@@ -1,7 +1,7 @@
 //! Generic key-value secret store.
 //!
-//! Backed by migration `0011_secrets.sql`. Used by `surge telegram setup`
-//! to persist the Bot API token; intended for other subsystems too.
+//! Backed by migration `0011_secrets.sql`. Telegram no longer reads credentials
+//! from this store; setup removes its legacy row during migration.
 //! Rows are namespaced by their `key` prefix (e.g.
 //! `telegram.cockpit.bot_token`).
 //!
@@ -20,8 +20,7 @@ pub enum SecretsError {
     Sqlite(#[from] rusqlite::Error),
 }
 
-/// Telegram cockpit bot token key prefix. The cockpit reads this key on
-/// startup; the CLI's `surge telegram setup` writes it.
+/// Legacy plaintext Telegram key. The daemon rejects its presence; setup removes it.
 pub const TELEGRAM_BOT_TOKEN_KEY: &str = "telegram.cockpit.bot_token";
 
 /// Insert or update a secret. Returns the resulting `created_at`

@@ -385,10 +385,17 @@ async fn request_and_await_approval(
     gate_resolutions: Option<&GateResolutions>,
     timeout: Duration,
 ) -> Result<(), StageError> {
+    let request_id = surge_core::id::GateRequestId::new();
     let rx = match gate_resolutions {
         Some(registry) => {
             let (tx, rx) = oneshot::channel();
-            registry.lock().await.insert(node.clone(), tx);
+            registry.lock().await.insert(
+                node.clone(),
+                crate::engine::stage::human_gate::PendingGate {
+                    request_id,
+                    sender: tx,
+                },
+            );
             Some(rx)
         },
         None => None,
@@ -399,7 +406,7 @@ async fn request_and_await_approval(
             EventPayload::HumanInputRequested {
                 node: node.clone(),
                 session: None,
-                call_id: None,
+                call_id: Some(request_id.to_string()),
                 prompt,
                 schema: Some(approval_response_schema()),
             },
@@ -437,7 +444,7 @@ async fn request_and_await_approval(
                 .append_event(VersionedEventPayload::new(
                     EventPayload::HumanInputResolved {
                         node: node.clone(),
-                        call_id: None,
+                        call_id: Some(request_id.to_string()),
                         response: res.response.clone(),
                     },
                 ))
@@ -449,7 +456,7 @@ async fn request_and_await_approval(
                 .append_event(VersionedEventPayload::new(
                     EventPayload::HumanInputTimedOut {
                         node: node.clone(),
-                        call_id: None,
+                        call_id: Some(request_id.to_string()),
                         elapsed_seconds: u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX),
                     },
                 ))
@@ -517,7 +524,7 @@ mod tests {
                 let mut guard = registry.lock().await;
                 if let Some(tx) = guard.remove(&node) {
                     drop(guard);
-                    let _ = tx.send(HumanGateResolution {
+                    let _ = tx.sender.send(HumanGateResolution {
                         outcome: surge_core::keys::OutcomeKey::try_from(outcome).unwrap(),
                         response: serde_json::json!({"outcome": outcome}),
                     });

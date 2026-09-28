@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 surge-core = { workspace = true }
+surge-mcp = { workspace = true }
 surge-acp = { workspace = true }
 surge-git = { workspace = true }
 surge-orchestrator = { workspace = true }
@@ -38,6 +39,7 @@ which = "6"
 nix = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
+git2 = { workspace = true }
 tempfile = { workspace = true }
 assert_cmd = "2"
 predicates = "3"

@@ -70,6 +70,10 @@ impl VersionedEventPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventPayload {
+    /// Nonterminal receipt for an authenticated, idempotent stage-tool call.
+    StageToolReceipt {
+        receipt: crate::stage_tool::StageToolReceipt,
+    },
     // Lifecycle
     RunStarted {
         pipeline_template: Option<TemplateKey>,
@@ -267,8 +271,13 @@ pub enum EventPayload {
     ArtifactProduced {
         node: NodeKey,
         artifact: ContentHash,
+        /// Location of the immutable stored bytes.
         path: PathBuf,
         name: String,
+        /// Original worktree-relative filename, when recorded by the producer.
+        /// Older runs and synthetic artifacts may not have a source file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_path: Option<PathBuf>,
     },
     OutcomeReported {
         node: NodeKey,
@@ -607,6 +616,7 @@ impl EventPayload {
     #[must_use]
     pub fn discriminant_str(&self) -> &'static str {
         match self {
+            Self::StageToolReceipt { .. } => "StageToolReceipt",
             Self::RunStarted { .. } => "RunStarted",
             Self::RunCompleted { .. } => "RunCompleted",
             Self::RunFailed { .. } => "RunFailed",
@@ -1124,10 +1134,32 @@ mod tests {
             artifact: ContentHash::compute(b"content"),
             path: PathBuf::from("artifacts/spec.md"),
             name: "spec.md".into(),
+            source_path: None,
         };
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn artifact_source_path_is_optional_for_legacy_events() {
+        let legacy = EventPayload::ArtifactProduced {
+            node: NodeKey::try_from("implement").unwrap(),
+            artifact: ContentHash::compute(b"content"),
+            path: PathBuf::from("artifacts/content-hash"),
+            name: "index".into(),
+            source_path: None,
+        };
+        let bytes = legacy.to_bincode().unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("source_path"));
+        assert_eq!(EventPayload::from_bincode(&bytes).unwrap(), legacy);
+
+        let mut recorded = legacy;
+        if let EventPayload::ArtifactProduced { source_path, .. } = &mut recorded {
+            *source_path = Some(PathBuf::from("web/index.html"));
+        }
+        let bytes = recorded.to_bincode().unwrap();
+        assert_eq!(EventPayload::from_bincode(&bytes).unwrap(), recorded);
     }
 
     #[test]

@@ -46,13 +46,18 @@ pub enum RunOutcome {
     },
 }
 
-/// Engine-flavoured projection of what was just persisted.
-/// Each variant corresponds 1:1 to an [`EventPayload`] that was successfully
-/// written to the event log (and therefore is durable).
+/// Run observation: durable events, confirmed completion, or an explicit stream failure.
+/// Only [`Self::Persisted`] carries a successfully written [`EventPayload`].
 #[non_exhaustive]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineRunEvent {
+    /// Event delivery failed; the durable run outcome is unconfirmed.
+    /// This is a transport/tracking failure, never a persisted terminal outcome.
+    StreamError {
+        /// Diagnostic explaining why the stream could not be confirmed.
+        message: String,
+    },
     /// A new event was persisted. Carries the payload + assigned seq.
     Persisted {
         /// Monotonically-increasing sequence number assigned to this event.

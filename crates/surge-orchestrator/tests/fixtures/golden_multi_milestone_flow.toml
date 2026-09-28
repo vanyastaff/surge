@@ -1,217 +1,388 @@
-# Golden Flow Generator output for a three-milestone roadmap.
-#
-# Shape required by Task 18:
-# - graph metadata declares the multi-milestone archetype
-# - outer Loop iterates over artifact name `roadmap.milestones`, produced by
-#   a real upstream `roadmap_planner` agent node (the loop's
-#   `iterates_over.value.node` reference must resolve — Ticket 18's
-#   measurement pass found this fixture referencing a `roadmap_planner` node
-#   that did not exist, tripping `surge_core::validation`'s
-#   `LoopIterableInvalid` rule; fixed here by adding the producer node the
-#   reference already named, matching the shape of the bundled
-#   `bootstrap-1.0.toml`'s own `roadmap_planner` node)
-# - outer body contains an inner task Loop
-# - inner task body contains concrete Agent work
-
+# Approved roadmap -> milestone/task loops -> specification, implementation and verification.
 schema_version = 1
-start = "roadmap_planner"
-
+start = "milestone_loop"
 [metadata]
 name = "golden_multi_milestone"
-created_at = "2026-05-07T00:00:00Z"
-
+created_at = "2026-05-06T00:00:00Z"
 [metadata.archetype]
 name = "multi-milestone"
 milestones = 3
 
-[nodes.roadmap_planner]
-id = "roadmap_planner"
-
-[nodes.roadmap_planner.position]
-x = -240.0
-y = 0.0
-
-[[nodes.roadmap_planner.declared_outcomes]]
-id = "drafted"
-description = "roadmap.milestones drafted and ready for iteration"
-edge_kind_hint = "forward"
-is_terminal = false
-
-[nodes.roadmap_planner.config]
-node_kind = "agent"
-profile = "roadmap-planner@1.0"
-
 [nodes.milestone_loop]
 id = "milestone_loop"
-
+[[nodes.milestone_loop.declared_outcomes]]
+id = "completed"
+description = "All items completed"
+edge_kind_hint = "forward"
+is_terminal = false
 [nodes.milestone_loop.position]
 x = 0.0
 y = 0.0
-
-[[nodes.milestone_loop.declared_outcomes]]
-id = "completed"
-description = "All roadmap milestones completed"
-edge_kind_hint = "forward"
-is_terminal = false
-
 [nodes.milestone_loop.config]
 node_kind = "loop"
 body = "milestone_body"
 iteration_var_name = "milestone"
 parallelism = "sequential"
 gate_after_each = false
-
 [nodes.milestone_loop.config.iterates_over]
-type = "artifact"
-
+type = "run_artifact"
 [nodes.milestone_loop.config.iterates_over.value]
-node = "roadmap_planner"
-name = "roadmap.milestones"
+name = "roadmap"
 jsonpath = "milestones"
-
 [nodes.milestone_loop.config.exit_condition]
 type = "all_items"
-
 [nodes.milestone_loop.config.on_iteration_failure]
 type = "abort"
-
-[nodes.final_review]
-id = "final_review"
-
-[nodes.final_review.position]
-x = 240.0
-y = 0.0
-
-[[nodes.final_review.declared_outcomes]]
-id = "approved"
-description = "Final review approved"
-edge_kind_hint = "forward"
-is_terminal = false
-
-[nodes.final_review.config]
-node_kind = "agent"
-profile = "reviewer@1.0"
 
 [nodes.end]
 id = "end"
 declared_outcomes = []
-
 [nodes.end.position]
-x = 480.0
+x = 960.0
 y = 0.0
-
 [nodes.end.config]
 node_kind = "terminal"
-
 [nodes.end.config.kind]
 type = "success"
 
 [[edges]]
-id = "e_roadmap_to_milestones"
-to = "milestone_loop"
-kind = "forward"
-
-[edges.from]
-node = "roadmap_planner"
-outcome = "drafted"
-
-[[edges]]
 id = "e_milestones_done"
-to = "final_review"
+to = "final_spec"
 kind = "forward"
-
 [edges.from]
 node = "milestone_loop"
 outcome = "completed"
-
-[[edges]]
-id = "e_review_end"
-to = "end"
-kind = "forward"
-
-[edges.from]
-node = "final_review"
-outcome = "approved"
+[edges.policy]
+on_max_exceeded = "escalate"
 
 [subgraphs.milestone_body]
 start = "task_loop"
-edges = []
 
 [subgraphs.milestone_body.nodes.task_loop]
 id = "task_loop"
-
+[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
+id = "completed"
+description = "All items completed"
+edge_kind_hint = "forward"
+is_terminal = false
 [subgraphs.milestone_body.nodes.task_loop.position]
 x = 0.0
 y = 0.0
-
-[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
-id = "completed"
-description = "Milestone tasks completed"
-edge_kind_hint = "forward"
-is_terminal = true
-
 [subgraphs.milestone_body.nodes.task_loop.config]
 node_kind = "loop"
 body = "task_body"
 iteration_var_name = "task"
 parallelism = "sequential"
 gate_after_each = false
-
 [subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
 type = "loop_item"
-
 [subgraphs.milestone_body.nodes.task_loop.config.iterates_over.value]
 var = "milestone"
 jsonpath = "tasks"
-
 [subgraphs.milestone_body.nodes.task_loop.config.exit_condition]
 type = "all_items"
-
 [subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
 type = "abort"
 
-[subgraphs.task_body]
-start = "impl_task"
+[subgraphs.milestone_body.nodes.milestone_end]
+id = "milestone_end"
+declared_outcomes = []
+[subgraphs.milestone_body.nodes.milestone_end.position]
+x = 320.0
+y = 0.0
+[subgraphs.milestone_body.nodes.milestone_end.config]
+node_kind = "terminal"
+[subgraphs.milestone_body.nodes.milestone_end.config.kind]
+type = "success"
 
-[[subgraphs.task_body.edges]]
-id = "e_impl_verify"
-to = "verify_task"
+[[subgraphs.milestone_body.edges]]
+id = "e_tasks_done"
+to = "milestone_end"
 kind = "forward"
+[subgraphs.milestone_body.edges.from]
+node = "task_loop"
+outcome = "completed"
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
 
-[subgraphs.task_body.edges.from]
-node = "impl_task"
-outcome = "done"
+[subgraphs.task_body]
+start = "spec_task"
+
+[subgraphs.task_body.nodes.spec_task]
+id = "spec_task"
+[[subgraphs.task_body.nodes.spec_task.declared_outcomes]]
+id = "drafted"
+description = "drafted"
+edge_kind_hint = "forward"
+is_terminal = false
+[[subgraphs.task_body.nodes.spec_task.declared_outcomes]]
+id = "needs_clarification"
+description = "needs clarification"
+edge_kind_hint = "escalate"
+is_terminal = false
+[subgraphs.task_body.nodes.spec_task.position]
+x = 0.0
+y = 0.0
+[subgraphs.task_body.nodes.spec_task.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[[subgraphs.task_body.nodes.spec_task.config.bindings]]
+target = "milestone"
+[subgraphs.task_body.nodes.spec_task.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
 
 [subgraphs.task_body.nodes.impl_task]
 id = "impl_task"
-
-[subgraphs.task_body.nodes.impl_task.position]
-x = 0.0
-y = 0.0
-
 [[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
-id = "done"
-description = "Task implemented"
+id = "ready_for_verification"
+description = "ready for verification"
 edge_kind_hint = "forward"
 is_terminal = false
-
+[[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
+id = "blocked"
+description = "blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[subgraphs.task_body.nodes.impl_task.position]
+x = 240.0
+y = 0.0
 [subgraphs.task_body.nodes.impl_task.config]
 node_kind = "agent"
-profile = "implementer@1.0"
+profile = "implementer@2.0"
+[[subgraphs.task_body.nodes.impl_task.config.bindings]]
+target = "spec"
+[subgraphs.task_body.nodes.impl_task.config.bindings.source]
+type = "node_output"
+node = "spec_task"
+artifact = "spec_toml"
 
 [subgraphs.task_body.nodes.verify_task]
 id = "verify_task"
-
-[subgraphs.task_body.nodes.verify_task.position]
-x = 220.0
-y = 0.0
-
 [[subgraphs.task_body.nodes.verify_task.declared_outcomes]]
-id = "done"
-description = "Task verified"
+id = "passed"
+description = "passed"
 edge_kind_hint = "forward"
-is_terminal = true
-
+is_terminal = false
+ledger_effect = "verified"
+[[subgraphs.task_body.nodes.verify_task.declared_outcomes]]
+id = "failed"
+description = "failed"
+edge_kind_hint = "backtrack"
+is_terminal = false
+ledger_effect = "failed_verification"
+[subgraphs.task_body.nodes.verify_task.position]
+x = 480.0
+y = 0.0
 [subgraphs.task_body.nodes.verify_task.config]
 node_kind = "agent"
-profile = "verifier@1.0"
+profile = "verifier@2.0"
+[[subgraphs.task_body.nodes.verify_task.config.bindings]]
+target = "spec"
+[subgraphs.task_body.nodes.verify_task.config.bindings.source]
+type = "node_output"
+node = "spec_task"
+artifact = "spec_toml"
+
+[subgraphs.task_body.nodes.task_end]
+id = "task_end"
+declared_outcomes = []
+[subgraphs.task_body.nodes.task_end.position]
+x = 720.0
+y = 0.0
+[subgraphs.task_body.nodes.task_end.config]
+node_kind = "terminal"
+[subgraphs.task_body.nodes.task_end.config.kind]
+type = "success"
+
+[subgraphs.task_body.nodes.task_failed]
+id = "task_failed"
+declared_outcomes = []
+[subgraphs.task_body.nodes.task_failed.position]
+x = 720.0
+y = 180.0
+[subgraphs.task_body.nodes.task_failed.config]
+node_kind = "terminal"
+[subgraphs.task_body.nodes.task_failed.config.kind]
+type = "failure"
+exit_code = 1
+
+[[subgraphs.task_body.edges]]
+id = "e_spec_ready"
+to = "impl_task"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "spec_task"
+outcome = "drafted"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_spec_blocked"
+to = "task_failed"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "spec_task"
+outcome = "needs_clarification"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_ready"
+to = "verify_task"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "ready_for_verification"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_blocked"
+to = "task_failed"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "blocked"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_partial"
+to = "impl_task"
+kind = "backtrack"
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "partial"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[subgraphs.task_body.edges]]
+id = "e_verified"
+to = "task_end"
+kind = "forward"
+[subgraphs.task_body.edges.from]
+node = "verify_task"
+outcome = "passed"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_verify_retry"
+to = "impl_task"
+kind = "backtrack"
+[subgraphs.task_body.edges.from]
+node = "verify_task"
+outcome = "failed"
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[nodes.final_spec]
+id = "final_spec"
+[[nodes.final_spec.declared_outcomes]]
+id = "drafted"
+description = "drafted"
+edge_kind_hint = "forward"
+is_terminal = false
+[[nodes.final_spec.declared_outcomes]]
+id = "needs_clarification"
+description = "needs clarification"
+edge_kind_hint = "escalate"
+is_terminal = false
+[nodes.final_spec.position]
+x = 320.0
+y = 0.0
+[nodes.final_spec.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[[nodes.final_spec.config.bindings]]
+target = "milestone"
+[nodes.final_spec.config.bindings.source]
+type = "run_artifact"
+name = "roadmap"
+
+[nodes.final_verify]
+id = "final_verify"
+[[nodes.final_verify.declared_outcomes]]
+id = "passed"
+description = "passed"
+edge_kind_hint = "forward"
+is_terminal = false
+ledger_effect = "verified"
+[[nodes.final_verify.declared_outcomes]]
+id = "failed"
+description = "failed"
+edge_kind_hint = "escalate"
+is_terminal = false
+ledger_effect = "failed_verification"
+[nodes.final_verify.position]
+x = 640.0
+y = 0.0
+[nodes.final_verify.config]
+node_kind = "agent"
+profile = "verifier@2.0"
+[[nodes.final_verify.config.bindings]]
+target = "spec"
+[nodes.final_verify.config.bindings.source]
+type = "node_output"
+node = "final_spec"
+artifact = "spec_toml"
+
+[nodes.review_failed]
+id = "review_failed"
+declared_outcomes = []
+[nodes.review_failed.position]
+x = 960.0
+y = 180.0
+[nodes.review_failed.config]
+node_kind = "terminal"
+[nodes.review_failed.config.kind]
+type = "failure"
+exit_code = 1
+
+[[edges]]
+id = "e_final_spec"
+to = "final_verify"
+kind = "forward"
+[edges.from]
+node = "final_spec"
+outcome = "drafted"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_final_unclear"
+to = "review_failed"
+kind = "forward"
+[edges.from]
+node = "final_spec"
+outcome = "needs_clarification"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_final_passed"
+to = "end"
+kind = "forward"
+[edges.from]
+node = "final_verify"
+outcome = "passed"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_final_failed"
+to = "review_failed"
+kind = "forward"
+[edges.from]
+node = "final_verify"
+outcome = "failed"
+[edges.policy]
+on_max_exceeded = "escalate"

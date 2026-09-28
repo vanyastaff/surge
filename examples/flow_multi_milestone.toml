@@ -58,8 +58,12 @@ is_terminal = false
 [nodes.final_review.config]
 node_kind = "agent"
 profile = "implementer@1.0"
-bindings = []
 hooks = []
+
+[[nodes.final_review.config.bindings]]
+target = "spec"
+[nodes.final_review.config.bindings.source]
+type = "initial_prompt"
 
 [nodes.final_review.config.limits]
 timeout_seconds = 900
@@ -212,8 +216,12 @@ is_terminal = false
 [subgraphs.task_body.nodes.impl_in_task.config]
 node_kind = "agent"
 profile = "implementer@1.0"
-bindings = []
 hooks = []
+
+[[subgraphs.task_body.nodes.impl_in_task.config.bindings]]
+target = "spec"
+[subgraphs.task_body.nodes.impl_in_task.config.bindings.source]
+type = "initial_prompt"
 
 [subgraphs.task_body.nodes.impl_in_task.config.limits]
 timeout_seconds = 900
@@ -238,8 +246,12 @@ is_terminal = false
 [subgraphs.task_body.nodes.verify_in_task.config]
 node_kind = "agent"
 profile = "implementer@1.0"
-bindings = []
 hooks = []
+
+[[subgraphs.task_body.nodes.verify_in_task.config.bindings]]
+target = "spec"
+[subgraphs.task_body.nodes.verify_in_task.config.bindings.source]
+type = "initial_prompt"
 
 [subgraphs.task_body.nodes.verify_in_task.config.limits]
 timeout_seconds = 900

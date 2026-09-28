@@ -1,9 +1,7 @@
-//! Integration test: report_stage_outcome surfaces as BridgeEvent::OutcomeReported,
-//! NOT a generic ToolCall.
+//! ACP tool notifications are display-only; authenticated stage control uses MCP.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::time::Duration;
 
 use surge_acp::bridge::{
     AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, MessageContent, SessionConfig,
@@ -11,15 +9,15 @@ use surge_acp::bridge::{
 use surge_acp::client::PermissionPolicy;
 use surge_core::OutcomeKey;
 use tempfile::TempDir;
-use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn report_stage_outcome_emits_outcome_reported_event() {
+async fn report_stage_outcome_notification_has_no_authority() {
     let wt = TempDir::new().unwrap();
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "report_done".into()],
         },
@@ -43,23 +41,14 @@ async fn report_stage_outcome_emits_outcome_reported_event() {
         .await
         .unwrap();
 
-    let mut saw_outcome = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while tokio::time::Instant::now() < deadline {
-        match timeout(Duration::from_millis(200), events.recv()).await {
-            Ok(Ok(BridgeEvent::OutcomeReported { outcome, .. })) => {
-                assert_eq!(outcome.as_str(), "done");
-                saw_outcome = true;
-                break;
-            },
-            Ok(Ok(BridgeEvent::ToolCall { tool, .. })) if tool == "report_stage_outcome" => {
-                panic!("report_stage_outcome should NOT surface as generic ToolCall");
-            },
-            _ => continue,
-        }
-    }
-    assert!(saw_outcome);
-
-    bridge.close_session(sid).await.ok();
+    bridge.close_session(sid).await.unwrap();
     bridge.shutdown().await.unwrap();
+    let observed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert!(observed.iter().any(|event| matches!(event, BridgeEvent::ToolObserved { session, title, .. } if *session == sid && title == "report_stage_outcome")));
+    assert!(!observed.iter().any(|event| matches!(
+        event,
+        BridgeEvent::OutcomeReported { .. }
+            | BridgeEvent::HumanInputRequested { .. }
+            | BridgeEvent::ToolCall { .. }
+    )));
 }

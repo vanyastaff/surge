@@ -8,7 +8,7 @@ memory database versions independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **8** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **9** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **2** (see below) |
 
 ## `surge.toml` (config)
@@ -167,3 +167,12 @@ When a breaking change to any format is unavoidable:
   the new table is purely additive, because the transformation itself —
   not the shape it adds — is the change that must be documented and
   applied exactly once.
+
+### Version 9: stage-tool receipts
+
+`StageToolReceipt` records an authenticated tool result or accepted outcome candidate.
+It is nonterminal: outcome candidates still require successful ACP prompt completion
+and the existing validators before `OutcomeReported` or task verification. Version 8
+histories remain readable through the unchanged identity migration. Version 8 readers
+reject version 9 envelopes with `SchemaTooNew` before decoding an unknown variant.
+No SQLite schema migration or rewriting of old events is required.

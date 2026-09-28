@@ -69,9 +69,9 @@ The Flow Generator chooses one of the bundled archetypes:
 | `linear-3` | Spec -> Implement -> Verify. |
 | `linear-with-review` | Linear flow plus a final review stage. |
 | `multi-milestone` | Outer milestone loop with an inner task loop. |
-| `bug-fix` | Reproduce -> Implement -> Verify with regression backtrack. |
-| `refactor` | Capture behavior, refactor, verify, review. |
-| `spike` | Bounded research or experiment. |
+| `bug-fix` | Spec -> Reproduce -> Implement -> Verify with bounded regression backtrack. |
+| `refactor` | Spec -> capture behavior -> refactor -> verify -> review, with artifact handoffs. |
+| `spike` | Spec -> bounded experiment; records findings without certifying production code. |
 | `single-task` | Smallest single-agent task flow. |
 
 User templates under `${SURGE_HOME}/templates/*.toml` can shadow bundled

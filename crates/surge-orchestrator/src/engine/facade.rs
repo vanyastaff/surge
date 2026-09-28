@@ -55,6 +55,40 @@ pub trait EngineFacade: Send + Sync {
         })
     }
 
+    /// Resolve a captured event identity without looking up a newer pending request.
+    async fn resolve_requested_input(
+        &self,
+        run_id: RunId,
+        node: surge_core::keys::NodeKey,
+        call_id: Option<String>,
+        response: serde_json::Value,
+    ) -> Result<(), EngineError> {
+        match call_id {
+            Some(id) => {
+                if let Some(gate) = surge_core::id::GateRequestId::from_event_call_id(&id) {
+                    self.resolve_gate_input(run_id, node, gate, response).await
+                } else {
+                    self.resolve_human_input(run_id, Some(id), response).await
+                }
+            },
+            None => Err(EngineError::MissingGateRequestIdentity),
+        }
+    }
+
+    /// Consume only the exact registered gate; never fall back to run-only input.
+    async fn resolve_gate_input(
+        &self,
+        run_id: RunId,
+        node: surge_core::keys::NodeKey,
+        gate_request_id: surge_core::id::GateRequestId,
+        response: serde_json::Value,
+    ) -> Result<(), EngineError> {
+        let _ = (run_id, node, gate_request_id, response);
+        Err(EngineError::OperationNotSupported {
+            operation: "resolve_gate_input",
+        })
+    }
+
     /// Provide an answer to a paused run waiting on human input.
     async fn resolve_human_input(
         &self,
@@ -146,6 +180,18 @@ impl EngineFacade for LocalEngineFacade {
     ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
         self.engine
             .submit_roadmap_amendment(run_id, patch_id, target, patch_result)
+            .await
+    }
+
+    async fn resolve_gate_input(
+        &self,
+        run_id: RunId,
+        node: surge_core::keys::NodeKey,
+        gate_request_id: surge_core::id::GateRequestId,
+        response: serde_json::Value,
+    ) -> Result<(), EngineError> {
+        self.engine
+            .resolve_gate_input(run_id, node, gate_request_id, response)
             .await
     }
 

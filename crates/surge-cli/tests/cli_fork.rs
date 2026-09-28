@@ -16,8 +16,10 @@ use surge_core::id::RunId;
 use surge_core::keys::{NodeKey, ProfileKey};
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
+use surge_core::run_state::Cursor;
 use surge_core::sandbox::SandboxMode;
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
+use surge_orchestrator::engine::snapshot::EngineSnapshot;
 use surge_persistence::runs::Storage;
 
 fn minimal_graph() -> Graph {
@@ -52,15 +54,48 @@ fn minimal_graph() -> Graph {
     }
 }
 
+/// Record a stage-boundary checkpoint the way the engine does at every stage
+/// boundary (see `EngineSnapshot` in `crates/surge-orchestrator/src/engine/snapshot.rs`):
+/// a Git checkpoint of the worktree plus a snapshot blob whose `at_seq` and
+/// `stage_boundary_seq` both equal `seq`. `engine fork` always requests an
+/// isolated checkout (`ForkRequest::with_worktree`), which requires exactly
+/// this — a checkpoint at the exact seq being forked from — so any seeded
+/// fork fixture needs one.
+async fn seed_stage_boundary_checkpoint(
+    writer: &surge_persistence::runs::RunWriter,
+    project: &Path,
+    run: RunId,
+    seq: surge_persistence::runs::seq::EventSeq,
+    cursor_node: &NodeKey,
+) {
+    git2::Repository::init(project).expect("init project git repo");
+    let checkpoint = surge_git::checkpoint::capture_record(project, run, seq.as_u64())
+        .expect("capture checkpoint")
+        .expect("project dir must be a git worktree root");
+    let cursor = Cursor {
+        node: cursor_node.clone(),
+        attempt: 1,
+    };
+    let mut snapshot = EngineSnapshot::new(&cursor, seq.as_u64(), seq.as_u64());
+    snapshot.workspace_checkpoint = Some(checkpoint);
+    writer
+        .write_graph_snapshot(seq, serde_json::to_vec(&snapshot).unwrap())
+        .await
+        .unwrap();
+}
+
 /// Seed a parent run with two events (`RunStarted`, `PipelineMaterialized`)
-/// under `home` (the `SURGE_HOME` the binary will read). Returns its id.
+/// under `home` (the `SURGE_HOME` the binary will read), plus a stage-boundary
+/// checkpoint at seq 2 so an isolated fork can restore from it. Returns its id.
 async fn seed_parent(home: &Path) -> RunId {
     let storage = Storage::open(home).await.unwrap();
     let parent = RunId::new();
-    let worktree = home.to_path_buf();
-    let writer = storage.create_run(parent, &worktree, None).await.unwrap();
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let writer = storage.create_run(parent, &project, None).await.unwrap();
 
     let graph = minimal_graph();
+    let start = graph.start.clone();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let config = RunConfig {
         budget: Default::default(),
@@ -69,11 +104,11 @@ async fn seed_parent(home: &Path) -> RunId {
         auto_pr: false,
         mcp_servers: vec![],
     };
-    writer
+    let seqs = writer
         .append_events(vec![
             VersionedEventPayload::new(EventPayload::RunStarted {
                 pipeline_template: None,
-                project_path: worktree.clone(),
+                project_path: project.clone(),
                 initial_prompt: "seed".into(),
                 config,
             }),
@@ -84,6 +119,7 @@ async fn seed_parent(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
+    seed_stage_boundary_checkpoint(&writer, &project, parent, seqs[1], &start).await;
     // Release the writer + registry handles before the binary opens the same
     // SURGE_HOME in a separate process.
     drop(writer);
@@ -203,9 +239,11 @@ fn agent_graph() -> Graph {
 async fn seed_agent_parent(home: &Path) -> RunId {
     let storage = Storage::open(home).await.unwrap();
     let parent = RunId::new();
-    let worktree = home.to_path_buf();
-    let writer = storage.create_run(parent, &worktree, None).await.unwrap();
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let writer = storage.create_run(parent, &project, None).await.unwrap();
     let graph = agent_graph();
+    let start = graph.start.clone();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let config = RunConfig {
         budget: Default::default(),
@@ -214,11 +252,11 @@ async fn seed_agent_parent(home: &Path) -> RunId {
         auto_pr: false,
         mcp_servers: vec![],
     };
-    writer
+    let seqs = writer
         .append_events(vec![
             VersionedEventPayload::new(EventPayload::RunStarted {
                 pipeline_template: None,
-                project_path: worktree.clone(),
+                project_path: project.clone(),
                 initial_prompt: "seed".into(),
                 config,
             }),
@@ -229,6 +267,7 @@ async fn seed_agent_parent(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
+    seed_stage_boundary_checkpoint(&writer, &project, parent, seqs[1], &start).await;
     drop(writer);
     drop(storage);
     parent

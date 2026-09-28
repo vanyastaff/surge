@@ -248,10 +248,12 @@ const RATE_LIMIT_PATTERNS: &[&str] = &[
     "too many requests",
     "quota exceeded",
     // Real provider shapes neither classifier recognized before.
-    "insufficient_quota",  // OpenAI
-    "resource_exhausted",  // Google (`RESOURCE_EXHAUSTED`; matched lowercased)
-    "overloaded_error",    // Anthropic
-    "usage limit reached", // prose
+    "insufficient_quota",          // OpenAI
+    "resource_exhausted",          // Google (`RESOURCE_EXHAUSTED`; matched lowercased)
+    "overloaded_error",            // Anthropic
+    "usage limit reached",         // prose
+    "you've hit your limit",       // Claude ACP subscription quota (observed live)
+    "you've hit your usage limit", // Codex ACP subscription quota (observed live)
 ];
 
 /// `true` when `lower` (already-lowercased text) contains `"429"` as a

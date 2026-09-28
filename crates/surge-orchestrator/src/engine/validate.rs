@@ -17,6 +17,138 @@ use surge_core::edge::{Edge, EdgeKind};
 use surge_core::graph::Graph;
 use surge_core::keys::NodeKey;
 
+/// Reject profiles whose required prompt inputs are missing or ambiguous.
+pub(crate) fn validate_agent_inputs(
+    config: &surge_core::agent_config::AgentConfig,
+    profile: &surge_core::profile::Profile,
+) -> Result<(), EngineError> {
+    for expected in profile
+        .bindings
+        .expected
+        .iter()
+        .filter(|input| !input.optional)
+    {
+        let bindings: Vec<_> = config
+            .bindings
+            .iter()
+            .filter(|binding| binding.target.0 == expected.name)
+            .collect();
+        let [binding] = bindings.as_slice() else {
+            return Err(EngineError::GraphInvalid(format!(
+                "profile {} requires exactly one binding for '{}', found {}",
+                config.profile,
+                expected.name,
+                bindings.len()
+            )));
+        };
+        if binding.optional
+            || matches!(
+                &binding.source,
+                surge_core::agent_config::ArtifactSource::Static { content } if content.trim().is_empty()
+            )
+        {
+            return Err(EngineError::GraphInvalid(format!(
+                "profile {} requires nonoptional, nonempty input '{}'",
+                config.profile, expected.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate required profile bindings in the root graph and every loop/subgraph body.
+pub(crate) fn validate_profile_inputs(
+    graph: &Graph,
+    registry: &crate::profile_loader::ProfileRegistry,
+) -> Result<(), EngineError> {
+    for node in graph
+        .nodes
+        .values()
+        .chain(graph.subgraphs.values().flat_map(|g| g.nodes.values()))
+    {
+        let surge_core::node::NodeConfig::Agent(config) = &node.config else {
+            continue;
+        };
+        let key = surge_core::profile::keyref::parse_key_ref(config.profile.as_str())
+            .map_err(|e| EngineError::GraphInvalid(format!("node {}: {e}", node.id)))?;
+        let profile = registry
+            .resolve(&key)
+            .map_err(|e| EngineError::GraphInvalid(format!("node {}: {e}", node.id)))?;
+        validate_agent_inputs(config, &profile.profile)
+            .map_err(|e| EngineError::GraphInvalid(format!("node {}: {e}", node.id)))?;
+        validate_binding_sources(graph, config)?;
+    }
+    Ok(())
+}
+
+fn validate_binding_sources(
+    graph: &Graph,
+    config: &surge_core::agent_config::AgentConfig,
+) -> Result<(), EngineError> {
+    use surge_core::agent_config::ArtifactSource;
+    for binding in &config.bindings {
+        match &binding.source {
+            ArtifactSource::GlobPattern { .. } => {
+                return Err(EngineError::GraphInvalid(format!(
+                    "binding '{}' uses unsupported glob_pattern source",
+                    binding.target.0
+                )));
+            },
+            ArtifactSource::NodeOutput { node, .. }
+                if !graph.nodes.contains_key(node)
+                    && !graph
+                        .subgraphs
+                        .values()
+                        .any(|body| body.nodes.contains_key(node)) =>
+            {
+                return Err(EngineError::GraphInvalid(format!(
+                    "binding '{}' references missing producer node '{node}'",
+                    binding.target.0
+                )));
+            },
+            _ => {},
+        }
+    }
+    Ok(())
+}
+
+/// Check externally supplied loop inputs before creating a run or dispatching agents.
+pub(crate) fn validate_loop_seeds(
+    graph: &Graph,
+    seeds: &[crate::engine::config::RunSeedArtifact],
+) -> Result<(), EngineError> {
+    use crate::engine::stage::loop_stage::{parse_iterable_artifact, resolve_array_path};
+    use surge_core::{loop_config::IterableSource, node::NodeConfig};
+
+    let nodes = graph.nodes.values().chain(
+        graph
+            .subgraphs
+            .values()
+            .flat_map(|body| body.nodes.values()),
+    );
+    for node in nodes {
+        let NodeConfig::Loop(config) = &node.config else {
+            continue;
+        };
+        let IterableSource::RunArtifact { name, jsonpath } = &config.iterates_over else {
+            continue;
+        };
+        let matches: Vec<_> = seeds.iter().filter(|seed| seed.name == *name).collect();
+        let [seed] = matches.as_slice() else {
+            return Err(EngineError::GraphInvalid(format!(
+                "loop {} requires exactly one run artifact '{name}', found {}",
+                node.id,
+                matches.len()
+            )));
+        };
+        let parsed = parse_iterable_artifact(name, &seed.content)
+            .map_err(|e| EngineError::GraphInvalid(format!("loop {}: {e}", node.id)))?;
+        resolve_array_path(&parsed, jsonpath)
+            .map_err(|e| EngineError::GraphInvalid(format!("loop {}: {e}", node.id)))?;
+    }
+    Ok(())
+}
+
 /// Validate the graph for M6 execution. Allows Loop and Subgraph nodes
 /// (M5 rejected them). Rejects multi-edge fanout (M8+) and
 /// `gate_after_each: true` (M7). Also runs the full
@@ -267,10 +399,13 @@ fn contains_roadmap_milestones_loop(graph: &Graph) -> bool {
     use surge_core::node::NodeConfig;
 
     fn loop_matches_milestones(cfg: &surge_core::loop_config::LoopConfig) -> bool {
-        matches!(
-            &cfg.iterates_over,
-            IterableSource::Artifact { name, .. } if name == "roadmap.milestones"
-        )
+        match &cfg.iterates_over {
+            IterableSource::RunArtifact { name, jsonpath } => {
+                name == "roadmap" && matches!(jsonpath.as_str(), "milestones" | "$.milestones[*]")
+            },
+            IterableSource::Artifact { name, .. } => name == "roadmap.milestones",
+            _ => false,
+        }
     }
 
     let outer_match = graph.nodes.values().any(|node| match &node.config {
@@ -509,6 +644,58 @@ mod tests {
             edges: vec![],
             subgraphs: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn required_profile_input_cannot_be_omitted_optional_empty_or_duplicated() {
+        use surge_core::agent_config::{ArtifactSource, Binding, TemplateVar};
+        let profile: surge_core::profile::Profile = toml::from_str(include_str!(
+            "../../../surge-core/bundled/profiles/implementer-2.0.toml"
+        ))
+        .unwrap();
+        let graph: Graph =
+            toml::from_str(include_str!("../../../../examples/flow_minimal_agent.toml")).unwrap();
+        let surge_core::node::NodeConfig::Agent(mut config) =
+            graph.nodes[&graph.start].config.clone()
+        else {
+            panic!("expected agent");
+        };
+        config.bindings.clear();
+        assert!(
+            validate_agent_inputs(&config, &profile)
+                .unwrap_err()
+                .to_string()
+                .contains("spec")
+        );
+        let binding = Binding {
+            target: TemplateVar("spec".into()),
+            source: ArtifactSource::Static {
+                content: "Approved task specification".into(),
+            },
+            optional: false,
+        };
+        config.bindings.push(binding.clone());
+        assert!(validate_agent_inputs(&config, &profile).is_ok());
+        config.bindings[0].optional = true;
+        assert!(validate_agent_inputs(&config, &profile).is_err());
+        config.bindings[0] = binding.clone();
+        config.bindings[0].source = ArtifactSource::Static {
+            content: "  ".into(),
+        };
+        assert!(validate_agent_inputs(&config, &profile).is_err());
+        config.bindings = vec![binding.clone()];
+        config.bindings[0].source = ArtifactSource::NodeOutput {
+            node: NodeKey::try_from("missing").unwrap(),
+            artifact: "spec".into(),
+        };
+        assert!(validate_binding_sources(&graph, &config).is_err());
+        config.bindings[0].source = ArtifactSource::GlobPattern {
+            node: graph.start.clone(),
+            pattern: "*.md".into(),
+        };
+        assert!(validate_binding_sources(&graph, &config).is_err());
+        config.bindings = vec![binding.clone(), binding];
+        assert!(validate_agent_inputs(&config, &profile).is_err());
     }
 
     #[test]
@@ -1133,6 +1320,38 @@ mod tests {
     }
 
     #[test]
+    fn run_artifact_loop_requires_unique_valid_seed() {
+        use crate::engine::config::RunSeedArtifact;
+
+        let source: IterableSource = toml::from_str(
+            "type = 'run_artifact'\n[value]\nname = 'roadmap'\njsonpath = 'milestones'",
+        )
+        .unwrap();
+        let graph = graph_with_archetype_and_loop(Some(multi_milestone_meta()), source.clone());
+        assert!(validate_archetype_topology(&graph).is_ok());
+        assert!(validate_loop_seeds(&graph, &[]).is_err());
+        let seed = RunSeedArtifact::new(
+            "roadmap",
+            "roadmap.toml",
+            "[[milestones]]\nid = 'approved'\ntasks = []",
+            "bootstrap_parent",
+        )
+        .unwrap();
+        assert!(validate_loop_seeds(&graph, std::slice::from_ref(&seed)).is_ok());
+        assert!(validate_loop_seeds(&graph, &[seed.clone(), seed]).is_err());
+        let invalid = RunSeedArtifact::new(
+            "roadmap",
+            "roadmap.toml",
+            "milestones = 42",
+            "bootstrap_parent",
+        )
+        .unwrap();
+        assert!(validate_loop_seeds(&graph, &[invalid]).is_err());
+        let roundtrip: IterableSource = toml::from_str(&toml::to_string(&source).unwrap()).unwrap();
+        assert_eq!(source, roundtrip);
+    }
+
+    #[test]
     fn archetype_topology_multi_milestone_with_matching_loop_passes() {
         let iterable = IterableSource::Artifact {
             node: NodeKey::try_from("roadmap_planner").unwrap(),
@@ -1256,6 +1475,19 @@ mod tests {
             .expect("golden flow declares archetype metadata");
         assert_eq!(archetype.name, ArchetypeName::MultiMilestone);
         assert_eq!(archetype.milestones, Some(3));
+        let registry = crate::profile_loader::ProfileRegistry::new(
+            crate::profile_loader::DiskProfileSet::empty(),
+        );
+        validate_profile_inputs(&graph, &registry).unwrap();
+        for flow in surge_core::BundledFlows::all().into_iter().filter(|flow| {
+            matches!(
+                flow.name.as_str(),
+                "bootstrap" | "linear-3" | "multi-milestone" | "bug-fix" | "refactor" | "spike"
+            )
+        }) {
+            validate_profile_inputs(&flow.graph, &registry)
+                .unwrap_or_else(|error| panic!("{} profile inputs: {error}", flow.name));
+        }
     }
 
     // ── Warning-severity findings are logged, not dropped (A8) ──────────
@@ -1391,18 +1623,18 @@ mod tests {
         }
     }
 
-    /// Pins W5's blast radius on the shipped set. Four bundled flows pair a
+    /// Pins W5's blast radius on the shipped set. Five bundled flows pair a
     /// verifier with an agent predecessor on the same runtime; the other
-    /// nine either have no top-level verification gate or no agent feeding
+    /// eight either have no top-level verification gate or no agent feeding
     /// one. Every bundled profile carries `agent_id = "claude-code"`, so
-    /// these four are a true statement about what we ship, not a defect in
+    /// these five are a true statement about what we ship, not a defect in
     /// the rule.
     ///
     /// The assertion is exact on purpose: a change that silently drops the
     /// rule to zero (the state it was in when first written) fails here,
     /// and so does one that widens it to every flow.
     #[test]
-    fn w5_warns_on_exactly_the_four_bundled_flows_that_verify_in_one_vendor() {
+    fn w5_warns_on_exactly_the_five_bundled_flows_that_verify_in_one_vendor() {
         let registry = crate::profile_loader::ProfileRegistry::new(
             crate::profile_loader::DiskProfileSet::empty(),
         );
@@ -1423,7 +1655,13 @@ mod tests {
         warned.sort_unstable();
         assert_eq!(
             warned,
-            vec!["bug-fix", "linear-3", "linear-with-review", "refactor"],
+            vec![
+                "bug-fix",
+                "linear-3",
+                "linear-with-review",
+                "multi-milestone",
+                "refactor"
+            ],
             "W5's blast radius on the bundled set changed"
         );
     }

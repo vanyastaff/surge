@@ -28,7 +28,7 @@ pub mod paths;
 pub mod registry;
 mod resolver;
 
-pub use catalog::render_profile_catalog;
+pub use catalog::{catalog_runtimes, render_profile_catalog, render_profile_catalog_with};
 pub use disk::DiskProfileSet;
 pub use paths::{profiles_dir, surge_home};
 pub use registry::ProfileRegistry;

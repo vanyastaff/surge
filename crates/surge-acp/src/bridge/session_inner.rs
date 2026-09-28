@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use agent_client_protocol::RequestPermissionResponse;
+use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use tokio::sync::oneshot;
 
 use crate::bridge::event::SessionEndReason;

@@ -6,8 +6,10 @@
 //! [`DaemonEvent::PerRun`].
 
 use crate::admission::{AdmissionController, AdmissionDecision};
+use crate::bootstrap_supervisor::{BootstrapError, BootstrapSupervisor};
 use crate::broadcast::BroadcastRegistry;
 use crate::error::DaemonError;
+use crate::tracked_run::{TrackingContext, spawn_tracked_run as spawn_forward_task};
 use interprocess::local_socket::tokio::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -59,7 +61,7 @@ struct PendingStartRun {
 
 /// Map from queued `RunId` → its stashed `StartRun` params. Populated by
 /// `dispatch::StartRun` when admission queues; drained by the
-/// drain-queue task in [`run`].
+/// drain-queue task in [`run_runs_only`].
 type PendingStarts = Arc<Mutex<HashMap<RunId, PendingStartRun>>>;
 
 /// Top-level daemon-server config.
@@ -75,33 +77,71 @@ pub struct ServerConfig {
     pub socket_path: PathBuf,
 }
 
-/// Wires together the engine facade, admission, broadcast registry,
-/// and the IPC listener. Called by `main.rs` (Phase 6.3).
-///
-/// This entry point creates a fresh [`BroadcastRegistry`] internally; for
-/// callers that need to subscribe to global daemon events themselves
-/// (e.g., the run-completion → tracker-comment hook in `surge-daemon`'s
-/// `main.rs`), use [`run_with_registry`] instead.
-pub async fn run(
+/// Explicit legacy adapter for synthetic facades without durable storage.
+/// Production callers must use [`run_runs_only`] with the actual Engine context.
+pub async fn run_synthetic(
     cfg: ServerConfig,
     facade: Arc<dyn EngineFacade>,
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
     let broadcast = Arc::new(BroadcastRegistry::new());
     let admission = Arc::new(AdmissionController::new(cfg.max_active, cfg.max_queue));
-    run_with_registry(cfg, facade, broadcast, admission, shutdown).await
+    run_runs_only(
+        cfg,
+        facade,
+        TrackingContext::synthetic(),
+        broadcast,
+        admission,
+        shutdown,
+    )
+    .await
 }
 
-/// Like [`run`], but accepts a pre-built [`BroadcastRegistry`] so the
+/// Requires an explicit tracking context and pre-built [`BroadcastRegistry`] so the
 /// caller can `subscribe_global()` for daemon-internal listeners. The
 /// caller is responsible for keeping its `Arc` clone alive for as long
 /// as it wants subscriptions to keep receiving events.
-pub async fn run_with_registry(
+pub async fn run_runs_only(
     cfg: ServerConfig,
     facade: Arc<dyn EngineFacade>,
+    tracking: TrackingContext,
     broadcast: Arc<BroadcastRegistry>,
     admission: Arc<AdmissionController>,
     shutdown: CancellationToken,
+) -> Result<(), DaemonError> {
+    run_host(cfg, facade, tracking, broadcast, admission, shutdown, None).await
+}
+
+/// Production IPC host with durable bootstrap supervision.
+pub async fn run_with_supervisor(
+    cfg: ServerConfig,
+    facade: Arc<dyn EngineFacade>,
+    tracking: TrackingContext,
+    broadcast: Arc<BroadcastRegistry>,
+    admission: Arc<AdmissionController>,
+    shutdown: CancellationToken,
+    bootstrap: Arc<BootstrapSupervisor>,
+) -> Result<(), DaemonError> {
+    run_host(
+        cfg,
+        facade,
+        tracking,
+        broadcast,
+        admission,
+        shutdown,
+        Some(bootstrap),
+    )
+    .await
+}
+
+async fn run_host(
+    cfg: ServerConfig,
+    facade: Arc<dyn EngineFacade>,
+    tracking: TrackingContext,
+    broadcast: Arc<BroadcastRegistry>,
+    admission: Arc<AdmissionController>,
+    shutdown: CancellationToken,
+    bootstrap: Option<Arc<BootstrapSupervisor>>,
 ) -> Result<(), DaemonError> {
     use interprocess::local_socket::ListenerOptions;
 
@@ -155,12 +195,19 @@ pub async fn run_with_registry(
         admission.clone(),
         broadcast.clone(),
         facade.clone(),
+        tracking.clone(),
         pending_starts.clone(),
         shutdown.clone(),
     );
 
+    let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
+            Some(result) = connections.join_next(), if !connections.is_empty() => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "connection task failed");
+                }
+            }
             () = shutdown.cancelled() => {
                 tracing::info!("shutdown signal received; closing listener");
                 break;
@@ -169,18 +216,22 @@ pub async fn run_with_registry(
                 match conn {
                     Ok(stream) => {
                         let facade = facade.clone();
+                        let tracking = tracking.clone();
                         let admission = admission.clone();
                         let broadcast = broadcast.clone();
                         let pending_starts = pending_starts.clone();
                         let shutdown_for_conn = shutdown.clone();
-                        tokio::spawn(async move {
+                        let bootstrap = bootstrap.clone();
+                        connections.spawn(async move {
                             if let Err(e) = handle_connection(
                                 stream,
                                 facade,
+                                tracking,
                                 admission,
                                 broadcast,
                                 pending_starts,
                                 shutdown_for_conn,
+                                bootstrap,
                             )
                             .await
                             {
@@ -193,6 +244,14 @@ pub async fn run_with_registry(
                     }
                 }
             }
+        }
+    }
+    // A finished server now means every admitted connection handler settled.
+    // The daemon's outer grace deadline still bounds this join; aborting this
+    // server task drops the JoinSet and cancels any remaining handlers.
+    while let Some(result) = connections.join_next().await {
+        if let Err(error) = result {
+            tracing::warn!(%error, "connection task failed during shutdown");
         }
     }
     Ok(())
@@ -213,13 +272,16 @@ struct ConnState {
     global_forwarder: Option<tokio::task::JoinHandle<()>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: LocalSocketStream,
     facade: Arc<dyn EngineFacade>,
+    tracking: TrackingContext,
     admission: Arc<AdmissionController>,
     broadcast: Arc<BroadcastRegistry>,
     pending_starts: PendingStarts,
     shutdown: CancellationToken,
+    bootstrap: Option<Arc<BootstrapSupervisor>>,
 ) -> Result<(), DaemonError> {
     let (read_half, write_half) = stream.split();
     let mut reader = BufReader::new(read_half);
@@ -249,12 +311,14 @@ async fn handle_connection(
                         let resp = dispatch(
                             req,
                             &*facade,
+                            &tracking,
                             &admission,
                             &broadcast,
                             &pending_starts,
                             &state,
                             &writer,
                             &shutdown,
+                            bootstrap.as_ref(),
                         )
                         .await;
                         if let Some(r) = resp {
@@ -287,23 +351,117 @@ async fn handle_connection(
     Ok(())
 }
 
+fn bootstrap_error(request_id: RequestId, error: &BootstrapError) -> DaemonResponse {
+    let code = match error {
+        BootstrapError::NotReady => ErrorCode::NotReady,
+        BootstrapError::Store(
+            surge_persistence::runs::bootstrap_operations::BootstrapStoreError::QueueFull,
+        ) => ErrorCode::QueueFull,
+        _ => ErrorCode::EngineError,
+    };
+    DaemonResponse::Error {
+        request_id,
+        code,
+        message: error.to_string(),
+    }
+}
+
+async fn dispatch_bootstrap(
+    request: DaemonRequest,
+    supervisor: Option<&Arc<BootstrapSupervisor>>,
+) -> DaemonResponse {
+    let request_id = request.request_id();
+    let Some(supervisor) = supervisor else {
+        return bootstrap_error(request_id, &BootstrapError::NotReady);
+    };
+    let result = match request {
+        DaemonRequest::StartBootstrap {
+            operation_id,
+            intent,
+            ..
+        } => supervisor.submit(operation_id, &intent).await,
+        DaemonRequest::BootstrapStatus { operation_id, .. } => supervisor.status(operation_id),
+        DaemonRequest::CancelBootstrap { operation_id, .. } => supervisor.cancel(operation_id),
+        DaemonRequest::RetryBootstrap {
+            operation_id,
+            revision,
+            ..
+        } => supervisor.retry(operation_id, revision).await,
+        _ => return bootstrap_error(request_id, &BootstrapError::NotReady),
+    };
+    match result {
+        Ok(status) => DaemonResponse::BootstrapOperation {
+            request_id,
+            status: Box::new(status),
+        },
+        Err(error) => bootstrap_error(request_id, &error),
+    }
+}
+
+fn reserved_run_refusal(
+    supervisor: Option<&Arc<BootstrapSupervisor>>,
+    run_id: RunId,
+    request_id: RequestId,
+) -> Option<DaemonResponse> {
+    match supervisor?.owns_run(run_id) {
+        Ok(false) => None,
+        Ok(true) => Some(DaemonResponse::Error { request_id, code: ErrorCode::EngineError,
+            message: "run belongs to a durable bootstrap operation; use its status, retry, or cancellation API".into() }),
+        Err(error) => Some(bootstrap_error(request_id, &error)),
+    }
+}
+
+// Subscribe remains idempotent after the start/resume reply, including if this
+// forwarder already delivered a fast terminal. Each new execution replaces it.
+async fn attach_run_forwarder(
+    run_id: RunId,
+    publisher: &tokio::sync::broadcast::Sender<EngineRunEvent>,
+    state: &Arc<Mutex<ConnState>>,
+    writer: &Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
+) {
+    let receiver = publisher.subscribe();
+    let handle = tokio::spawn(forward_per_run_to_client(run_id, receiver, writer.clone()));
+    let mut state = state.lock().await;
+    state.subscriptions.insert(run_id);
+    if let Some(old) = state.forwarders.insert(run_id, handle) {
+        old.abort();
+    }
+}
+
+async fn remove_run_forwarder(run_id: RunId, state: &Arc<Mutex<ConnState>>) {
+    let mut state = state.lock().await;
+    state.subscriptions.remove(&run_id);
+    if let Some(handle) = state.forwarders.remove(&run_id) {
+        handle.abort();
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 async fn dispatch(
     req: DaemonRequest,
     facade: &dyn EngineFacade,
+    tracking: &TrackingContext,
     admission: &Arc<AdmissionController>,
     broadcast: &Arc<BroadcastRegistry>,
     pending_starts: &PendingStarts,
     state: &Arc<Mutex<ConnState>>,
     writer: &Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
     shutdown: &CancellationToken,
+    bootstrap: Option<&Arc<BootstrapSupervisor>>,
 ) -> Option<DaemonResponse> {
     match req {
         DaemonRequest::Ping { request_id } => Some(DaemonResponse::PingOk {
             request_id,
             version: env!("CARGO_PKG_VERSION").into(),
         }),
+
+        request @ (DaemonRequest::StartBootstrap { .. }
+        | DaemonRequest::BootstrapStatus { .. }
+        | DaemonRequest::CancelBootstrap { .. }
+        | DaemonRequest::RetryBootstrap { .. }) => {
+            Some(dispatch_bootstrap(request, bootstrap).await)
+        },
 
         DaemonRequest::StartRun {
             request_id,
@@ -312,6 +470,9 @@ async fn dispatch(
             worktree_path,
             run_config,
         } => {
+            if let Some(response) = reserved_run_refusal(bootstrap, run_id, request_id) {
+                return Some(response);
+            }
             let mut run_config = *run_config;
             let config = SurgeConfig::discover_from(&worktree_path).unwrap_or_else(|e| {
                 tracing::debug!(
@@ -367,44 +528,13 @@ async fn dispatch(
                     // against this dispatch finds the per-run channel
                     // already in the registry.
                     let publisher = broadcast.register(run_id).await;
-                    // Pre-attach a forwarder for THIS connection BEFORE
-                    // the engine starts emitting. Without this, fast-
-                    // completing flows (e.g. `flow_terminal_only.toml`)
-                    // can race the client: the engine fires Terminal
-                    // into `publisher` before the client's follow-up
-                    // `Subscribe` IPC creates a subscriber, and tokio
-                    // broadcast's `send` with no receivers drops the
-                    // message — there is no buffer-for-future-receivers
-                    // semantic. Subscribing now (off the same publisher
-                    // we hand to `spawn_forward_task` below) guarantees
-                    // the receiver exists before any send; the
-                    // companion `Subscribe` handler is idempotent for
-                    // already-attached connections so the client's
-                    // post-StartRun Subscribe is a no-op.
-                    let pre_subscribe_rx = publisher.subscribe();
-                    let writer_for_task = writer.clone();
-                    let pre_handle = tokio::spawn(forward_per_run_to_client(
-                        run_id,
-                        pre_subscribe_rx,
-                        writer_for_task,
-                    ));
-                    {
-                        let mut s = state.lock().await;
-                        s.subscriptions.insert(run_id);
-                        if let Some(old) = s.forwarders.insert(run_id, pre_handle) {
-                            // Defensive: should never have a prior
-                            // forwarder for a freshly-admitted run,
-                            // but mirror the Subscribe handler's
-                            // abort-before-replace pattern for
-                            // safety.
-                            old.abort();
-                        }
-                    }
+                    attach_run_forwarder(run_id, &publisher, state, writer).await;
                     broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
                     let admission_for_completion = admission.clone();
                     let broadcast_for_completion = broadcast.clone();
-                    match facade
-                        .start_run(
+                    match tracking
+                        .start(
+                            facade,
                             run_id,
                             *pending.graph,
                             pending.worktree_path,
@@ -423,17 +553,7 @@ async fn dispatch(
                             Some(DaemonResponse::StartRunOk { request_id, run_id })
                         },
                         Err(e) => {
-                            // Clean up the pre-attached forwarder
-                            // we optimistically spawned above, so the
-                            // connection's state stays consistent and
-                            // the task does not hang awaiting events
-                            // that never come.
-                            let mut s = state.lock().await;
-                            s.subscriptions.remove(&run_id);
-                            if let Some(h) = s.forwarders.remove(&run_id) {
-                                h.abort();
-                            }
-                            drop(s);
+                            remove_run_forwarder(run_id, state).await;
                             broadcast.deregister(run_id).await;
                             admission.notify_completed(run_id).await;
                             Some(DaemonResponse::Error {
@@ -514,6 +634,9 @@ async fn dispatch(
             run_id,
             worktree_path,
         } => {
+            if let Some(response) = reserved_run_refusal(bootstrap, run_id, request_id) {
+                return Some(response);
+            }
             // Resume must consume an admission slot just like a fresh
             // StartRun, otherwise users can exceed max_active by replaying
             // resumes. We do NOT queue resumes (the user expects the run to
@@ -526,10 +649,14 @@ async fn dispatch(
                 });
             }
             let publisher = broadcast.register(run_id).await;
+            // A resume is a new stream generation, even on the original connection.
+            // Attach before execution and replace any finished parked-run forwarder.
+            attach_run_forwarder(run_id, &publisher, state, writer).await;
             let admission_for_completion = admission.clone();
             let broadcast_for_completion = broadcast.clone();
-            match facade.resume_run(run_id, worktree_path).await {
+            match tracking.resume(facade, run_id, worktree_path).await {
                 Ok(handle) => {
+                    broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
                     spawn_forward_task(
                         run_id,
                         handle,
@@ -540,6 +667,7 @@ async fn dispatch(
                     Some(DaemonResponse::ResumeRunOk { request_id })
                 },
                 Err(e) => {
+                    remove_run_forwarder(run_id, state).await;
                     broadcast.deregister(run_id).await;
                     admission.notify_completed(run_id).await;
                     Some(DaemonResponse::Error {
@@ -556,6 +684,9 @@ async fn dispatch(
             run_id,
             reason,
         } => {
+            if let Some(response) = reserved_run_refusal(bootstrap, run_id, request_id) {
+                return Some(response);
+            }
             // The engine only knows about runs that `Engine::start_run`
             // has admitted; a queued run is invisible to
             // `facade.stop_run`. Without a queue-aware branch, the
@@ -641,6 +772,26 @@ async fn dispatch(
                 code: ErrorCode::EngineError,
                 message: format!("{e}"),
             }),
+        },
+
+        DaemonRequest::ResolveGateInput {
+            request_id,
+            run_id,
+            node,
+            gate_request_id,
+            response,
+        } => {
+            match facade
+                .resolve_gate_input(run_id, node, gate_request_id, response)
+                .await
+            {
+                Ok(()) => Some(DaemonResponse::ResolveHumanInputOk { request_id }),
+                Err(error) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: error.to_string(),
+                }),
+            }
         },
 
         DaemonRequest::ResolveHumanInput {
@@ -1006,6 +1157,7 @@ fn spawn_drain_task(
     admission: Arc<AdmissionController>,
     broadcast: Arc<BroadcastRegistry>,
     facade: Arc<dyn EngineFacade>,
+    tracking: TrackingContext,
     pending_starts: PendingStarts,
     shutdown: CancellationToken,
 ) {
@@ -1021,6 +1173,7 @@ fn spawn_drain_task(
                         &admission,
                         &broadcast,
                         facade.as_ref(),
+                        &tracking,
                         &pending_starts,
                     )
                     .await;
@@ -1037,6 +1190,7 @@ async fn drain_one_pass(
     admission: &Arc<AdmissionController>,
     broadcast: &Arc<BroadcastRegistry>,
     facade: &dyn EngineFacade,
+    tracking: &TrackingContext,
     pending_starts: &PendingStarts,
 ) {
     while let Some(run_id) = admission.pop_queued().await {
@@ -1059,8 +1213,9 @@ async fn drain_one_pass(
         broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
         let admission_for_completion = admission.clone();
         let broadcast_for_completion = broadcast.clone();
-        match facade
-            .start_run(
+        match tracking
+            .start(
+                facade,
                 run_id,
                 *pending.graph,
                 pending.worktree_path,
@@ -1112,6 +1267,7 @@ pub async fn resume_run_tracked(
     run_id: RunId,
     worktree_path: PathBuf,
     facade: &dyn EngineFacade,
+    tracking: &TrackingContext,
     admission: &Arc<AdmissionController>,
     broadcast: &Arc<BroadcastRegistry>,
 ) -> Result<(), String> {
@@ -1119,8 +1275,9 @@ pub async fn resume_run_tracked(
         return Err(format!("admission cap reached; cannot resume {run_id} now"));
     }
     let publisher = broadcast.register(run_id).await;
-    match facade.resume_run(run_id, worktree_path).await {
+    match tracking.resume(facade, run_id, worktree_path).await {
         Ok(handle) => {
+            broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
             spawn_forward_task(
                 run_id,
                 handle,
@@ -1138,48 +1295,16 @@ pub async fn resume_run_tracked(
     }
 }
 
-/// Spawn the task that forwards engine events into the broadcast
-/// registry and on terminal: publishes `RunFinished` + frees the
-/// admission slot.
-pub(crate) fn spawn_forward_task(
-    run_id: RunId,
-    handle: surge_orchestrator::engine::handle::RunHandle,
-    publisher: tokio::sync::broadcast::Sender<EngineRunEvent>,
-    admission: Arc<AdmissionController>,
-    broadcast: Arc<BroadcastRegistry>,
-) {
-    tokio::spawn(async move {
-        let mut rx = handle.events;
-        loop {
-            match rx.recv().await {
-                Ok(ev) => {
-                    let _ = publisher.send(ev);
-                },
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
-            }
-        }
-        // The run task finished (engine event stream closed). Wait for
-        // the run-task JoinHandle to read the outcome, then notify.
-        let outcome = handle.completion.await.unwrap_or(
-            surge_orchestrator::engine::handle::RunOutcome::Aborted {
-                reason: "run task panicked".into(),
-            },
-        );
-        broadcast.publish_global(GlobalDaemonEvent::RunFinished { run_id, outcome });
-        broadcast.deregister(run_id).await;
-        admission.notify_completed(run_id).await;
-    });
-}
-
 /// Per-subscriber forwarder: pumps per-run broadcast → wire as
 /// [`DaemonEvent::PerRun`]. Exits when the broadcast closes, the
 /// writer fails, or the receiver lags too much.
-async fn forward_per_run_to_client(
+async fn forward_per_run_to_client<W>(
     run_id: RunId,
     mut rx: tokio::sync::broadcast::Receiver<EngineRunEvent>,
-    writer: Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
-) {
+    writer: Arc<Mutex<W>>,
+) where
+    W: AsyncWrite + Unpin,
+{
     loop {
         match rx.recv().await {
             Ok(event) => {
@@ -1199,11 +1324,17 @@ async fn forward_per_run_to_client(
             },
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(
-                    run_id = %run_id,
-                    dropped = n,
-                    "per-run forwarder lagged"
-                );
+                let frame = DaemonEvent::PerRun {
+                    run_id,
+                    event: Box::new(EngineRunEvent::StreamError {
+                        message: format!(
+                            "run event subscriber lost {n} events; outcome is unconfirmed"
+                        ),
+                    }),
+                };
+                let mut writer = writer.lock().await;
+                let _ = write_frame(&mut *writer, &frame).await;
+                break;
             },
         }
     }
@@ -1293,7 +1424,56 @@ async fn forward_global_to_writer<W>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_orchestrator::engine::ipc::{InboundServerFrame, read_inbound_server_frame};
     use tokio::io::BufReader;
+
+    #[tokio::test]
+    async fn per_run_subscriber_lag_reports_unconfirmed_and_ends_only_that_stream() {
+        let id = RunId::new();
+        let (sender, receiver) = tokio::sync::broadcast::channel(1);
+        for _ in 0..3 {
+            sender
+                .send(EngineRunEvent::Terminal {
+                    outcome: surge_orchestrator::engine::RunOutcome::Aborted {
+                        reason: "must not survive gap".into(),
+                    },
+                })
+                .unwrap();
+        }
+        let (client, server) = tokio::io::duplex(4096);
+        let writer = Arc::new(Mutex::new(server));
+        forward_per_run_to_client(id, receiver, writer.clone()).await;
+        // The connection writer remains usable after this single stream ends.
+        write_frame(
+            &mut *writer.lock().await,
+            &DaemonResponse::PingOk {
+                request_id: 99,
+                version: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut reader = BufReader::new(client);
+        let frame = read_inbound_server_frame(&mut reader)
+            .await
+            .unwrap()
+            .unwrap();
+        let InboundServerFrame::Event(frame) = frame else {
+            panic!("expected event")
+        };
+        let DaemonEvent::PerRun { run_id, event } = *frame else {
+            panic!("expected per-run event")
+        };
+        assert_eq!(run_id, id);
+        assert!(matches!(*event, EngineRunEvent::StreamError { .. }));
+        assert!(matches!(
+            read_inbound_server_frame(&mut reader)
+                .await
+                .unwrap()
+                .unwrap(),
+            InboundServerFrame::Response(DaemonResponse::PingOk { request_id: 99, .. })
+        ));
+    }
 
     #[tokio::test]
     async fn global_forwarder_reports_lag_and_closes() {

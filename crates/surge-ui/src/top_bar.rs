@@ -1,7 +1,7 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
-use gpui_component::{Icon, IconName};
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::{Icon, IconName};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::project::RecentProjects;
 use crate::router::Screen;
@@ -11,6 +11,8 @@ use crate::ui;
 /// Events emitted by the TopBar.
 #[derive(Clone, PartialEq)]
 pub enum TopBarEvent {
+    /// Project menu is opening; native child views must yield to the overlay.
+    ProjectSwitcherOpened,
     /// User clicked project name — wants to switch project.
     SwitchProject(std::path::PathBuf),
     /// User wants to open another project.
@@ -58,6 +60,9 @@ impl TopBar {
 
     pub fn toggle_switcher(&mut self, cx: &mut Context<Self>) {
         self.switcher_open = !self.switcher_open;
+        if self.switcher_open {
+            cx.emit(TopBarEvent::ProjectSwitcherOpened);
+        }
         cx.notify();
     }
 
@@ -110,6 +115,8 @@ impl TopBar {
 
                 div()
                     .id(SharedString::from(format!("switch-{display_path}")))
+                    .role(Role::Button)
+                    .aria_label(format!("Open project {name}"))
                     .h_flex()
                     .justify_between()
                     .px_3()
@@ -163,6 +170,8 @@ impl TopBar {
                     .child(
                         div()
                             .id("switch-open-other")
+                            .role(Role::Button)
+                            .aria_label("Open another project")
                             .px_3()
                             .py(px(6.0))
                             .cursor_pointer()
@@ -179,6 +188,8 @@ impl TopBar {
                     .child(
                         div()
                             .id("switch-new-project")
+                            .role(Role::Button)
+                            .aria_label("New project")
                             .px_3()
                             .py(px(6.0))
                             .cursor_pointer()
@@ -219,6 +230,8 @@ impl Render for TopBar {
                     .child(
                         div()
                             .id("project-switcher")
+                            .role(Role::Button)
+                            .aria_label("Switch project")
                             .h_flex()
                             .gap(px(7.0))
                             .items_center()
@@ -259,10 +272,35 @@ impl Render for TopBar {
                     .items_center()
                     .child(self.render_agent_dots())
                     .child(ui::meta(format!(
-                        "{}  ·  {} agents",
+                        "{}  ·  {} connected",
                         self.branch_name, agents_online
                     )))
                     .child(ui::kbd("⌘K")),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn opening_project_switcher_notifies_parent_before_project_selection() {
+        use gpui_kit::{AppContext as _, TestAppContext};
+        use std::{cell::Cell, rc::Rc};
+        let mut cx = TestAppContext::single();
+        let opened = Rc::new(Cell::new(0));
+        let bar = cx.new(|cx| super::TopBar::new("project", crate::router::Screen::Runs, cx));
+        let count = opened.clone();
+        cx.update(|cx| {
+            cx.subscribe(&bar, move |_, event, _| {
+                if matches!(event, super::TopBarEvent::ProjectSwitcherOpened) {
+                    count.set(count.get() + 1);
+                }
+            })
+            .detach();
+        });
+        bar.update(&mut cx, |bar, cx| bar.toggle_switcher(cx));
+        assert_eq!(opened.get(), 1);
+        bar.update(&mut cx, |bar, cx| bar.toggle_switcher(cx));
+        assert_eq!(opened.get(), 1);
     }
 }

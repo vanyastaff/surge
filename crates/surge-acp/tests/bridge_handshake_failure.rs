@@ -19,6 +19,7 @@ async fn handshake_failure_returns_open_session_error() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--handshake-fail".into()],
         },

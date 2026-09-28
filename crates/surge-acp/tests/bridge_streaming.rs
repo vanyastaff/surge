@@ -25,6 +25,7 @@ async fn inner_test() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "long_streaming".into()],
         },

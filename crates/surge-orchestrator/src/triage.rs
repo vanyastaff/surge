@@ -217,6 +217,7 @@ fn event_session_id(event: &BridgeEvent) -> Option<SessionId> {
         BridgeEvent::SessionEstablished { session, .. }
         | BridgeEvent::AgentMessage { session, .. }
         | BridgeEvent::TokenUsage { session, .. }
+        | BridgeEvent::ToolObserved { session, .. }
         | BridgeEvent::ToolCall { session, .. }
         | BridgeEvent::ToolResult { session, .. }
         | BridgeEvent::OutcomeReported { session, .. }
@@ -322,6 +323,7 @@ async fn try_one_attempt(
     bindings.insert("intake.attempt".into(), attempt.to_string());
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::ClaudeCode {
             binary: claude_binary.to_path_buf(),
             extra_args: vec![],

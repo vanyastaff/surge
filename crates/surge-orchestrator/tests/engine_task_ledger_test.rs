@@ -141,6 +141,8 @@ async fn run_stage_steered(
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: steers.clone(),
         node: &node,
         agent_config: cfg,

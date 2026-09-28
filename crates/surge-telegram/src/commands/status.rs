@@ -11,10 +11,43 @@ use surge_persistence::runs::RunStatusSnapshot;
 use crate::commands::CommandReply;
 use crate::error::Result;
 
+/// Healthy requests and isolated journal failures from one recovery scan.
+#[derive(Default)]
+pub struct PendingRequestBatch {
+    /// Actionable requests backed by readable durable evidence.
+    pub requests: Vec<surge_orchestrator::engine::RunEventTap>,
+    /// Unreadable runs remain unknown, never absent or resolved.
+    pub failures: Vec<PendingRequestFailure>,
+}
+
+/// A run whose durable evidence could not be inspected.
+pub struct PendingRequestFailure {
+    /// Run requiring a later retry.
+    pub run_id: RunId,
+    /// Inspection or replay failure, preserved for diagnostics.
+    pub error: crate::error::TelegramCockpitError,
+}
+
 /// Reads a per-run status snapshot. Production wraps
 /// `surge_persistence::runs::query::current_status`.
 #[async_trait]
 pub trait RunSnapshotProvider: Send + Sync {
+    /// Durable pending requests, used to recover cards missed by the live tap.
+    /// Per-run failures are isolated in the batch; an outer error means discovery
+    /// itself failed. Neither kind of failure authorizes closing a card.
+    async fn pending_requests(&self) -> Result<PendingRequestBatch> {
+        Ok(PendingRequestBatch::default())
+    }
+
+    /// Whether the exact durable source request has a matching resolution/timeout.
+    /// Unreadable evidence returns an error and must not close a card.
+    async fn request_settled(
+        &self,
+        _card: &surge_persistence::telegram::cards::Card,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Look up the snapshot for `run_id`. Returns `Ok(None)` when the
     /// run does not exist.
     async fn snapshot(&self, run_id: RunId) -> Result<Option<RunStatusSnapshot>>;

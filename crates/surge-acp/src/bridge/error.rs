@@ -14,6 +14,12 @@ use super::event::SessionEndReason;
 /// has died or refuses commands.
 #[derive(Debug, Error)]
 pub enum BridgeError {
+    /// Cleanup remains owned by the worker but could not be confirmed in time.
+    #[error("ACP cleanup could not be confirmed")]
+    CleanupUnconfirmed,
+    /// Invalid channel capacity or timeout.
+    #[error("ACP capacities and timeouts must be nonzero")]
+    InvalidConfig,
     /// Worker thread panicked or exited unexpectedly. The bridge is dead;
     /// callers should drop the `AcpBridge` and respawn if they want to recover.
     #[error("bridge worker thread is dead")]
@@ -32,6 +38,17 @@ pub enum BridgeError {
 /// Errors from `AcpBridge::open_session`.
 #[derive(Debug, Error)]
 pub enum OpenSessionError {
+    /// Opening was cancelled before a session was delivered.
+    #[error("ACP session opening cancelled")]
+    Cancelled,
+    /// Total initialize/new-session deadline expired.
+    #[error("ACP {phase} exceeded handshake deadline {timeout:?}")]
+    HandshakeTimedOut {
+        /// Handshake phase at expiry.
+        phase: &'static str,
+        /// Configured total handshake budget.
+        timeout: Duration,
+    },
     /// Agent subprocess could not be started (binary not found, bad working dir, etc.).
     #[error("agent subprocess spawn failed for kind '{kind}': {source}")]
     AgentSpawnFailed {
@@ -79,6 +96,12 @@ pub enum OpenSessionError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SendMessageError {
+    /// A session accepts at most one prompt at a time.
+    #[error("session {session} already has a prompt in progress")]
+    PromptAlreadyRunning {
+        /// Busy session.
+        session: SessionId,
+    },
     /// No session with this id exists in the bridge's session map.
     #[error("session {session} not found")]
     SessionNotFound {
@@ -198,7 +221,7 @@ pub enum ReplyToPermissionError {
 pub enum AcpError {
     /// ACP protocol-level error (framing, serialization, handshake violation).
     #[error("ACP protocol error: {0}")]
-    Protocol(#[source] agent_client_protocol::Error),
+    Protocol(#[source] agent_client_protocol::schema::v1::Error),
 
     /// OS I/O error on the subprocess stdio pipes.
     #[error("io: {0}")]

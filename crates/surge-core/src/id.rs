@@ -98,6 +98,17 @@ define_id!(SubtaskId, "sub");
 
 // New runtime IDs added in M1 for Surge data model.
 define_id!(RunId, "run");
+// Identity of one registered operator gate request, never an ACP tool call.
+define_id!(GateRequestId, "gate");
+
+impl GateRequestId {
+    /// Decode only the explicitly namespaced event field, never a bare tool ID.
+    #[must_use]
+    pub fn from_event_call_id(value: &str) -> Option<Self> {
+        value.strip_prefix("gate-")?.parse::<Ulid>().ok().map(Self)
+    }
+}
+define_id!(StageGenerationId, "generation");
 define_id!(SessionId, "session");
 
 // Identifier for a `crate::memory::MemoryClaim`.
@@ -106,6 +117,15 @@ define_id!(MemoryClaimId, "claim");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_event_identity_requires_exact_namespace() {
+        let id = GateRequestId::new();
+        assert_eq!(GateRequestId::from_event_call_id(&id.to_string()), Some(id));
+        assert!(GateRequestId::from_event_call_id(&id.as_ulid().to_string()).is_none());
+        assert!(GateRequestId::from_event_call_id(&format!("gate-{id}")).is_none());
+        assert!(GateRequestId::from_event_call_id("session-01:tool-1").is_none());
+    }
 
     #[test]
     fn ids_are_unique() {

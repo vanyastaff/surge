@@ -56,6 +56,23 @@ impl AgentConfig {
     /// # Errors
     /// [`DeclaredSkillsError`] when `custom_fields["skills"]` exists but
     /// does not deserialize as an array of skill references.
+    /// Provider chosen for this node, overriding the profile's
+    /// `runtime.agent_id`: `custom_fields["runtime"]["agent_id"]`.
+    ///
+    /// Lets an operator move one step to another provider (e.g. run the
+    /// verifier on a different vendor, or away from one that is out of
+    /// quota) without forking the profile. Rides `custom_fields` for the
+    /// same additive reason as [`Self::declared_skills`]. Blank = no override.
+    #[must_use]
+    pub fn runtime_override(&self) -> Option<&str> {
+        self.custom_fields
+            .get("runtime")?
+            .get("agent_id")?
+            .as_str()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
     #[must_use = "a malformed declaration (Err) must be surfaced, not silently dropped"]
     pub fn declared_skills(&self) -> Result<Vec<SkillRef>, DeclaredSkillsError> {
         match self.custom_fields.get("skills") {
@@ -192,6 +209,22 @@ pub struct CbConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_override_reads_node_provider_and_ignores_blank() {
+        let mut cfg: AgentConfig = toml::from_str(r#"profile = "implementer@1.0""#).unwrap();
+        assert_eq!(cfg.runtime_override(), None);
+        cfg.custom_fields.insert(
+            "runtime".into(),
+            toml::from_str::<toml::Value>(r#"agent_id = "codex-acp""#).unwrap(),
+        );
+        assert_eq!(cfg.runtime_override(), Some("codex-acp"));
+        cfg.custom_fields.insert(
+            "runtime".into(),
+            toml::from_str::<toml::Value>(r#"agent_id = "  ""#).unwrap(),
+        );
+        assert_eq!(cfg.runtime_override(), None);
+    }
 
     #[test]
     fn default_limits_match_spec() {

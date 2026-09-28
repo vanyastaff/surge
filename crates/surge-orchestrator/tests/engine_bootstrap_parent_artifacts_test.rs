@@ -99,18 +99,21 @@ async fn start_run_with_bootstrap_parent_seeds_parent_artifacts() {
                 artifact: description.hash,
                 path: description.path,
                 name: "description".into(),
+                source_path: None,
             }),
             VersionedEventPayload::new(EventPayload::ArtifactProduced {
                 node: parent_node.clone(),
                 artifact: roadmap.hash,
                 path: roadmap.path,
                 name: "roadmap".into(),
+                source_path: None,
             }),
             VersionedEventPayload::new(EventPayload::ArtifactProduced {
                 node: parent_node,
                 artifact: flow.hash,
                 path: flow.path,
                 name: "flow".into(),
+                source_path: None,
             }),
         ])
         .await
@@ -154,6 +157,7 @@ async fn start_run_with_bootstrap_parent_seeds_parent_artifacts() {
             artifact,
             path,
             name,
+            ..
         } = &payload
             && ["description", "roadmap", "flow"].contains(&name.as_str())
         {

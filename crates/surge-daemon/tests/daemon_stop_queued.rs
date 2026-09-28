@@ -27,7 +27,7 @@ use std::time::Duration;
 use interprocess::local_socket::tokio::prelude::*;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -226,7 +226,7 @@ async fn stop_run_cancels_queued_run() {
 
     let server_handle = tokio::spawn({
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, stub_for_facade, shutdown).await }
+        async move { run_synthetic_server(cfg, stub_for_facade, shutdown).await }
     });
 
     let stream = connect_with_retry(socket, Duration::from_secs(3))

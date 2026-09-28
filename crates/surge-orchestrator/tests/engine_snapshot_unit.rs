@@ -82,10 +82,19 @@ async fn single_terminal_run_has_no_stage_boundary_snapshots() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn three_node_branch_run_writes_two_snapshots() {
     let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("project");
+    std::fs::create_dir(&worktree).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+    std::fs::write(worktree.join("app.txt"), "boundary version").unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
     let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+        Arc::new(WorktreeToolDispatcher::new(worktree.clone())) as Arc<dyn ToolDispatcher>;
 
     let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
@@ -192,12 +201,7 @@ async fn three_node_branch_run_writes_two_snapshots() {
 
     let run_id = RunId::new();
     let handle = engine
-        .start_run(
-            run_id,
-            graph,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
+        .start_run(run_id, graph, worktree.clone(), EngineRunConfig::default())
         .await
         .unwrap();
     let outcome = handle.await_completion().await.unwrap();
@@ -207,6 +211,68 @@ async fn three_node_branch_run_writes_two_snapshots() {
     assert_eq!(
         snapshot_count, 2,
         "3-node graph (2 transitions) → 2 snapshots"
+    );
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let (boundary_seq, blob) = reader
+        .latest_snapshot_at_or_before(reader.current_seq().await.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot =
+        surge_orchestrator::engine::snapshot::EngineSnapshot::deserialize(&blob).unwrap();
+    assert_eq!(snapshot.root_traversal_counts.get("e1"), Some(&1));
+    assert_eq!(snapshot.root_traversal_counts.get("e2"), Some(&1));
+    let replayed = surge_orchestrator::engine::replay::replay(&reader)
+        .await
+        .unwrap();
+    assert_eq!(
+        replayed
+            .root_traversal_counts
+            .get(&EdgeKey::try_from("e1").unwrap()),
+        Some(&1)
+    );
+    let checkpoint = snapshot
+        .workspace_checkpoint
+        .expect("boundary records workspace checkpoint");
+    std::fs::write(worktree.join("app.txt"), "later version").unwrap();
+    let historical = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(&checkpoint.git_common_dir)
+        .args(["show", &format!("{}:app.txt", checkpoint.commit)])
+        .output()
+        .unwrap();
+    assert!(historical.status.success());
+    assert_eq!(historical.stdout, b"boundary version");
+    let child = RunId::new();
+    let destination = dir.path().canonicalize().unwrap().join("fork");
+    surge_orchestrator::engine::fork::fork(
+        &storage,
+        surge_orchestrator::engine::fork::ForkRequest::new(run_id, child, boundary_seq.as_u64())
+            .with_worktree(destination.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read(destination.join("app.txt")).unwrap(),
+        b"boundary version"
+    );
+    let child_reader = storage.open_run_reader(child).await.unwrap();
+    let events = child_reader
+        .read_events(surge_persistence::runs::EventSeq(1)..surge_persistence::runs::EventSeq(2))
+        .await
+        .unwrap();
+    assert!(matches!(&events[0].payload.payload,
+        surge_core::run_event::EventPayload::RunStarted { project_path, .. }
+            if project_path == &destination));
+    let resumed = engine.resume_run(child, destination.clone()).await.unwrap();
+    assert!(matches!(
+        resumed.await_completion().await.unwrap(),
+        RunOutcome::Completed { .. }
+    ));
+    std::fs::write(destination.join("app.txt"), "child edit").unwrap();
+    assert_eq!(
+        std::fs::read(worktree.join("app.txt")).unwrap(),
+        b"later version"
     );
 }
 

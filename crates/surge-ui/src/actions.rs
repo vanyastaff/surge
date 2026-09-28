@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 // All global actions triggered by keyboard shortcuts.
 actions!(

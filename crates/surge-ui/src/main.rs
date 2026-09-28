@@ -11,9 +11,13 @@ mod app;
 mod app_state;
 mod command_palette;
 mod daemon_link;
+mod dismissed;
+mod flow_diagram;
+mod flow_review;
 mod markdown;
 mod notifications;
 mod project;
+mod project_init;
 mod router;
 mod run_stream;
 mod screens;
@@ -22,8 +26,7 @@ mod theme;
 mod top_bar;
 mod ui;
 
-use gpui::*;
-use gpui_component::Root;
+use gpui_kit::*;
 
 use app::SurgeApp;
 use app_state::AppState;
@@ -50,17 +53,16 @@ fn main() {
         .expect("failed to build tokio runtime");
     let _guard = tokio_rt.enter();
 
-    let app = Application::new().with_assets(gpui_component_assets::Assets);
+    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
 
     app.run(move |cx| {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         theme::init();
         // Force gpui-component's chrome (TitleBar, controls) to dark so it
         // matches the fleet-ops shell instead of following the OS appearance.
-        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
         SurgeApp::bind_actions(cx);
 
-        cx.spawn(async move |cx| {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(100.0), px(100.0)),
@@ -71,17 +73,16 @@ fn main() {
                 // border + shadow via window_border(). Server decorations
                 // aren't shown by this Wayland compositor, so the window was
                 // unmanageable without this.
-                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                titlebar: Some(gpui_kit::component::TitleBar::title_bar_options()),
                 window_decorations: Some(WindowDecorations::Client),
                 app_id: Some("surge".into()),
                 window_min_size: Some(size(px(960.0), px(640.0))),
                 ..Default::default()
             };
 
-            if let Err(err) = cx.open_window(options, |window, cx| {
-                let state = cx.new(|_| AppState::new());
-                let view = cx.new(|cx| SurgeApp::new(state, cx));
-                cx.new(|cx| Root::new(view, window, cx))
+            if let Err(err) = gpui_kit::open_window(options, cx, |_, cx| {
+                    let state = cx.new(|_| AppState::new());
+                    cx.new(|cx| SurgeApp::new(state, cx))
             }) {
                 // Reproducible on a compositor whose renderer gpui can't
                 // use (observed: "Failed to create surface:
@@ -94,7 +95,5 @@ fn main() {
                 );
                 std::process::exit(1);
             }
-        })
-        .detach();
     });
 }

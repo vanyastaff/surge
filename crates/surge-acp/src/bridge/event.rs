@@ -16,6 +16,17 @@ use super::sandbox::SandboxDecision;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum BridgeEvent {
+    /// ACP display notification. This never authorizes tool execution or stage completion.
+    ToolObserved {
+        /// Owning session.
+        session: SessionId,
+        /// Provider's display call ID.
+        call_id: String,
+        /// Provider's display title, not an authenticated tool name.
+        title: String,
+        /// Redacted display arguments.
+        args_redacted_json: String,
+    },
     /// Emitted once after ACP handshake succeeds and tools are declared.
     SessionEstablished {
         /// Bridge-assigned session identifier.
@@ -56,6 +67,7 @@ pub enum BridgeEvent {
         model: String,
     },
 
+    /// Legacy in-process adapter control only; never emitted from ACP notifications.
     /// Generic tool call (not the engine-injected ones). The bridge tracks
     /// the `call_id` in its per-session pending-replies map and waits for the
     /// engine to call `AcpBridge::reply_to_tool` with a dispatcher result;
@@ -91,6 +103,7 @@ pub enum BridgeEvent {
 
     /// Engine-injected `report_stage_outcome` was called. Routed as a first-class
     /// event so M5 can fold directly into `EventPayload::OutcomeReported`.
+    /// Legacy test/triage adapter control; real stage authority uses MCP.
     OutcomeReported {
         /// Session that reported the outcome.
         session: SessionId,
@@ -103,6 +116,7 @@ pub enum BridgeEvent {
     },
 
     /// Engine-injected `request_human_input` was called.
+    /// Legacy test/triage adapter control; real stage authority uses MCP.
     HumanInputRequested {
         /// Session that requested human input.
         session: SessionId,

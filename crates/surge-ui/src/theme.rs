@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use gpui::Hsla;
+use gpui_kit::Hsla;
 
 // ── Dynamic theme colors ───────────────────────────────────────────
 

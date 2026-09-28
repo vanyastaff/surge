@@ -4,9 +4,9 @@
 //! allowing agents to interact with the filesystem, terminals, and permission management
 //! within the context of a Surge task execution.
 
-use agent_client_protocol::{
-    Client, ContentBlock, CreateTerminalRequest, CreateTerminalResponse, ExtNotification,
-    ExtRequest, ExtResponse, KillTerminalRequest, KillTerminalResponse, PermissionOptionId,
+use agent_client_protocol::schema::v1::{
+    ContentBlock, CreateTerminalRequest, CreateTerminalResponse, ExtNotification, ExtRequest,
+    ExtResponse, KillTerminalRequest, KillTerminalResponse, PermissionOptionId,
     PermissionOptionKind, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
     ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, Result as AcpResult, SelectedPermissionOutcome, SessionNotification,
@@ -395,35 +395,43 @@ impl SurgeClient {
 
 // ── ACP type conversions ────────────────────────────────────────────
 
-fn convert_tool_kind(kind: &agent_client_protocol::ToolKind) -> surge_core::ToolKind {
+fn convert_tool_kind(kind: &agent_client_protocol::schema::v1::ToolKind) -> surge_core::ToolKind {
     match kind {
-        agent_client_protocol::ToolKind::Read => surge_core::ToolKind::Read,
-        agent_client_protocol::ToolKind::Edit => surge_core::ToolKind::Edit,
-        agent_client_protocol::ToolKind::Delete => surge_core::ToolKind::Delete,
-        agent_client_protocol::ToolKind::Move => surge_core::ToolKind::Move,
-        agent_client_protocol::ToolKind::Search => surge_core::ToolKind::Search,
-        agent_client_protocol::ToolKind::Execute => surge_core::ToolKind::Execute,
-        agent_client_protocol::ToolKind::Think => surge_core::ToolKind::Think,
-        agent_client_protocol::ToolKind::Fetch => surge_core::ToolKind::Fetch,
-        agent_client_protocol::ToolKind::SwitchMode => surge_core::ToolKind::SwitchMode,
+        agent_client_protocol::schema::v1::ToolKind::Read => surge_core::ToolKind::Read,
+        agent_client_protocol::schema::v1::ToolKind::Edit => surge_core::ToolKind::Edit,
+        agent_client_protocol::schema::v1::ToolKind::Delete => surge_core::ToolKind::Delete,
+        agent_client_protocol::schema::v1::ToolKind::Move => surge_core::ToolKind::Move,
+        agent_client_protocol::schema::v1::ToolKind::Search => surge_core::ToolKind::Search,
+        agent_client_protocol::schema::v1::ToolKind::Execute => surge_core::ToolKind::Execute,
+        agent_client_protocol::schema::v1::ToolKind::Think => surge_core::ToolKind::Think,
+        agent_client_protocol::schema::v1::ToolKind::Fetch => surge_core::ToolKind::Fetch,
+        agent_client_protocol::schema::v1::ToolKind::SwitchMode => surge_core::ToolKind::SwitchMode,
         _ => surge_core::ToolKind::Other,
     }
 }
 
 fn convert_tool_status(
-    status: &agent_client_protocol::ToolCallStatus,
+    status: &agent_client_protocol::schema::v1::ToolCallStatus,
 ) -> surge_core::ToolCallStatus {
     match status {
-        agent_client_protocol::ToolCallStatus::Pending => surge_core::ToolCallStatus::Pending,
-        agent_client_protocol::ToolCallStatus::InProgress => surge_core::ToolCallStatus::InProgress,
-        agent_client_protocol::ToolCallStatus::Completed => surge_core::ToolCallStatus::Completed,
-        agent_client_protocol::ToolCallStatus::Failed => surge_core::ToolCallStatus::Failed,
+        agent_client_protocol::schema::v1::ToolCallStatus::Pending => {
+            surge_core::ToolCallStatus::Pending
+        },
+        agent_client_protocol::schema::v1::ToolCallStatus::InProgress => {
+            surge_core::ToolCallStatus::InProgress
+        },
+        agent_client_protocol::schema::v1::ToolCallStatus::Completed => {
+            surge_core::ToolCallStatus::Completed
+        },
+        agent_client_protocol::schema::v1::ToolCallStatus::Failed => {
+            surge_core::ToolCallStatus::Failed
+        },
         _ => surge_core::ToolCallStatus::Pending,
     }
 }
 
 fn convert_locations(
-    locs: &[agent_client_protocol::ToolCallLocation],
+    locs: &[agent_client_protocol::schema::v1::ToolCallLocation],
 ) -> Vec<surge_core::ToolLocation> {
     locs.iter()
         .map(|l| surge_core::ToolLocation {
@@ -450,27 +458,40 @@ fn extract_diffs(content: &[ToolCallContent]) -> Vec<surge_core::ToolDiff> {
         .collect()
 }
 
-fn convert_plan_priority(p: &agent_client_protocol::PlanEntryPriority) -> surge_core::PlanPriority {
+fn convert_plan_priority(
+    p: &agent_client_protocol::schema::v1::PlanEntryPriority,
+) -> surge_core::PlanPriority {
     match p {
-        agent_client_protocol::PlanEntryPriority::High => surge_core::PlanPriority::High,
-        agent_client_protocol::PlanEntryPriority::Medium => surge_core::PlanPriority::Medium,
-        agent_client_protocol::PlanEntryPriority::Low => surge_core::PlanPriority::Low,
+        agent_client_protocol::schema::v1::PlanEntryPriority::High => {
+            surge_core::PlanPriority::High
+        },
+        agent_client_protocol::schema::v1::PlanEntryPriority::Medium => {
+            surge_core::PlanPriority::Medium
+        },
+        agent_client_protocol::schema::v1::PlanEntryPriority::Low => surge_core::PlanPriority::Low,
         _ => surge_core::PlanPriority::Medium,
     }
 }
 
-fn convert_plan_status(s: &agent_client_protocol::PlanEntryStatus) -> surge_core::PlanStatus {
+fn convert_plan_status(
+    s: &agent_client_protocol::schema::v1::PlanEntryStatus,
+) -> surge_core::PlanStatus {
     match s {
-        agent_client_protocol::PlanEntryStatus::Pending => surge_core::PlanStatus::Pending,
-        agent_client_protocol::PlanEntryStatus::InProgress => surge_core::PlanStatus::InProgress,
-        agent_client_protocol::PlanEntryStatus::Completed => surge_core::PlanStatus::Completed,
+        agent_client_protocol::schema::v1::PlanEntryStatus::Pending => {
+            surge_core::PlanStatus::Pending
+        },
+        agent_client_protocol::schema::v1::PlanEntryStatus::InProgress => {
+            surge_core::PlanStatus::InProgress
+        },
+        agent_client_protocol::schema::v1::PlanEntryStatus::Completed => {
+            surge_core::PlanStatus::Completed
+        },
         _ => surge_core::PlanStatus::Pending,
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl Client for SurgeClient {
-    async fn request_permission(
+impl SurgeClient {
+    pub(crate) async fn request_permission(
         &self,
         args: RequestPermissionRequest,
     ) -> AcpResult<RequestPermissionResponse> {
@@ -511,7 +532,7 @@ impl Client for SurgeClient {
         Ok(RequestPermissionResponse::new(outcome))
     }
 
-    async fn session_notification(&self, args: SessionNotification) -> AcpResult<()> {
+    pub(crate) async fn session_notification(&self, args: SessionNotification) -> AcpResult<()> {
         let session_id = args.session_id.to_string();
         match args.update {
             SessionUpdate::AgentMessageChunk(chunk) => {
@@ -628,15 +649,24 @@ impl Client for SurgeClient {
         Ok(())
     }
 
-    async fn read_text_file(&self, args: ReadTextFileRequest) -> AcpResult<ReadTextFileResponse> {
+    pub(crate) async fn read_text_file(
+        &self,
+        args: ReadTextFileRequest,
+    ) -> AcpResult<ReadTextFileResponse> {
         let path = self.resolve_path(&args.path).map_err(|e| {
-            agent_client_protocol::Error::new(-32603, format!("Failed to resolve path: {e}"))
+            agent_client_protocol::schema::v1::Error::new(
+                -32603,
+                format!("Failed to resolve path: {e}"),
+            )
         })?;
 
         debug!("Reading file: {}", path.display());
 
         let raw_content: String = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            agent_client_protocol::Error::new(-32603, format!("Failed to read file: {e}"))
+            agent_client_protocol::schema::v1::Error::new(
+                -32603,
+                format!("Failed to read file: {e}"),
+            )
         })?;
 
         // Redact credentials before they enter the LLM context.
@@ -650,13 +680,16 @@ impl Client for SurgeClient {
         Ok(ReadTextFileResponse::new(content))
     }
 
-    async fn write_text_file(
+    pub(crate) async fn write_text_file(
         &self,
         args: WriteTextFileRequest,
     ) -> AcpResult<WriteTextFileResponse> {
         // For new files, resolve parent first (resolve_path handles this)
         let path = self.resolve_path(&args.path).map_err(|e| {
-            agent_client_protocol::Error::new(-32603, format!("Failed to resolve path: {e}"))
+            agent_client_protocol::schema::v1::Error::new(
+                -32603,
+                format!("Failed to resolve path: {e}"),
+            )
         })?;
 
         debug!("Writing file: {}", path.display());
@@ -673,7 +706,7 @@ impl Client for SurgeClient {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             let _: () = tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                agent_client_protocol::Error::new(
+                agent_client_protocol::schema::v1::Error::new(
                     -32603,
                     format!("Failed to create directory: {e}"),
                 )
@@ -681,7 +714,10 @@ impl Client for SurgeClient {
         }
 
         let _: () = tokio::fs::write(&path, &args.content).await.map_err(|e| {
-            agent_client_protocol::Error::new(-32603, format!("Failed to write file: {e}"))
+            agent_client_protocol::schema::v1::Error::new(
+                -32603,
+                format!("Failed to write file: {e}"),
+            )
         })?;
 
         self.emit_event(SurgeEvent::FileOperation {
@@ -692,7 +728,7 @@ impl Client for SurgeClient {
         Ok(WriteTextFileResponse::default())
     }
 
-    async fn create_terminal(
+    pub(crate) async fn create_terminal(
         &self,
         args: CreateTerminalRequest,
     ) -> AcpResult<CreateTerminalResponse> {
@@ -716,7 +752,10 @@ impl Client for SurgeClient {
                 args.output_byte_limit,
             )
             .map_err(|e| {
-                agent_client_protocol::Error::new(-32603, format!("Terminal spawn failed: {e}"))
+                agent_client_protocol::schema::v1::Error::new(
+                    -32603,
+                    format!("Terminal spawn failed: {e}"),
+                )
             })?;
 
         self.emit_event(SurgeEvent::TerminalCreated {
@@ -727,7 +766,7 @@ impl Client for SurgeClient {
         Ok(CreateTerminalResponse::new(terminal_id))
     }
 
-    async fn terminal_output(
+    pub(crate) async fn terminal_output(
         &self,
         args: TerminalOutputRequest,
     ) -> AcpResult<TerminalOutputResponse> {
@@ -737,7 +776,7 @@ impl Client for SurgeClient {
             terminal::terminal_get_output(&self.terminals, &terminal_id)
                 .await
                 .map_err(|e| {
-                    agent_client_protocol::Error::new(
+                    agent_client_protocol::schema::v1::Error::new(
                         -32603,
                         format!("Terminal output failed: {e}"),
                     )
@@ -757,7 +796,7 @@ impl Client for SurgeClient {
         Ok(TerminalOutputResponse::new(output, _truncated).exit_status(exit_status))
     }
 
-    async fn release_terminal(
+    pub(crate) async fn release_terminal(
         &self,
         args: ReleaseTerminalRequest,
     ) -> AcpResult<ReleaseTerminalResponse> {
@@ -767,13 +806,16 @@ impl Client for SurgeClient {
         terminal::terminal_release(&self.terminals, &terminal_id)
             .await
             .map_err(|e| {
-                agent_client_protocol::Error::new(-32603, format!("Terminal release failed: {e}"))
+                agent_client_protocol::schema::v1::Error::new(
+                    -32603,
+                    format!("Terminal release failed: {e}"),
+                )
             })?;
 
         Ok(ReleaseTerminalResponse::default())
     }
 
-    async fn wait_for_terminal_exit(
+    pub(crate) async fn wait_for_terminal_exit(
         &self,
         args: WaitForTerminalExitRequest,
     ) -> AcpResult<WaitForTerminalExitResponse> {
@@ -786,7 +828,10 @@ impl Client for SurgeClient {
         let exit = terminal::terminal_wait_for_exit(&self.terminals, &terminal_id)
             .await
             .map_err(|e| {
-                agent_client_protocol::Error::new(-32603, format!("Terminal wait failed: {e}"))
+                agent_client_protocol::schema::v1::Error::new(
+                    -32603,
+                    format!("Terminal wait failed: {e}"),
+                )
             })?;
 
         self.emit_event(SurgeEvent::TerminalExited {
@@ -801,14 +846,20 @@ impl Client for SurgeClient {
         Ok(WaitForTerminalExitResponse::new(status))
     }
 
-    async fn kill_terminal(&self, args: KillTerminalRequest) -> AcpResult<KillTerminalResponse> {
+    pub(crate) async fn kill_terminal(
+        &self,
+        args: KillTerminalRequest,
+    ) -> AcpResult<KillTerminalResponse> {
         let terminal_id = args.terminal_id.to_string();
         debug!(terminal_id = terminal_id.as_str(), "killing terminal");
 
         terminal::terminal_kill(&self.terminals, &terminal_id)
             .await
             .map_err(|e| {
-                agent_client_protocol::Error::new(-32603, format!("Terminal kill failed: {e}"))
+                agent_client_protocol::schema::v1::Error::new(
+                    -32603,
+                    format!("Terminal kill failed: {e}"),
+                )
             })?;
 
         self.emit_event(SurgeEvent::TerminalKilled { terminal_id });
@@ -816,11 +867,11 @@ impl Client for SurgeClient {
         Ok(KillTerminalResponse::default())
     }
 
-    async fn ext_method(&self, _args: ExtRequest) -> AcpResult<ExtResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+    pub(crate) async fn ext_method(&self, _args: ExtRequest) -> AcpResult<ExtResponse> {
+        Err(agent_client_protocol::schema::v1::Error::method_not_found())
     }
 
-    async fn ext_notification(&self, _args: ExtNotification) -> AcpResult<()> {
+    pub(crate) async fn ext_notification(&self, _args: ExtNotification) -> AcpResult<()> {
         Ok(())
     }
 }
@@ -828,7 +879,7 @@ impl Client for SurgeClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
+    use agent_client_protocol::schema::v1::{
         PermissionOption, PermissionOptionKind, ToolCallUpdate, ToolCallUpdateFields,
     };
 
@@ -1020,3 +1071,5 @@ mod tests {
         );
     }
 }
+
+crate::sdk_v1::client_callbacks!(SurgeClient);

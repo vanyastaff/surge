@@ -9,15 +9,14 @@
 //!    (Decision 6). Unpaired chats short-circuit to
 //!    [`CallbackOutcome::AdmissionDenied`].
 //! 3. **Dispatch** the verb to the right engine call. Approve / Edit /
-//!    Reject route to [`EngineResolver::resolve_human_input`]; Ack is a
+//!    Reject route to [`EngineResolver::resolve_card`]; Ack is a
 //!    no-op acknowledgement. Stale taps (missing or closed card) short-
 //!    circuit to [`CallbackOutcome::StaleTap`] per Decision 14.
 //!
 //! Both the engine and the pairings allowlist are reached through traits so
 //! unit tests can substitute in-memory fakes without standing up a runtime.
-//! The teloxide bot loop that consumes [`CallbackQuery`] events from
-//! Telegram and feeds them into [`handle_callback`] is wired in the follow-
-//! up phase.
+//! The production update loop acknowledges the query first, then dispatches
+//! here and sends the resulting success, stale, or failure message.
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -124,6 +123,14 @@ pub enum CallbackOutcome {
         /// Verb that fired.
         verb: CallbackVerb,
     },
+    /// The engine accepted the decision, but the card's presentation state
+    /// could not be closed. This is not a failed or retryable decision.
+    ResolvedCardUpdateFailed {
+        /// Card whose presentation needs reconciliation.
+        card_id: String,
+        /// Accepted operator decision.
+        verb: CallbackVerb,
+    },
     /// The verb was [`CallbackVerb::Ack`] — no engine call, just an
     /// acknowledgement.
     Acknowledged {
@@ -138,7 +145,7 @@ pub enum CallbackOutcome {
         verb: CallbackVerb,
     },
     /// The verb was [`CallbackVerb::Edit`]. The handler must NOT call
-    /// `resolve_human_input` here — tapping `Edit` is only an
+    /// `resolve_card` here — tapping `Edit` is only an
     /// expression of intent. The runtime is expected to send a
     /// forced-reply prompt for the operator's feedback text, store
     /// the prompt's `message_id` on the card's
@@ -179,20 +186,18 @@ pub trait Admission: Send + Sync {
     async fn is_admitted(&self, chat_id: i64) -> Result<bool>;
 }
 
-/// Adapter around [`Engine::resolve_human_input`] used by the callback
-/// router. Lets unit tests substitute a fake without standing up the full
-/// engine.
+/// Card-bound resolution surface. Production validates the card's immutable
+/// request sequence against its journal before calling `Engine::resolve_gate_input`.
 #[async_trait]
 pub trait EngineResolver: Send + Sync {
     /// Forward the operator's decision to the engine.
     ///
-    /// `run_id` is the string form of the cockpit card's `run_id` column;
-    /// the production impl parses it back into a `RunId`. `response` is
-    /// the JSON the engine expects (`{"outcome": "approve", ...}`).
-    async fn resolve_human_input(
+    /// `card` carries the original run, node and durable request sequence.
+    /// `response` is the operator's decision. Implementations must never replace
+    /// the captured request with a newer request during resolution.
+    async fn resolve_card(
         &self,
-        run_id: &str,
-        call_id: Option<String>,
+        card: &surge_persistence::telegram::cards::Card,
         response: serde_json::Value,
     ) -> Result<()>;
 }
@@ -275,8 +280,11 @@ where
         },
     };
 
-    // 4. Verb dispatch.
-    match parsed.verb {
+    if card.chat_id != chat_id {
+        return Ok(CallbackOutcome::AdmissionDenied { chat_id });
+    }
+    // Exact request validation happens at the resolver immediately before mutation.
+    let outcome = match parsed.verb {
         CallbackVerb::Approve => resolve(&parsed, &card, &ctx.engine, "approve", None).await,
         CallbackVerb::Reject => resolve(&parsed, &card, &ctx.engine, "reject", None).await,
         CallbackVerb::Edit => {
@@ -323,6 +331,31 @@ where
             );
             Ok(CallbackOutcome::NotImplemented { verb: parsed.verb })
         },
+    };
+    match outcome {
+        Ok(resolved @ CallbackOutcome::Resolved { .. }) => {
+            if let Err(error) = ctx
+                .store
+                .close(&card.card_id, chrono::Utc::now().timestamp_millis())
+                .await
+            {
+                tracing::warn!(%error, card_id = %card.card_id, "decision accepted but card close failed");
+                return Ok(CallbackOutcome::ResolvedCardUpdateFailed {
+                    card_id: card.card_id,
+                    verb: parsed.verb,
+                });
+            }
+            Ok(resolved)
+        },
+        Err(
+            crate::error::TelegramCockpitError::CardClosed
+            | crate::error::TelegramCockpitError::EngineResolve(
+                surge_orchestrator::engine::EngineError::StaleGateRequest,
+            ),
+        ) => Ok(CallbackOutcome::StaleTap {
+            card_id: card.card_id,
+        }),
+        other => other,
     }
 }
 
@@ -339,9 +372,7 @@ async fn resolve<E: EngineResolver>(
         Some(c) => json!({ "outcome": outcome, "comment": c }),
         None => json!({ "outcome": outcome }),
     };
-    engine
-        .resolve_human_input(&card.run_id, None, response)
-        .await?;
+    engine.resolve_card(card, response).await?;
     tracing::info!(
         target: "telegram::callback",
         verb = %parsed.verb.as_str(),
@@ -447,16 +478,12 @@ mod tests {
 
     #[async_trait]
     impl EngineResolver for FakeEngine {
-        async fn resolve_human_input(
-            &self,
-            run_id: &str,
-            call_id: Option<String>,
-            response: serde_json::Value,
-        ) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((run_id.to_owned(), call_id, response));
+        async fn resolve_card(&self, card: &Card, response: serde_json::Value) -> Result<()> {
+            self.calls.lock().unwrap().push((
+                card.run_id.clone(),
+                Some(card.card_id.clone()),
+                response,
+            ));
             Ok(())
         }
     }
@@ -515,8 +542,14 @@ mod tests {
             unreachable!("callback tests do not exercise find_open")
         }
 
-        async fn close(&self, _card_id: &str, _now_ms: i64) -> Result<()> {
-            unreachable!("callback tests do not exercise close")
+        async fn close(&self, card_id: &str, now_ms: i64) -> Result<()> {
+            let mut cards = self.cards.lock().unwrap();
+            let card = cards
+                .iter_mut()
+                .find(|card| card.card_id == card_id)
+                .unwrap();
+            card.closed_at = Some(now_ms);
+            Ok(())
         }
     }
 
@@ -624,7 +657,7 @@ mod tests {
         let calls = ctx.engine.calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "run-XYZ");
-        assert_eq!(calls[0].1, None);
+        assert_eq!(calls[0].1.as_deref(), Some(SAMPLE_CARD_ID));
         assert_eq!(calls[0].2["outcome"], "approve");
         // No `comment` key on approve.
         assert!(calls[0].2.get("comment").is_none());

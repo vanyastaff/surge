@@ -42,11 +42,16 @@ pub struct DaemonClient {
 /// background read loop.
 struct EventDispatcher {
     per_run: Mutex<HashMap<RunId, broadcast::Sender<EngineRunEvent>>>,
-    global: broadcast::Sender<GlobalDaemonEvent>,
+    global: Mutex<Option<broadcast::Sender<GlobalDaemonEvent>>>,
     /// Tracks completion oneshots so `start_run` / `resume_run` can
     /// fabricate a `JoinHandle<RunOutcome>` for the returned
     /// [`RunHandle`].
-    completion: Mutex<HashMap<RunId, oneshot::Sender<RunOutcome>>>,
+    completion: Mutex<HashMap<RunId, PendingRunCompletion>>,
+}
+
+struct PendingRunCompletion {
+    sender: oneshot::Sender<RunOutcome>,
+    abort: tokio::task::AbortHandle,
 }
 
 impl DaemonClient {
@@ -67,7 +72,7 @@ impl DaemonClient {
         let (global_tx, _) = broadcast::channel(64);
         let event_dispatcher = Arc::new(EventDispatcher {
             per_run: Mutex::new(HashMap::new()),
-            global: global_tx,
+            global: Mutex::new(Some(global_tx)),
             completion: Mutex::new(HashMap::new()),
         });
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<DaemonResponse>>>> =
@@ -88,13 +93,23 @@ impl DaemonClient {
                     Ok(Some(InboundServerFrame::Event(ev))) => match *ev {
                         DaemonEvent::PerRun { run_id, event } => {
                             let event = *event;
-                            let is_terminal = matches!(&event, EngineRunEvent::Terminal { .. });
+                            let is_terminal = matches!(
+                                &event,
+                                EngineRunEvent::Terminal { .. }
+                                    | EngineRunEvent::StreamError { .. }
+                            );
                             if is_terminal
                                 && let EngineRunEvent::Terminal { outcome } = &event
                                 && let Some(tx) =
                                     dispatcher_for_task.completion.lock().await.remove(&run_id)
                             {
-                                let _ = tx.send(outcome.clone());
+                                let _ = tx.sender.send(outcome.clone());
+                            }
+                            if matches!(&event, EngineRunEvent::StreamError { .. })
+                                && let Some(pending) =
+                                    dispatcher_for_task.completion.lock().await.remove(&run_id)
+                            {
+                                pending.abort.abort();
                             }
                             // Forward event to per-run broadcast (if subscribed).
                             {
@@ -110,7 +125,9 @@ impl DaemonClient {
                             }
                         },
                         DaemonEvent::Global(g) => {
-                            let _ = dispatcher_for_task.global.send(g);
+                            if let Some(tx) = dispatcher_for_task.global.lock().await.as_ref() {
+                                let _ = tx.send(g);
+                            }
                         },
                     },
                     Ok(None) => break, // EOF — daemon closed connection
@@ -123,13 +140,16 @@ impl DaemonClient {
             // Fix 1: drain all pending maps so in-flight futures resolve
             // gracefully (via channel-closed error) instead of hanging forever.
             tracing::info!("daemon-client read loop ended; draining pending+completion maps");
+            dispatcher_for_task.global.lock().await.take();
             {
                 let mut p = pending_for_task.lock().await;
                 p.clear();
             }
             {
                 let mut c = dispatcher_for_task.completion.lock().await;
-                c.clear();
+                for (_, pending) in c.drain() {
+                    pending.abort.abort();
+                }
             }
             {
                 let mut r = dispatcher_for_task.per_run.lock().await;
@@ -188,12 +208,105 @@ pub struct DaemonEngineFacade {
     inner: Arc<DaemonClient>,
 }
 
+/// Typed refusal from the durable bootstrap API.
+#[derive(Debug, thiserror::Error)]
+pub enum BootstrapClientError {
+    /// No durable supervisor is installed; the request accepted no operation.
+    #[error("durable bootstrap supervision is not available")]
+    NotReady,
+    /// The daemon rejected the request.
+    #[error("bootstrap request rejected ({code:?}): {message}")]
+    Rejected {
+        /// Stable wire error code.
+        code: ErrorCode,
+        /// Daemon diagnostic.
+        message: String,
+    },
+    /// IPC transport or response protocol failure.
+    #[error(transparent)]
+    Transport(#[from] EngineError),
+}
+
 impl DaemonEngineFacade {
     /// Open an IPC connection and return a facade.
     pub async fn connect(socket_path: PathBuf) -> Result<Self, EngineError> {
         Ok(Self {
             inner: DaemonClient::connect(socket_path).await?,
         })
+    }
+
+    /// Submit allowlisted bootstrap intent using a stable operation identity.
+    pub async fn start_bootstrap(
+        &self,
+        operation_id: RunId,
+        intent: surge_core::bootstrap_operation::BootstrapIntent,
+    ) -> Result<surge_core::bootstrap_operation::BootstrapOperationStatus, BootstrapClientError>
+    {
+        self.bootstrap_rpc(|request_id| DaemonRequest::StartBootstrap {
+            request_id,
+            operation_id,
+            intent: Box::new(intent),
+        })
+        .await
+    }
+
+    /// Read durable bootstrap state.
+    pub async fn bootstrap_status(
+        &self,
+        operation_id: RunId,
+    ) -> Result<surge_core::bootstrap_operation::BootstrapOperationStatus, BootstrapClientError>
+    {
+        self.bootstrap_rpc(|request_id| DaemonRequest::BootstrapStatus {
+            request_id,
+            operation_id,
+        })
+        .await
+    }
+
+    /// Request cancellation without relabeling an already terminal operation.
+    pub async fn cancel_bootstrap(
+        &self,
+        operation_id: RunId,
+    ) -> Result<surge_core::bootstrap_operation::BootstrapOperationStatus, BootstrapClientError>
+    {
+        self.bootstrap_rpc(|request_id| DaemonRequest::CancelBootstrap {
+            request_id,
+            operation_id,
+        })
+        .await
+    }
+
+    /// Explicitly retry a blocked operation against its observed revision.
+    pub async fn retry_bootstrap(
+        &self,
+        operation_id: RunId,
+        revision: u64,
+    ) -> Result<surge_core::bootstrap_operation::BootstrapOperationStatus, BootstrapClientError>
+    {
+        self.bootstrap_rpc(|request_id| DaemonRequest::RetryBootstrap {
+            request_id,
+            operation_id,
+            revision,
+        })
+        .await
+    }
+
+    async fn bootstrap_rpc(
+        &self,
+        request: impl FnOnce(RequestId) -> DaemonRequest,
+    ) -> Result<surge_core::bootstrap_operation::BootstrapOperationStatus, BootstrapClientError>
+    {
+        match self.inner.rpc(request).await? {
+            DaemonResponse::BootstrapOperation { status, .. } => Ok(*status),
+            DaemonResponse::Error {
+                code: ErrorCode::NotReady,
+                ..
+            } => Err(BootstrapClientError::NotReady),
+            DaemonResponse::Error { code, message, .. } => {
+                Err(BootstrapClientError::Rejected { code, message })
+            },
+            _ => Err(EngineError::Internal("unexpected bootstrap response".into()).into()),
+        }
     }
 
     /// Request-scoped MCP config validation (`surge mcp list|start`).
@@ -260,13 +373,7 @@ impl EngineFacade for DaemonEngineFacade {
     ) -> Result<RunHandle, EngineError> {
         // Reserve completion + per-run channel BEFORE sending Subscribe so
         // we don't lose early events.
-        let (completion_tx, completion_rx) = oneshot::channel();
-        self.inner
-            .event_dispatcher
-            .completion
-            .lock()
-            .await
-            .insert(run_id, completion_tx);
+        let join = self.register_completion(run_id).await;
         let (event_tx, event_rx) = broadcast::channel(256);
         self.inner
             .event_dispatcher
@@ -276,8 +383,7 @@ impl EngineFacade for DaemonEngineFacade {
             .insert(run_id, event_tx);
 
         let resp = self
-            .inner
-            .rpc(|request_id| DaemonRequest::StartRun {
+            .rpc_for_run(run_id, |request_id| DaemonRequest::StartRun {
                 request_id,
                 run_id,
                 graph: Box::new(graph),
@@ -301,8 +407,10 @@ impl EngineFacade for DaemonEngineFacade {
 
         // Subscribe to per-run events.
         let sub = self
-            .inner
-            .rpc(|request_id| DaemonRequest::Subscribe { request_id, run_id })
+            .rpc_for_run(run_id, |request_id| DaemonRequest::Subscribe {
+                request_id,
+                run_id,
+            })
             .await?;
         match sub {
             DaemonResponse::SubscribeOk { .. } => {},
@@ -318,12 +426,6 @@ impl EngineFacade for DaemonEngineFacade {
             },
         }
 
-        let join: tokio::task::JoinHandle<RunOutcome> = tokio::spawn(async move {
-            completion_rx.await.unwrap_or(RunOutcome::Aborted {
-                reason: "daemon connection lost".into(),
-            })
-        });
-
         Ok(RunHandle {
             run_id,
             events: event_rx,
@@ -336,13 +438,7 @@ impl EngineFacade for DaemonEngineFacade {
         run_id: RunId,
         worktree_path: PathBuf,
     ) -> Result<RunHandle, EngineError> {
-        let (completion_tx, completion_rx) = oneshot::channel();
-        self.inner
-            .event_dispatcher
-            .completion
-            .lock()
-            .await
-            .insert(run_id, completion_tx);
+        let join = self.register_completion(run_id).await;
         let (event_tx, event_rx) = broadcast::channel(256);
         self.inner
             .event_dispatcher
@@ -352,8 +448,7 @@ impl EngineFacade for DaemonEngineFacade {
             .insert(run_id, event_tx);
 
         let resp = self
-            .inner
-            .rpc(|request_id| DaemonRequest::ResumeRun {
+            .rpc_for_run(run_id, |request_id| DaemonRequest::ResumeRun {
                 request_id,
                 run_id,
                 worktree_path,
@@ -374,8 +469,10 @@ impl EngineFacade for DaemonEngineFacade {
         }
 
         let sub = self
-            .inner
-            .rpc(|request_id| DaemonRequest::Subscribe { request_id, run_id })
+            .rpc_for_run(run_id, |request_id| DaemonRequest::Subscribe {
+                request_id,
+                run_id,
+            })
             .await?;
         match sub {
             DaemonResponse::SubscribeOk { .. } => {},
@@ -390,12 +487,6 @@ impl EngineFacade for DaemonEngineFacade {
                 )));
             },
         }
-
-        let join: tokio::task::JoinHandle<RunOutcome> = tokio::spawn(async move {
-            completion_rx.await.unwrap_or(RunOutcome::Aborted {
-                reason: "daemon connection lost".into(),
-            })
-        });
 
         Ok(RunHandle {
             run_id,
@@ -439,6 +530,30 @@ impl EngineFacade for DaemonEngineFacade {
             .await?
         {
             DaemonResponse::SubmitRoadmapAmendmentOk { outcome, .. } => Ok(*outcome),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
+    async fn resolve_gate_input(
+        &self,
+        run_id: RunId,
+        node: surge_core::keys::NodeKey,
+        gate_request_id: surge_core::id::GateRequestId,
+        response: serde_json::Value,
+    ) -> Result<(), EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::ResolveGateInput {
+                request_id,
+                run_id,
+                node,
+                gate_request_id,
+                response,
+            })
+            .await?
+        {
+            DaemonResponse::ResolveHumanInputOk { .. } => Ok(()),
             DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
             other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
         }
@@ -631,7 +746,15 @@ impl DaemonEngineFacade {
         // Subscribe to the local channel BEFORE sending the IPC so any
         // global events arriving immediately after the daemon registers
         // the subscription are delivered to the caller.
-        let rx = self.inner.event_dispatcher.global.subscribe();
+        let rx = self
+            .inner
+            .event_dispatcher
+            .global
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| EngineError::Internal("daemon connection is closed".into()))?
+            .subscribe();
 
         let resp = self
             .inner
@@ -693,6 +816,45 @@ impl DaemonEngineFacade {
         }
     }
 
+    async fn rpc_for_run(
+        &self,
+        run_id: RunId,
+        request: impl FnOnce(RequestId) -> DaemonRequest,
+    ) -> Result<DaemonResponse, EngineError> {
+        let response = self.inner.rpc(request).await;
+        if response.is_err() {
+            self.cleanup_run_channels(run_id).await;
+        }
+        response
+    }
+
+    async fn register_completion(&self, run_id: RunId) -> tokio::task::JoinHandle<RunOutcome> {
+        let (sender, receiver) = oneshot::channel();
+        let join = tokio::spawn(async move {
+            match receiver.await {
+                Ok(outcome) => outcome,
+                // Every removal on an error path aborts this waiter. Never invent
+                // an Aborted/Failed durable outcome when a transport sender vanishes.
+                Err(_) => std::future::pending().await,
+            }
+        });
+        let pending = PendingRunCompletion {
+            sender,
+            abort: join.abort_handle(),
+        };
+        if let Some(previous) = self
+            .inner
+            .event_dispatcher
+            .completion
+            .lock()
+            .await
+            .insert(run_id, pending)
+        {
+            previous.abort.abort();
+        }
+        join
+    }
+
     async fn cleanup_run_channels(&self, run_id: RunId) {
         self.inner
             .event_dispatcher
@@ -700,12 +862,16 @@ impl DaemonEngineFacade {
             .lock()
             .await
             .remove(&run_id);
-        self.inner
+        if let Some(pending) = self
+            .inner
             .event_dispatcher
             .completion
             .lock()
             .await
-            .remove(&run_id);
+            .remove(&run_id)
+        {
+            pending.abort.abort();
+        }
     }
 }
 

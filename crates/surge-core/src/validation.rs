@@ -3556,16 +3556,11 @@ mod w6_tests {
         assert_eq!(w6(&g), vec![]);
     }
 
-    /// Pins W6's blast radius on the shipped set, and with it the fact this
-    /// rule exists to state: **no bundled flow gates more than one
-    /// boundary.** Five have exactly one verifier against two or more work
-    /// nodes; the other eight have none at all and are W4's finding.
-    ///
-    /// `multi-milestone` earns its place here twice over — its verifier
-    /// lives inside a task-body subgraph, so this also proves the tally
-    /// descends into `graph.subgraphs`.
+    /// Pins W6's scope on the shipped set. Multi-milestone now verifies each
+    /// task and performs a separate final verification, so it no longer has
+    /// only one verification boundary.
     #[test]
-    fn w6_names_exactly_the_five_bundled_flows_that_verify_only_at_the_end() {
+    fn w6_names_exactly_the_four_bundled_flows_that_verify_only_at_the_end() {
         let mut warned: Vec<String> = Vec::new();
         for flow in crate::BundledFlows::all() {
             let mut out = Vec::new();
@@ -3577,13 +3572,7 @@ mod w6_tests {
         warned.sort_unstable();
         assert_eq!(
             warned,
-            vec![
-                "bug-fix",
-                "linear-3",
-                "linear-with-review",
-                "multi-milestone",
-                "refactor",
-            ],
+            vec!["bug-fix", "linear-3", "linear-with-review", "refactor",],
             "W6's blast radius on the bundled set changed"
         );
     }

@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use agent_client_protocol::RequestPermissionResponse;
+use agent_client_protocol::schema::v1::RequestPermissionResponse;
 
 use crate::bridge::acp_bridge::AcpBridge;
 use crate::bridge::error::{
@@ -27,6 +27,13 @@ use surge_core::SessionId;
 /// Engine-facing surface of an ACP bridge. All futures are `Send`.
 #[async_trait]
 pub trait BridgeFacade: Send + Sync {
+    /// Internal migration seam for in-process test/triage adapters only.
+    /// Real ACP sessions must use authenticated MCP and leave this false.
+    /// This legacy seam will be removed after fake-stage and triage migration.
+    fn legacy_stage_event_adapter(&self) -> bool {
+        false
+    }
+
     /// Open a new ACP session with the given configuration.
     async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError>;
 

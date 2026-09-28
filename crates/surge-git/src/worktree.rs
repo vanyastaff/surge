@@ -55,6 +55,18 @@ pub enum GitError {
 
     #[error("merge source and target are the same branch: {0}")]
     SameBranch(String),
+
+    #[error("repository has tracked or untracked changes")]
+    DirtyRepository,
+
+    #[error("worktree identity conflict at {path}: {reason}")]
+    WorktreeConflict {
+        path: PathBuf,
+        reason: crate::run_worktree::WorktreeConflict,
+    },
+
+    #[error("cannot encode worktree identity: {0}")]
+    IdentityEncoding(#[from] serde_json::Error),
 }
 
 impl From<GitError> for surge_core::SurgeError {
@@ -82,6 +94,9 @@ impl From<GitError> for surge_core::SurgeError {
             GitError::SameBranch(s) => {
                 surge_core::SurgeError::git(format!("source and target are the same branch: {s}"))
             },
+            other @ (GitError::DirtyRepository
+            | GitError::WorktreeConflict { .. }
+            | GitError::IdentityEncoding(_)) => surge_core::SurgeError::git(other.to_string()),
         }
     }
 }

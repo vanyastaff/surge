@@ -6,19 +6,25 @@
 //! calls `EngineFacade::stop_run`, and the steer bar queues a real
 //! operator message via `EngineFacade::submit_steer`.
 //!
-//! What the daemon does NOT expose yet (per-run stage/event streaming —
-//! `daemon_link.rs` stops at global lifecycle events) is shown honestly:
-//! the pipeline renders the run *lifecycle* (accepted → executing →
-//! terminal) rather than fake graph stages, and the event pane says so.
-//! When there are no runs at all, a clearly-labelled sample cockpit
-//! shows the design intent offline (same policy as the Fleet screen).
+//! Live streams and restored durable events provide stage and event details.
+//! Runs without recorded stage events show the known lifecycle only. The result
+//! folder action reads that run's registry path and opens it through the platform.
+//! When no runs exist, the cockpit stays empty and points to Fleet.
+
+#[path = "run_changes.rs"]
+mod run_changes;
+#[path = "run_checks.rs"]
+mod run_checks;
+#[path = "run_preview.rs"]
+mod run_preview;
 
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::facade::EngineFacade as _;
 use surge_orchestrator::engine::handle::RunStatus;
@@ -32,7 +38,6 @@ use crate::ui;
 enum StageState {
     Done,
     Running,
-    Gate,
     Failed,
     Queued,
 }
@@ -41,7 +46,7 @@ impl StageState {
     fn color(self) -> Hsla {
         match self {
             Self::Done => theme::success(),
-            Self::Running | Self::Gate => theme::accent(),
+            Self::Running => theme::accent(),
             Self::Failed => theme::error(),
             Self::Queued => theme::text_muted(),
         }
@@ -79,11 +84,10 @@ fn stage_from_stream(row: &crate::run_stream::StageRow) -> Stage {
     }
 }
 
-/// Row model for the left rail + detail header, built either from a
-/// real [`UiRun`] or from the sample set.
+/// Row model for the left rail and detail header, built from a real [`UiRun`].
 #[derive(Clone)]
 struct RunRow {
-    /// Real daemon run id (None in sample mode).
+    /// Real daemon run id.
     run_id: Option<RunId>,
     id_label: String,
     title: String,
@@ -235,6 +239,9 @@ impl RunRow {
     /// live stage pipeline, event log, token/cost counters.
     fn attach_stream(&mut self, stream: &crate::run_stream::RunStreamState) {
         self.live_stream = stream.live;
+        if let Some(prompt) = &stream.prompt {
+            self.title = crate::ui::headline(prompt, 30);
+        }
         if !stream.stages.is_empty() {
             self.stages = stream.stages.iter().map(stage_from_stream).collect();
         }
@@ -260,16 +267,54 @@ impl RunRow {
     }
 }
 
+async fn load_result_folder(
+    home: std::path::PathBuf,
+    run_id: RunId,
+) -> Result<std::path::PathBuf, String> {
+    let summary = surge_persistence::runs::Storage::inspect_existing_run_summary(home, run_id)
+        .await
+        .map_err(|error| format!("Cannot read result folder: {error}"))?
+        .ok_or_else(|| "Result folder is not recorded for this run".to_string())?;
+    tokio::task::spawn_blocking(move || validate_result_folder(summary.project_path))
+        .await
+        .map_err(|error| format!("Cannot inspect result folder: {error}"))?
+}
+
+fn validate_result_folder(path: std::path::PathBuf) -> Result<std::path::PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("Recorded result folder is not an absolute path".into());
+    }
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| format!("Result folder unavailable ({}): {error}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "Result folder is not a directory: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunTab {
+    Preview,
+    Activity,
+    Changes,
+    Checks,
+}
+
 /// Runs screen — daemon-run cockpit.
 pub struct RunsScreen {
     state: Entity<AppState>,
     /// Selected real run; falls back to the most attention-worthy.
     selected: Option<RunId>,
-    /// Selection within the sample set (offline mode).
-    sample_selected: usize,
     steer_input: Option<Entity<InputState>>,
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
+    tab: RunTab,
+    preview: Option<(RunId, Entity<run_preview::PreviewView>)>,
+    checks: Option<(RunId, Entity<run_checks::ChecksView>)>,
+    changes: Option<(RunId, Entity<run_changes::ChangesView>)>,
 }
 
 impl RunsScreen {
@@ -291,7 +336,7 @@ impl RunsScreen {
                     })
                     .is_ok()
                 });
-                if !matches!(alive, Ok(true)) {
+                if !alive {
                     break;
                 }
             }
@@ -301,32 +346,48 @@ impl RunsScreen {
         Self {
             state,
             selected: None,
-            sample_selected: 0,
             steer_input: None,
             action_note: None,
+            tab: RunTab::Activity,
+            preview: None,
+            checks: None,
+            changes: None,
         }
+    }
+
+    fn clear_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, preview)) = self.preview.take() {
+            preview.update(cx, |view, cx| view.close(cx));
+        }
+    }
+
+    pub fn close_preview(&mut self, cx: &mut Context<Self>) {
+        self.clear_preview(cx);
+        if self.tab == RunTab::Preview {
+            self.tab = RunTab::Activity;
+        }
+        cx.notify();
     }
 
     /// Focus a specific run (used by Fleet → "Open run" deep links).
     pub fn select_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
+        self.clear_preview(cx);
         self.selected = Some(run_id);
         cx.notify();
     }
 
-    /// Rail rows + selected index. Real when any runs exist, else sample.
+    /// Actual daemon runs and the selected row index.
     fn rows(&self, cx: &Context<Self>) -> (Vec<RunRow>, usize, bool) {
         let state = self.state.read(cx);
-        if state.runs.is_empty() {
-            let rows = sample_rows();
-            let sel = self.sample_selected.min(rows.len().saturating_sub(1));
-            return (rows, sel, false);
-        }
-
         let mut rows: Vec<RunRow> = state
-            .runs
-            .iter()
+            .project_runs()
+            .into_iter()
             .map(|run| {
                 let mut row = RunRow::from_run(run);
+                // An acknowledged failure is history, not "needs you".
+                if row.rank == 0 && state.dismissed_runs.contains(&run.run_id) {
+                    row.rank = 3;
+                }
                 if let Some(stream) = state.run_streams.get(&run.run_id) {
                     row.attach_stream(stream);
                 }
@@ -338,36 +399,90 @@ impl RunsScreen {
             .selected
             .and_then(|id| rows.iter().position(|r| r.run_id == Some(id)))
             .unwrap_or(0);
-        (rows, sel, true)
+        (rows, sel, state.daemon_state.facade().is_some())
     }
 
     // ── facade actions ──────────────────────────────────────────────
 
+    fn open_result_folder(&mut self, run_id: RunId, cx: &mut Context<Self>) {
+        self.selected = Some(run_id);
+        let Some(home) = surge_core::home::surge_home_dir() else {
+            self.action_note = Some("Cannot locate Surge home".into());
+            cx.notify();
+            return;
+        };
+        self.action_note = Some("Locating result folder…".into());
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = load_result_folder(home, run_id).await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    if screen.selected != Some(run_id) {
+                        return;
+                    }
+                    screen.action_note = Some(match result {
+                        Ok(path) => {
+                            cx.open_with_system(&path);
+                            format!("Opening requested: {}", path.display())
+                        },
+                        Err(error) => error,
+                    });
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     fn stop_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
-        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+        let state_entity = self.state.clone();
+        let (facade, operation) = {
+            let state = self.state.read(cx);
+            (
+                state.daemon_state.facade(),
+                state
+                    .bootstrap_operations
+                    .iter()
+                    .find(|(_, op)| op.planning_run == run_id || op.implementation_run == run_id)
+                    .map(|(id, _)| *id),
+            )
+        };
+        let Some(facade) = facade else {
             self.action_note = Some("daemon offline — cannot stop".into());
             cx.notify();
             return;
         };
-        let state = self.state.clone();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let note = match facade
-                .stop_run(run_id, "stopped from Runs cockpit".to_string())
-                .await
-            {
-                Ok(()) => format!("stop requested · {}", run_id.short().to_lowercase()),
-                Err(e) => format!("stop failed: {e}"),
+            let note = if let Some(operation) = operation {
+                match facade.cancel_bootstrap(operation).await {
+                    Ok(status) => format!(
+                        "cancel recorded · {}",
+                        status
+                            .state
+                            .phase()
+                            .map_or_else(|| "settled".into(), |phase| format!("{phase:?}"),)
+                    ),
+                    Err(error) => format!("cancel failed: {error}"),
+                }
+            } else {
+                match facade
+                    .stop_run(run_id, "stopped from Runs cockpit".to_string())
+                    .await
+                {
+                    Ok(()) => format!("stop requested · {}", run_id.short().to_lowercase()),
+                    Err(error) => format!("stop failed: {error}"),
+                }
             };
             // Refresh the run list so the rail reflects the new status.
             if let Ok(summaries) = facade.list_runs().await {
-                let _ = cx.update(|cx| {
-                    state.update(cx, |s, cx| {
+                cx.update(|cx| {
+                    state_entity.update(cx, |s, cx| {
                         s.set_runs_from_summaries(&summaries);
                         cx.notify();
                     });
                 });
             }
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |t, cx| {
                     t.action_note = Some(note);
                     cx.notify();
@@ -406,7 +521,7 @@ impl RunsScreen {
                 Ok(steer_id) => format!("steer queued · {steer_id}"),
                 Err(e) => format!("steer failed: {e}"),
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |t, cx| {
                     t.action_note = Some(note);
                     cx.notify();
@@ -434,7 +549,13 @@ impl RunsScreen {
             let is_sel = i == sel;
             let run_id = row.run_id;
             let item = div()
-                .id(SharedString::from(format!("run-row-{i}")))
+                .id(SharedString::from(format!(
+                    "run-row-{}",
+                    row.run_id
+                        .map_or_else(|| row.id_label.clone(), |id| id.to_string())
+                )))
+                .role(Role::Button)
+                .aria_label(format!("{}, {}", row.title, row.status_label))
                 .v_flex()
                 .px(px(10.0))
                 .py(px(7.0))
@@ -449,10 +570,8 @@ impl RunsScreen {
                     el.hover(|s: StyleRefinement| s.bg(theme::panel_raised().opacity(0.6)))
                 })
                 .on_click(cx.listener(move |this, _e, _w, cx| {
-                    match run_id {
-                        Some(id) => this.selected = Some(id),
-                        None => this.sample_selected = i,
-                    }
+                    this.clear_preview(cx);
+                    this.selected = run_id;
                     this.action_note = None;
                     cx.notify();
                 }))
@@ -527,7 +646,7 @@ impl RunsScreen {
                     })
                     .when(!live, |el| {
                         el.child(ui::pill(
-                            "sample",
+                            "Disconnected",
                             theme::text_muted(),
                             theme::panel_raised(),
                         ))
@@ -566,9 +685,98 @@ impl RunsScreen {
             )
             .child(div().flex_1());
 
+        if let Some(operation) =
+            self.state
+                .read(cx)
+                .bootstrap_operations
+                .iter()
+                .find_map(|(id, status)| {
+                    (status.planning_run == row.run_id?
+                        || status.implementation_run == row.run_id?)
+                        .then_some((*id, status.clone()))
+                })
+        {
+            let (operation_id, status) = operation;
+            let (label, detail) = match &status.state {
+                surge_core::bootstrap_operation::BootstrapState::Pending { phase } => {
+                    ("in progress", format!("{phase:?}"))
+                },
+                surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
+                    phase,
+                    reason,
+                    ..
+                } => ("needs attention", format!("{phase:?} · {reason:?}")),
+                surge_core::bootstrap_operation::BootstrapState::Cancelling { phase } => {
+                    ("cancelling", format!("{phase:?}"))
+                },
+                surge_core::bootstrap_operation::BootstrapState::Completed => {
+                    ("completed", "implementation run settled".into())
+                },
+                surge_core::bootstrap_operation::BootstrapState::Failed => {
+                    ("failed", "operation settled with failure".into())
+                },
+                surge_core::bootstrap_operation::BootstrapState::Cancelled => {
+                    ("cancelled", "operation stopped".into())
+                },
+            };
+            header = header.child(ui::pill(
+                label,
+                theme::accent(),
+                theme::accent().opacity(0.13),
+            ));
+            header = header.child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme::text_muted())
+                    .child(detail),
+            );
+            if !matches!(
+                status.state,
+                surge_core::bootstrap_operation::BootstrapState::Completed
+                    | surge_core::bootstrap_operation::BootstrapState::Failed
+                    | surge_core::bootstrap_operation::BootstrapState::Cancelled
+            ) {
+                header = header.child(
+                    div()
+                        .id("cancel-bootstrap")
+                        .role(Role::Button)
+                        .aria_label("Cancel application workflow")
+                        .h_flex()
+                        .items_center()
+                        .h(px(30.0))
+                        .px(px(13.0))
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme::error().opacity(0.35))
+                        .text_color(theme::error())
+                        .text_size(px(11.0))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                            this.cancel_bootstrap(operation_id, cx)
+                        }))
+                        .child("■ Cancel build"),
+                );
+            }
+        }
+
+        if let Some(run_id) = row.run_id {
+            header = header.child(
+                Button::new("open-result-folder")
+                    .ghost()
+                    .label("Open result folder")
+                    .accessibility_id("open-result-folder")
+                    .debug_selector(|| "open-result-folder".into())
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_result_folder(run_id, cx);
+                    })),
+            );
+        }
+
         if let Some(note) = &self.action_note {
             header = header.child(
                 div()
+                    .max_w(px(240.0))
+                    .truncate()
                     .text_size(px(10.5))
                     .text_color(theme::accent())
                     .child(note.clone()),
@@ -583,6 +791,8 @@ impl RunsScreen {
             header = header.child(
                 div()
                     .id("stop-run")
+                    .role(Role::Button)
+                    .aria_label("Stop run")
                     .h_flex()
                     .gap(px(7.0))
                     .items_center()
@@ -604,6 +814,75 @@ impl RunsScreen {
         }
 
         header
+    }
+
+    fn cancel_bootstrap(&mut self, operation_id: RunId, cx: &mut Context<Self>) {
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            self.action_note = Some("daemon offline — cannot cancel this build".into());
+            cx.notify();
+            return;
+        };
+        let state = self.state.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let outcome = facade.cancel_bootstrap(operation_id).await;
+            if let Ok(status) = &outcome {
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state
+                            .bootstrap_operations
+                            .insert(operation_id, status.clone());
+                        cx.notify();
+                    })
+                });
+            }
+            let note = match outcome {
+                Ok(status) if status.cancel_requested => {
+                    "Cancellation recorded by daemon".to_string()
+                },
+                Ok(_) => "Build already settled".to_string(),
+                Err(error) => format!("cancel failed: {error}"),
+            };
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.action_note = Some(note);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn retry_bootstrap(&mut self, operation_id: RunId, revision: u64, cx: &mut Context<Self>) {
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            self.action_note = Some("daemon offline — cannot retry this build".into());
+            cx.notify();
+            return;
+        };
+        let state = self.state.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let outcome = facade.retry_bootstrap(operation_id, revision).await;
+            if let Ok(status) = &outcome {
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state
+                            .bootstrap_operations
+                            .insert(operation_id, status.clone());
+                        cx.notify();
+                    })
+                });
+            }
+            let note = match outcome {
+                Ok(status) => format!("retry accepted · {:?}", status.state),
+                Err(error) => format!("retry failed: {error}"),
+            };
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.action_note = Some(note);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     fn render_kpis(&self, row: &RunRow) -> Div {
@@ -709,7 +988,7 @@ impl RunsScreen {
 
     fn render_stage_chip(&self, stage: &Stage, last: bool) -> Div {
         let color = stage.state.color();
-        let is_hot = matches!(stage.state, StageState::Running | StageState::Gate);
+        let is_hot = matches!(stage.state, StageState::Running);
 
         let dot: AnyElement = if is_hot {
             ui::status_dot(color)
@@ -733,7 +1012,7 @@ impl RunsScreen {
             .bg(theme::panel_raised())
             .border_1()
             .border_color(match stage.state {
-                StageState::Running | StageState::Gate => color.opacity(0.5),
+                StageState::Running => color.opacity(0.5),
                 StageState::Failed => color.opacity(0.4),
                 _ => theme::hairline(),
             })
@@ -840,7 +1119,7 @@ impl RunsScreen {
                     } else if live {
                         "run lifecycle · select while active for live stage telemetry"
                     } else {
-                        "sample pipeline · start the daemon for live runs"
+                        "last known run lifecycle · daemon disconnected"
                     }),
             )
     }
@@ -873,17 +1152,21 @@ impl RunsScreen {
                     .child(text),
             );
         } else {
-            for e in &row.event_rows {
+            for (index, e) in row.event_rows.iter().enumerate() {
                 body = body.child(
                     div()
+                        .id(("run-event", index))
+                        .role(Role::Label)
+                        .aria_label(format!("{} {} {}", e.t, e.kind, e.text))
                         .h_flex()
                         .gap(px(12.0))
                         .items_center()
                         .py(px(4.0))
                         .child(
                             div()
-                                .w(px(38.0))
+                                .w(px(54.0))
                                 .flex_shrink_0()
+                                .whitespace_nowrap()
                                 .text_size(px(10.0))
                                 .text_color(theme::text_muted().opacity(0.8))
                                 .child(e.t.clone()),
@@ -891,8 +1174,9 @@ impl RunsScreen {
                         .child(ui::status_dot(e.color))
                         .child(
                             div()
-                                .w(px(48.0))
+                                .w(px(60.0))
                                 .flex_shrink_0()
+                                .whitespace_nowrap()
                                 .text_size(px(9.5))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(e.color)
@@ -1022,7 +1306,10 @@ impl RunsScreen {
                     ))
                     .child(
                         div().flex_1().child(
-                            Input::new(self.steer_input.as_ref().unwrap()).appearance(false),
+                            Input::new(self.steer_input.as_ref().unwrap())
+                                .accessibility_id("steer-run")
+                                .aria_label("Steer active run")
+                                .appearance(false),
                         ),
                     )
                     .child(ui::kbd("↵")),
@@ -1034,21 +1321,185 @@ impl Render for RunsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (rows, sel, live) = self.rows(cx);
         let selected = rows.get(sel).cloned();
+        let selected_bootstrap =
+            selected.as_ref().and_then(|row| {
+                let id = row.run_id?;
+                self.state.read(cx).bootstrap_operations.iter().find_map(
+                    |(operation_id, status)| {
+                        (status.planning_run == id || status.implementation_run == id)
+                            .then_some((*operation_id, status.clone()))
+                    },
+                )
+            });
 
         let mut main = div().flex_1().min_w_0().v_flex();
         if let Some(row) = &selected {
             main = main
                 .child(self.render_header(row, live, cx))
                 .child(self.render_kpis(row))
-                .child(self.render_pipeline(row, live))
-                .child(self.render_event_log(row, live));
+                .when_some(selected_bootstrap.as_ref(), |el, (operation_id, status)| {
+                    let operation_id = *operation_id;
+                    let phase = match &status.state {
+                        surge_core::bootstrap_operation::BootstrapState::Pending { phase } => {
+                            format!("In progress · {phase:?}")
+                        },
+                        surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
+                            phase,
+                            reason,
+                            ..
+                        } => format!("Needs attention · {phase:?} · {reason:?}"),
+                        surge_core::bootstrap_operation::BootstrapState::Cancelling { phase } => {
+                            format!("Cancelling · {phase:?}")
+                        },
+                        surge_core::bootstrap_operation::BootstrapState::Completed => {
+                            "Completed · implementation verified by durable engine outcome".into()
+                        },
+                        surge_core::bootstrap_operation::BootstrapState::Failed => {
+                            "Failed · inspect checks and run evidence".into()
+                        },
+                        surge_core::bootstrap_operation::BootstrapState::Cancelled => {
+                            "Cancelled · no further run will launch".into()
+                        },
+                    };
+                    let active = status.state.phase().is_some();
+                    let retry_revision = status.revision;
+                    el.child(
+                        div()
+                            .id("bootstrap-operation")
+                            .v_flex()
+                            .gap(px(8.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .border_b_1()
+                            .border_color(theme::hairline())
+                            .bg(theme::panel_deep())
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme::text_primary())
+                                    .child("Application workflow"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme::text_muted())
+                                    .child(phase),
+                            )
+                            .when(
+                                matches!(status.state, surge_core::bootstrap_operation::BootstrapState::NeedsAttention { .. })
+                                    && !status.cancel_requested,
+                                |panel| panel.child(
+                                    div()
+                                        .id("retry-bootstrap")
+                                        .role(Role::Button)
+                                        .aria_label("Retry application workflow")
+                                        .h_flex().items_center().h(px(30.0)).px(px(13.0)).rounded_lg()
+                                        .border_1().border_color(theme::accent().opacity(0.35)).text_color(theme::accent())
+                                        .text_size(px(11.0)).cursor_pointer()
+                                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                                            this.retry_bootstrap(operation_id, retry_revision, cx)
+                                        }))
+                                        .child("↻ Retry after repair"),
+                                ),
+                            )
+                            .when(active, |panel| {
+                                panel.child(
+                                    div()
+                                        .id("cancel-bootstrap")
+                                        .role(Role::Button)
+                                        .aria_label("Cancel application workflow")
+                                        .h_flex()
+                                        .items_center()
+                                        .h(px(30.0))
+                                        .px(px(13.0))
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(theme::error().opacity(0.35))
+                                        .text_color(theme::error())
+                                        .text_size(px(11.0))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                                            this.cancel_bootstrap(operation_id, cx)
+                                        }))
+                                        .child("■ Cancel build"),
+                                )
+                            }),
+                    )
+                })
+                ;
+            let mut tabs = div().h_flex().gap(px(8.0)).px(px(20.0)).py(px(6.0));
+            for (tab, label) in [
+                (RunTab::Preview, "Preview"),
+                (RunTab::Activity, "Activity"),
+                (RunTab::Changes, "Changes"),
+                (RunTab::Checks, "Checks"),
+            ] {
+                tabs = tabs.child(
+                    Button::new(SharedString::from(format!("run-tab-{label}")))
+                        .ghost()
+                        .label(label)
+                        .when(self.tab == tab, |button| button.primary())
+                        .on_click(cx.listener(move |screen, _, _, cx| {
+                            if screen.tab != tab {
+                                screen.clear_preview(cx);
+                            }
+                            screen.tab = tab;
+                            cx.notify();
+                        })),
+                );
+            }
+            main = main.child(tabs);
+            if self.tab == RunTab::Preview {
+                if let Some(run_id) = row.run_id {
+                    if self.preview.as_ref().is_none_or(|(id, _)| *id != run_id) {
+                        self.clear_preview(cx);
+                        self.preview = Some((
+                            run_id,
+                            cx.new(|cx| run_preview::PreviewView::new(run_id, window, cx)),
+                        ));
+                    }
+                    if let Some((_, preview)) = &self.preview {
+                        main = main.child(preview.clone());
+                    }
+                }
+            } else if self.tab == RunTab::Checks {
+                if let Some(run_id) = row.run_id {
+                    if self.checks.as_ref().is_none_or(|(id, _)| *id != run_id) {
+                        self.checks = Some((
+                            run_id,
+                            cx.new(|cx| run_checks::ChecksView::new(run_id, window, cx)),
+                        ));
+                    }
+                    if let Some((_, checks)) = &self.checks {
+                        main = main.child(checks.clone());
+                    }
+                }
+            } else if self.tab == RunTab::Changes {
+                if let Some(run_id) = row.run_id {
+                    if self.changes.as_ref().is_none_or(|(id, _)| *id != run_id) {
+                        self.changes = Some((
+                            run_id,
+                            cx.new(|cx| run_changes::ChangesView::new(run_id, window, cx)),
+                        ));
+                    }
+                    if let Some((_, changes)) = &self.changes {
+                        main = main.child(changes.clone());
+                    }
+                }
+            } else {
+                main = main
+                    .child(self.render_pipeline(row, live))
+                    .child(self.render_event_log(row, live));
+            }
         } else {
+            self.clear_preview(cx);
             main = main.child(
                 div().flex_1().flex().items_center().justify_center().child(
                     div()
                         .text_size(px(12.0))
                         .text_color(theme::text_muted())
-                        .child("No runs yet — dispatch something from the Backlog."),
+                        .child("No runs yet — describe an application in Fleet to begin."),
                 ),
             );
         }
@@ -1071,183 +1522,106 @@ impl Render for RunsScreen {
     }
 }
 
-/// Clearly-labelled sample cockpit (offline / no daemon runs). Mirrors
-/// the concept's run set so the three-pane idea reads without live data.
-fn sample_rows() -> Vec<RunRow> {
-    let amber = theme::accent();
-    let green = theme::success();
-    let red = theme::error();
-    let muted = theme::text_muted();
+#[cfg(test)]
+mod empty_state_tests {
+    use super::RunsScreen;
+    use crate::app_state::AppState;
+    use gpui_kit::{AppContext, TestAppContext};
 
-    let stages = |list: Vec<(&'static str, &str, StageState)>| -> Vec<Stage> {
-        list.into_iter()
-            .map(|(label, sub, state)| Stage {
-                label: label.to_string(),
-                sub: sub.to_string(),
-                state,
-            })
-            .collect()
-    };
-    let ev = |t: &str, kind: &'static str, color: Hsla, text: &str| EventRow {
-        t: t.to_string(),
-        kind,
-        color,
-        text: text.to_string(),
-    };
+    #[gpui_kit::test]
+    fn empty_cockpit_never_invents_runs(cx: &mut TestAppContext) {
+        let screen = cx.update(|cx| {
+            let state = cx.new(|_| AppState::new());
+            cx.new(|cx| RunsScreen::new(state, cx))
+        });
+        screen.update(cx, |screen, cx| {
+            let (rows, selected, connected) = screen.rows(cx);
+            assert!(rows.is_empty());
+            assert_eq!(selected, 0);
+            assert!(!connected);
+        });
+    }
+}
 
-    vec![
-        RunRow {
-            run_id: None,
-            id_label: "r-9c1e".into(),
-            title: "Rate limiter middleware".into(),
-            age: "15m".into(),
-            status_label: "review gate",
-            color: amber,
-            active: false,
-            rank: 0,
-            started: "14:21".into(),
-            elapsed: "41:12".into(),
-            events: "38".into(),
-            stages: stages(vec![
-                ("intake", "done", StageState::Done),
-                ("plan gate", "approved", StageState::Done),
-                ("implement", "claude-1 · done", StageState::Done),
-                ("qa suite", "42/42", StageState::Done),
-                ("review gate", "needs you", StageState::Gate),
-                ("merge", "queued", StageState::Queued),
-            ]),
-            event_rows: vec![
-                ev("14:36", "TEST", green, "Tests passed — 42/42 green"),
-                ev(
-                    "14:34",
-                    "WRITE",
-                    amber,
-                    "Wrote src/middleware/rate_limit.rs +186",
-                ),
-                ev("14:31", "LINT", green, "Lint clean"),
-                ev("14:28", "PLAN", amber, "Plan approved at gate — 6 stages"),
-                ev("14:21", "START", muted, "Run accepted · worktree wt-9c1e"),
-            ],
-            live_stream: false,
-            usage: None,
-        },
-        RunRow {
-            run_id: None,
-            id_label: "r-b2e8".into(),
-            title: "Retry logic patch".into(),
-            age: "8m".into(),
-            status_label: "active",
-            color: amber,
-            active: true,
-            rank: 1,
-            started: "14:29".into(),
-            elapsed: "12:44".into(),
-            events: "21".into(),
-            stages: stages(vec![
-                ("intake", "done", StageState::Done),
-                ("plan gate", "approved", StageState::Done),
-                ("implement", "gpt-runner", StageState::Running),
-                ("qa suite", "5/6", StageState::Queued),
-                ("review gate", "pending", StageState::Queued),
-                ("merge", "queued", StageState::Queued),
-            ]),
-            event_rows: vec![
-                ev("14:41", "WRITE", amber, "Patching src/retry/backoff.rs"),
-                ev("14:38", "READ", muted, "Scanning call sites of retry()"),
-                ev("14:29", "START", muted, "Run accepted · worktree wt-b2e8"),
-            ],
-            live_stream: false,
-            usage: None,
-        },
-        RunRow {
-            run_id: None,
-            id_label: "r-77b0".into(),
-            title: "Config loader refactor".into(),
-            age: "32m".into(),
-            status_label: "failed",
-            color: red,
-            active: false,
-            rank: 0,
-            started: "13:58".into(),
-            elapsed: "17:03".into(),
-            events: "29".into(),
-            stages: stages(vec![
-                ("intake", "done", StageState::Done),
-                ("plan gate", "approved", StageState::Done),
-                ("implement", "claude-1 · done", StageState::Done),
-                ("qa suite", "3/6 failing", StageState::Failed),
-                ("review gate", "blocked", StageState::Queued),
-                ("merge", "blocked", StageState::Queued),
-            ]),
-            event_rows: vec![
-                ev(
-                    "14:15",
-                    "FAIL",
-                    red,
-                    "qa suite failed — 3/6: config_env round-trip",
-                ),
-                ev(
-                    "14:12",
-                    "TEST",
-                    red,
-                    "test_env_override ✗ expected \"prod\", got \"dev\"",
-                ),
-                ev("13:58", "START", muted, "Run accepted · worktree wt-77b0"),
-            ],
-            live_stream: false,
-            usage: None,
-        },
-        RunRow {
-            run_id: None,
-            id_label: "r-4f2a".into(),
-            title: "Session cache".into(),
-            age: "2h".into(),
-            status_label: "merged",
-            color: green,
-            active: false,
-            rank: 3,
-            started: "12:02".into(),
-            elapsed: "38:20".into(),
-            events: "54".into(),
-            stages: stages(vec![
-                ("intake", "done", StageState::Done),
-                ("plan gate", "approved", StageState::Done),
-                ("implement", "claude-1 · done", StageState::Done),
-                ("qa suite", "31/31", StageState::Done),
-                ("review gate", "approved", StageState::Done),
-                ("merge", "→ main", StageState::Done),
-            ]),
-            event_rows: vec![
-                ev("12:40", "MERGE", green, "Merged to main · +214 −40"),
-                ev("12:31", "GATE", green, "Review approved by operator"),
-                ev("12:02", "START", muted, "Run accepted · worktree wt-4f2a"),
-            ],
-            live_stream: false,
-            usage: None,
-        },
-        RunRow {
-            run_id: None,
-            id_label: "r-c3d9".into(),
-            title: "CSV import v2".into(),
-            age: "1m".into(),
-            status_label: "queued",
-            color: muted,
-            active: false,
-            rank: 2,
-            started: "14:41".into(),
-            elapsed: "0:48".into(),
-            events: "0".into(),
-            stages: stages(vec![
-                ("intake", "queued", StageState::Queued),
-                ("plan gate", "—", StageState::Queued),
-                ("implement", "—", StageState::Queued),
-                ("qa suite", "—", StageState::Queued),
-                ("review gate", "—", StageState::Queued),
-                ("merge", "—", StageState::Queued),
-            ]),
-            event_rows: Vec::new(),
-            live_stream: false,
-            usage: None,
-        },
-    ]
+#[cfg(test)]
+mod result_folder_tests {
+    #[test]
+    fn result_folder_button_dispatches_selected_run() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _guard = runtime.enter();
+        use gpui_kit::{AppContext as _, Modifiers, TestAppContext};
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        crate::theme::init();
+        let id = surge_core::RunId::new();
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: id,
+                status: surge_orchestrator::engine::handle::RunStatus::Completed,
+                started_at: chrono::Utc::now(),
+                ended_at: Some(chrono::Utc::now()),
+                last_event_seq: None,
+            });
+            state
+        });
+        let screen = cx.new(|cx| super::RunsScreen::new(state, cx));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        let button = window
+            .debug_bounds("open-result-folder")
+            .expect("result action rendered");
+        window.simulate_click(button.center(), Modifiers::default());
+        screen.update(window, |screen, _| {
+            assert_eq!(screen.selected, Some(id));
+            assert!(screen.action_note.is_some());
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn result_folder_uses_persisted_custom_path() {
+        let home = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let run = surge_core::RunId::new();
+        let writer = storage
+            .create_run(run, output.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        assert_eq!(
+            super::load_result_folder(home.path().into(), run)
+                .await
+                .unwrap(),
+            output.path()
+        );
+        assert!(
+            super::load_result_folder(home.path().into(), surge_core::RunId::new())
+                .await
+                .unwrap_err()
+                .contains("not recorded")
+        );
+    }
+
+    #[test]
+    fn result_folder_rejects_missing_file_and_relative_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        std::fs::write(&file, "data").unwrap();
+        for path in [
+            file,
+            root.path().join("missing"),
+            std::path::PathBuf::from("relative"),
+        ] {
+            assert!(super::validate_result_folder(path).is_err());
+        }
+        assert_eq!(
+            super::validate_result_folder(root.path().into()).unwrap(),
+            root.path()
+        );
+    }
 }

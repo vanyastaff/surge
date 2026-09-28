@@ -8,9 +8,9 @@ rust-version.workspace = true
 description = "GUI for Surge — GPUI-based desktop application"
 
 [dependencies]
-gpui = "0.2"
-gpui-component = "0.5"
-gpui-component-assets = "0.5"
+gpui-kit.workspace = true
+cap-std.workspace = true
+percent-encoding.workspace = true
 
 surge-core = { path = "../surge-core" }
 surge-acp = { path = "../surge-acp" }
@@ -29,9 +29,21 @@ tracing-subscriber.workspace = true
 pulldown-cmark = "0.12"
 chrono = { workspace = true }
 notify-rust = { workspace = true }
+git2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+gpui-wry.workspace = true
+wry.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 # `test-support` unlocks `TestAppContext`/`add_window_view` for the screen
 # smoke tests (src/screens/smoke_test.rs). Dev-only: it is never active for
 # `cargo build`/`cargo run`, only for `cargo test`/nextest.
-gpui = { version = "0.2", features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["test-support"] }

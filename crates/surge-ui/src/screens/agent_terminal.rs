@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{Icon, IconName, StyledExt};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{Icon, IconName, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::app_state::AppState;
 use crate::markdown;
@@ -214,8 +214,7 @@ impl AgentTerminalScreen {
                                 this.session = Some(s_clone);
                                 cx.notify();
                             });
-                        })
-                        .ok();
+                        });
                         s
                     }
                     Err(e) => {
@@ -226,8 +225,7 @@ impl AgentTerminalScreen {
                                 this.is_sending = false;
                                 cx.notify();
                             });
-                        })
-                        .ok();
+                        });
                         return;
                     }
                 }
@@ -238,7 +236,7 @@ impl AgentTerminalScreen {
                 while let Ok(event) = event_rx.recv().await {
                     match event {
                         surge_core::SurgeEvent::AgentMessageChunk { text, .. } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     this.ensure_agent_text().push_str(&text);
                                     this.scroll_handle.scroll_to_bottom();
@@ -247,7 +245,7 @@ impl AgentTerminalScreen {
                             });
                         }
                         surge_core::SurgeEvent::AgentThoughtChunk { text, .. } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     this.ensure_thinking().text.push_str(&text);
                                     this.scroll_handle.scroll_to_bottom();
@@ -263,7 +261,7 @@ impl AgentTerminalScreen {
                             raw_input,
                             ..
                         } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     this.collapsed.insert(call_id.clone(), true);
                                     this.items.push(ChatItem::ToolCall(ToolCallBlock {
@@ -290,7 +288,7 @@ impl AgentTerminalScreen {
                             raw_output,
                             ..
                         } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     if let Some(tc) = this.find_tool_call_mut(&call_id) {
                                         if let Some(s) = status {
@@ -315,7 +313,7 @@ impl AgentTerminalScreen {
                             });
                         }
                         surge_core::SurgeEvent::PlanUpdated { entries, .. } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     let found = this.items.iter_mut().rev().any(|item| {
                                         if let ChatItem::Plan {
@@ -342,7 +340,7 @@ impl AgentTerminalScreen {
                             options,
                             ..
                         } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     this.items.push(ChatItem::Permission(PermissionBlock {
                                         description,
@@ -356,7 +354,7 @@ impl AgentTerminalScreen {
                             });
                         }
                         surge_core::SurgeEvent::PermissionResolved { granted, .. } => {
-                            let _ = cx.update(|cx| {
+                            cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     if let Some(p) = this.find_pending_permission_mut() {
                                         p.resolved = Some(granted);
@@ -370,8 +368,8 @@ impl AgentTerminalScreen {
                 }
             });
 
-            let content = vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new(input),
+            let content = vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                agent_client_protocol::schema::v1::TextContent::new(input),
             )];
 
             let result = pool.prompt(&session, content).await;
@@ -401,8 +399,7 @@ impl AgentTerminalScreen {
                     this.scroll_handle.scroll_to_bottom();
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -495,6 +492,8 @@ impl AgentTerminalScreen {
         container = container.child(
             div()
                 .id(SharedString::from(format!("tc-{}", tc.call_id)))
+                .role(Role::Button)
+                .aria_label(format!("Toggle tool call {}", tc.call_id))
                 .w_full()
                 .px(px(8.0))
                 .py(px(3.0))
@@ -591,6 +590,8 @@ impl AgentTerminalScreen {
         container = container.child(
             div()
                 .id(SharedString::from(key.clone()))
+                .role(Role::Button)
+                .aria_label(format!("Toggle {key}"))
                 .flex()
                 .items_center()
                 .gap(px(4.0))
@@ -650,6 +651,8 @@ impl AgentTerminalScreen {
         container = container.child(
             div()
                 .id(SharedString::from(key.clone()))
+                .role(Role::Button)
+                .aria_label(format!("Toggle {key}"))
                 .flex()
                 .items_center()
                 .gap(px(5.0))
@@ -774,6 +777,8 @@ impl Render for AgentTerminalScreen {
                     .child(
                         div().flex_1().child(
                             Input::new(self.input_state.as_ref().unwrap())
+                                .accessibility_id("agent-message")
+                                .aria_label("Message agent")
                                 .appearance(false)
                                 .cleanable(true),
                         ),
@@ -804,13 +809,13 @@ impl Render for AgentTerminalScreen {
                                 d.child(
                                     Icon::new(IconName::ArrowUp)
                                         .size_4()
-                                        .text_color(gpui::white()),
+                                        .text_color(gpui_kit::white()),
                                 )
                                 .child(
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(gpui::white())
+                                        .text_color(gpui_kit::white())
                                         .child("Send"),
                                 )
                                 .on_mouse_down(
@@ -1048,23 +1053,23 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
     );
 
     // Removed lines (red)
-    if let Some(old) = &diff.old_text {
-        if !old.is_empty() {
-            let mut old_block = div().w_full();
-            for line in old.lines() {
-                old_block = old_block.child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(1.0))
-                        .bg(hsla(0.0, 0.4, 0.15, 1.0))
-                        .font_family("Consolas")
-                        .text_xs()
-                        .text_color(hsla(0.0, 0.7, 0.7, 1.0))
-                        .child(format!("- {line}")),
-                );
-            }
-            container = container.child(old_block);
+    if let Some(old) = &diff.old_text
+        && !old.is_empty()
+    {
+        let mut old_block = div().w_full();
+        for line in old.lines() {
+            old_block = old_block.child(
+                div()
+                    .px(px(10.0))
+                    .py(px(1.0))
+                    .bg(hsla(0.0, 0.4, 0.15, 1.0))
+                    .font_family("Consolas")
+                    .text_xs()
+                    .text_color(hsla(0.0, 0.7, 0.7, 1.0))
+                    .child(format!("- {line}")),
+            );
         }
+        container = container.child(old_block);
     }
 
     // Added lines (green)

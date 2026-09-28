@@ -42,9 +42,39 @@ use super::ProfileRegistry;
 /// resolving to a different runtime than `implementer`).
 #[must_use]
 pub fn render_profile_catalog(registry: &ProfileRegistry) -> String {
+    render_profile_catalog_with(registry, &std::collections::BTreeMap::new())
+}
+
+/// Canonical runtime ids the catalog rows resolve to (what a caller needs to
+/// look up availability for).
+#[must_use]
+pub fn catalog_runtimes(registry: &ProfileRegistry) -> std::collections::BTreeSet<String> {
+    registry
+        .list()
+        .into_iter()
+        .filter_map(|entry| {
+            let role = &entry.profile.role;
+            crate::engine::stage::agent::resolve_profile_runtime_id(
+                Some(registry),
+                &format!("{}@{}", role.id.as_str(), role.version),
+            )
+        })
+        .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
+        .collect()
+}
+
+/// [`render_profile_catalog`], with runtimes that cannot take work right now
+/// (exhausted provider quota) marked in the runtime column, so the flow
+/// generator plans around them instead of routing a stage into a runtime
+/// that will only park the run.
+#[must_use]
+pub fn render_profile_catalog_with(
+    registry: &ProfileRegistry,
+    unavailable: &std::collections::BTreeMap<String, String>,
+) -> String {
     let mut out = String::from(
-        "| profile | display name | runtime | sandbox | verifier | outcomes | when to use |\n\
-         |---|---|---|---|---|---|---|\n",
+        "| profile | display name | runtime | sandbox | verifier | outcomes | when to use | inputs |\n\
+         |---|---|---|---|---|---|---|---|\n",
     );
     for entry in registry.list() {
         let profile = &entry.profile;
@@ -55,10 +85,20 @@ pub fn render_profile_catalog(registry: &ProfileRegistry) -> String {
         // entry `list()` produced, not "latest" (which could differ when
         // a disk profile shadows only some versions of a bundled name).
         let resolve_key = format!("{id}@{version}");
+        let resolved = surge_core::profile::keyref::parse_key_ref(&resolve_key)
+            .ok()
+            .and_then(|key| registry.resolve(&key).ok());
+        // Inputs, outcomes, sandbox and authority must describe the same
+        // inherited profile that execution resolves, not only the leaf file.
+        let profile = resolved.as_ref().map_or(profile, |value| &value.profile);
         let runtime =
             crate::engine::stage::agent::resolve_profile_runtime_id(Some(registry), &resolve_key)
                 .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
                 .unwrap_or_else(|| "unknown".to_string());
+        let runtime = match unavailable.get(&runtime) {
+            Some(why) => format!("{runtime} ⚠ UNAVAILABLE ({why})"),
+            None => runtime,
+        };
         let sandbox = sandbox_mode_label(profile.sandbox.mode);
         let verifier = if profile.verification.authority {
             "yes"
@@ -71,10 +111,31 @@ pub fn render_profile_catalog(registry: &ProfileRegistry) -> String {
             .map(|o| o.id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        let inputs = profile
+            .bindings
+            .expected
+            .iter()
+            .map(|binding| {
+                use surge_core::profile::ExpectedBindingSource;
+                let source = match &binding.source {
+                    ExpectedBindingSource::NodeOutput { from_role } => format!("from {from_role}"),
+                    ExpectedBindingSource::RunArtifact => "run artifact".into(),
+                    ExpectedBindingSource::Any => "any source".into(),
+                };
+                let required = if binding.optional {
+                    "optional"
+                } else {
+                    "required"
+                };
+                format!("{} ({required}, {source})", binding.name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         out.push_str(&format!(
-            "| `{display_key}` | {} | {runtime} | {sandbox} | {verifier} | {outcomes} | {} |\n",
+            "| `{display_key}` | {} | {runtime} | {sandbox} | {verifier} | {outcomes} | {} | {} |\n",
             md_cell(&profile.role.display_name),
             md_cell(&profile.role.when_to_use),
+            md_cell(&inputs),
         ));
     }
     out
@@ -172,6 +233,45 @@ system = "test fixture prompt"
         }
     }
 
+    /// An exhausted runtime is flagged on every row bound to it, and only
+    /// there, so the flow generator can plan around it.
+    #[test]
+    fn exhausted_runtime_is_marked_unavailable() {
+        let registry = ProfileRegistry::new(DiskProfileSet::empty());
+        let runtimes = super::catalog_runtimes(&registry);
+        assert!(runtimes.contains("codex-acp"), "{runtimes:?}");
+        let unavailable = std::collections::BTreeMap::from([(
+            "codex-acp".to_string(),
+            "provider usage limit".to_string(),
+        )]);
+        let catalog = super::render_profile_catalog_with(&registry, &unavailable);
+        let cross = catalog
+            .lines()
+            .find(|l| l.contains("`cross-verifier@1.0`"))
+            .expect("cross-verifier row");
+        assert!(cross.contains("codex-acp ⚠ UNAVAILABLE"), "{cross}");
+        let implementer = catalog
+            .lines()
+            .find(|l| l.contains("`implementer@1.0`"))
+            .expect("implementer row");
+        assert!(!implementer.contains("UNAVAILABLE"), "{implementer}");
+    }
+
+    #[test]
+    fn catalog_includes_inherited_required_inputs() {
+        let registry = ProfileRegistry::new(DiskProfileSet::empty());
+        let catalog = render_profile_catalog(&registry);
+        for role in [
+            "bug-fix-implementer",
+            "refactor-implementer",
+            "migration-implementer",
+        ] {
+            let key = format!("`{role}@1.0`");
+            let row = catalog.lines().find(|line| line.contains(&key)).unwrap();
+            assert!(row.contains("spec (required, from spec-author)"), "{row}");
+        }
+    }
+
     /// The whole reason the runtime column exists: `cross-verifier@1.0`
     /// (bundled, `agent_id = "codex"`) must show a Codex runtime, and
     /// `implementer@1.0` (bundled, `agent_id = "claude-code"`) a Claude
@@ -260,6 +360,7 @@ system = "test fixture prompt"
             implementer_row.contains("| no |"),
             "implementer@1.0 should not carry verification authority: {implementer_row}"
         );
+        assert!(implementer_row.contains("spec (required, from spec-author)"));
     }
 
     /// Stays small enough to live in a prompt: bundled-only registry

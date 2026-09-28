@@ -56,6 +56,9 @@ impl BudgetMockBridge {
 
 #[async_trait]
 impl BridgeFacade for BudgetMockBridge {
+    fn legacy_stage_event_adapter(&self) -> bool {
+        true
+    }
     async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         let session = SessionId::new();
         let outcome = config
@@ -118,7 +121,7 @@ impl BridgeFacade for BudgetMockBridge {
         &self,
         _session: SessionId,
         _request_id: String,
-        _response: agent_client_protocol::RequestPermissionResponse,
+        _response: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
         Ok(())
     }

@@ -42,6 +42,10 @@ use crate::prompt::PromptRenderer;
 
 /// Parameters for executing a single agent stage.
 pub struct AgentStageParams<'a> {
+    /// Active execution frames supplying the current loop items to the agent.
+    pub frames: &'a [crate::engine::frames::Frame],
+    /// Run cancellation, observed between durable writes and during approval waits.
+    pub cancel: tokio_util::sync::CancellationToken,
     /// Key of the node being executed (used for tracing; wired to events in 6.2).
     pub node: &'a NodeKey,
     /// Operator steer messages drained for this stage. When non-empty they are
@@ -125,6 +129,69 @@ pub struct AgentStageParams<'a> {
     /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
     /// emits the matching task-ledger event. `None` outside a task loop.
     pub active_task_id: Option<String>,
+}
+
+fn append_completion_contract(mut prompt: String, outcomes: &[OutcomeKey]) -> String {
+    prompt.push_str(
+        "\n\n## Stage completion protocol\n\
+        Before ending your turn, call the available report_stage_outcome tool \
+        (it may be exposed with an MCP server prefix). A final text message alone \
+        does not complete this stage. Choose exactly one of these declared outcomes: ",
+    );
+    prompt.push_str(
+        &outcomes
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    prompt.push_str(
+        ".\n\
+        Follow the tool's input schema: provide the outcome, a factual summary, \
+        and artifacts_produced paths for files you produced. When call_id is required, \
+        use a unique ID for each revised report. If validation rejects a report, \
+        repair the reported problem before submitting a new candidate. A receipt \
+        acknowledges a candidate; it does not certify verification or approval. \
+        Never claim checks passed unless you actually ran them.\n",
+    );
+    prompt
+}
+
+fn append_iteration_context(
+    prompt: String,
+    frames: &[crate::engine::frames::Frame],
+) -> Result<String, StageError> {
+    let mut context = Vec::new();
+    for frame in frames {
+        let crate::engine::frames::Frame::Loop(frame) = frame else {
+            continue;
+        };
+        let item = frame
+            .items
+            .get(frame.current_index as usize)
+            .ok_or_else(|| {
+                StageError::Internal(format!("loop {} has no current item", frame.loop_node))
+            })?;
+        context.push(serde_json::json!({
+            "loop_node": frame.loop_node.as_str(),
+            "variable": frame.config.iteration_var_name,
+            "index": frame.current_index,
+            "item": item,
+        }));
+    }
+    if context.is_empty() {
+        return Ok(prompt);
+    }
+    let context = serde_json::to_string_pretty(&context)
+        .map_err(|e| StageError::Internal(format!("serialize loop context: {e}")))?;
+    Ok(format!(
+        "{prompt}\n\n# Current workflow iteration\n\
+         The following data identifies the active loop items, outermost first. \
+         Perform this stage for the innermost item, using its description and \
+         acceptance criteria. Outer items provide context; other tasks listed there \
+         are not the current task. Apply the stage's implementation or verification \
+         role to this item.\n\n```json\n{context}\n```"
+    ))
 }
 
 /// Pick the effective [`ApprovalConfig`] for an agent stage.
@@ -324,6 +391,27 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         None
     };
     let effective_hooks = effective_agent_hooks(p.agent_config, resolved_profile.as_ref());
+    if let Some(profile) = &resolved_profile {
+        crate::engine::validate::validate_agent_inputs(p.agent_config, &profile.profile)
+            .map_err(|e| StageError::Internal(format!("required profile input: {e}")))?;
+        for input in profile
+            .profile
+            .bindings
+            .expected
+            .iter()
+            .filter(|input| !input.optional)
+        {
+            if !resolved_bindings
+                .iter()
+                .any(|(target, content)| target.0 == input.name && !content.trim().is_empty())
+            {
+                return Err(StageError::Internal(format!(
+                    "required profile input '{}' resolved to empty content",
+                    input.name
+                )));
+            }
+        }
+    }
     let effective_approval_cfg = effective_approvals(p.agent_config, resolved_profile.as_ref());
 
     // Effective system prompt: node `system` override (or the profile's system)
@@ -332,15 +420,18 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // `--prompt` edits take effect even when the node or profile already carries
     // a base system prompt.
     let prompt_template = effective_system_prompt(p.agent_config, resolved_profile.as_ref());
-    // Lenient at runtime: missing bindings render as empty strings rather
-    // than failing the stage. Strict-mode validation runs at
-    // `ProfileRegistry::load` so bundled / disk profiles are caught at
-    // startup; runtime forgiveness keeps the engine from blowing up over
-    // optional-binding edge cases the profile schema authorizes.
+    // Required profile inputs were checked above. Lenient rendering lets
+    // omitted optional inputs remain empty without weakening that check.
     let renderer = PromptRenderer::lenient();
     let prompt_text = renderer
         .render(&prompt_template, &resolved_bindings)
         .map_err(|e| StageError::Internal(format!("prompt render: {e}")))?;
+    let prompt_text = if crate::engine::bootstrap::is_flow_generator_profile(profile_str) {
+        crate::engine::bootstrap::append_flow_serialization_reference(&prompt_text)
+    } else {
+        prompt_text
+    };
+    let prompt_text = append_iteration_context(prompt_text, p.frames)?;
 
     // Append every bound skill's instructions *after* template rendering,
     // not before: a pack's own Markdown body can legitimately contain
@@ -361,7 +452,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     let agent_launch = match resolved_profile.as_ref() {
         Some(rp) => derive_agent_kind_from_id(
             profile_str,
-            rp.profile.runtime.agent_id.as_str(),
+            effective_agent_id(p.agent_config, rp),
             p.agent_registry.as_deref(),
         )?,
         None => AgentLaunch {
@@ -400,6 +491,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     } else {
         p.declared_outcomes.iter().map(|d| d.id.clone()).collect()
     };
+
+    let prompt_text = append_completion_contract(prompt_text, &declared_outcomes);
 
     // Derive allows_escalation from approvals_override.
     let allows_escalation = p
@@ -572,7 +665,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
     // Build SessionConfig from derived values.
     let sandbox = build_sandbox(Some(&sandbox_cfg));
-    let session_config = SessionConfig {
+    let mut session_config = SessionConfig {
+        stage_mcp: None,
         agent_kind,
         working_dir: p.worktree_path.to_path_buf(),
         system_prompt: prompt_text.clone(),
@@ -585,6 +679,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         env: agent_env,
     };
 
+    let stage_context = surge_core::stage_tool::StageToolContext {
+        run: p.run_id,
+        node: p.node.clone(),
+        session: surge_core::SessionId::new(),
+        generation: surge_core::id::StageGenerationId::new(),
+    };
+    let accepted_outcomes = session_config.declared_outcomes.clone();
+    let (stage_endpoint, mut stage_requests, mut stage_calls) =
+        super::stage_tools::prepare(&mut session_config, stage_context)?;
+
     // Subscribe to events BEFORE opening the session, so we don't miss the
     // SessionEstablished event (or earlier ToolCall events).
     let mut events = p.bridge.subscribe();
@@ -594,13 +698,18 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     let max_outcome_rejections: u32 = p.agent_config.limits.max_retries;
     let mut outcome_rejection_attempts: u32 = 0;
 
-    let session_id = p
-        .bridge
-        .open_session(session_config)
-        .await
-        .map_err(|e| StageError::Bridge(format!("open_session: {e}")))?;
+    let session_id = match p.bridge.open_session(session_config).await {
+        Ok(session) => session,
+        Err(error) => {
+            let cleanup = stage_endpoint.close().await;
+            return Err(StageError::Bridge(format!(
+                "open_session: {error}; stage endpoint cleanup: {cleanup:?}"
+            )));
+        },
+    };
 
-    p.writer
+    let opened = p
+        .writer
         .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
             node: p.node.clone(),
             session: session_id,
@@ -650,10 +759,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             // can undo.
             agent_id: resolved_profile
                 .as_ref()
-                .map(|rp| canonical_runtime_id_for(rp).into_string()),
+                .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string()),
         }))
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
+        .await;
+    if let Err(error) = opened {
+        let endpoint_cleanup = stage_endpoint.close().await;
+        let cleanup = p.bridge.close_session(session_id).await;
+        return Err(StageError::Storage(format!(
+            "SessionOpened: {error}; cleanup: {cleanup:?}; stage endpoint: {endpoint_cleanup:?}"
+        )));
+    }
 
     // Prepend any queued operator steer messages to this turn's prompt (B2).
     // Non-destructive: steering lands here, at the stage boundary, because ACP
@@ -673,9 +788,118 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         steered
     };
     let prompt_msg = MessageContent::Text(prompt_text);
-    p.bridge
-        .send_message(session_id, prompt_msg)
-        .await
+    let mut prompt_finished = tokio_util::sync::CancellationToken::new();
+    let prompt_signal = prompt_finished.clone();
+    let prompt_bridge = Arc::clone(p.bridge);
+    let mut prompt_task = tokio::spawn(async move {
+        let _finished = prompt_signal.drop_guard();
+        prompt_bridge.send_message(session_id, prompt_msg).await
+    });
+    let mut prompt_joined = false;
+    let mut session_disposition = None;
+    let stage_result = async {
+    let mut prompt_success = false;
+    let mut candidates = std::collections::VecDeque::new();
+    let mut retry_feedback: Option<String> = None;
+    let mut missing_outcome_reminders: u32 = 0;
+    // Timer-driven poll of the loop guard's wall-clock deadline
+    // (`.autopilot/competitive-waves/spec.md` §15). `check_loop_guard`
+    // (inside `RoutingToolDispatcher::dispatch`) only sees the deadline when
+    // a tool call arrives — a node stuck in one long agent turn (streaming
+    // `AgentMessage`s, no tool calls at all) would otherwise never trip its
+    // budget. A 1s period bounds trip latency cheaply against a default
+    // one-hour budget; `tick()` fires immediately on the first poll, so a
+    // deadline that is already exceeded at session start (e.g. a `0`-second
+    // configured limit) is caught right away rather than a full period late.
+    let mut deadline_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+    deadline_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Drive the event loop until OutcomeReported (success) or SessionEnded
+    // (failure / abnormal termination).
+    let outcome = loop {
+        if prompt_success && candidates.is_empty()
+            && !p.bridge.legacy_stage_event_adapter()
+            && let Some(feedback) = retry_feedback.take()
+        {
+            // Validation runs only after a complete provider turn. Start a new
+            // turn asynchronously so this loop can continue servicing MCP calls.
+            // The rejection counter was checked before scheduling this retry.
+            prompt_finished = tokio_util::sync::CancellationToken::new();
+            let signal = prompt_finished.clone();
+            let bridge = Arc::clone(p.bridge);
+            prompt_task = tokio::spawn(async move {
+                let _finished = signal.drop_guard();
+                bridge.send_message(session_id, MessageContent::Text(feedback)).await
+            });
+            prompt_joined = false;
+            prompt_success = false;
+        }
+        let event = if prompt_success && !candidates.is_empty() {
+            candidates.pop_front().ok_or_else(|| StageError::Bridge("missing buffered outcome".into()))?
+        } else if prompt_success && !p.bridge.legacy_stage_event_adapter() {
+            match events.try_recv() {
+                Ok(event) => {
+                    if is_legacy_stage_control(&event) && !p.bridge.legacy_stage_event_adapter() { continue; }
+                    event
+                },
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) if missing_outcome_reminders < MAX_MISSING_OUTCOME_REMINDERS => {
+                    // Agents routinely finish real work and then end the turn
+                    // without calling the stage tool. Failing the run there
+                    // discards completed work; ask for the outcome instead,
+                    // a bounded number of times, in the same session.
+                    missing_outcome_reminders += 1;
+                    tracing::warn!(
+                        target: "engine::stage::agent",
+                        node = %p.node,
+                        session = %session_id,
+                        reminder = missing_outcome_reminders,
+                        max = MAX_MISSING_OUTCOME_REMINDERS,
+                        "turn ended without an accepted outcome; requesting it"
+                    );
+                    retry_feedback = Some(missing_outcome_prompt(p.declared_outcomes));
+                    continue;
+                },
+                Err(_) => return Err(StageError::Bridge(format!(
+                    "prompt completed without an accepted, valid outcome candidate \
+                     (agent ended {} turns without an accepted report_stage_outcome call)",
+                    missing_outcome_reminders + 1
+                ))),
+            }
+        } else { tokio::select! {
+            biased;
+            () = p.cancel.cancelled() => return Err(StageError::Cancelled),
+            _ = deadline_poll.tick() => {
+                session_dispatcher.poll_wall_clock_deadline();
+                let trips = append_loop_escalations(p.writer, &session_dispatcher).await?;
+                // A repeated-tool-call trip only blocks the next dispatch —
+                // the turn itself may still be mid-stream and recovers once
+                // the agent stops repeating. A wall-clock trip has no such
+                // recovery: the node is already past its budget and a turn
+                // burning tokens with no tool calls at all would otherwise
+                // run to its own end (`.autopilot/competitive-waves/spec.md`
+                // §15 / ticket 17: "raising EscalationRequested rather than
+                // burning budget" — a mark that lets the burn continue is
+                // not that). So this trip ends the stage; the other does not.
+                if let Some(trip) = trips
+                    .into_iter()
+                    .find(|t| matches!(t, LoopGuardTrip::NodeDeadlineExceeded { .. }))
+                {
+                    return Err(StageError::LoopGuardTripped(trip));
+                }
+                continue;
+            },
+            request = stage_requests.recv() => {
+                let Some(request) = request else { return Err(StageError::Bridge("stage MCP endpoint ended".into())); };
+                let Some(key) = stage_calls.admit(request) else { continue; };
+                match stage_calls.event(p.writer, &key, &accepted_outcomes).await? {
+                    Some(event) => event,
+                    None => continue,
+                }
+            },
+            joined = &mut prompt_task, if !prompt_joined => {
+                prompt_joined = true;
+                joined.map_err(|error| StageError::Bridge(format!("prompt task: {error}")))?
         .map_err(|e| match e {
             surge_acp::bridge::error::SendMessageError::RateLimited {
                 retry_after,
@@ -713,16 +937,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // for the capacity ledger's design (M2), not settled here.
                 runtime: resolved_profile
                     .as_ref()
-                    .map(|rp| canonical_runtime_id_for(rp).into_string()),
+                    .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string()),
                 retry_after,
                 details,
             },
             other => StageError::Bridge(format!("send_message: {other}")),
         })?;
-
+                prompt_success = true;
     // Record each steer delivery only after the prompt was actually sent, so a
     // failed `send_message` never leaves a `SteerDelivered` claiming otherwise.
-    for steer in &p.steers {
+    for steer in p.steers.iter().filter(|_| outcome_rejection_attempts == 0) {
         p.writer
             .append_event(VersionedEventPayload::new(EventPayload::SteerDelivered {
                 id: steer.id.clone(),
@@ -733,25 +957,14 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             .map_err(|e| StageError::Storage(e.to_string()))?;
     }
 
-    // Timer-driven poll of the loop guard's wall-clock deadline
-    // (`.autopilot/competitive-waves/spec.md` §15). `check_loop_guard`
-    // (inside `RoutingToolDispatcher::dispatch`) only sees the deadline when
-    // a tool call arrives — a node stuck in one long agent turn (streaming
-    // `AgentMessage`s, no tool calls at all) would otherwise never trip its
-    // budget. A 1s period bounds trip latency cheaply against a default
-    // one-hour budget; `tick()` fires immediately on the first poll, so a
-    // deadline that is already exceeded at session start (e.g. a `0`-second
-    // configured limit) is caught right away rather than a full period late.
-    let mut deadline_poll = tokio::time::interval(std::time::Duration::from_secs(1));
-    deadline_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    // Drive the event loop until OutcomeReported (success) or SessionEnded
-    // (failure / abnormal termination).
-    let outcome = loop {
-        let event = tokio::select! {
-            biased;
+                continue;
+            },
             recv = events.recv() => match recv {
-                Ok(ev) => ev,
+                Ok(ev) => {
+                    if is_legacy_stage_control(&ev) && !p.bridge.legacy_stage_event_adapter() { continue; }
+                    ev
+                },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err(StageError::Bridge(
@@ -759,41 +972,18 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     ));
                 },
             },
-            _ = deadline_poll.tick() => {
-                session_dispatcher.poll_wall_clock_deadline();
-                let trips = append_loop_escalations(p.writer, &session_dispatcher).await?;
-                // A repeated-tool-call trip only blocks the next dispatch —
-                // the turn itself may still be mid-stream and recovers once
-                // the agent stops repeating. A wall-clock trip has no such
-                // recovery: the node is already past its budget and a turn
-                // burning tokens with no tool calls at all would otherwise
-                // run to its own end (`.autopilot/competitive-waves/spec.md`
-                // §15 / ticket 17: "raising EscalationRequested rather than
-                // burning budget" — a mark that lets the burn continue is
-                // not that). So this trip ends the stage; the other does not.
-                if let Some(trip) = trips
-                    .into_iter()
-                    .find(|t| matches!(t, LoopGuardTrip::NodeDeadlineExceeded { .. }))
-                {
-                    p.bridge
-                        .close_session(session_id)
-                        .await
-                        .map_err(|e| StageError::Bridge(format!("close_session: {e}")))?;
-                    p.writer
-                        .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
-                            session: session_id,
-                            disposition: SessionDisposition::ForcedClose,
-                        }))
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
-                    return Err(StageError::LoopGuardTripped(trip));
-                }
-                continue;
-            },
-        };
+        }};
 
         // Filter events for this session only.
         if event_session_id(&event) != Some(session_id) {
+            continue;
+        }
+
+        if matches!(event, BridgeEvent::OutcomeReported { .. }) && !prompt_success {
+            if candidates.len() >= 64 {
+                return Err(StageError::Bridge("too many outcomes before prompt completion".into()));
+            }
+            candidates.push_back(event);
             continue;
         }
 
@@ -838,6 +1028,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         &mut outcome_rejection_attempts,
                     )
                     .await?;
+                    retry_feedback = Some(validation_retry_prompt(&format!("{hook_id}: {reason}")));
                     continue;
                 }
 
@@ -867,11 +1058,13 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         &mut outcome_rejection_attempts,
                     )
                     .await?;
+                    retry_feedback = Some(validation_retry_prompt("A verified outcome requires a sealed read-only sandbox. Report an appropriate non-verified outcome instead."));
                     continue;
                 }
 
                 if let Some(rejection) = validate_profile_artifact_contracts(
                     resolved_profile.as_ref(),
+                    p.agent_config.profile.as_str(),
                     &outcome,
                     &artifacts_produced,
                     p.worktree_path,
@@ -893,6 +1086,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         &mut outcome_rejection_attempts,
                     )
                     .await?;
+                    retry_feedback = Some(validation_retry_prompt(&format!("{}: {}", rejection.hook_id, rejection.reason)));
                     continue;
                 }
 
@@ -1000,6 +1194,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                                     artifact: artifact_ref.hash,
                                     path: artifact_ref.path,
                                     name,
+                                    source_path: Some(relative_path),
                                 },
                             ))
                             .await
@@ -1051,11 +1246,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 handle_permission_request(
                     &p,
                     &effective_approval_cfg,
+                    &prompt_finished,
                     session_id,
-                    request_id,
-                    tool,
-                    capability,
-                    options,
+                    PermissionRequest { request_id, tool, capability, options },
                 )
                 .await?;
             },
@@ -1074,13 +1267,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         SessionDisposition::ForcedClose
                     },
                 };
-                p.writer
-                    .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
-                        session: session_id,
-                        disposition,
-                    }))
-                    .await
-                    .map_err(|e| StageError::Storage(e.to_string()))?;
+                session_disposition = Some(disposition);
                 return Err(StageError::AgentCrashed(format!(
                     "session ended before OutcomeReported: {reason:?}"
                 )));
@@ -1134,8 +1321,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         reason = %reason,
                         "pre_tool_use hook rejected; sending tool-error reply"
                     );
-                    p.bridge
-                        .reply_to_tool(
+                    stage_calls
+                        .reply(p.writer, p.bridge.as_ref(),
                             session_id,
                             call_id,
                             AcpResultPayload::Error {
@@ -1245,8 +1432,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         message: "cancelled".into(),
                     },
                 };
-                p.bridge
-                    .reply_to_tool(session_id, call_id, acp_result)
+                stage_calls
+                    .reply(p.writer, p.bridge.as_ref(),session_id, call_id, acp_result)
                     .await
                     .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
 
@@ -1306,7 +1493,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     None => question.clone(),
                 };
 
-                p.writer
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                p.tool_resolutions.lock().await.insert(call_id.clone(), tx);
+                let requested = p.writer
                     .append_event(VersionedEventPayload::new(
                         EventPayload::HumanInputRequested {
                             node: p.node.clone(),
@@ -1316,23 +1505,24 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             schema: None,
                         },
                     ))
-                    .await
-                    .map_err(|e| StageError::Storage(e.to_string()))?;
-
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                p.tool_resolutions.lock().await.insert(call_id.clone(), tx);
+                    .await;
+                if let Err(error) = requested {
+                    p.tool_resolutions.lock().await.remove(&call_id);
+                    return Err(StageError::Storage(error.to_string()));
+                }
 
                 let resolved = tokio::select! {
-                    response = rx => match response {
-                        Ok(v) => Some(v),
-                        Err(_) => None, // sender dropped (run aborted)
-                    },
-                    () = tokio::time::sleep(p.human_input_timeout) => None,
+                    biased;
+                    () = p.cancel.cancelled() => Err(StageError::Cancelled),
+                    () = prompt_finished.cancelled() => Err(StageError::Bridge("prompt ended while human input was pending".into())),
+                    () = stage_calls.disconnected(&call_id) => Err(StageError::Bridge("MCP caller disconnected while human input was pending".into())),
+                    response = rx => response.map(Some).map_err(|_| StageError::Cancelled),
+                    () = tokio::time::sleep(p.human_input_timeout) => Ok(None),
                 };
 
                 p.tool_resolutions.lock().await.remove(&call_id);
 
-                if let Some(response) = resolved {
+                if let Some(response) = resolved? {
                     p.writer
                         .append_event(VersionedEventPayload::new(
                             EventPayload::HumanInputResolved {
@@ -1343,8 +1533,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         ))
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
-                    p.bridge
-                        .reply_to_tool(
+                    stage_calls
+                        .reply(p.writer, p.bridge.as_ref(),
                             session_id,
                             call_id,
                             AcpResultPayload::Ok {
@@ -1365,8 +1555,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         ))
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
-                    p.bridge
-                        .reply_to_tool(
+                    stage_calls
+                        .reply(p.writer, p.bridge.as_ref(),
                             session_id,
                             call_id,
                             AcpResultPayload::Error {
@@ -1383,20 +1573,62 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         }
     };
 
-    p.bridge
-        .close_session(session_id)
-        .await
-        .map_err(|e| StageError::Bridge(format!("close_session: {e}")))?;
-
+    Ok(outcome)
+    }.await;
+    let endpoint_closed = stage_endpoint.close().await;
+    let closed = p.bridge.close_session(session_id).await;
+    if !prompt_joined {
+        // A failed close leaves resource ownership in the bridge. Stop only this
+        // caller task so an unconfirmed cleanup cannot hang the engine driver.
+        if closed.is_err() {
+            prompt_task.abort();
+        }
+        if let Err(error) = prompt_task.await
+            && (!error.is_cancelled() || closed.is_ok())
+        {
+            return Err(StageError::Bridge(format!(
+                "prompt cleanup: {error}; close: {closed:?}; stage: {stage_result:?}"
+            )));
+        }
+    }
+    // Outcome validation and artifact persistence already finished above.
+    // Reaped forced cleanup must not discard that result; unconfirmed cleanup
+    // still prevents the next stage from starting.
+    let forced_cleanup = matches!(
+        &closed,
+        Err(surge_acp::bridge::error::CloseSessionError::GracefulTimedOut { killed: true, .. })
+    );
+    if forced_cleanup {
+        tracing::warn!(%session_id, "stage session was forcibly closed and reaped");
+    } else {
+        closed.map_err(|error| match &stage_result {
+            Err(stage_error) => StageError::Bridge(format!(
+                "stage failed: {stage_error}; session cleanup also failed: {error}"
+            )),
+            Ok(outcome) => StageError::Bridge(format!(
+                "session cleanup failed: {error}; stage outcome: {outcome}"
+            )),
+        })?;
+    }
     p.writer
         .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
             session: session_id,
-            disposition: SessionDisposition::Normal,
+            disposition: session_disposition.unwrap_or(
+                if stage_result.is_ok() && !forced_cleanup {
+                    SessionDisposition::Normal
+                } else {
+                    SessionDisposition::ForcedClose
+                },
+            ),
         }))
         .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-
-    Ok(outcome)
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    endpoint_closed.map_err(|error| {
+        StageError::Bridge(format!(
+            "stage endpoint cleanup: {error}; stage: {stage_result:?}"
+        ))
+    })?;
+    stage_result
 }
 
 /// Look up the [`LedgerEffect`] declared for `outcome` on this node, defaulting
@@ -1564,6 +1796,36 @@ struct RejectionRecordParams<'a> {
     max_rejections: u32,
 }
 
+/// Follow-up turns granted to an agent that ends its turn without calling
+/// `report_stage_outcome`, before the stage fails.
+const MAX_MISSING_OUTCOME_REMINDERS: u32 = 2;
+
+/// Follow-up turn after validation rejected a reported outcome.
+fn validation_retry_prompt(feedback: &str) -> String {
+    format!(
+        "Your stage outcome was rejected by validation:\n{feedback}\n\nCorrect the artifacts or outcome, then call report_stage_outcome again with a new unique call_id. The stage is not complete until validation accepts the result."
+    )
+}
+
+/// Follow-up turn after the agent ended its turn without reporting.
+fn missing_outcome_prompt(declared: &[OutcomeDecl]) -> String {
+    let outcomes = if declared.is_empty() {
+        "done".to_string()
+    } else {
+        declared
+            .iter()
+            .map(|o| format!("`{}` ({})", o.id.as_str(), o.description.trim()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "Your turn ended without an accepted report_stage_outcome call, so this stage has no result yet. \
+         Do not redo finished work: check the current state of the workspace, finish anything \
+         still missing, then call report_stage_outcome with a new unique call_id. \
+         Allowed outcomes: {outcomes}."
+    )
+}
+
 async fn record_outcome_rejection(
     params: RejectionRecordParams<'_>,
     attempts: &mut u32,
@@ -1624,6 +1886,7 @@ struct ArtifactContractRejection {
 
 async fn validate_profile_artifact_contracts(
     resolved_profile: Option<&ResolvedProfile>,
+    profile_ref: &str,
     outcome: &OutcomeKey,
     artifacts_produced: &[String],
     worktree_path: &Path,
@@ -1676,6 +1939,14 @@ async fn validate_profile_artifact_contracts(
                 )));
             };
             let content = String::from_utf8_lossy(&validation_input.bytes);
+            // Flow-generator output is validated by the bootstrap post-processor,
+            // which persists diagnostics and routes the bounded edit loop. Keep
+            // path/readability checks here, but do not consume its retry there.
+            if declaration.contract.kind == ArtifactKind::Flow
+                && crate::engine::bootstrap::is_flow_generator_profile(profile_ref)
+            {
+                continue;
+            }
             let report = validate_artifact(
                 declaration.contract.kind,
                 Some(validation_input.relative_path.as_path()),
@@ -1928,22 +2199,33 @@ fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {
 /// Holding the agent stage on this handler matches ACP semantics: the agent
 /// itself is blocked on its `request_permission` call until surge replies,
 /// so there is no concurrent agent activity to drain.
-#[allow(clippy::too_many_lines)]
-async fn handle_permission_request(
-    p: &AgentStageParams<'_>,
-    effective_approval_cfg: &surge_core::approvals::ApprovalConfig,
-    session_id: surge_core::id::SessionId,
+struct PermissionRequest {
     request_id: String,
     tool: String,
     capability: String,
     options: Vec<String>,
+}
+
+#[allow(clippy::too_many_lines)]
+async fn handle_permission_request(
+    p: &AgentStageParams<'_>,
+    effective_approval_cfg: &surge_core::approvals::ApprovalConfig,
+    prompt_finished: &tokio_util::sync::CancellationToken,
+    session_id: surge_core::id::SessionId,
+    request: PermissionRequest,
 ) -> Result<(), StageError> {
-    use agent_client_protocol::{
+    use agent_client_protocol::schema::v1::{
         PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse,
         SelectedPermissionOutcome,
     };
     use surge_core::run_event::ElevationDecision;
     use tokio::time::sleep;
+    let PermissionRequest {
+        request_id,
+        tool,
+        capability,
+        options,
+    } = request;
 
     tracing::info!(
         target: "surge_orch.elevation",
@@ -1999,6 +2281,15 @@ async fn handle_permission_request(
     );
 
     let outcome = tokio::select! {
+        biased;
+        () = p.cancel.cancelled() => {
+            let _ = p.pending_elevations.cancel(session_id, &request_id).await;
+            return Err(StageError::Cancelled);
+        },
+        () = prompt_finished.cancelled() => {
+            let _ = p.pending_elevations.cancel(session_id, &request_id).await;
+            return Ok(());
+        },
         result = rx => result.ok(),
         () = sleep(timeout) => None,
     };
@@ -2153,11 +2444,21 @@ fn resolve_option_id(
     desired.to_string()
 }
 
+fn is_legacy_stage_control(event: &BridgeEvent) -> bool {
+    matches!(
+        event,
+        BridgeEvent::OutcomeReported { .. }
+            | BridgeEvent::HumanInputRequested { .. }
+            | BridgeEvent::ToolCall { .. }
+    )
+}
+
 fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
     match event {
         BridgeEvent::SessionEstablished { session, .. }
         | BridgeEvent::AgentMessage { session, .. }
         | BridgeEvent::TokenUsage { session, .. }
+        | BridgeEvent::ToolObserved { session, .. }
         | BridgeEvent::ToolCall { session, .. }
         | BridgeEvent::ToolResult { session, .. }
         | BridgeEvent::OutcomeReported { session, .. }
@@ -2185,11 +2486,37 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
 /// ([`resolve_profile_runtime_id`]) all call this, so the three facts can
 /// never quietly diverge on what "the runtime" means for the same profile
 /// (Task 12 M3, acceptance criterion A).
-fn canonical_runtime_id_for(rp: &ResolvedProfile) -> crate::engine::capacity::CanonicalRuntimeId {
+fn canonical_runtime_id_for(
+    agent_config: &AgentConfig,
+    rp: &ResolvedProfile,
+) -> crate::engine::capacity::CanonicalRuntimeId {
     crate::engine::capacity::CanonicalRuntimeId::resolve(
         &surge_acp::Registry::builtin(),
-        &rp.profile.runtime.agent_id,
+        effective_agent_id(agent_config, rp),
     )
+}
+
+/// The provider a node actually runs on: its own
+/// [`AgentConfig::runtime_override`] when set, else the profile's
+/// `runtime.agent_id`. Every runtime-identity fact (launch, `SessionOpened`,
+/// rate-limit attribution, capacity precheck) goes through this.
+fn effective_agent_id<'a>(agent_config: &'a AgentConfig, rp: &'a ResolvedProfile) -> &'a str {
+    agent_config
+        .runtime_override()
+        .unwrap_or(rp.profile.runtime.agent_id.as_str())
+}
+
+/// [`resolve_profile_runtime_id`] for a concrete node, honouring its
+/// provider override — what the capacity precheck must key on.
+#[must_use]
+pub(crate) fn resolve_node_runtime_id(
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    agent_config: &AgentConfig,
+) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
+    let registry = profile_registry?;
+    let key_ref = surge_core::profile::keyref::parse_key_ref(agent_config.profile.as_ref()).ok()?;
+    let resolved = registry.resolve(&key_ref).ok()?;
+    Some(canonical_runtime_id_for(agent_config, &resolved))
 }
 
 /// Resolve the canonical agent-runtime id a node's `agent_config.profile`
@@ -2212,7 +2539,10 @@ pub(crate) fn resolve_profile_runtime_id(
     let registry = profile_registry?;
     let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).ok()?;
     let resolved = registry.resolve(&key_ref).ok()?;
-    Some(canonical_runtime_id_for(&resolved))
+    Some(crate::engine::capacity::CanonicalRuntimeId::resolve(
+        &surge_acp::Registry::builtin(),
+        &resolved.profile.runtime.agent_id,
+    ))
 }
 
 /// Why a candidate rotation target was refused (Task 12 §1(1), revision 6).
@@ -2515,6 +2845,18 @@ mod tests {
     use surge_core::profile::VerificationCfg;
 
     #[test]
+    fn completion_contract_requires_tool_submission_with_actual_outcomes() {
+        let outcomes = vec![OutcomeKey::try_from("ready_for_verification").unwrap()];
+        let prompt = append_completion_contract("Implement the app.".into(), &outcomes);
+        assert!(prompt.starts_with("Implement the app."));
+        assert!(prompt.contains("call the available report_stage_outcome tool"));
+        assert!(prompt.contains("ready_for_verification"));
+        assert!(prompt.contains("final text message alone"));
+        assert!(prompt.contains("unique ID for each revised report"));
+        assert!(prompt.contains("does not certify verification or approval"));
+    }
+
+    #[test]
     fn derive_agent_kind_carries_entry_env_and_settings_files() {
         // A custom provider in the merged registry is a first-class runtime:
         // its env spec and settings files flow into the launch with no
@@ -2655,6 +2997,49 @@ mod tests {
         RoleCategory, RuntimeCfg, ToolsCfg,
     };
     use surge_core::sandbox::SandboxConfig;
+
+    #[tokio::test]
+    async fn flow_generator_defers_content_validation_but_other_profiles_do_not() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("flow.toml"), "schema_version = 1\n").unwrap();
+        let mut profile = resolved_profile(Vec::new());
+        profile.profile = toml::from_str(include_str!(
+            "../../../../surge-core/bundled/profiles/flow-generator-1.0.toml"
+        ))
+        .unwrap();
+        let outcome = OutcomeKey::try_from("drafted").unwrap();
+        let artifacts = vec!["flow.toml".to_owned()];
+        let deferred = validate_profile_artifact_contracts(
+            Some(&profile),
+            "flow-generator@1.0",
+            &outcome,
+            &artifacts,
+            directory.path(),
+        )
+        .await
+        .unwrap();
+        assert!(deferred.is_none());
+        let rejected = validate_profile_artifact_contracts(
+            Some(&profile),
+            "implementer@1.0",
+            &outcome,
+            &artifacts,
+            directory.path(),
+        )
+        .await
+        .unwrap();
+        assert!(rejected.is_some());
+        let missing = validate_profile_artifact_contracts(
+            Some(&profile),
+            "flow-generator@1.0",
+            &outcome,
+            &[],
+            directory.path(),
+        )
+        .await
+        .unwrap();
+        assert!(missing.is_some());
+    }
 
     fn hook(id: &str, command: &str) -> Hook {
         Hook {

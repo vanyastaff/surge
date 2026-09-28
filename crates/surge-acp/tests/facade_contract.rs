@@ -41,7 +41,7 @@ impl BridgeFacade for MinimalMock {
         &self,
         _: SessionId,
         _: String,
-        _: agent_client_protocol::RequestPermissionResponse,
+        _: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), ReplyToPermissionError> {
         Ok(())
     }
@@ -60,6 +60,7 @@ impl BridgeFacade for MinimalMock {
 
 fn minimal_session_config() -> SessionConfig {
     SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock { args: vec![] },
         working_dir: std::path::PathBuf::from("/tmp/wt"),
         system_prompt: "sys".into(),

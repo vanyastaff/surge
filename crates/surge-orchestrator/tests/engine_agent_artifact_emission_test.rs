@@ -100,6 +100,8 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -151,10 +153,15 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
                 artifact,
                 path,
                 name,
+                source_path,
             } => {
                 assert_eq!(producer, &node, "producer node mismatch");
                 match name.as_str() {
                     "spec" => {
+                        assert_eq!(
+                            source_path.as_deref(),
+                            Some(std::path::Path::new("spec.md"))
+                        );
                         assert_eq!(artifact, &expected_spec_hash);
                         assert_eq!(
                             path.file_name().unwrap(),
@@ -163,6 +170,10 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
                         assert_eq!(std::fs::read(path).unwrap(), spec_body);
                     },
                     "design" => {
+                        assert_eq!(
+                            source_path.as_deref(),
+                            Some(std::path::Path::new("design.md"))
+                        );
                         assert_eq!(artifact, &expected_design_hash);
                         assert_eq!(
                             path.file_name().unwrap(),
@@ -244,6 +255,8 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -358,6 +371,8 @@ subtasks = [
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -465,6 +480,8 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -571,12 +588,21 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
     let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg_with_profile("architect@1.0");
+    let mut cfg = agent_cfg_with_profile("architect@1.0");
+    cfg.bindings.push(surge_core::agent_config::Binding {
+        source: surge_core::agent_config::ArtifactSource::Static {
+            content: "Choose a durable artifact format and document the decision.".into(),
+        },
+        target: surge_core::agent_config::TemplateVar("spec".into()),
+        optional: false,
+    });
     let node = NodeKey::try_from("architect").unwrap();
     let tool_resolutions =
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,

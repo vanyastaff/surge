@@ -160,7 +160,6 @@ async fn run_command(
     worktree: Option<PathBuf>,
     daemon: bool,
 ) -> Result<()> {
-    use std::time::Duration;
     use surge_core::graph::Graph;
     use surge_orchestrator::engine::facade::EngineFacade;
     use surge_orchestrator::engine::handle::EngineRunEvent;
@@ -211,6 +210,7 @@ async fn run_command(
     let app_config =
         SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
 
+    let mut local_events = None;
     let facade: Arc<dyn EngineFacade> = if daemon {
         ensure_daemon_running().await?;
         let socket = surge_daemon::pidfile::socket_path()?;
@@ -261,6 +261,7 @@ async fn run_command(
                 ..EngineConfig::default()
             },
         ));
+        local_events = Some(engine.subscribe_tap());
         Arc::new(surge_orchestrator::engine::facade::LocalEngineFacade::new(
             engine,
         ))
@@ -282,23 +283,32 @@ async fn run_command(
         .start_run(run_id, graph, worktree_path, run_config)
         .await?;
 
-    if watch {
-        let mut rx = handle.events;
-        loop {
-            match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
-                Ok(Ok(event)) => {
-                    print_event(&event);
-                    if matches!(event, EngineRunEvent::Terminal { .. }) {
-                        break;
-                    }
-                },
-                Ok(Err(_)) => break, // sender dropped
-                Err(_) => continue,  // 60s timeout, keep waiting
-            }
-        }
+    if daemon && !watch {
+        return Ok(());
     }
-
-    Ok(())
+    let outcome = super::run_lifecycle::drive_run(
+        handle,
+        local_events,
+        !daemon,
+        |event| async move {
+            if watch {
+                print_event(&event);
+            }
+            if !daemon && matches!(event, EngineRunEvent::Persisted { payload, .. }
+                if matches!(*payload, surge_core::run_event::EventPayload::HumanInputRequested { .. }))
+            {
+                return Err(anyhow!("run {run_id} needs human input that local engine run cannot answer. Use --daemon with an approval client, or the bootstrap console for bootstrap flows"));
+            }
+            Ok(())
+        },
+        |reason| facade.stop_run(run_id, reason),
+    ).await?;
+    if watch && !daemon {
+        print_event(&EngineRunEvent::Terminal {
+            outcome: outcome.clone(),
+        });
+    }
+    super::run_lifecycle::require_completed(run_id, outcome)
 }
 
 async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
@@ -310,10 +320,7 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
     }
 
     // M7 daemon path: subscribe to per-run events and stream live.
-    use std::time::Duration;
     use surge_orchestrator::engine::EngineError;
-    use surge_orchestrator::engine::handle::EngineRunEvent;
-
     ensure_daemon_running().await?;
     let socket = surge_daemon::pidfile::socket_path()?;
     let facade =
@@ -349,8 +356,23 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
 
     eprintln!("watching {id} (Ctrl+C to stop)…");
 
+    let result = watch_daemon_events(&mut rx).await;
+    // Always unsubscribe, including when delivery ends without a confirmed outcome.
+    let _ = facade.unsubscribe_from_run(id).await;
+    result
+}
+
+async fn watch_daemon_events(
+    rx: &mut tokio::sync::broadcast::Receiver<surge_orchestrator::engine::handle::EngineRunEvent>,
+) -> Result<()> {
+    use std::time::Duration;
+    use surge_orchestrator::engine::handle::EngineRunEvent;
+
     loop {
         match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
+            Ok(Ok(EngineRunEvent::StreamError { message })) => {
+                return Err(anyhow!("run outcome unconfirmed: {message}"));
+            },
             Ok(Ok(event)) => {
                 print_event(&event);
                 if matches!(event, EngineRunEvent::Terminal { .. }) {
@@ -358,19 +380,19 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
                 }
             },
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                eprintln!("daemon closed the per-run channel; run may have terminated");
-                break;
+                return Err(anyhow!(
+                    "daemon event stream closed before terminal confirmation; run outcome unconfirmed"
+                ));
             },
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
-                eprintln!("note: dropped {n} events (subscriber lagged); continuing");
+                return Err(anyhow!(
+                    "missed {n} daemon events; run observation is incomplete"
+                ));
             },
             Err(_timeout) => continue, // 60s without events; keep waiting
         }
     }
 
-    // Best-effort unsubscribe so the daemon stops pumping events to this
-    // connection. If it fails (e.g., daemon died), we don't care.
-    let _ = facade.unsubscribe_from_run(id).await;
     Ok(())
 }
 
@@ -386,9 +408,19 @@ async fn resume_command(run_id: String, daemon: bool) -> Result<()> {
     let socket = surge_daemon::pidfile::socket_path()?;
     let facade =
         surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
-    let cwd = std::env::current_dir().context("cwd")?;
+    let storage = Storage::open(&surge_runs_dir()?).await?;
+    let summary = storage
+        .get_run(&id)
+        .await?
+        .ok_or_else(|| anyhow!("run {id} was not found"))?;
+    if !summary.project_path.is_dir() {
+        return Err(anyhow!(
+            "recorded worktree is missing: {}",
+            summary.project_path.display()
+        ));
+    }
     use surge_orchestrator::engine::facade::EngineFacade;
-    let _handle = facade.resume_run(id, cwd).await?;
+    let _handle = facade.resume_run(id, summary.project_path).await?;
     println!("resumed {id}");
     Ok(())
 }
@@ -435,33 +467,39 @@ async fn ls_command(daemon: bool) -> Result<()> {
     legacy_ls_command().await
 }
 
+/// List runs from the on-disk run registry (daemon not required).
+///
+/// `surge_runs_dir()` returns the surge *home* directory, so listing its
+/// entries directly would print `daemon/`, `db/`, `profiles/`… instead of
+/// runs. The registry is the authoritative index and also carries status.
 async fn legacy_ls_command() -> Result<()> {
-    let runs_dir = surge_runs_dir()?;
-    // Use storage registry for accurate metadata when available; fall back to
-    // raw directory listing if the registry isn't open.
-    let mut entries: Vec<_> = std::fs::read_dir(&runs_dir)
-        .with_context(|| format!("read_dir {}", runs_dir.display()))?
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
+    use surge_persistence::runs::RunFilter;
 
-    println!("{:32}  STARTED", "ID");
-    for entry in entries {
-        let name = entry.file_name();
-        let id_str = name.to_string_lossy();
-        let metadata = entry.metadata().ok();
-        let started = metadata.and_then(|m| m.created().ok()).map_or_else(
-            || "?".to_string(),
-            |t| {
-                chrono::DateTime::<chrono::Utc>::from(t)
-                    .format("%Y-%m-%d %H:%M:%S")
-                    .to_string()
-            },
-        );
-        println!("{id_str:32}  {started}");
-    }
+    let storage = Storage::open(&surge_runs_dir()?).await?;
+    let runs = storage.list_runs(RunFilter::default()).await?;
+    print!("{}", render_run_table(&runs));
     Ok(())
+}
+
+/// Render registry rows as the `surge engine ls` table, newest first.
+fn render_run_table(runs: &[surge_persistence::runs::RunSummary]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = format!("{:<32} {:<12} STARTED\n", "ID", "STATUS");
+    for r in runs {
+        let started = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(r.started_at_ms)
+            .map_or_else(
+                || "?".to_string(),
+                |t| t.format("%Y-%m-%d %H:%M:%S").to_string(),
+            );
+        let _ = writeln!(
+            out,
+            "{:<32} {:<12} {started}",
+            r.id.to_string(),
+            r.status.as_str()
+        );
+    }
+    out
 }
 
 async fn logs_command(run_id: String, since: Option<u64>, follow: bool) -> Result<()> {
@@ -653,15 +691,23 @@ async fn fork_command(
 
     let storage = Storage::open(&surge_runs_dir()?).await?;
     let child = RunId::new();
+    let worktrees = storage.home().join("worktrees");
+    tokio::fs::create_dir_all(&worktrees).await?;
+    let destination = tokio::fs::canonicalize(&worktrees)
+        .await?
+        .join(child.to_string());
     let outcome = fork(
         &storage,
-        ForkRequest::new(parent, child, seq).with_edits(edits),
+        ForkRequest::new(parent, child, seq)
+            .with_edits(edits)
+            .with_worktree(destination.clone()),
     )
     .await?;
 
     println!("forked {parent} @ seq {seq}");
     println!("  new run:       {}", outcome.new_run);
     println!("  events copied: {}", outcome.copied_events);
+    println!("  worktree:      {}", destination.display());
     if !prompt.is_empty() || !profile.is_empty() {
         println!(
             "  edits applied: {} prompt, {} profile",
@@ -779,4 +825,91 @@ pub(crate) async fn ensure_daemon_running() -> Result<()> {
         max_active: 8,
     })
     .await
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::watch_daemon_events;
+    use surge_orchestrator::engine::handle::{EngineRunEvent, RunOutcome};
+
+    #[tokio::test]
+    async fn stream_error_is_not_successful_observation() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(2);
+        tx.send(EngineRunEvent::StreamError {
+            message: "durable catch-up failed".into(),
+        })
+        .unwrap();
+        drop(tx);
+        let error = watch_daemon_events(&mut rx).await.unwrap_err();
+        assert!(error.to_string().contains("durable catch-up failed"));
+    }
+
+    #[tokio::test]
+    async fn closed_stream_without_terminal_is_unconfirmed() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(2);
+        drop(tx);
+        let error = watch_daemon_events(&mut rx).await.unwrap_err();
+        assert!(error.to_string().contains("unconfirmed"));
+    }
+
+    #[tokio::test]
+    async fn lost_events_do_not_become_success_after_a_terminal() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        for _ in 0..3 {
+            tx.send(EngineRunEvent::Terminal {
+                outcome: RunOutcome::Failed {
+                    error: "agent failed".into(),
+                },
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let error = watch_daemon_events(&mut rx).await.unwrap_err();
+        assert!(error.to_string().contains("missed"));
+    }
+
+    #[tokio::test]
+    async fn explicit_terminal_confirms_observation() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        tx.send(EngineRunEvent::Terminal {
+            outcome: RunOutcome::Failed {
+                error: "agent failed".into(),
+            },
+        })
+        .unwrap();
+        drop(tx);
+        watch_daemon_events(&mut rx).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_run_table;
+    use std::path::PathBuf;
+    use surge_core::id::RunId;
+    use surge_core::run_status::RunStatus;
+    use surge_persistence::runs::RunSummary;
+
+    #[test]
+    fn run_table_lists_registry_runs_with_status_not_home_dirs() {
+        let id = RunId::new();
+        let runs = vec![RunSummary {
+            id,
+            project_path: PathBuf::from("/tmp/p"),
+            pipeline_template: None,
+            status: RunStatus::Failed,
+            started_at_ms: 1_700_000_000_000,
+            ended_at_ms: Some(1_700_000_000_500),
+            daemon_pid: None,
+            wake_at_ms: None,
+        }];
+        let table = render_run_table(&runs);
+        let mut lines = table.lines();
+        assert!(lines.next().unwrap().starts_with("ID"));
+        let row = lines.next().unwrap();
+        assert!(row.starts_with(&id.to_string()), "{row}");
+        assert!(row.contains("failed"), "{row}");
+        assert!(row.contains("2023-11-14 22:13:20"), "{row}");
+        assert!(!table.contains("profiles"));
+    }
 }

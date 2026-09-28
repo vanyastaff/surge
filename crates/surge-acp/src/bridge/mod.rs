@@ -48,9 +48,9 @@ pub use sandbox_resolver::{ResolveContext, SandboxResolveError, resolve_launch_f
 
 // Re-exports from the ACP SDK that downstream callers (engine, doctor,
 // tests) need to construct `reply_to_permission` arguments.
-pub use agent_client_protocol::{
-    PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse,
-    SelectedPermissionOutcome,
+pub use agent_client_protocol::schema::v1::{
+    EnvVariable, McpServerStdio, PermissionOptionId, RequestPermissionOutcome,
+    RequestPermissionResponse, SelectedPermissionOutcome,
 };
 
 pub mod tools;
@@ -62,6 +62,7 @@ pub use session::{AgentKind, MessageContent, SessionConfig, SessionState, Sessio
 pub mod command;
 pub use command::BridgeCommand;
 
+mod lifecycle;
 pub(crate) mod worker;
 
 pub(crate) mod session_inner;
@@ -71,7 +72,7 @@ pub(crate) mod client;
 pub(crate) mod tokens;
 
 pub mod acp_bridge;
-pub use acp_bridge::AcpBridge;
+pub use acp_bridge::{AcpBridge, BridgeTimeouts};
 
 pub mod facade;
 pub use facade::BridgeFacade;

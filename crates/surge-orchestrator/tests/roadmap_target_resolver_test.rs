@@ -37,6 +37,7 @@ async fn create_run_with_artifacts(
             artifact: roadmap.hash,
             path: roadmap.path,
             name: "roadmap".into(),
+            source_path: None,
         }))
         .await
         .unwrap();
@@ -46,6 +47,7 @@ async fn create_run_with_artifacts(
             artifact: flow.hash,
             path: flow.path,
             name: "flow".into(),
+            source_path: None,
         }))
         .await
         .unwrap();

@@ -1,4 +1,4 @@
-default_agent = "test-agent"
+default_agent = "codex-acp"
 
 [agents.claude-acp]
 args = ["@zed-industries/claude-agent-acp"]
@@ -24,3 +24,8 @@ after_each_subtask = false
 after_plan = true
 after_qa = true
 after_spec = true
+
+[agents.codex-acp]
+command = "npx"
+args = ["@zed-industries/codex-acp", "-c", 'model="gpt-5.5"']
+transport = "stdio"

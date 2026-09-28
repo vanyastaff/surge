@@ -4,7 +4,7 @@
 //! with proper styling for headers, bold, italic, code blocks, inline code,
 //! tables, lists, blockquotes, and horizontal rules.
 
-use gpui::*;
+use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 use crate::theme;
@@ -31,6 +31,8 @@ struct MarkdownRenderer {
     format_stack: Vec<FormatTag>,
     /// Current list state
     list_stack: Vec<ListKind>,
+    /// Marker stays beside wrapping item text instead of becoming a flex span.
+    list_marker: Option<String>,
     /// Code block accumulator
     code_buf: Option<CodeBlock>,
     /// Table state
@@ -81,6 +83,7 @@ impl MarkdownRenderer {
             inline_buf: Vec::new(),
             format_stack: Vec::new(),
             list_stack: Vec::new(),
+            list_marker: None,
             code_buf: None,
             table: None,
             in_blockquote: false,
@@ -132,11 +135,11 @@ impl MarkdownRenderer {
             return None;
         }
 
-        let spans: Vec<_> = self.inline_buf.drain(..).collect();
-        let mut line = div().flex().flex_wrap().gap(px(0.0));
+        let spans: Vec<_> = std::mem::take(&mut self.inline_buf);
+        let mut line = div().w_full().min_w_0().flex().flex_wrap().gap(px(0.0));
 
         for span in spans {
-            let mut el = div().child(span.text);
+            let mut el = div().min_w_0().max_w_full().child(span.text);
 
             if span.bold {
                 el = el.font_weight(FontWeight::BOLD);
@@ -160,7 +163,18 @@ impl MarkdownRenderer {
             line = line.child(el);
         }
 
-        Some(line)
+        Some(if let Some(marker) = self.list_marker.take() {
+            div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .items_start()
+                .gap(px(6.0))
+                .child(div().flex_shrink_0().child(marker))
+                .child(line.flex_1())
+        } else {
+            line
+        })
     }
 
     fn flush_paragraph(&mut self) {
@@ -274,7 +288,7 @@ impl MarkdownRenderer {
                 };
                 let indent = self.list_stack.len().saturating_sub(1);
                 let padding = "  ".repeat(indent);
-                self.push_text(&format!("{padding}{prefix}"));
+                self.list_marker = Some(format!("{padding}{prefix}"));
             },
             Tag::BlockQuote(_) => {
                 self.flush_paragraph();
@@ -315,7 +329,7 @@ impl MarkdownRenderer {
                 self.flush_paragraph();
             },
             TagEnd::Heading(level) => {
-                let spans: Vec<_> = self.inline_buf.drain(..).collect();
+                let spans: Vec<_> = std::mem::take(&mut self.inline_buf);
                 let text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
                 let (size, weight) = match level as u8 {
@@ -402,6 +416,7 @@ impl MarkdownRenderer {
             },
             TagEnd::Item => {
                 self.flush_paragraph();
+                self.list_marker = None;
             },
             TagEnd::BlockQuote(_) => {
                 self.flush_paragraph();
@@ -419,10 +434,10 @@ impl MarkdownRenderer {
                 }
             },
             TagEnd::TableRow => {
-                if let Some(t) = &mut self.table {
-                    if !t.in_head {
-                        t.rows.push(t.current_row.clone());
-                    }
+                if let Some(t) = &mut self.table
+                    && !t.in_head
+                {
+                    t.rows.push(t.current_row.clone());
                 }
             },
             TagEnd::TableCell => {
@@ -436,7 +451,7 @@ impl MarkdownRenderer {
 
     fn finish(mut self) -> Div {
         self.flush_paragraph();
-        let mut container = div().flex().flex_col();
+        let mut container = div().w_full().min_w_0().flex().flex_col();
         for el in self.root {
             container = container.child(el);
         }
@@ -508,4 +523,34 @@ fn render_table(table: TableState) -> Div {
     }
 
     container
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MarkdownRenderer, Tag, TagEnd};
+
+    #[test]
+    fn list_marker_is_separate_from_wrapping_text() {
+        let mut renderer = MarkdownRenderer::new();
+        renderer.start_tag(Tag::List(None));
+        renderer.start_tag(Tag::Item);
+        renderer.push_text("Long requirement that must wrap within the document pane");
+        assert_eq!(renderer.list_marker.as_deref(), Some("• "));
+        assert_eq!(renderer.inline_buf.len(), 1);
+        assert!(renderer.inline_buf[0].text.starts_with("Long requirement"));
+        assert!(renderer.flush_inline().is_some());
+        assert!(renderer.list_marker.is_none());
+    }
+
+    #[test]
+    fn ordered_markers_advance_and_empty_items_do_not_leak() {
+        let mut renderer = MarkdownRenderer::new();
+        renderer.start_tag(Tag::List(Some(3)));
+        renderer.start_tag(Tag::Item);
+        assert_eq!(renderer.list_marker.as_deref(), Some("3. "));
+        renderer.end_tag(TagEnd::Item);
+        assert!(renderer.list_marker.is_none());
+        renderer.start_tag(Tag::Item);
+        assert_eq!(renderer.list_marker.as_deref(), Some("4. "));
+    }
 }

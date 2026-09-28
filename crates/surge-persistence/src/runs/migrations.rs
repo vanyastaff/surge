@@ -81,6 +81,18 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0016-runs-wake-at",
         include_str!("migrations/registry/0016_runs_wake_at.sql"),
     ),
+    (
+        "registry-0017-bootstrap-operations",
+        include_str!("migrations/registry/0017_bootstrap_operations.sql"),
+    ),
+    (
+        "registry-0018-bootstrap-continuation",
+        include_str!("migrations/registry/0018_bootstrap_continuation.sql"),
+    ),
+    (
+        "registry-0019-telegram-pairing-target",
+        include_str!("migrations/registry/0019_telegram_pairing_target.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

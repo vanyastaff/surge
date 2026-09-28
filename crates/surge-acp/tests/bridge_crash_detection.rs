@@ -21,6 +21,7 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             // crash_after=0: mock crashes on the first prompt
             // (count > N is satisfied at count=1, N=0).

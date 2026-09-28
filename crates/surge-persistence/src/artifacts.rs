@@ -30,13 +30,19 @@ pub enum ArtifactStoreError {
     /// `index.json` serialization or parsing failed.
     #[error("artifact index JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    /// The fallback file did not match the requested content hash.
-    #[error("artifact fallback hash mismatch: expected {expected}, got {actual}")]
+    /// The artifact bytes did not match the requested content hash.
+    #[error("artifact content hash mismatch: expected {expected}, got {actual}")]
     HashMismatch {
         /// Expected content hash from the artifact event.
         expected: ContentHash,
-        /// Actual hash computed from the fallback file.
+        /// Actual hash computed from the artifact bytes.
         actual: ContentHash,
+    },
+    /// The artifact exceeded the caller's bounded read budget.
+    #[error("artifact exceeds the {max_bytes} byte read limit")]
+    TooLarge {
+        /// Maximum accepted artifact byte length.
+        max_bytes: usize,
     },
     /// The internal synthetic producer key was invalid.
     #[error("invalid synthetic artifact producer: {0}")]
@@ -88,7 +94,7 @@ impl ArtifactStore {
     ///
     /// # Errors
     /// Returns an error when filesystem writes, index serialization, or the
-    /// internal producer key conversion fail.
+    /// internal producer key conversion fail, or an existing blob is corrupt.
     pub async fn put(&self, run_id: RunId, name: &str, content: &[u8]) -> Result<ArtifactRef> {
         let hash = ContentHash::compute(content);
         let artifacts_dir = self.artifacts_dir(run_id);
@@ -106,6 +112,10 @@ impl ArtifactStore {
                 Err(e) => return Err(ArtifactStoreError::Io(e)),
             }
         }
+
+        // Existing files may have been corrupted after their original write.
+        // Never publish an index entry for bytes that do not match its key.
+        self.open(run_id, hash).await?;
 
         let mut index = self.read_index(run_id).await?;
         index.insert(name.to_owned(), hash);
@@ -126,9 +136,51 @@ impl ArtifactStore {
     /// Read an artifact by content hash.
     ///
     /// # Errors
-    /// Returns an error when the artifact file is absent or unreadable.
+    /// Returns an error when the artifact file is absent, unreadable, or its
+    /// bytes no longer match the requested content hash.
     pub async fn open(&self, run_id: RunId, hash: ContentHash) -> Result<Vec<u8>> {
-        Ok(tokio::fs::read(self.artifacts_dir(run_id).join(hash.to_hex())).await?)
+        let bytes = tokio::fs::read(self.artifacts_dir(run_id).join(hash.to_hex())).await?;
+        let actual = ContentHash::compute(&bytes);
+        if actual != hash {
+            return Err(ArtifactStoreError::HashMismatch {
+                expected: hash,
+                actual,
+            });
+        }
+        Ok(bytes)
+    }
+
+    /// Read at most `max_bytes` of a content-addressed artifact and verify its hash.
+    ///
+    /// Reads one extra byte to detect oversize data without trusting file metadata.
+    /// No index or mutable source-path fallback is used.
+    ///
+    /// # Errors
+    /// Returns an I/O error, [`ArtifactStoreError::TooLarge`], or a hash mismatch.
+    pub async fn open_bounded(
+        &self,
+        run_id: RunId,
+        hash: ContentHash,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>> {
+        use tokio::io::AsyncReadExt as _;
+        let file = tokio::fs::File::open(self.artifacts_dir(run_id).join(hash.to_hex())).await?;
+        let limit = u64::try_from(max_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut bytes = Vec::new();
+        file.take(limit).read_to_end(&mut bytes).await?;
+        if bytes.len() > max_bytes {
+            return Err(ArtifactStoreError::TooLarge { max_bytes });
+        }
+        let actual = ContentHash::compute(&bytes);
+        if actual != hash {
+            return Err(ArtifactStoreError::HashMismatch {
+                expected: hash,
+                actual,
+            });
+        }
+        Ok(bytes)
     }
 
     /// Read an artifact, falling back to the event's original path.
@@ -139,7 +191,7 @@ impl ArtifactStore {
     ///
     /// # Errors
     /// Returns an error when neither the store nor the fallback path can be
-    /// read, or when fallback bytes do not match the recorded hash.
+    /// read, or when stored or fallback bytes do not match the recorded hash.
     pub async fn open_ref(
         &self,
         run_id: RunId,
@@ -249,6 +301,95 @@ mod tests {
         assert_eq!(
             artifact.path.file_name().unwrap(),
             artifact.hash.to_hex().as_str()
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_open_enforces_limit_and_hash() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = test_store(temp.path());
+        let run = RunId::new();
+        let artifact = store.put(run, "report", b"four").await.unwrap();
+        assert_eq!(
+            store.open_bounded(run, artifact.hash, 4).await.unwrap(),
+            b"four"
+        );
+        assert!(matches!(
+            store.open_bounded(run, artifact.hash, 3).await,
+            Err(ArtifactStoreError::TooLarge { max_bytes: 3 })
+        ));
+        assert!(store.open_bounded(run, artifact.hash, 0).await.is_err());
+        let empty = store.put(run, "empty", b"").await.unwrap();
+        assert!(
+            store
+                .open_bounded(run, empty.hash, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            store.open_bounded(RunId::new(), artifact.hash, 4).await,
+            Err(ArtifactStoreError::Io(_))
+        ));
+        tokio::fs::write(&artifact.path, b"fake").await.unwrap();
+        assert!(matches!(
+            store.open_bounded(run, artifact.hash, 4).await,
+            Err(ArtifactStoreError::HashMismatch { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_rejects_corrupt_content_addressed_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = test_store(tmp.path());
+        let run_id = RunId::new();
+        let artifact = store.put(run_id, "spec", b"approved").await.unwrap();
+        tokio::fs::write(&artifact.path, b"changed").await.unwrap();
+
+        let error = store.open(run_id, artifact.hash).await.unwrap_err();
+        assert!(
+            matches!(error, ArtifactStoreError::HashMismatch { expected, actual }
+            if expected == artifact.hash && actual == ContentHash::compute(b"changed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn open_ref_does_not_hide_corruption_with_valid_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = test_store(tmp.path());
+        let run_id = RunId::new();
+        let mut artifact = store.put(run_id, "spec", b"approved").await.unwrap();
+        tokio::fs::write(&artifact.path, b"changed").await.unwrap();
+        tokio::fs::write(tmp.path().join("spec.toml"), b"approved")
+            .await
+            .unwrap();
+        artifact.path = PathBuf::from("spec.toml");
+
+        let error = store
+            .open_ref(run_id, &artifact, tmp.path())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ArtifactStoreError::HashMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn put_rejects_corrupt_existing_blob_before_updating_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = test_store(tmp.path());
+        let run_id = RunId::new();
+        let artifact = store.put(run_id, "spec", b"approved").await.unwrap();
+        let original_index = tokio::fs::read(store.index_path(run_id)).await.unwrap();
+        tokio::fs::write(&artifact.path, b"changed").await.unwrap();
+
+        let error = store
+            .put(run_id, "another_name", b"approved")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ArtifactStoreError::HashMismatch { .. }));
+        assert_eq!(
+            tokio::fs::read(store.index_path(run_id)).await.unwrap(),
+            original_index
         );
     }
 

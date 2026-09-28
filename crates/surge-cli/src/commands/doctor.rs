@@ -113,6 +113,7 @@ async fn run_real_smoke(
     surge_acp::settings_seed::seed_settings_files(&entry.settings_files, &workdir);
     let outcome = OutcomeKey::try_from("done").expect("static outcome key");
     let config = SessionConfig {
+        stage_mcp: None,
         agent_kind,
         working_dir: workdir,
         system_prompt: "Surge doctor smoke. Touch no files.".into(),
@@ -311,9 +312,11 @@ fn collect_telegram_health() -> Result<TelegramHealth> {
     use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, has_secret};
     use surge_persistence::telegram::{cards, pairings};
 
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?
-        .join(".surge");
+    let home = std::env::var_os("SURGE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".surge")))
+        .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?;
     let db_path = home.join("db").join("registry.sqlite");
     if !db_path.exists() {
         return Ok(TelegramHealth {
@@ -326,8 +329,23 @@ fn collect_telegram_health() -> Result<TelegramHealth> {
     let conn =
         rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("open registry: {e}"))?;
 
-    let bot_token_configured = has_secret(&conn, TELEGRAM_BOT_TOKEN_KEY)
-        .map_err(|e| anyhow::anyhow!("query secret: {e}"))?;
+    if has_secret(&conn, TELEGRAM_BOT_TOKEN_KEY)
+        .map_err(|e| anyhow::anyhow!("query legacy credential: {e}"))?
+    {
+        anyhow::bail!(
+            "legacy Telegram credential requires surge telegram setup --token-env NAME --chat-id ID"
+        );
+    }
+    let config_path = std::env::current_dir()?.join("surge.toml");
+    let bot_token_configured = if config_path.exists() {
+        surge_core::config::SurgeConfig::load(&config_path)?
+            .telegram
+            .and_then(|config| config.bot_token_env)
+            .and_then(|name| std::env::var(name).ok())
+            .is_some_and(|value| !value.trim().is_empty())
+    } else {
+        false
+    };
     let active_pairings =
         pairings::count_active(&conn).map_err(|e| anyhow::anyhow!("count active pairings: {e}"))?;
     let open_cards =

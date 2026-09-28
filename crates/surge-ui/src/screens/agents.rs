@@ -14,9 +14,9 @@
 //! instructions). When nothing is installed the screen says so — agent
 //! detection always runs, so there is no sample mode here.
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::component::StyledExt;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_acp::{DetectedAgent, HealthStatus};
 use surge_core::sandbox_matrix::{RuntimeSandboxMatrix, default_matrix};
 
@@ -115,6 +115,8 @@ impl AgentsScreen {
 
         div()
             .id(SharedString::from(format!("crew-{}", agent.entry.id)))
+            .role(Role::Button)
+            .aria_label(format!("Select agent {}", agent.entry.id))
             .flex_1()
             .min_w(px(220.0))
             .max_w(px(320.0))
@@ -244,6 +246,8 @@ impl AgentsScreen {
             .child(
                 div()
                     .id("agent-open-terminal")
+                    .role(Role::Button)
+                    .aria_label("Open agent terminal")
                     .h_flex()
                     .gap(px(7.0))
                     .items_center()
@@ -598,6 +602,8 @@ impl AgentsScreen {
                 .child(
                     div()
                         .id("agents-open-catalog")
+                        .role(Role::Button)
+                        .aria_label("Open agent catalog")
                         .h(px(34.0))
                         .px(px(16.0))
                         .rounded_lg()
@@ -660,6 +666,8 @@ impl Render for AgentsScreen {
             .child(
                 div()
                     .id("agents-add")
+                    .role(Role::Button)
+                    .aria_label("Add agent")
                     .h_flex()
                     .gap(px(7.0))
                     .items_center()

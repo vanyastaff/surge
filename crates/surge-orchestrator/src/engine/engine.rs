@@ -49,10 +49,7 @@ pub(crate) struct ActiveRun {
     pub cancel: tokio_util::sync::CancellationToken,
     pub gate_resolutions: Arc<
         tokio::sync::Mutex<
-            HashMap<
-                surge_core::keys::NodeKey,
-                tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>,
-            >,
+            HashMap<surge_core::keys::NodeKey, crate::engine::stage::human_gate::PendingGate>,
         >,
     >,
     pub tool_resolutions:
@@ -78,10 +75,7 @@ struct FreshRunRegistration {
     cancel: tokio_util::sync::CancellationToken,
     gate_resolutions: Arc<
         tokio::sync::Mutex<
-            HashMap<
-                surge_core::keys::NodeKey,
-                tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>,
-            >,
+            HashMap<surge_core::keys::NodeKey, crate::engine::stage::human_gate::PendingGate>,
         >,
     >,
     tool_resolutions:
@@ -339,7 +333,10 @@ impl Engine {
         // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
         // impl. No registry keeps today's resolver-free behavior unchanged.
         match self.config.profile_registry.as_ref() {
-            Some(registry) => validate_for_m6_with_resolver(&graph, registry.as_ref())?,
+            Some(registry) => {
+                validate_for_m6_with_resolver(&graph, registry.as_ref())?;
+                crate::engine::validate::validate_profile_inputs(&graph, registry)?;
+            },
             None => validate_for_m6(&graph)?,
         }
 
@@ -348,7 +345,9 @@ impl Engine {
 
         // No registry wired keeps today's behavior unchanged — see
         // `seed_profile_catalog`'s doc for what this seeds and why.
-        self.seed_profile_catalog(&mut run_config)?;
+        self.seed_profile_catalog(&mut run_config).await?;
+
+        crate::engine::validate::validate_loop_seeds(&graph, &run_config.seed_artifacts)?;
 
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
@@ -387,6 +386,7 @@ impl Engine {
         // `project_path` (which is the worktree path today).
         let project_path_for_ledger = worktree_path.clone();
         let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
+        let run_agent_registry = self.agent_registry_for(&run_config);
         let params = RunTaskParams {
             run_id,
             writer,
@@ -412,7 +412,7 @@ impl Engine {
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
-            agent_registry: self.config.agent_registry.clone(),
+            agent_registry: run_agent_registry.clone(),
             capacity_ledger,
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
@@ -430,6 +430,7 @@ impl Engine {
         let join = tokio::spawn(async move {
             let outcome = execute(params).await;
             runs_for_cleanup.write().await.remove(&run_id);
+            record_terminal_status(&storage_for_ledger, run_id, &outcome).await;
             mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
             outcome
         });
@@ -473,17 +474,54 @@ impl Engine {
         per_run.or_else(|| self.config.memory_store_path.clone())
     }
 
+    /// Agent catalog a run launches with: its own (project-scoped) catalog
+    /// when the launcher supplied one, else the engine-wide catalog.
+    fn agent_registry_for(&self, run_config: &EngineRunConfig) -> Option<Arc<surge_acp::Registry>> {
+        run_config
+            .agent_registry
+            .clone()
+            .or_else(|| self.config.agent_registry.clone())
+    }
+
     /// Seed the resolved profile registry as the `profile_catalog` run
     /// artifact so bootstrap profiles (`flow-generator@1.0` above all) can
     /// bind Agent nodes to profiles that actually exist
     /// (`profile_loader::render_profile_catalog`) instead of naming them
     /// from prompt text. A no-op when no registry is wired — `start_run`'s
     /// resolver-free default behavior is unchanged in that case.
-    fn seed_profile_catalog(&self, run_config: &mut EngineRunConfig) -> Result<(), EngineError> {
+    ///
+    /// Runtimes whose provider quota is exhausted right now are marked
+    /// unavailable in the catalog, so the plan routes around them instead of
+    /// parking on the first stage bound to one.
+    async fn seed_profile_catalog(
+        &self,
+        run_config: &mut EngineRunConfig,
+    ) -> Result<(), EngineError> {
         let Some(registry) = self.config.profile_registry.as_ref() else {
             return Ok(());
         };
-        let catalog = crate::profile_loader::render_profile_catalog(registry);
+        let agents = run_config
+            .agent_registry
+            .clone()
+            .or_else(|| self.config.agent_registry.clone())
+            .unwrap_or_else(|| Arc::new(surge_acp::Registry::builtin()));
+        let mut unavailable = std::collections::BTreeMap::new();
+        for runtime in crate::profile_loader::catalog_runtimes(registry) {
+            // A runtime that cannot even start (e.g. a required environment
+            // variable is unset) would fail its stage at spawn.
+            if let Some(entry) = agents.find_normalized(&runtime)
+                && let Err(error) = surge_acp::agent_env::resolve(&entry.id, &entry.env)
+            {
+                unavailable.insert(runtime, format!("not configured: {error}"));
+                continue;
+            }
+            if let Ok(status) = self.storage.capacity_status(&runtime).await
+                && let Some(why) = exhausted_reason(&status, chrono::Utc::now())
+            {
+                unavailable.insert(runtime, why);
+            }
+        }
+        let catalog = crate::profile_loader::render_profile_catalog_with(registry, &unavailable);
         let seed = RunSeedArtifact::new(
             PROFILE_CATALOG_ARTIFACT_NAME,
             PROFILE_CATALOG_ARTIFACT_RELPATH,
@@ -620,6 +658,7 @@ impl Engine {
                     artifact,
                     path,
                     name,
+                    ..
                 } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str()) => {
                     artifacts.insert(
                         name.clone(),
@@ -675,6 +714,7 @@ impl Engine {
                 artifact: child_ref.hash,
                 path: child_ref.path,
                 name: name.to_owned(),
+                source_path: None,
             }));
         }
 
@@ -853,6 +893,7 @@ impl Engine {
         // task-ledger mirror; matches RunStarted's project_path).
         let project_path_for_ledger = worktree_path.clone();
         let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
+        let run_agent_registry = self.agent_registry_for(&resume_run_config);
         let params = RunTaskParams {
             run_id,
             writer,
@@ -867,8 +908,8 @@ impl Engine {
             cancel: registration.cancel,
             resume_cursor: Some(replayed.cursor),
             resume_memory: Some(replayed.memory),
-            resume_frames: None,
-            resume_root_traversal_counts: None,
+            resume_frames: Some(replayed.frames),
+            resume_root_traversal_counts: Some(replayed.root_traversal_counts),
             resume_applied_graph_revision_seq: Some(replayed.applied_graph_revision_seq),
             gate_resolutions: registration.gate_resolutions,
             tool_resolutions: registration.tool_resolutions,
@@ -878,7 +919,7 @@ impl Engine {
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
-            agent_registry: self.config.agent_registry.clone(),
+            agent_registry: run_agent_registry.clone(),
             capacity_ledger,
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
@@ -891,6 +932,7 @@ impl Engine {
         let join = tokio::spawn(async move {
             let outcome = execute(params).await;
             runs_for_cleanup.write().await.remove(&run_id);
+            record_terminal_status(&storage_for_ledger, run_id, &outcome).await;
             mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
             outcome
         });
@@ -993,38 +1035,60 @@ impl Engine {
                 .map_err(|_| EngineError::Internal("tool resolution receiver dropped".into()))?;
             Ok(())
         } else {
-            // HumanGate resolution. Look up by extracting outcome from response.
-            let outcome_str = response
-                .get("outcome")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    EngineError::Internal("HumanGate resolution missing 'outcome' field".into())
-                })?;
-            let outcome = surge_core::keys::OutcomeKey::try_from(outcome_str)
-                .map_err(|e| EngineError::Internal(format!("invalid outcome: {e}")))?;
-
-            // M5 simplification: only one HumanGate active per run at a
-            // time, so take the first entry from the map.
-            let mut gates = active.gate_resolutions.lock().await;
-            let key = gates.keys().next().cloned();
-            if let Some(k) = key {
-                let Some(tx) = gates.remove(&k) else {
-                    return Err(EngineError::Internal(format!(
-                        "pending HumanGate disappeared before resolving {k:?}"
-                    )));
-                };
-                tx.send(crate::engine::stage::human_gate::HumanGateResolution {
-                    outcome,
-                    response,
-                })
-                .map_err(|_| EngineError::Internal("gate resolution receiver dropped".into()))?;
-                Ok(())
-            } else {
-                Err(EngineError::Internal(
-                    "no pending HumanGate to resolve".into(),
-                ))
-            }
+            Err(EngineError::MissingGateRequestIdentity)
         }
+    }
+
+    /// Resolve a captured event identity without looking up a newer pending request.
+    pub async fn resolve_requested_input(
+        &self,
+        run_id: RunId,
+        node: surge_core::keys::NodeKey,
+        call_id: Option<String>,
+        response: serde_json::Value,
+    ) -> Result<(), EngineError> {
+        match call_id {
+            Some(id) => {
+                if let Some(gate) = surge_core::id::GateRequestId::from_event_call_id(&id) {
+                    self.resolve_gate_input(run_id, node, gate, response).await
+                } else {
+                    self.resolve_human_input(run_id, Some(id), response).await
+                }
+            },
+            None => Err(EngineError::MissingGateRequestIdentity),
+        }
+    }
+
+    /// Consume only the exact registered gate; never fall back to run-only input.
+    pub async fn resolve_gate_input(
+        &self,
+        run_id: RunId,
+        node: surge_core::keys::NodeKey,
+        request_id: surge_core::id::GateRequestId,
+        response: serde_json::Value,
+    ) -> Result<(), EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let outcome = response
+            .get("outcome")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                EngineError::Internal("HumanGate resolution missing 'outcome' field".into())
+            })?;
+        let outcome = surge_core::keys::OutcomeKey::try_from(outcome)
+            .map_err(|error| EngineError::Internal(format!("invalid outcome: {error}")))?;
+        let mut gates = active.gate_resolutions.lock().await;
+        if !gates
+            .get(&node)
+            .is_some_and(|pending| pending.request_id == request_id)
+        {
+            return Err(EngineError::StaleGateRequest);
+        }
+        let pending = gates.remove(&node).ok_or(EngineError::StaleGateRequest)?;
+        pending
+            .sender
+            .send(crate::engine::stage::human_gate::HumanGateResolution { outcome, response })
+            .map_err(|_| EngineError::StaleGateRequest)
     }
 
     /// Queue an operator steer message for a live run. Non-destructive: the
@@ -1288,6 +1352,7 @@ fn artifact_produced_event(
         artifact,
         path,
         name: name.to_owned(),
+        source_path: None,
     })
 }
 
@@ -1323,6 +1388,56 @@ const PROFILE_CATALOG_PRODUCER_NODE: &str = "profile_catalog_seed";
 
 /// Relative path within the worktree where the seeded prompt body is stored.
 const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
+
+/// Why a runtime cannot take work now, when its last observed capacity
+/// window is exhausted and has not reset yet. `None` = usable.
+fn exhausted_reason(
+    status: &surge_core::capacity::CapacityStatus,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    let surge_core::capacity::CapacityStatus::Known(window) = status else {
+        return None;
+    };
+    let empty = window.remaining().is_none_or(|share| share.get() <= 0.0);
+    match window.resets_at() {
+        Some(reset) if reset > now && empty => Some(format!(
+            "provider usage limit, resets {}",
+            reset.format("%Y-%m-%d %H:%M UTC")
+        )),
+        None if empty => Some("provider usage limit reached".into()),
+        _ => None,
+    }
+}
+
+/// Write a finished run's terminal status into the cross-run registry.
+///
+/// The per-run event log is the source of truth, but `surge engine ls`,
+/// liveness probes and every registry reader otherwise kept seeing
+/// `running`/`bootstrapping` until the next daemon restart ran recovery.
+/// Parked runs are written by `set_run_parked`; a stream error is not a
+/// terminal fact, so neither is recorded here. Best-effort, like the ledger
+/// mirror: a failed write is logged and never changes the outcome.
+async fn record_terminal_status(
+    storage: &Arc<surge_persistence::runs::Storage>,
+    run_id: RunId,
+    outcome: &crate::engine::handle::RunOutcome,
+) {
+    use crate::engine::handle::RunOutcome;
+    use surge_core::RunStatus;
+    let status = match outcome {
+        RunOutcome::Completed { .. } => RunStatus::Completed,
+        RunOutcome::Failed { .. } => RunStatus::Failed,
+        RunOutcome::Aborted { .. } => RunStatus::Aborted,
+        _ => return,
+    };
+    let ended_at_ms = chrono::Utc::now().timestamp_millis();
+    if let Err(error) = storage
+        .set_run_status(&run_id, status, Some(ended_at_ms))
+        .await
+    {
+        tracing::warn!(%run_id, ?status, %error, "could not record terminal run status in registry");
+    }
+}
 
 /// Synthetic producer node id recorded on the seeded `ArtifactProduced` event.
 /// Bootstrap graphs do not have a real `start_node` user node, so the
@@ -1423,4 +1538,35 @@ pub(crate) async fn synthesise_run_seed_artifact(
         relative_path: seed.relative_path.clone(),
         producer: seed.producer.clone(),
     })
+}
+
+#[cfg(test)]
+mod exhausted_reason_tests {
+    use super::exhausted_reason;
+    use surge_core::capacity::{CapacityStatus, CapacityWindow};
+
+    #[test]
+    fn only_a_window_that_has_not_reset_blocks_planning() {
+        let now = chrono::Utc::now();
+        let hour = std::time::Duration::from_secs(3600);
+        assert_eq!(exhausted_reason(&CapacityStatus::NeverObserved, now), None);
+
+        let pending =
+            CapacityStatus::Known(CapacityWindow::observed_429("codex-acp", Some(hour), now));
+        assert!(exhausted_reason(&pending, now).is_some_and(|w| w.contains("resets")));
+
+        let earlier = now - chrono::Duration::hours(2);
+        let lapsed = CapacityStatus::Known(CapacityWindow::observed_429(
+            "codex-acp",
+            Some(hour),
+            earlier,
+        ));
+        assert_eq!(exhausted_reason(&lapsed, now), None, "reset already passed");
+
+        let unknown = CapacityStatus::Known(CapacityWindow::observed_429("codex-acp", None, now));
+        assert!(
+            exhausted_reason(&unknown, now).is_some(),
+            "no reset hint: still exhausted"
+        );
+    }
 }

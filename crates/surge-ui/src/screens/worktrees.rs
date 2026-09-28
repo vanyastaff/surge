@@ -1,7 +1,7 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Icon, IconName, StyledExt};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::app_state::AppState;
 use crate::theme;

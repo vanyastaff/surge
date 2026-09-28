@@ -52,6 +52,11 @@ build-ui:
     cargo build -p surge-ui
 
 [group("build")]
+[doc("Build surge-ui and wrap it in a macOS Surge.app bundle (macOS only)")]
+bundle-ui *args: build-ui
+    bash scripts/bundle-macos-app.sh {{ args }}
+
+[group("build")]
 [doc("Build the surge CLI in release mode")]
 build-release:
     cargo build --release -p surge-cli --bin surge

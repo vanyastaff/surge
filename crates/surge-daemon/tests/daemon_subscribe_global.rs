@@ -1,7 +1,7 @@
 //! Integration test for `DaemonRequest::SubscribeGlobal` and the
 //! corresponding server-side fan-out of [`GlobalDaemonEvent`] frames.
 //!
-//! Setup: `run_server` with `max_active=4` and a stub facade whose
+//! Setup: `run_synthetic_server` with `max_active=4` and a stub facade whose
 //! `start_run` returns a quickly-terminating `RunHandle` (mirrors the
 //! `CountingStubFacade` pattern from `daemon_queue_drain.rs`).
 //!
@@ -26,7 +26,7 @@ use std::time::Duration;
 use interprocess::local_socket::tokio::prelude::*;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
@@ -176,7 +176,7 @@ async fn subscribe_global_delivers_run_lifecycle_events() {
     let server_handle = tokio::spawn({
         let stub = stub.clone();
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, stub, shutdown).await }
+        async move { run_synthetic_server(cfg, stub, shutdown).await }
     });
 
     // --- Subscriber connection (high-level facade) ---
@@ -295,7 +295,7 @@ async fn subscribe_global_is_idempotent_within_a_connection() {
     let server_handle = tokio::spawn({
         let stub = stub.clone();
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, stub, shutdown).await }
+        async move { run_synthetic_server(cfg, stub, shutdown).await }
     });
 
     let client = connect_with_retry(socket.clone(), Duration::from_secs(3))

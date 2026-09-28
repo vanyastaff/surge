@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::EventEmitter;
+use gpui_kit::EventEmitter;
 use surge_acp::{
     AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry,
 };
@@ -20,6 +20,9 @@ use crate::daemon_link::ConnectionState;
 pub struct AppState {
     // ── Project ──
     pub project_path: Option<PathBuf>,
+    /// Ownership rule for runs of the open project; see
+    /// [`AppState::project_runs`].
+    pub project_scope: Option<crate::project::ProjectScope>,
     pub project_name: String,
     pub config: Option<SurgeConfig>,
     pub current_branch: String,
@@ -71,6 +74,14 @@ pub struct AppState {
     /// present once the UI has attached a subscription for that run.
     /// See [`crate::run_stream`].
     pub run_streams: HashMap<RunId, crate::run_stream::RunStreamState>,
+    /// Failed runs the operator acknowledged; excluded from "needs you".
+    pub dismissed_runs: crate::dismissed::DismissedRuns,
+    /// Unapproved plan edits (provider per step), keyed by the planning run
+    /// whose flow gate is waiting. Sent with the approval.
+    pub plan_edits: HashMap<RunId, surge_core::node_overrides::NodeOverrides>,
+    /// Latest durable bootstrap operation snapshots observed by this UI session.
+    pub bootstrap_operations:
+        HashMap<RunId, surge_core::bootstrap_operation::BootstrapOperationStatus>,
 
     // ── Events ──
     pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
@@ -153,6 +164,7 @@ impl AppState {
 
         Self {
             project_path: None,
+            project_scope: None,
             project_name: String::new(),
             config: None,
             current_branch: "main".to_string(),
@@ -166,6 +178,9 @@ impl AppState {
             daemon_state: ConnectionState::default(),
             runs: Vec::new(),
             run_streams: HashMap::new(),
+            dismissed_runs: crate::dismissed::DismissedRuns::load(),
+            plan_edits: HashMap::new(),
+            bootstrap_operations: HashMap::new(),
             _event_tx: event_tx,
             recent_events: Vec::new(),
         }
@@ -264,6 +279,14 @@ impl AppState {
             .iter()
             .filter_map(|r| r.ended_at.map(|t| (r.run_id, t)))
             .collect();
+        // ListRuns describes the daemon's currently hosted runs, not durable
+        // history. Keep terminal rows recovered from bootstrap or prior events.
+        let history: Vec<_> = self
+            .runs
+            .iter()
+            .filter(|run| run.is_terminal() && !summaries.iter().any(|s| s.run_id == run.run_id))
+            .cloned()
+            .collect();
         self.runs = summaries
             .iter()
             .map(|s| {
@@ -276,11 +299,97 @@ impl AppState {
                 run
             })
             .collect();
+        self.runs.extend(history);
+    }
+
+    /// Whether `run_id` belongs to the open project. Runs whose
+    /// `RunStarted` has not been folded yet are kept visible rather than
+    /// hidden, so a just-accepted run never disappears from the UI.
+    pub fn run_in_project(&self, run_id: &RunId) -> bool {
+        let Some(scope) = &self.project_scope else {
+            return true;
+        };
+        let Some(stream) = self.run_streams.get(run_id) else {
+            return true;
+        };
+        scope
+            .owns(stream.run_path.as_deref(), stream.git_common_dir.as_deref())
+            .unwrap_or(true)
+    }
+
+    /// Runs of the open project, newest first. The daemon and the durable
+    /// run registry are shared by every project, so screens must read
+    /// this rather than [`AppState::runs`].
+    pub fn project_runs(&self) -> Vec<&UiRun> {
+        let mut runs: Vec<&UiRun> = self
+            .runs
+            .iter()
+            .filter(|run| self.run_in_project(&run.run_id))
+            .collect();
+        runs.sort_by_key(|run| std::cmp::Reverse(run.started_at));
+        runs
+    }
+
+    /// Decisions blocked on the operator in the open project: live gates,
+    /// tasks in review and failed/aborted runs. One number for the Inbox
+    /// badge and the Fleet chip so the two can never disagree.
+    pub fn needs_you_count(&self) -> usize {
+        let reviews = self
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.state, TaskState::HumanReview | TaskState::QaReview { .. }))
+            .count();
+        let failed = self.unacknowledged_failures().len();
+        self.pending_decisions().len() + reviews + failed
+    }
+
+    /// Failed/aborted runs of the open project the operator has not
+    /// dismissed yet — the Inbox's failure-triage queue.
+    pub fn unacknowledged_failures(&self) -> Vec<&UiRun> {
+        self.project_runs()
+            .into_iter()
+            .filter(|r| matches!(r.status, RunStatus::Failed | RunStatus::Aborted))
+            .filter(|r| !self.dismissed_runs.contains(&r.run_id))
+            .collect()
+    }
+
+    /// Operator's request for a run, when its `RunStarted` was observed.
+    pub fn run_prompt(&self, run_id: &RunId) -> Option<&str> {
+        self.run_streams.get(run_id)?.prompt.as_deref()
+    }
+
+    /// Merge durable terminal history; live state is supplied by the daemon.
+    pub fn restore_finished_runs(&mut self, summaries: &[surge_persistence::runs::RunSummary]) {
+        for summary in summaries {
+            let status = match summary.status {
+                surge_core::RunStatus::Completed => RunStatus::Completed,
+                surge_core::RunStatus::Failed => RunStatus::Failed,
+                surge_core::RunStatus::Aborted => RunStatus::Aborted,
+                _ => continue,
+            };
+            if self.runs.iter().any(|run| run.run_id == summary.id) {
+                continue;
+            }
+            let Some(started_at) = chrono::DateTime::from_timestamp_millis(summary.started_at_ms)
+            else {
+                continue;
+            };
+            self.runs.push(UiRun {
+                run_id: summary.id,
+                status,
+                started_at,
+                last_event_seq: None,
+                ended_at: summary
+                    .ended_at_ms
+                    .and_then(chrono::DateTime::from_timestamp_millis),
+            });
+        }
     }
 
     /// Load project from a directory path.
     pub fn load_project(&mut self, path: &std::path::Path) {
         self.project_path = Some(path.to_path_buf());
+        self.project_scope = Some(crate::project::ProjectScope::resolve(path));
         self.project_name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -358,7 +467,7 @@ impl AppState {
     }
 
     /// Handle a SurgeEvent — update state and emit for UI subscribers.
-    pub fn handle_event(&mut self, event: SurgeEvent, cx: &mut gpui::Context<Self>) {
+    pub fn handle_event(&mut self, event: SurgeEvent, cx: &mut gpui_kit::Context<Self>) {
         // Keep last 100 events for recent activity.
         self.recent_events.push(event.clone());
         if self.recent_events.len() > 100 {
@@ -442,6 +551,7 @@ impl AppState {
         let mut all: Vec<(RunId, crate::run_stream::PendingDecision)> = self
             .run_streams
             .iter()
+            .filter(|(run_id, _)| self.run_in_project(run_id))
             .flat_map(|(run_id, stream)| stream.pending.iter().map(move |p| (*run_id, p.clone())))
             .collect();
         // Deterministic total order: run_streams is a HashMap, and a
@@ -460,10 +570,10 @@ impl EventEmitter<SurgeEvent> for AppState {}
 /// Detect current git branch name from a path.
 fn detect_branch(path: &std::path::Path) -> Option<String> {
     let head_file = path.join(".git").join("HEAD");
-    if let Ok(content) = std::fs::read_to_string(head_file) {
-        if let Some(ref_str) = content.strip_prefix("ref: refs/heads/") {
-            return Some(ref_str.trim().to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string(head_file)
+        && let Some(ref_str) = content.strip_prefix("ref: refs/heads/")
+    {
+        return Some(ref_str.trim().to_string());
     }
     None
 }
@@ -475,6 +585,40 @@ mod tests {
     use surge_core::config::{AgentConfig, ResilienceConfig, Transport};
 
     use super::*;
+
+    #[test]
+    fn active_run_refresh_preserves_finished_history() {
+        let mut state = AppState::new();
+        let completed = RunId::new();
+        let failed = RunId::new();
+        let active = RunId::new();
+        let ended = chrono::Utc::now();
+        for (run_id, status) in [
+            (completed, RunStatus::Completed),
+            (failed, RunStatus::Failed),
+            (active, RunStatus::Active),
+        ] {
+            state.runs.push(UiRun {
+                run_id,
+                status,
+                started_at: ended,
+                last_event_seq: Some(12),
+                ended_at: (run_id != active).then_some(ended),
+            });
+        }
+        state.set_runs_from_summaries(&[]);
+        assert_eq!(state.runs.len(), 2);
+        assert!(
+            state
+                .runs
+                .iter()
+                .all(|run| run.is_terminal() && run.ended_at == Some(ended))
+        );
+        state.set_runs_from_summaries(&[RunSummary::queued(active, ended)]);
+        assert_eq!(state.runs.len(), 3);
+        state.set_runs_from_summaries(&[RunSummary::queued(active, ended)]);
+        assert_eq!(state.runs.len(), 3, "refresh must not duplicate history");
+    }
 
     fn test_agent_config() -> AgentConfig {
         AgentConfig {

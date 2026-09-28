@@ -1,217 +1,181 @@
-# Linear 3-stage flow: Spec → Implement → Verify → Terminal.
-#
-# Three Agent stages wired to the bundled `implementer@1.0` placeholder
-# profile (resolves through the same path as `flow_minimal_agent.toml`).
-# Each stage declares `pass` (forward) and `fail` (escalate to failure
-# terminal). Demonstrates the smallest non-trivial pipeline shape.
-
+# Spec author -> implementation -> sealed verification. Inputs follow profile contracts.
 schema_version = 1
 start = "spec_1"
-
 [metadata]
 name = "linear-3"
 created_at = "2026-05-06T00:00:00Z"
 
-# ── spec_1 ──
 [nodes.spec_1]
 id = "spec_1"
-
+[[nodes.spec_1.declared_outcomes]]
+id = "drafted"
+description = "drafted"
+edge_kind_hint = "forward"
+is_terminal = false
+[[nodes.spec_1.declared_outcomes]]
+id = "needs_clarification"
+description = "needs clarification"
+edge_kind_hint = "escalate"
+is_terminal = false
 [nodes.spec_1.position]
 x = 0.0
 y = 0.0
-
-[[nodes.spec_1.declared_outcomes]]
-id = "pass"
-description = "Spec accepted"
-edge_kind_hint = "forward"
-is_terminal = false
-
-[[nodes.spec_1.declared_outcomes]]
-id = "fail"
-description = "Spec unrecoverable"
-edge_kind_hint = "escalate"
-is_terminal = false
-
 [nodes.spec_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
+profile = "spec-author@1.0"
+[[nodes.spec_1.config.bindings]]
+target = "milestone"
+[nodes.spec_1.config.bindings.source]
+type = "initial_prompt"
 
-[nodes.spec_1.config.limits]
-timeout_seconds = 900
-max_retries = 3
-max_tokens = 200000
-
-[nodes.spec_1.config.custom_fields]
-
-# ── implement_1 ──
 [nodes.implement_1]
 id = "implement_1"
-
-[nodes.implement_1.position]
-x = 200.0
-y = 0.0
-
 [[nodes.implement_1.declared_outcomes]]
-id = "pass"
-description = "Implementation done"
+id = "ready_for_verification"
+description = "ready for verification"
 edge_kind_hint = "forward"
 is_terminal = false
-
 [[nodes.implement_1.declared_outcomes]]
-id = "fail"
-description = "Implementation blocked"
+id = "blocked"
+description = "blocked"
 edge_kind_hint = "escalate"
 is_terminal = false
-
+[[nodes.implement_1.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
+[nodes.implement_1.position]
+x = 240.0
+y = 0.0
 [nodes.implement_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
+profile = "implementer@2.0"
+[[nodes.implement_1.config.bindings]]
+target = "spec"
+[nodes.implement_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
-[nodes.implement_1.config.limits]
-timeout_seconds = 900
-max_retries = 3
-max_tokens = 200000
-
-[nodes.implement_1.config.custom_fields]
-
-# ── verify_1 ──
 [nodes.verify_1]
 id = "verify_1"
-
-[nodes.verify_1.position]
-x = 400.0
-y = 0.0
-
 [[nodes.verify_1.declared_outcomes]]
-id = "pass"
-description = "Verification clean"
+id = "passed"
+description = "passed"
 edge_kind_hint = "forward"
 is_terminal = false
 ledger_effect = "verified"
-
 [[nodes.verify_1.declared_outcomes]]
-id = "fail"
-description = "Regression detected"
-edge_kind_hint = "escalate"
+id = "failed"
+description = "failed"
+edge_kind_hint = "backtrack"
 is_terminal = false
 ledger_effect = "failed_verification"
-
+[nodes.verify_1.position]
+x = 480.0
+y = 0.0
 [nodes.verify_1.config]
 node_kind = "agent"
 profile = "verifier@2.0"
-bindings = []
-hooks = []
+[[nodes.verify_1.config.bindings]]
+target = "spec"
+[nodes.verify_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
-[nodes.verify_1.config.limits]
-timeout_seconds = 900
-max_retries = 3
-max_tokens = 200000
-
-[nodes.verify_1.config.custom_fields]
-
-# ── terminals ──
 [nodes.success]
 id = "success"
 declared_outcomes = []
-
 [nodes.success.position]
-x = 600.0
+x = 720.0
 y = 0.0
-
 [nodes.success.config]
 node_kind = "terminal"
-
 [nodes.success.config.kind]
 type = "success"
 
 [nodes.failure]
 id = "failure"
 declared_outcomes = []
-
 [nodes.failure.position]
-x = 600.0
-y = 200.0
-
+x = 720.0
+y = 180.0
 [nodes.failure.config]
 node_kind = "terminal"
-
 [nodes.failure.config.kind]
 type = "failure"
 exit_code = 1
 
-# ── edges ──
 [[edges]]
-id = "e_spec_pass"
+id = "e_spec_ready"
 to = "implement_1"
 kind = "forward"
-
 [edges.from]
 node = "spec_1"
-outcome = "pass"
-
+outcome = "drafted"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_spec_fail"
+id = "e_spec_blocked"
 to = "failure"
 kind = "forward"
-
 [edges.from]
 node = "spec_1"
-outcome = "fail"
-
+outcome = "needs_clarification"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_impl_pass"
+id = "e_impl_ready"
 to = "verify_1"
 kind = "forward"
-
 [edges.from]
 node = "implement_1"
-outcome = "pass"
-
+outcome = "ready_for_verification"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_impl_fail"
+id = "e_impl_blocked"
 to = "failure"
 kind = "forward"
-
 [edges.from]
 node = "implement_1"
-outcome = "fail"
-
+outcome = "blocked"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_verify_pass"
+id = "e_impl_partial"
+to = "implement_1"
+kind = "backtrack"
+[edges.from]
+node = "implement_1"
+outcome = "partial"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[edges]]
+id = "e_verified"
 to = "success"
 kind = "forward"
-
 [edges.from]
 node = "verify_1"
-outcome = "pass"
-
+outcome = "passed"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_verify_fail"
-to = "failure"
-kind = "forward"
-
+id = "e_verify_retry"
+to = "implement_1"
+kind = "backtrack"
 [edges.from]
 node = "verify_1"
-outcome = "fail"
-
+outcome = "failed"
 [edges.policy]
 on_max_exceeded = "escalate"
+max_traversals = 3

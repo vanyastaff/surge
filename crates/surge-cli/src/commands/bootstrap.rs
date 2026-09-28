@@ -65,7 +65,7 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
     let project_context =
         surge_orchestrator::project_context::load_project_context_seed(&project_root, &config);
 
-    let mut approvals = tokio::spawn(poll_console_approvals(
+    let approvals = tokio::spawn(poll_console_approvals(
         engine.clone(),
         storage,
         bootstrap_run_id,
@@ -84,30 +84,66 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
         .await
     });
 
+    let materialized = await_bootstrap_driver(driver, approvals, |reason| {
+        engine.stop_run(bootstrap_run_id, reason)
+    })
+    .await?;
+    start_followup_run(engine, materialized, worktree, project_root, config).await
+}
+
+async fn await_bootstrap_driver<S, C>(
+    mut driver: tokio::task::JoinHandle<
+        Result<MaterializedRun, surge_orchestrator::bootstrap_driver::BootstrapError>,
+    >,
+    mut approvals: tokio::task::JoinHandle<Result<()>>,
+    stop: S,
+) -> Result<MaterializedRun>
+where
+    S: FnOnce(String) -> C,
+    C: std::future::Future<Output = Result<(), surge_orchestrator::engine::EngineError>>,
+{
     let materialized = tokio::select! {
-        result = driver => {
+        result = &mut driver => {
             approvals.abort();
+            let _ = approvals.await;
             result.context("bootstrap driver task panicked")??
         }
         approval_result = &mut approvals => {
-            approval_result.context("approval task panicked")??;
-            return Err(anyhow!("approval loop ended before bootstrap completed"));
+            match approval_result.context("approval task panicked").and_then(std::convert::identity) {
+                Ok(()) => driver.await.context("bootstrap driver task panicked")??,
+                Err(error) => {
+                    let driver_result = super::run_lifecycle::stop_and_join(
+                        &mut driver,
+                        stop(error.to_string()),
+                    ).await.with_context(|| error.to_string())?;
+                    driver_result.with_context(|| error.to_string())?;
+                    return Err(error);
+                },
+            }
         }
     };
-
-    start_followup_run(engine, materialized, worktree, project_root, config).await?;
-    Ok(())
+    Ok(materialized)
 }
 
 async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Result<()> {
     let bootstrap_run_id = parse_run_id(&run_id)?;
     let (config, project_root) = load_project_config_for_current_repo()?;
     let worktree = existing_bootstrap_worktree(&bootstrap_run_id, worktree_root, &config)?;
-    let (engine, _storage) = build_local_engine(&worktree, &config).await?;
+    let (engine, storage) = build_local_engine(&worktree, &config).await?;
+    let after_seq = storage
+        .open_run_reader(bootstrap_run_id)
+        .await?
+        .current_seq()
+        .await?
+        .as_u64();
+    let events = engine.subscribe_tap();
     let handle = engine
         .resume_run(bootstrap_run_id, worktree.clone())
         .await?;
-    let outcome = drive_run_handle(engine.clone(), handle).await?;
+    let outcome = drive_run_handle(engine.clone(), handle, events, after_seq, |prompt| {
+        prompt_for_gate_decision(None, prompt)
+    })
+    .await?;
     match outcome {
         RunOutcome::Completed { .. } => {},
         RunOutcome::Failed { error } => return Err(anyhow!("bootstrap run failed: {error}")),
@@ -123,8 +159,7 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
     }
 
     let materialized = materialized_run_from_completed(engine.as_ref(), bootstrap_run_id).await?;
-    start_followup_run(engine, materialized, worktree, project_root, config).await?;
-    Ok(())
+    start_followup_run(engine, materialized, worktree, project_root, config).await
 }
 
 async fn start_followup_run(
@@ -133,9 +168,10 @@ async fn start_followup_run(
     worktree: PathBuf,
     project_root: PathBuf,
     config: SurgeConfig,
-) -> Result<RunOutcome> {
+) -> Result<()> {
     let followup_run_id = RunId::new();
     println!("followup_run_id={followup_run_id}");
+    let events = engine.subscribe_tap();
     let handle = engine
         .start_run(
             followup_run_id,
@@ -151,46 +187,64 @@ async fn start_followup_run(
             ),
         )
         .await?;
-    drive_run_handle(engine, handle).await
+    let outcome = drive_run_handle(engine, handle, events, 0, |prompt| {
+        prompt_for_gate_decision(None, prompt)
+    })
+    .await?;
+    super::run_lifecycle::require_completed(followup_run_id, outcome)
 }
 
-async fn drive_run_handle(
+async fn drive_run_handle<D>(
     engine: Arc<Engine>,
     handle: surge_orchestrator::engine::handle::RunHandle,
-) -> Result<RunOutcome> {
-    let surge_orchestrator::engine::handle::RunHandle {
-        run_id,
-        mut events,
-        completion,
-    } = handle;
-
-    loop {
-        match events.recv().await {
-            Ok(EngineRunEvent::Persisted { seq, payload }) => {
-                print_bootstrap_event(seq, &payload);
-                if let EventPayload::HumanInputRequested {
-                    call_id, prompt, ..
-                } = payload.as_ref()
-                {
-                    let response = prompt_for_gate_decision(None, prompt)?;
-                    engine
-                        .resolve_human_input(run_id, call_id.clone(), response)
-                        .await?;
+    events: tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
+    after_seq: u64,
+    decide: D,
+) -> Result<RunOutcome>
+where
+    D: Fn(&str) -> Result<serde_json::Value>,
+{
+    let run_id = handle.run_id;
+    let decide = &decide;
+    super::run_lifecycle::drive_run(
+        handle,
+        Some(events),
+        true,
+        |event| {
+            let engine = engine.clone();
+            async move {
+                if let EngineRunEvent::Persisted { seq, payload } = event {
+                    print_bootstrap_event(seq, &payload);
+                    // A resumed tap replays the entire log. Only newly emitted
+                    // requests belong to this execution; replayed answers must
+                    // never be submitted to a different pending gate.
+                    if seq <= after_seq {
+                        return Ok(());
+                    }
+                    if let EventPayload::HumanInputRequested {
+                        node,
+                        call_id,
+                        prompt,
+                        ..
+                    } = payload.as_ref()
+                    {
+                        let response = decide(prompt)?;
+                        engine
+                            .resolve_requested_input(
+                                run_id,
+                                node.clone(),
+                                call_id.clone(),
+                                response,
+                            )
+                            .await?;
+                    }
                 }
-            },
-            Ok(EngineRunEvent::Terminal { outcome }) => return Ok(outcome),
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                eprintln!("note: dropped {n} events while watching run {run_id}");
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                let outcome = completion
-                    .await
-                    .map_err(|e| anyhow!("run task join failed: {e}"))?;
-                return Ok(outcome);
-            },
-            Ok(_) => {},
-        }
-    }
+                Ok(())
+            }
+        },
+        |reason| engine.stop_run(run_id, reason),
+    )
+    .await
 }
 
 async fn poll_console_approvals(
@@ -223,11 +277,14 @@ async fn poll_console_approvals(
                     last_stage = Some(stage);
                 },
                 EventPayload::HumanInputRequested {
-                    call_id, prompt, ..
+                    node,
+                    call_id,
+                    prompt,
+                    ..
                 } => {
                     let response = prompt_for_gate_decision(last_stage, &prompt)?;
                     engine
-                        .resolve_human_input(run_id, call_id, response)
+                        .resolve_requested_input(run_id, node, call_id, response)
                         .await?;
                 },
                 EventPayload::RunCompleted { .. }
@@ -258,25 +315,44 @@ fn prompt_for_gate_decision(
     print!("choice: ");
     io::stdout().flush()?;
 
+    read_gate_decision(&mut io::stdin().lock(), &mut io::stdout())
+}
+
+fn read_gate_decision(
+    input: &mut impl io::BufRead,
+    output: &mut impl io::Write,
+) -> Result<serde_json::Value> {
     let mut choice = String::new();
-    io::stdin().read_line(&mut choice)?;
+    if input.read_line(&mut choice)? == 0 {
+        return Err(anyhow!(
+            "approval input closed (EOF); no approval was submitted. Resume with an interactive bootstrap console"
+        ));
+    }
     match choice.trim().to_lowercase().as_str() {
         "" | "a" | "approve" => Ok(serde_json::json!({"outcome": "approve"})),
         "e" | "edit" => {
-            print!("feedback: ");
-            io::stdout().flush()?;
+            write!(output, "feedback: ")?;
+            output.flush()?;
             let mut feedback = String::new();
-            io::stdin().read_line(&mut feedback)?;
+            if input.read_line(&mut feedback)? == 0 {
+                return Err(anyhow!(
+                    "approval feedback input closed (EOF); no decision was submitted"
+                ));
+            }
             Ok(serde_json::json!({
                 "outcome": "edit",
                 "comment": feedback.trim()
             }))
         },
         "r" | "reject" => {
-            print!("reason: ");
-            io::stdout().flush()?;
+            write!(output, "reason: ")?;
+            output.flush()?;
             let mut reason = String::new();
-            io::stdin().read_line(&mut reason)?;
+            if input.read_line(&mut reason)? == 0 {
+                return Err(anyhow!(
+                    "approval reason input closed (EOF); no decision was submitted"
+                ));
+            }
             Ok(serde_json::json!({
                 "outcome": "reject",
                 "comment": reason.trim()
@@ -458,6 +534,279 @@ fn print_bootstrap_event(seq: u64, payload: &EventPayload) {
 mod tests {
     use super::*;
     use surge_core::config::WorktreeLocationConfig;
+
+    #[test]
+    fn gate_eof_never_approves() {
+        for text in ["", "edit\n", "reject\n"] {
+            let error = read_gate_decision(&mut text.as_bytes(), &mut Vec::new()).unwrap_err();
+            assert!(error.to_string().contains("EOF"));
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_failure_settles_driver_and_preserves_its_failure() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let settled = Arc::new(AtomicBool::new(false));
+        let settled_by_driver = settled.clone();
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
+        let driver = tokio::spawn(async move {
+            cancelled.await.unwrap();
+            settled_by_driver.store(true, Ordering::SeqCst);
+            Err(
+                surge_orchestrator::bootstrap_driver::BootstrapError::RunFailed(
+                    "persist RunAborted: disk failure".into(),
+                ),
+            )
+        });
+        let approvals = tokio::spawn(async { Err(anyhow!("approval input closed")) });
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            await_bootstrap_driver(driver, approvals, |_| async move {
+                cancel.send(()).unwrap();
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(settled.load(Ordering::SeqCst));
+        let message = format!("{error:#}");
+        assert!(message.contains("approval input closed"), "{message}");
+        assert!(
+            message.contains("persist RunAborted: disk failure"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn finished_approval_loop_waits_for_successful_driver() {
+        let id = RunId::new();
+        let driver = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(MaterializedRun {
+                bootstrap_run_id: id,
+                materialized_graph: toml::from_str(include_str!(
+                    "../../../../examples/flow_terminal_only.toml"
+                ))
+                .unwrap(),
+                artifacts: vec![],
+            })
+        });
+        let approvals = tokio::spawn(async { Ok(()) });
+        let run = tokio::time::timeout(
+            Duration::from_secs(2),
+            await_bootstrap_driver(driver, approvals, |_| async {
+                panic!("normal completion must not cancel")
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(run.bootstrap_run_id, id);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resumed_console_answers_only_the_fresh_pending_gate() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path()).await.unwrap();
+        let bridge = Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap());
+        let build_engine = || {
+            Arc::new(Engine::new(
+                bridge.clone(),
+                storage.clone(),
+                Arc::new(
+                    surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                        temp.path().to_path_buf(),
+                    ),
+                ),
+                EngineConfig::default(),
+            ))
+        };
+        let engine = build_engine();
+        let mut graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
+        graph.start = "first".try_into().unwrap();
+        for (name, target) in [("first", "second"), ("second", "end")] {
+            let node: surge_core::node::Node = serde_json::from_value(serde_json::json!({
+                "id": name, "position": {"x": 0.0, "y": 0.0},
+                "declared_outcomes": [{"id": "approve", "description": "approved", "edge_kind_hint": "forward", "is_terminal": false}],
+                "config": {"node_kind": "human_gate", "delivery_channels": [],
+                    "summary": {"title": name, "body": name},
+                    "options": [{"outcome": "approve", "label": "Approve"}]},
+            })).unwrap();
+            graph.nodes.insert(node.id.clone(), node);
+            graph.edges.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": name, "from": {"node": name, "outcome": "approve"},
+                    "to": target, "kind": "forward",
+                }))
+                .unwrap(),
+            );
+        }
+        let id = RunId::new();
+        let mut events = engine.subscribe_tap();
+        let handle = engine
+            .start_run(
+                id,
+                graph,
+                temp.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        let (node, call_id) = wait_for_gate(&mut events, "first").await;
+        engine
+            .resolve_requested_input(id, node, call_id, serde_json::json!({"outcome": "approve"}))
+            .await
+            .unwrap();
+        wait_for_gate(&mut events, "second").await;
+        // Simulate interruption without a terminal event; resume replays history.
+        handle.completion.abort();
+        assert!(handle.completion.await.unwrap_err().is_cancelled());
+        drop(engine);
+        let resumed_engine = build_engine();
+        let after_seq = storage
+            .open_run_reader(id)
+            .await
+            .unwrap()
+            .current_seq()
+            .await
+            .unwrap()
+            .as_u64();
+        let events = resumed_engine.subscribe_tap();
+        let handle = resumed_engine
+            .resume_run(id, temp.path().to_path_buf())
+            .await
+            .unwrap();
+        let prompts = std::sync::Mutex::new(Vec::new());
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_run_handle(resumed_engine, handle, events, after_seq, |prompt| {
+                prompts.lock().unwrap().push(prompt.to_string());
+                Ok(serde_json::json!({"outcome": "approve"}))
+            }),
+        )
+        .await
+        .unwrap();
+        let prompts = prompts.into_inner().unwrap();
+        assert_eq!(prompts.len(), 1, "{prompts:?}; outcome: {outcome:?}");
+        assert!(prompts[0].contains("second"), "{prompts:?}");
+        assert!(matches!(outcome.unwrap(), RunOutcome::Completed { .. }));
+    }
+
+    async fn wait_for_gate(
+        events: &mut tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
+        expected: &str,
+    ) -> (surge_core::keys::NodeKey, Option<String>) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if let EventPayload::HumanInputRequested { node, call_id, .. } =
+                    event.event.payload.payload
+                    && node.as_str() == expected
+                {
+                    break (node, call_id);
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    #[test]
+    fn gate_explicit_decisions_and_blank_enter() {
+        for (text, outcome, comment) in [
+            ("approve\n", "approve", None),
+            ("\n", "approve", None),
+            ("edit\nfix the plan\n", "edit", Some("fix the plan")),
+            ("reject\nwrong task\n", "reject", Some("wrong task")),
+        ] {
+            let decision = read_gate_decision(&mut text.as_bytes(), &mut Vec::new()).unwrap();
+            assert_eq!(decision["outcome"], outcome);
+            assert_eq!(
+                decision.get("comment").and_then(serde_json::Value::as_str),
+                comment
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn followup_failure_reaches_the_command_result() {
+        use surge_core::run_event::VersionedEventPayload;
+        use surge_persistence::artifacts::ArtifactStore;
+
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path()).await.unwrap();
+        let engine = Arc::new(Engine::new(
+            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+            storage.clone(),
+            Arc::new(
+                surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                    temp.path().to_path_buf(),
+                ),
+            ),
+            EngineConfig::default(),
+        ));
+        let graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
+        let parent = RunId::new();
+        engine
+            .start_run(
+                parent,
+                graph.clone(),
+                temp.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap()
+            .await_completion()
+            .await
+            .unwrap();
+        let writer = storage.open_run_writer(parent).await.unwrap();
+        let artifacts = ArtifactStore::new(temp.path().join("runs"));
+        for name in ["description", "roadmap", "flow"] {
+            let reference = artifacts.put(parent, name, b"fixture").await.unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                    node: "end".try_into().unwrap(),
+                    artifact: reference.hash,
+                    path: reference.path,
+                    name: name.into(),
+                    source_path: None,
+                }))
+                .await
+                .unwrap();
+        }
+        writer.close().await.unwrap();
+        let mut failure = graph;
+        failure.nodes.get_mut(&failure.start).unwrap().config =
+            surge_core::node::NodeConfig::Terminal(surge_core::terminal_config::TerminalConfig {
+                kind: surge_core::terminal_config::TerminalKind::Failure { exit_code: 1 },
+                message: None,
+            });
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            start_followup_run(
+                engine,
+                MaterializedRun {
+                    bootstrap_run_id: parent,
+                    materialized_graph: failure,
+                    artifacts: vec![],
+                },
+                temp.path().to_path_buf(),
+                temp.path().to_path_buf(),
+                SurgeConfig::default(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed: terminal failure node")
+        );
+    }
 
     #[test]
     fn bootstrap_worktree_location_uses_config_default() {

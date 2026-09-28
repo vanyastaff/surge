@@ -25,25 +25,17 @@ noise.
 
 In BotFather: `/newbot`, follow the prompts, copy the token.
 
-### 2. Persist token + mint a pairing token
+### 2. Configure a token reference and target chat
+
+Provide the bot token through your daemon's environment or service secret manager. Do not put it in command arguments or `surge.toml`.
 
 ```bash
-surge telegram setup --label "operator-phone"
-# (or omit --label for the default "operator")
-# Paste the bot token at the prompt, or pass --token <TOKEN> for scripts.
+surge telegram setup --token-env TELEGRAM_BOT_TOKEN --chat-id 123456 --label "operator-phone"
 ```
 
-The command:
+Setup stores only `bot_token_env` and the explicit delivery chat in the current directory's `surge.toml`. It mints a 6-character pairing code, valid for 10 minutes and only for that chat. Consumption and allowlist insertion share one SQLite transaction. Replay, wrong-chat and expired codes are rejected.
 
-- writes the token into `~/.surge/db/registry.sqlite` under the
-  `telegram.cockpit.bot_token` key (see `surge_persistence::secrets`),
-- mints a 6-character base32 pairing token with a default 10-minute TTL,
-- prints instructions like:
-
-  ```
-  ✅ Bot token saved.
-  Send `/pair <TOKEN>` to your bot from your personal chat within 10 minutes.
-  ```
+`--token` and stdin credential input are unsupported. Setup removes the legacy `telegram.cockpit.bot_token` row and replaces the old Telegram config table; the daemon refuses to start Telegram while a legacy stored token remains. Old pairing codes without a target cannot authorize a chat: mint a fresh code. Removing the row does not erase historical SQLite pages or backups; rotate a previously stored token through BotFather if needed.
 
 ### 3. Pair your chat
 
@@ -61,12 +53,12 @@ gets a generic deny message.
 ### 4. Start the daemon
 
 ```bash
-surge daemon start
+surge daemon start --detached
 ```
 
 The daemon's cockpit subsystem spawns automatically when both the bot
-token (in secrets) and a `[telegram]` chat-id configuration are
-present. Cards start landing on the next bootstrap gate / human-gate
+token environment variable and explicit `[telegram]` chat-id configuration are
+present in the daemon process. Use the configuration written by setup. Cards start landing on the next bootstrap gate / human-gate
 event.
 
 ### 5. Revoke / list
@@ -257,3 +249,9 @@ is on the roadmap.
   [0010](adr/0010-telegram-callback-schema.md),
   [0011](adr/0011-telegram-card-lifecycle.md),
   [0012](adr/0012-surge-telegram-crate-split.md).
+
+### Credential diagnostics
+
+Surge-owned credential Debug/Display and Bot API error fields do not include the bot token or raw HTTP error payload. Upstream raw transport diagnostics are outside this guarantee: leave teloxide/HTTP TRACE diagnostics disabled in production. Runtime credentials are not serialized to cards, events or registry rows.
+
+Recovery also closes an old gate card when its exact source request has a durable matching resolution or timeout, even if the run has moved to another gate. Unreadable journals leave cards open for retry.

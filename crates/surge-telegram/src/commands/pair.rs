@@ -13,70 +13,24 @@ use async_trait::async_trait;
 use crate::commands::CommandReply;
 use crate::error::{Result, TelegramCockpitError};
 
-/// Consumes a previously-minted pairing token. Production wraps
-/// `surge_persistence::telegram::pairing::consume_pairing_token`.
+/// Atomically consumes a target-bound code and admits the matching chat.
 #[async_trait]
 pub trait PairingTokenConsumer: Send + Sync {
-    /// Consume `token`. Returns the label that was attached at mint time
-    /// (used to label the resulting allowlist row).
-    ///
     /// # Errors
-    ///
-    /// Returns [`TelegramCockpitError::PairingTokenInvalid`] for unknown
-    /// tokens and [`TelegramCockpitError::PairingTokenExpired`] for stale
-    /// or already-consumed ones.
-    async fn consume(&self, token: &str, now_ms: i64) -> Result<String>;
+    /// Rejects invalid, expired, consumed, unbound or wrong-chat codes; propagates storage failures.
+    async fn pair_with_token(&self, token: &str, chat_id: i64, now_ms: i64) -> Result<String>;
 }
 
-/// Inserts an allowlist row. Production wraps
-/// `surge_persistence::telegram::pairings::pair`.
-#[async_trait]
-pub trait PairingWriter: Send + Sync {
-    /// Pair (or re-pair) `chat_id` with the given label.
-    async fn pair(&self, chat_id: i64, user_label: &str, now_ms: i64) -> Result<()>;
-}
-
-/// Handle `/pair <token>` from an unpaired chat.
-///
-/// `args` is the rest of the message after `/pair`. Tokens are
-/// case-insensitive on the wire (the database stores Crockford
-/// uppercase); this handler normalises trim+uppercase before consume.
-///
-/// # Known limitation — token consume + pairing write are not yet atomic
-///
-/// The current flow calls [`PairingTokenConsumer::consume`] *before*
-/// [`PairingWriter::pair`]. If the consume succeeds but the pair
-/// write then fails (rare — SQLite transient error), the token is
-/// permanently marked consumed and the operator has to mint a fresh
-/// one with `surge telegram setup`. The reverse order would open a
-/// security window: the token would remain valid between the pair
-/// write and the consume call, so a leaked token could pair a
-/// second chat in that gap.
-///
-/// The proper fix is a single transactional persistence operation
-/// (`pair_with_token(token, chat_id, now)`) that wraps both SQL
-/// calls in `BEGIN IMMEDIATE` ... `COMMIT`. It lands together with
-/// the live `polling_default(bot)` adapter — until that adapter
-/// runs, no `/pair` Telegram update reaches this handler and the
-/// race is moot. Tracked in the milestone plan as a follow-up to
-/// the deferred live-polling listener.
+/// Handle `/pair <token>`; consumption and allowlist insertion share one transaction.
 ///
 /// # Errors
-///
-/// Returns [`TelegramCockpitError`] when token consume or pairings write
-/// fails for a reason other than a recoverable "invalid token" message —
-/// those are reported back in [`CommandReply`] instead.
-pub async fn handle_pair<C, W>(
+/// Propagates storage errors. Invalid codes return actionable replies.
+pub async fn handle_pair<C: PairingTokenConsumer>(
     chat_id: i64,
     args: &str,
     consumer: &C,
-    writer: &W,
     now_ms: i64,
-) -> Result<CommandReply>
-where
-    C: PairingTokenConsumer,
-    W: PairingWriter,
-{
+) -> Result<CommandReply> {
     let token = args.trim().to_ascii_uppercase();
     if token.is_empty() {
         return Ok(CommandReply::new(
@@ -84,7 +38,7 @@ where
         ));
     }
 
-    let consume = consumer.consume(&token, now_ms).await;
+    let consume = consumer.pair_with_token(&token, chat_id, now_ms).await;
     let label = match consume {
         Ok(label) => label,
         Err(TelegramCockpitError::PairingTokenInvalid) => {
@@ -107,10 +61,18 @@ where
                 "❌ Pair failed: token has expired or was already used. Generate a fresh one with `surge telegram setup`.",
             ));
         },
+        Err(TelegramCockpitError::PairingTargetMismatch) => {
+            return Ok(CommandReply::new(
+                "Pair failed: this code is for a different chat.",
+            ));
+        },
+        Err(TelegramCockpitError::PairingLegacyCode) => {
+            return Ok(CommandReply::new(
+                "Legacy unbound code rejected. Run surge telegram setup --token-env NAME --chat-id ID again.",
+            ));
+        },
         Err(other) => return Err(other),
     };
-
-    writer.pair(chat_id, &label, now_ms).await?;
 
     tracing::info!(
         target: "telegram::cmd::pair",
@@ -151,7 +113,8 @@ mod tests {
 
     #[async_trait]
     impl PairingTokenConsumer for FakeConsumer {
-        async fn consume(&self, token: &str, now_ms: i64) -> Result<String> {
+        async fn pair_with_token(&self, token: &str, chat_id: i64, now_ms: i64) -> Result<String> {
+            assert_eq!(chat_id, 42);
             self.calls.lock().unwrap().push((token.to_owned(), now_ms));
             match &*self.result.lock().unwrap() {
                 Ok(label) => Ok(label.clone()),
@@ -166,39 +129,18 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct FakeWriter {
-        calls: Mutex<Vec<(i64, String, i64)>>,
-    }
-
-    #[async_trait]
-    impl PairingWriter for FakeWriter {
-        async fn pair(&self, chat_id: i64, user_label: &str, now_ms: i64) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((chat_id, user_label.to_owned(), now_ms));
-            Ok(())
-        }
-    }
-
     #[tokio::test]
     async fn empty_token_returns_usage_message() {
         let consumer = FakeConsumer::allowing("");
-        let writer = FakeWriter::default();
-        let reply = handle_pair(42, "", &consumer, &writer, 1_000)
-            .await
-            .unwrap();
+        let reply = handle_pair(42, "", &consumer, 1_000).await.unwrap();
         assert!(reply.text.contains("/pair"));
         assert!(consumer.calls.lock().unwrap().is_empty());
-        assert!(writer.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn valid_token_pairs_chat_and_returns_success() {
         let consumer = FakeConsumer::allowing("phone");
-        let writer = FakeWriter::default();
-        let reply = handle_pair(42, "  abcdef  ", &consumer, &writer, 1_500)
+        let reply = handle_pair(42, "  abcdef  ", &consumer, 1_500)
             .await
             .unwrap();
         assert!(reply.text.contains("Paired"));
@@ -209,44 +151,27 @@ mod tests {
         assert_eq!(consume_calls.len(), 1);
         assert_eq!(consume_calls[0].0, "ABCDEF");
         assert_eq!(consume_calls[0].1, 1_500);
-
-        // Pairing write happened with the right label.
-        let pair_calls = writer.calls.lock().unwrap();
-        assert_eq!(pair_calls.len(), 1);
-        assert_eq!(pair_calls[0].0, 42);
-        assert_eq!(pair_calls[0].1, "phone");
     }
 
     #[tokio::test]
     async fn unknown_token_returns_recoverable_error_message() {
         let consumer = FakeConsumer::rejecting(TelegramCockpitError::PairingTokenInvalid);
-        let writer = FakeWriter::default();
-        let reply = handle_pair(42, "BADTOK", &consumer, &writer, 1_000)
-            .await
-            .unwrap();
+        let reply = handle_pair(42, "BADTOK", &consumer, 1_000).await.unwrap();
         assert!(reply.text.contains("not recognised"));
         // No pairings write must have happened.
-        assert!(writer.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn expired_token_returns_recoverable_error_message() {
         let consumer = FakeConsumer::rejecting(TelegramCockpitError::PairingTokenExpired);
-        let writer = FakeWriter::default();
-        let reply = handle_pair(42, "OLDTOK", &consumer, &writer, 1_000)
-            .await
-            .unwrap();
+        let reply = handle_pair(42, "OLDTOK", &consumer, 1_000).await.unwrap();
         assert!(reply.text.contains("expired"));
-        assert!(writer.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn token_unrelated_persistence_error_bubbles_up() {
         let consumer = FakeConsumer::rejecting(TelegramCockpitError::Persistence("DB down".into()));
-        let writer = FakeWriter::default();
-        let err = handle_pair(42, "ANY", &consumer, &writer, 1_000)
-            .await
-            .unwrap_err();
+        let err = handle_pair(42, "ANY", &consumer, 1_000).await.unwrap_err();
         assert!(matches!(err, TelegramCockpitError::Persistence(_)));
     }
 }

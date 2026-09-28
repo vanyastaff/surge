@@ -36,6 +36,51 @@ cargo clippy --workspace --all-targets --all-features
 
 The strict clippy profile is in [`clippy.toml`](../clippy.toml). Test code relaxes most rules (`allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-print-in-tests`, etc.); production code does not.
 
+## Daemon restart check
+
+On Unix, this explicit subprocess test starts an isolated daemon with an
+11-second shutdown grace, restarts it through the CLI, and verifies a new PID
+and healthy IPC connection. Build the sibling daemon executable first:
+
+```bash
+cargo build -p surge-daemon
+cargo test -p surge-cli --test daemon_restart -- --ignored
+```
+
+The test uses a temporary `SURGE_HOME` and cleans up its own processes.
+
+## Desktop UI checks
+
+The desktop uses the workspace-pinned `gpui-kit` 0.7.0 facade and its
+`gpui-pre` 0.3.7 type family. Import GPUI and widgets through `gpui_kit`;
+adding the older `gpui` package creates incompatible entity/window types.
+The production `gpui_kit::open_window` helper installs one Root overlay host.
+Do not also render notification or modal layers in the application shell.
+
+```bash
+cargo test -p surge-ui
+cargo clippy -p surge-ui --all-targets --all-features -- -D warnings
+cargo +1.96.0 check -p surge-ui --all-targets --locked
+cargo fmt -p surge-ui --check
+```
+
+On macOS, native builds require the Xcode Metal toolchain. For a smaller local
+build cache, set `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and
+`CARGO_INCREMENTAL=0` in the command environment.
+
+Custom clickable divs need an element identity, an accessibility role and a
+meaningful label. Use the item's domain identity when a list can reorder or
+filter. Planning uses `TextareaState` so Enter inserts a newline, while the
+single-line command and search inputs keep their Enter actions.
+
+Render tests and the production submission-boundary tests cover different
+contracts. Native accessibility still needs a separate application check:
+open a project, navigate, enter a multiline task, observe submission failure
+and retry, filter the command palette, inspect an approval, and scroll run
+status. A controlled-response form harness does not prove a live daemon or
+agent workflow. Record the platform and input method used; native paste,
+accessibility value assignment, and synthetic typing are distinct paths.
+
 ## Long-Running / External-Agent Tests
 
 Some `surge-orchestrator` tests need the bundled mock Agent Client Protocol (ACP) agent. Build it and run the ignored tests separately:

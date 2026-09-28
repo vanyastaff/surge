@@ -40,3 +40,60 @@ pub async fn drain(token: CancellationToken, grace: Duration) {
     token.cancelled().await;
     tokio::time::sleep(grace).await;
 }
+
+/// Wait for shutdown and then for observed task completion, bounded by `grace`.
+/// Returns false when the deadline expires before all owners have settled.
+pub async fn drain_until<F, Fut>(token: CancellationToken, grace: Duration, mut settled: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    token.cancelled().await;
+    tokio::time::timeout(grace, async {
+        loop {
+            if settled().await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn settled_shutdown_does_not_wait_for_full_grace() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            drain_until(token, Duration::from_secs(30), || async { true }),
+        )
+        .await;
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn unsettled_shutdown_is_bounded() {
+        let token = CancellationToken::new();
+        token.cancel();
+        assert!(!drain_until(token, Duration::from_millis(20), || async { false }).await);
+    }
+
+    #[tokio::test]
+    async fn completion_does_not_exit_before_shutdown_signal() {
+        let token = CancellationToken::new();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                drain_until(token, Duration::from_secs(30), || async { true }),
+            )
+            .await
+            .is_err()
+        );
+    }
+}

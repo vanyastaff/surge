@@ -77,7 +77,10 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
             .collect(),
         _ => Vec::new(),
     };
-    let is_tool_call = pending.call_id.is_some();
+    let is_tool_call = pending
+        .call_id
+        .as_deref()
+        .is_some_and(|id| surge_core::id::GateRequestId::from_event_call_id(id).is_none());
 
     // Inspect mode: no resolution flag → show the question and how to answer.
     if args.outcome.is_none() && args.text.is_none() && args.json.is_none() {
@@ -94,7 +97,7 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
         return Ok(());
     }
 
-    let (call_id, response) = build_answer(
+    let (_, response) = build_answer(
         is_tool_call,
         pending.call_id.clone(),
         &gate_options,
@@ -106,7 +109,12 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
 
     let daemon = connect_daemon().await?;
     daemon
-        .resolve_human_input(run_id, call_id, response)
+        .resolve_requested_input(
+            run_id,
+            pending.node.clone(),
+            pending.call_id.clone(),
+            response,
+        )
         .await
         .map_err(|e| {
             anyhow!(

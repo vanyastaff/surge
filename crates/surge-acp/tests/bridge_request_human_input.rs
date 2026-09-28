@@ -1,10 +1,7 @@
-//! Integration test: agent calling request_human_input surfaces as
-//! BridgeEvent::HumanInputRequested, not a generic ToolCall, and bridge
-//! does NOT auto-reply (per spec §5.3 — M5 will provide the reply API).
+//! ACP tool notifications are display-only; authenticated stage control uses MCP.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::time::Duration;
 
 use surge_acp::bridge::{
     AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, MessageContent, SessionConfig,
@@ -12,15 +9,15 @@ use surge_acp::bridge::{
 use surge_acp::client::PermissionPolicy;
 use surge_core::OutcomeKey;
 use tempfile::TempDir;
-use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn human_input_surfaces_as_distinct_event() {
+async fn request_human_input_notification_has_no_authority() {
     let wt = TempDir::new().unwrap();
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "human_input".into()],
         },
@@ -41,26 +38,14 @@ async fn human_input_surfaces_as_distinct_event() {
         .await
         .unwrap();
 
-    let mut saw_human = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while tokio::time::Instant::now() < deadline {
-        match timeout(Duration::from_millis(200), events.recv()).await {
-            Ok(Ok(BridgeEvent::HumanInputRequested {
-                session, question, ..
-            })) => {
-                assert_eq!(session, sid);
-                assert!(!question.is_empty());
-                saw_human = true;
-                break;
-            },
-            Ok(Ok(BridgeEvent::ToolCall { tool, .. })) if tool == "request_human_input" => {
-                panic!("request_human_input should NOT surface as generic ToolCall");
-            },
-            _ => continue,
-        }
-    }
-    assert!(saw_human);
-
-    bridge.close_session(sid).await.ok();
+    bridge.close_session(sid).await.unwrap();
     bridge.shutdown().await.unwrap();
+    let observed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert!(observed.iter().any(|event| matches!(event, BridgeEvent::ToolObserved { session, title, .. } if *session == sid && title == "request_human_input")));
+    assert!(!observed.iter().any(|event| matches!(
+        event,
+        BridgeEvent::OutcomeReported { .. }
+            | BridgeEvent::HumanInputRequested { .. }
+            | BridgeEvent::ToolCall { .. }
+    )));
 }

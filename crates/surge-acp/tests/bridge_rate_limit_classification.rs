@@ -39,6 +39,7 @@ async fn real_429_with_retry_after_survives_the_acp_wire_as_rate_limited() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "prompt_error=429_retry_after".into()],
         },

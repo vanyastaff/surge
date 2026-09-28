@@ -2,7 +2,7 @@
 //!
 //! Loads each example, runs the syntactic graph validator, and runs the
 //! engine validator with an in-memory profile resolver that knows the
-//! placeholder profiles we ship. Driving the actual ACP runtime is the
+//! bundled profiles and the legacy mock planner. Driving the actual ACP runtime is the
 //! job of Task 5.1 (`crates/surge-orchestrator/tests/archetypes_mock_test.rs`);
 //! this test guards against regressions in the example shape itself.
 
@@ -31,8 +31,15 @@ struct ArchetypeResolver;
 
 impl ReferenceResolver for ArchetypeResolver {
     fn profile_exists(&self, name: &str) -> bool {
-        // Profiles referenced by the bundled archetype examples.
-        matches!(name, "implementer@1.0" | "planner@1.0")
+        // Legacy mock examples still use planner; delivery examples must
+        // reference profiles that actually ship, rather than a stale allowlist.
+        name == "planner@1.0"
+            || surge_core::BundledRegistry::all().iter().any(|profile| {
+                name == format!(
+                    "{}@{}.{}",
+                    profile.role.id, profile.role.version.major, profile.role.version.minor
+                )
+            })
     }
     fn template_exists(&self, _: &str) -> bool {
         true
@@ -90,44 +97,28 @@ fn flow_spike_validates() {
 }
 
 #[test]
-fn bundled_template_names_and_legacy_aliases_start_runs() {
+fn bundled_template_names_and_legacy_aliases_resolve_valid_graphs() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let surge_home = home.join(".surge");
-    std::fs::create_dir_all(&surge_home).unwrap();
-    let worktree = temp.path().join("worktree");
-    std::fs::create_dir_all(&worktree).unwrap();
-
-    for template in [
-        "feature",
-        "bug-fix",
-        "bugfix",
-        "fix",
-        "refactor",
-        "performance",
-        "perf",
-        "security",
-        "sec",
-        "docs",
-        "doc",
-        "migration",
-        "migrate",
+    let registry =
+        surge_orchestrator::archetype_registry::ArchetypeRegistry::from_dir(temp.path()).unwrap();
+    for (name, canonical) in [
+        ("feature", "feature"),
+        ("bug-fix", "bug-fix"),
+        ("bugfix", "bug-fix"),
+        ("fix", "bug-fix"),
+        ("refactor", "refactor"),
+        ("performance", "performance"),
+        ("perf", "performance"),
+        ("security", "security"),
+        ("sec", "security"),
+        ("docs", "docs"),
+        ("doc", "docs"),
+        ("migration", "migration"),
+        ("migrate", "migration"),
     ] {
-        Command::cargo_bin("surge")
-            .unwrap()
-            .args(["engine", "run", "--template", template])
-            .current_dir(&worktree)
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .env("SURGE_HOME", &surge_home)
-            // Force the in-process mock agent so this plumbing smoke test
-            // starts a run without spawning a real ACP subprocess (which
-            // would hang the CLI process on a live agent child).
-            .env("SURGE_FORCE_AGENT_MOCK", "1")
-            .assert()
-            .success()
-            .stdout(contains("run-"));
+        let resolved = registry.resolve(name).unwrap();
+        assert_eq!(resolved.name, canonical);
+        validate_for_m6(&resolved.graph).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
 
@@ -164,8 +155,8 @@ members = []
         .assert()
         .success();
 
-    let example = examples_dir().join("flow_minimal_agent.toml");
-    Command::cargo_bin("surge")
+    let example = examples_dir().join("flow_terminal_only.toml");
+    let execution = Command::cargo_bin("surge")
         .unwrap()
         .args([
             "engine",
@@ -177,9 +168,20 @@ members = []
         .current_dir(temp.path())
         .env("HOME", &home)
         .env("USERPROFILE", &home)
-        // Mock agent: start the run without spawning a real ACP subprocess.
-        .env("SURGE_FORCE_AGENT_MOCK", "1")
+        .env("SURGE_HOME", home.join(".surge"))
+        .timeout(std::time::Duration::from_secs(15))
         .assert()
         .success()
         .stdout(contains("run-"));
+    let run_id = String::from_utf8(execution.get_output().stdout.clone()).unwrap();
+    let replay = Command::cargo_bin("surge")
+        .unwrap()
+        .args(["engine", "replay", run_id.trim(), "--format", "json"])
+        .env("SURGE_HOME", home.join(".surge"))
+        .current_dir(temp.path())
+        .timeout(std::time::Duration::from_secs(15))
+        .assert()
+        .success();
+    let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
+    assert_eq!(state["view"]["terminal"], "completed");
 }

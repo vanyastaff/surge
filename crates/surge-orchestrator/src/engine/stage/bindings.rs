@@ -19,6 +19,9 @@ pub enum BindingError {
     /// The referenced artifact name is not present in `RunMemory`.
     #[error("unknown artifact name: {0}")]
     UnknownArtifact(String),
+    /// Canonical bootstrap artifact has competing logical aliases.
+    #[error("ambiguous bootstrap artifact: {0}")]
+    AmbiguousArtifact(String),
     /// The referenced node has not produced any artifacts yet.
     #[error("node {0} produced no artifacts")]
     NoArtifactsForNode(String),
@@ -54,7 +57,14 @@ pub async fn resolve_bindings(
             },
             ArtifactSource::NodeOutput { node, artifact } => {
                 if let Some(arefs) = memory.artifacts_by_node.get(node) {
-                    if let Some(aref) = arefs.iter().find(|a| &a.name == artifact) {
+                    let reference =
+                        if matches!(artifact.as_str(), "roadmap" | "roadmap.toml" | "roadmap.md") {
+                            crate::bootstrap_driver::canonical_roadmap_ref(arefs, artifact)
+                                .map_err(|()| BindingError::AmbiguousArtifact(artifact.clone()))?
+                        } else {
+                            arefs.iter().rev().find(|a| &a.name == artifact)
+                        };
+                    if let Some(aref) = reference {
                         read_artifact_text(&aref.path, worktree_root, &aref.name).await
                     } else {
                         Err(BindingError::UnknownArtifact(artifact.clone()))
@@ -188,6 +198,126 @@ pub fn substitute_template(template: &str, bindings: &[(TemplateVar, String)]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn repeated_producer_binds_latest_specification() {
+        use surge_core::{ContentHash, run_state::ArtifactRef};
+        let dir = tempfile::tempdir().unwrap();
+        let node = NodeKey::try_new("spec_task").unwrap();
+        let mut memory = RunMemory::default();
+        for (seq, text) in [
+            (1, "First task specification"),
+            (2, "Current task specification"),
+        ] {
+            let path = dir.path().join(format!("spec-{seq}.toml"));
+            tokio::fs::write(&path, text).await.unwrap();
+            memory
+                .artifacts_by_node
+                .entry(node.clone())
+                .or_default()
+                .push(ArtifactRef {
+                    hash: ContentHash::compute(text.as_bytes()),
+                    path,
+                    name: "spec_toml".into(),
+                    produced_by: node.clone(),
+                    produced_at_seq: seq,
+                });
+        }
+        let binding = Binding {
+            source: ArtifactSource::NodeOutput {
+                node,
+                artifact: "spec_toml".into(),
+            },
+            target: TemplateVar("spec".into()),
+            optional: false,
+        };
+        let resolved = resolve_bindings(&[binding], &memory, dir.path())
+            .await
+            .unwrap();
+        assert_eq!(resolved[0].1, "Current task specification");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_duplicate_stems_bind_canonical_roadmap_formats() {
+        use surge_core::{ContentHash, run_state::ArtifactRef};
+        let dir = tempfile::tempdir().unwrap();
+        let node = NodeKey::try_new("roadmap_planner").unwrap();
+        let mut memory = RunMemory::default();
+        for (name, path, text) in [
+            ("roadmap-toml", "roadmap.toml", "machine roadmap"),
+            ("roadmap-md", "roadmap.md", "human roadmap"),
+        ] {
+            tokio::fs::write(dir.path().join(path), text).await.unwrap();
+            memory
+                .artifacts_by_node
+                .entry(node.clone())
+                .or_default()
+                .push(ArtifactRef {
+                    hash: ContentHash::compute(text.as_bytes()),
+                    path: path.into(),
+                    name: name.into(),
+                    produced_by: node.clone(),
+                    produced_at_seq: 5,
+                });
+        }
+        for (name, expected) in [
+            ("roadmap", "machine roadmap"),
+            ("roadmap.toml", "machine roadmap"),
+            ("roadmap.md", "human roadmap"),
+        ] {
+            let binding = Binding {
+                source: ArtifactSource::NodeOutput {
+                    node: node.clone(),
+                    artifact: name.into(),
+                },
+                target: TemplateVar("roadmap".into()),
+                optional: false,
+            };
+            let result = resolve_bindings(&[binding], &memory, dir.path())
+                .await
+                .unwrap();
+            assert_eq!(result[0].1, expected);
+        }
+        // Actual duplicate-stem emitter uses underscores; legacy hyphens remain readable.
+        for artifact in memory.artifacts_by_node.get_mut(&node).unwrap() {
+            artifact.name = artifact.name.replace('-', "_");
+        }
+        let binding = Binding {
+            source: ArtifactSource::NodeOutput {
+                node: node.clone(),
+                artifact: "roadmap.toml".into(),
+            },
+            target: TemplateVar("roadmap".into()),
+            optional: false,
+        };
+        assert_eq!(
+            resolve_bindings(std::slice::from_ref(&binding), &memory, dir.path())
+                .await
+                .unwrap()[0]
+                .1,
+            "machine roadmap"
+        );
+        let mut ambiguous = memory.clone();
+        let refs = ambiguous.artifacts_by_node.get_mut(&node).unwrap();
+        let mut duplicate = refs[0].clone();
+        duplicate.name = "roadmap-toml".into();
+        refs.push(duplicate);
+        assert!(
+            resolve_bindings(std::slice::from_ref(&binding), &ambiguous, dir.path())
+                .await
+                .is_err()
+        );
+        memory
+            .artifacts_by_node
+            .get_mut(&node)
+            .unwrap()
+            .retain(|artifact| artifact.name == "roadmap_md");
+        assert!(
+            resolve_bindings(&[binding], &memory, dir.path())
+                .await
+                .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn static_binding_resolves_immediately() {

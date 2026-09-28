@@ -1,8 +1,8 @@
 //! Schema-version migration registry for persisted `EventPayload` bytes.
 //!
 //! Persistence reads invoke [`migrate_payload`] to turn the on-disk bytes back
-//! into a current [`EventPayload`]. Today the registry contains only the v1
-//! identity migration (the current shape); future schema-breaking changes add
+//! into a current [`EventPayload`]. The registry preserves earlier identity
+//! migrations; future schema-breaking changes add
 //! a new [`Migration`] entry with its own version constant.
 //!
 //! The entry point lives here (in `surge-core`) — not inside
@@ -86,7 +86,11 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// existing named causes are untouched) — only a payload that actually
 /// carries the new tag needs the bump, exactly like v6/v7's own "old
 /// payloads decode cleanly, they simply never contain the new thing."
-pub const MAX_SUPPORTED_VERSION: u32 = 8;
+///
+/// **v9:** adds the nonterminal [`EventPayload::StageToolReceipt`] variant.
+/// Accepted candidates still require prompt success and final validation.
+/// Older readers reject v9 with [`SurgeError::SchemaTooNew`].
+pub const MAX_SUPPORTED_VERSION: u32 = 9;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -262,6 +266,22 @@ impl Migration for IdentityV8 {
     }
 }
 
+/// Identity migration for v9, adding nonterminal authenticated stage-tool receipts.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV9;
+
+impl Migration for IdentityV9 {
+    fn version(&self) -> u32 {
+        9
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v9 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -270,7 +290,7 @@ pub struct MigrationChain {
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
-    /// [`IdentityV7`], and [`IdentityV8`].
+    /// [`IdentityV7`], [`IdentityV8`], and [`IdentityV9`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -283,6 +303,7 @@ impl MigrationChain {
                 Box::new(IdentityV6),
                 Box::new(IdentityV7),
                 Box::new(IdentityV8),
+                Box::new(IdentityV9),
             ],
         }
     }
@@ -391,7 +412,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 8);
+        assert_eq!(wrapper.schema_version, 9);
     }
 
     #[test]
@@ -399,7 +420,7 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 8 }
+            SurgeError::SchemaTooNew { found: 99, max: 9 }
         ));
     }
 

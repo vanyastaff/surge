@@ -77,7 +77,38 @@ async fn agent_stage_loops_until_outcome_reported() {
     let tool_resolutions =
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
+    let item: toml::Value = toml::from_str(
+        "id = 'pause-timer'\ndescription = 'Preserve {{literal}} task text'\nacceptance_criteria = ['Pause keeps remaining time']",
+    ).unwrap();
+    let loop_config: surge_core::loop_config::LoopConfig = toml::from_str(
+        "body = 'body'\niteration_var_name = 'task'\n[iterates_over]\ntype = 'static'\nvalue = []\n[exit_condition]\ntype = 'all_items'\n[on_iteration_failure]\ntype = 'abort'",
+    ).unwrap();
+    let mut frames = vec![surge_orchestrator::engine::frames::Frame::Loop(
+        surge_orchestrator::engine::frames::LoopFrame {
+            loop_node: NodeKey::try_from("task_loop").unwrap(),
+            config: loop_config,
+            items: vec![
+                toml::Value::String("previous-task-must-not-be-active".into()),
+                item,
+            ],
+            current_index: 1,
+            attempts_remaining: 0,
+            return_to: NodeKey::try_from("end").unwrap(),
+            traversal_counts: Default::default(),
+        },
+    )];
+    let mut milestone = frames[0].clone();
+    let surge_orchestrator::engine::frames::Frame::Loop(ref mut outer) = milestone else {
+        panic!("expected loop");
+    };
+    outer.loop_node = NodeKey::try_from("milestone_loop").unwrap();
+    outer.config.iteration_var_name = "milestone".into();
+    outer.items = vec![toml::from_str("id = 'timer-controls'").unwrap()];
+    outer.current_index = 0;
+    frames.insert(0, milestone);
     let result = execute_agent_stage(AgentStageParams {
+        frames: &frames,
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -108,4 +139,10 @@ async fn agent_stage_loops_until_outcome_reported() {
     pump.await.unwrap();
 
     assert_eq!(result.as_ref(), "done");
+    let prompt = mock.last_prompt().await.unwrap();
+    assert!(prompt.contains("pause-timer"));
+    assert!(prompt.find("timer-controls").unwrap() < prompt.find("pause-timer").unwrap());
+    assert!(prompt.contains("Pause keeps remaining time"));
+    assert!(prompt.contains("{{literal}}"));
+    assert!(!prompt.contains("previous-task-must-not-be-active"));
 }

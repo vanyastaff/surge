@@ -42,6 +42,7 @@
     clippy::match_same_arms,
 )]
 
+pub mod bootstrap_operations;
 pub mod capacity;
 pub mod clock;
 pub mod config;
@@ -49,6 +50,7 @@ pub mod error;
 pub mod escalations;
 pub(crate) mod file_lock;
 pub mod inbox_queue;
+pub mod inspection;
 mod macros;
 pub mod migrations;
 pub mod pragmas;

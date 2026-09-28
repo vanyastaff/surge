@@ -95,6 +95,84 @@ system = "test"
 /// that stringified everything via `Display`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
+    let result = rate_limit_stage(None).await;
+    let Err(StageError::RateLimited {
+        runtime,
+        retry_after,
+        details,
+    }) = result
+    else {
+        panic!("expected StageError::RateLimited, got: {result:?}");
+    };
+    assert_eq!(
+        runtime, None,
+        "legacy no-profile-registry path must report no runtime, not a placeholder"
+    );
+    assert_eq!(retry_after, Some(Duration::from_secs(30)));
+    assert!(
+        details.contains("429"),
+        "details should preserve raw text, got: {details}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rate_limit_does_not_mask_unconfirmed_session_cleanup() {
+    use surge_acp::bridge::error::{BridgeError, CloseSessionError};
+    for error in [
+        CloseSessionError::GracefulTimedOut {
+            session: surge_core::SessionId::new(),
+            killed: false,
+        },
+        CloseSessionError::Bridge(BridgeError::CleanupUnconfirmed),
+    ] {
+        let result = rate_limit_stage(Some(error)).await;
+        assert!(
+            matches!(result, Err(StageError::Bridge(_))),
+            "unconfirmed cleanup must prevent automatic retry: {result:?}"
+        );
+    }
+}
+
+async fn rate_limit_stage(
+    close_error: Option<surge_acp::bridge::error::CloseSessionError>,
+) -> surge_orchestrator::engine::stage::StageResult {
+    stage_with_cleanup(close_error, false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successful_outcome_survives_confirmed_forced_cleanup() {
+    let result = stage_with_cleanup(
+        Some(
+            surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
+                session: surge_core::SessionId::new(),
+                killed: true,
+            },
+        ),
+        true,
+    )
+    .await;
+    assert_eq!(result.unwrap().as_str(), "done");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successful_outcome_does_not_mask_unconfirmed_cleanup() {
+    let result = stage_with_cleanup(
+        Some(
+            surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
+                session: surge_core::SessionId::new(),
+                killed: false,
+            },
+        ),
+        true,
+    )
+    .await;
+    assert!(matches!(result, Err(StageError::Bridge(_))));
+}
+
+async fn stage_with_cleanup(
+    close_error: Option<surge_acp::bridge::error::CloseSessionError>,
+    success: bool,
+) -> surge_orchestrator::engine::stage::StageResult {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
@@ -103,12 +181,30 @@ async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    *mock.next_close_error.lock().await = close_error;
 
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: Some(Duration::from_secs(30)),
-        details: "429 Too Many Requests: Retry-After: 30".into(),
-    })
-    .await;
+    let pump = if success {
+        let session = surge_core::SessionId::new();
+        mock.pin_session_ids(vec![session]).await;
+        mock.enqueue_event(surge_acp::bridge::BridgeEvent::OutcomeReported {
+            session,
+            outcome: "done".parse().unwrap(),
+            summary: "validated result".into(),
+            artifacts_produced: vec![],
+        })
+        .await;
+        let worker = mock.clone();
+        Some(tokio::spawn(
+            async move { worker.pump_after_subscribe(1).await },
+        ))
+    } else {
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+            details: "429 Too Many Requests: Retry-After: 30".into(),
+        })
+        .await;
+        None
+    };
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
     let memory = surge_core::run_state::RunMemory::default();
@@ -118,6 +214,8 @@ async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -146,23 +244,11 @@ async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
     })
     .await;
 
-    let Err(StageError::RateLimited {
-        runtime,
-        retry_after,
-        details,
-    }) = result
-    else {
-        panic!("expected StageError::RateLimited, got: {result:?}");
-    };
-    assert_eq!(
-        runtime, None,
-        "legacy no-profile-registry path must report no runtime, not a placeholder"
-    );
-    assert_eq!(retry_after, Some(Duration::from_secs(30)));
-    assert!(
-        details.contains("429"),
-        "details should preserve raw text, got: {details}"
-    );
+    if let Some(pump) = pump {
+        pump.await.unwrap();
+    }
+    writer.close().await.unwrap();
+    result
 }
 
 /// The branch every real entry point actually uses (`profile_registry:
@@ -201,6 +287,8 @@ async fn agent_stage_with_profile_registry_reports_normalized_runtime() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -324,6 +412,8 @@ async fn agent_stage_with_unregistered_mock_runtime_falls_back_to_raw_id_not_non
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,

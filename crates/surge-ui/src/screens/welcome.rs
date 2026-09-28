@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::project::{RecentProject, RecentProjects};
 use crate::theme;
@@ -15,8 +15,8 @@ pub enum WelcomeEvent {
     OpenProject(PathBuf),
     /// User wants to browse for a project.
     BrowseProject,
-    /// User wants to init a new project.
-    InitProject,
+    /// User wants to start a new application in an empty folder.
+    NewProject,
     /// User removed a project from the list.
     RemoveProject(PathBuf),
     /// User toggled pin on a project.
@@ -56,10 +56,11 @@ impl WelcomeScreen {
                     .child("Surge".to_string()),
             )
             .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::text_muted())
-                    .child("Any Agent. One Protocol. Pure Rust.".to_string()),
+                div().text_sm().text_color(theme::text_muted()).child(
+                    "Describe an app. Surge plans it, builds it with your coding agent, \
+                         and shows you the evidence."
+                        .to_string(),
+                ),
             )
     }
 
@@ -78,6 +79,8 @@ impl WelcomeScreen {
 
         div()
             .id(SharedString::from(format!("project-{}", display_path)))
+            .role(Role::Button)
+            .aria_label(format!("Open project {name}"))
             .h_flex()
             .justify_between()
             .items_center()
@@ -143,6 +146,8 @@ impl WelcomeScreen {
                     .child(
                         div()
                             .id(SharedString::from(format!("pin-{}", path_pin.display())))
+                            .role(Role::Button)
+                            .aria_label(if pinned { "Unpin project" } else { "Pin project" })
                             .cursor_pointer()
                             .px_2()
                             .py_1()
@@ -165,6 +170,8 @@ impl WelcomeScreen {
                     .child(
                         div()
                             .id(SharedString::from(format!("rm-{}", path_remove.display())))
+                            .role(Role::Button)
+                            .aria_label("Remove recent project")
                             .cursor_pointer()
                             .px_2()
                             .py_1()
@@ -190,23 +197,26 @@ impl WelcomeScreen {
             .gap_3()
             .justify_center()
             .pt_4()
+            // New app → empty folder picker + repository initialization.
+            // The primary path: most people arrive with an idea, not a repo.
+            .child(
+                Button::new("new-project")
+                    .primary()
+                    .label("New app")
+                    .accessibility_id("new-project")
+                    .on_click(cx.listener(|_this, _event, _window, cx| {
+                        cx.emit(WelcomeEvent::NewProject);
+                    })),
+            )
             // Open Project → native directory picker
             .child(
-                div()
-                    .id("btn-open-project")
+                Button::new("open-project")
+                    .ghost()
+                    .label("Open existing project")
+                    .accessibility_id("open-project")
                     .on_click(cx.listener(|_this, _event, _window, cx| {
                         cx.emit(WelcomeEvent::BrowseProject);
-                    }))
-                    .child(Button::new("open-project").primary().label("Open Project")),
-            )
-            // Init New Project
-            .child(
-                div()
-                    .id("btn-init-project")
-                    .on_click(cx.listener(|_this, _event, _window, cx| {
-                        cx.emit(WelcomeEvent::InitProject);
-                    }))
-                    .child(Button::new("init-project").label("Init New Project")),
+                    })),
             )
     }
 }
@@ -244,14 +254,18 @@ impl Render for WelcomeScreen {
                         ),
                     )
                     // Project list
+                    // Scrolls past ~5 rows so the logo and the primary
+                    // actions always stay on screen.
                     .child(
                         div()
+                            .id("recent-projects")
                             .v_flex()
+                            .max_h(px(372.0))
+                            .overflow_y_scroll()
                             .rounded_lg()
                             .border_1()
                             .border_color(theme::surface())
-                            .overflow_hidden()
-                            .when(project_items.is_empty(), |el: Div| {
+                            .when(project_items.is_empty(), |el| {
                                 el.child(
                                     div()
                                         .p_8()

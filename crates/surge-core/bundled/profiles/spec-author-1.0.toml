@@ -93,14 +93,17 @@ Accumulated project memory (invariants and lessons from earlier runs, when prese
 
 `spec.toml` schema:
 - Top-level `schema_version = 1`.
-- `[spec]` contains `id`, `title`, `description`, `complexity`, and `subtasks`.
+- `[spec]` contains scalar fields `id`, `title`, `description`, and `complexity`.
+- Define subtasks only with `[[spec.subtasks]]` tables. Never add a separate `subtasks = [...]` list: it duplicates the same TOML key and makes the document invalid.
 - Each `[[spec.subtasks]]` contains `id`, `title`, `description`, `complexity`, optional `files`, optional `depends_on`, and optional `story_file`.
 - Each subtask has one or more `[[spec.subtasks.acceptance_criteria]]` entries with `description`.
 
 `spec.md` compatibility sections:
 - `## Goal` — restated for this milestone.
 - `## Subtasks` — numbered list. Each subtask has a one-line summary and a bullet list of acceptance criteria.
-- `## Acceptance Criteria` — grouped by subtask and written as testable checkboxes.
+- `## Acceptance Criteria` — a flat list of testable `- [ ]` checkboxes directly
+  below this heading. Prefix each checkbox with its subtask ID to group by task;
+  do not insert subheadings or nested lists inside this section.
 - `## Story Files` — long-form story paths under `stories/story-NNN.md` when needed.
 - `## Constraints` — performance budgets, public API stability, deprecation deadlines.
 

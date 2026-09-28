@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::facade::EngineFacade;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -86,7 +86,7 @@ async fn shutdown_token_exits_within_500ms() {
     let handle = tokio::spawn({
         let facade = facade.clone();
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, facade, shutdown).await }
+        async move { run_synthetic_server(cfg, facade, shutdown).await }
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
     shutdown.cancel();

@@ -16,9 +16,9 @@
 //! here in Triage. A labelled sample board renders when the project
 //! has no tasks yet.
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::component::StyledExt;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_core::TaskState;
 use surge_orchestrator::engine::handle::RunStatus;
 
@@ -210,6 +210,8 @@ impl BacklogScreen {
             .child(
                 div()
                     .id("backlog-new-task")
+                    .role(Role::Button)
+                    .aria_label("Plan a task")
                     .h_flex()
                     .gap(px(7.0))
                     .items_center()
@@ -308,7 +310,9 @@ impl BacklogScreen {
         let is_done = card.column == Column::Done;
 
         let mut el = div()
-            .id(SharedString::from(format!("bl-card-{}", card.id_label)))
+            .id(SharedString::from(format!("bl-card-{}", card.task_id.as_deref().unwrap_or(&card.id_label))))
+            .role(Role::Button)
+            .aria_label(card.title.clone())
             .v_flex()
             .gap(px(8.0))
             .p(px(12.0))
@@ -358,7 +362,12 @@ impl BacklogScreen {
             el = el.child(
                 div().h_flex().child(div().flex_1()).child(
                     div()
-                        .id(SharedString::from(format!("bl-dispatch-{}", card.id_label)))
+                        .id(SharedString::from(format!(
+                            "bl-dispatch-{}",
+                            card.task_id.as_deref().unwrap_or(&card.id_label)
+                        )))
+                        .role(Role::Button)
+                        .aria_label(format!("Dispatch {}", card.title))
                         .px(px(10.0))
                         .py(px(3.0))
                         .rounded_md()

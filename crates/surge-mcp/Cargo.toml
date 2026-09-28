@@ -12,10 +12,12 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["full"] }
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+futures.workspace = true
 tracing.workspace = true
 
-rmcp.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-io", "transport-worker"] }
+rand.workspace = true
 
 surge-core.workspace = true
 

@@ -1,12 +1,12 @@
 //! Helpers for constructing ACP `ContentBlock`s used by both legacy and bridge
 //! code paths. Kept in `shared/` so a future ACP-SDK upgrade touches one place.
 
-use agent_client_protocol::ContentBlock;
+use agent_client_protocol::schema::v1::ContentBlock;
 
 /// Build a single text `ContentBlock` from an owned string.
 #[allow(dead_code)] // consumed in Task 7.1 BridgeClient
 pub(crate) fn text(s: impl Into<String>) -> ContentBlock {
-    ContentBlock::Text(agent_client_protocol::TextContent::new(s))
+    ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(s))
 }
 
 /// Build a single-element `Vec<ContentBlock>` from a string.

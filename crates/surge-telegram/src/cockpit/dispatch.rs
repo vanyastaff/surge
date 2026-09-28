@@ -97,7 +97,7 @@ where
         .store()
         .upsert(
             &run_id_str,
-            action.node_key,
+            &action.node_key,
             action.attempt_index,
             pre_rendered.kind.as_str(),
             ctx.admin_chat_id,
@@ -148,10 +148,9 @@ struct CardAction {
     /// completion, failure, escalation) this is a synthetic per-kind key so
     /// the cards table's `(run_id, node_key, attempt_index)` triple
     /// remains unique without colliding with real graph nodes.
-    node_key: &'static str,
-    /// `RunMemory.node_visits[node]` value at emit time. MVP defaults to
-    /// `0` until the dispatcher gains access to live memory; the bootstrap
-    /// edit loop's multi-attempt cards land here in a later phase.
+    node_key: String,
+    /// Durable request sequence for human-input cards; zero for run metadata.
+    /// The existing integer column preserves distinct requests and stable replay keys.
     attempt_index: i64,
     /// Pre-extracted payload pieces the renderer needs. Avoids matching
     /// the event variant a second time inside `render_for_action`.
@@ -182,34 +181,36 @@ enum ActionPayload {
 /// Decide which cockpit action (if any) a tap event requires.
 fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
     match tap.event.payload.payload() {
-        EventPayload::HumanInputRequested { node, prompt, .. } => Some(CardAction {
-            event_kind: "HumanInputRequested",
-            kind: CardKind::HumanGate,
-            // Node keys carry an &str view; the lifetime escapes via the
-            // `CardAction`, so we lean on the existing static-table trick:
-            // copy into a static-leak-free String by going through render.
-            // Here we accept the leak as a one-shot test artifact — the
-            // production dispatcher will plumb the &str through directly.
-            node_key: leak_node_key(node.as_str()),
-            attempt_index: 0,
-            payload: ActionPayload::HumanGate {
-                prompt: prompt.clone(),
-            },
-        }),
-        EventPayload::BootstrapApprovalRequested { stage, .. } => Some(CardAction {
-            event_kind: "BootstrapApprovalRequested",
-            kind: CardKind::from(*stage),
-            node_key: bootstrap_node_key(*stage),
-            attempt_index: 0,
-            payload: ActionPayload::Bootstrap {
-                stage: *stage,
-                summary: format!("Stage {stage:?} ready for review."),
-            },
-        }),
+        EventPayload::HumanInputRequested {
+            node,
+            prompt,
+            schema,
+            ..
+        } => {
+            let stage = schema
+                .as_ref()
+                .and_then(|schema| schema.get("x-surge-bootstrap-stage"))
+                .and_then(|stage| serde_json::from_value::<BootstrapStage>(stage.clone()).ok());
+            Some(CardAction {
+                event_kind: "HumanInputRequested",
+                kind: stage.map_or(CardKind::HumanGate, CardKind::from),
+                node_key: node.to_string(),
+                attempt_index: i64::try_from(tap.event.seq.0).ok()?,
+                payload: match stage {
+                    Some(stage) => ActionPayload::Bootstrap {
+                        stage,
+                        summary: prompt.clone(),
+                    },
+                    None => ActionPayload::HumanGate {
+                        prompt: prompt.clone(),
+                    },
+                },
+            })
+        },
         EventPayload::RunCompleted { terminal_node } => Some(CardAction {
             event_kind: "RunCompleted",
             kind: CardKind::Completion,
-            node_key: "__completion__",
+            node_key: "__completion__".into(),
             attempt_index: 0,
             payload: ActionPayload::Completion {
                 terminal_node: terminal_node.as_str().to_owned(),
@@ -218,7 +219,7 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
         EventPayload::RunFailed { error } => Some(CardAction {
             event_kind: "RunFailed",
             kind: CardKind::Failure,
-            node_key: "__failure__",
+            node_key: "__failure__".into(),
             attempt_index: 0,
             payload: ActionPayload::Failure {
                 error: error.clone(),
@@ -227,7 +228,7 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
         EventPayload::EscalationRequested { stage, reason, .. } => Some(CardAction {
             event_kind: "EscalationRequested",
             kind: CardKind::Escalation,
-            node_key: "__escalation__",
+            node_key: "__escalation__".into(),
             attempt_index: 0,
             payload: ActionPayload::Escalation {
                 stage: *stage,
@@ -256,25 +257,6 @@ fn render_for_action(
         ActionPayload::Failure { error } => render_failure(card_id, run_id, error),
         ActionPayload::Escalation { stage, reason } => render_escalation(card_id, *stage, reason),
     }
-}
-
-/// Map a [`BootstrapStage`] to its synthetic node-key constant. The
-/// canonical bootstrap graph names match these so a real `node_key` would
-/// shadow the synthetic key — that is intentional, the upsert collapses
-/// onto the canonical node when both exist.
-fn bootstrap_node_key(stage: BootstrapStage) -> &'static str {
-    match stage {
-        BootstrapStage::Description => "bootstrap_description",
-        BootstrapStage::Roadmap => "bootstrap_roadmap",
-        BootstrapStage::Flow => "bootstrap_flow",
-    }
-}
-
-/// Convert a `&str` view of a `NodeKey` into a `&'static str`. Used by the
-/// `CardAction` struct in the MVP dispatcher; the production dispatcher
-/// will thread the owned string through instead, retiring this helper.
-fn leak_node_key(node_key: &str) -> &'static str {
-    Box::leak(node_key.to_owned().into_boxed_str())
 }
 
 #[cfg(test)]
@@ -486,32 +468,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_approval_requested_routes_per_stage() {
+    async fn bootstrap_metadata_is_not_a_second_actionable_card() {
         for stage in [
             BootstrapStage::Description,
             BootstrapStage::Roadmap,
             BootstrapStage::Flow,
         ] {
             let ctx = ctx();
-            let outcome = dispatch(
-                tap(
-                    RunId::new(),
-                    1,
-                    EventPayload::BootstrapApprovalRequested {
-                        stage,
-                        channel: surge_core::approvals::ApprovalChannel::Desktop {
-                            duration: surge_core::approvals::ApprovalDuration::Transient,
-                        },
+            let metadata = tap(
+                RunId::new(),
+                1,
+                EventPayload::BootstrapApprovalRequested {
+                    stage,
+                    channel: surge_core::approvals::ApprovalChannel::Desktop {
+                        duration: surge_core::approvals::ApprovalDuration::Transient,
                     },
-                ),
-                &ctx,
-                1_000,
-            )
-            .await
-            .unwrap();
-
-            let DispatchOutcome::Emitted { kind, .. } = outcome else {
-                panic!("expected Emitted outcome for stage {stage:?}");
+                },
+            );
+            assert!(matches!(
+                dispatch(metadata, &ctx, 1000).await.unwrap(),
+                DispatchOutcome::Ignored { .. }
+            ));
+            let request = tap(
+                RunId::new(),
+                2,
+                EventPayload::HumanInputRequested {
+                    node: node("gate"),
+                    session: None,
+                    call_id: Some(surge_core::id::GateRequestId::new().to_string()),
+                    prompt: "Review stage".into(),
+                    schema: Some(serde_json::json!({"x-surge-bootstrap-stage":stage})),
+                },
+            );
+            let DispatchOutcome::Emitted { kind, .. } =
+                dispatch(request, &ctx, 1001).await.unwrap()
+            else {
+                panic!("missing authoritative stage card")
             };
             assert_eq!(kind, CardKind::from(stage));
         }
@@ -615,7 +607,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_dispatch_for_same_run_node_is_noop_on_second_call() {
+    async fn distinct_request_sequences_create_distinct_cards_and_replay_is_noop() {
         let ctx = ctx();
         let run_id = RunId::new();
         let mk_tap = |seq| {
@@ -642,6 +634,14 @@ mod tests {
             panic!("expected Emitted second");
         };
         assert!(matches!(emit1, EmitOutcome::Sent { .. }));
-        assert_eq!(emit2, EmitOutcome::NoOp);
+        assert!(matches!(emit2, EmitOutcome::Sent { .. }));
+        let replay = dispatch(mk_tap(2), &ctx, 1_200).await.unwrap();
+        assert!(matches!(
+            replay,
+            DispatchOutcome::Emitted {
+                emit: EmitOutcome::NoOp,
+                ..
+            }
+        ));
     }
 }

@@ -1018,6 +1018,7 @@ mod tests {
                     artifact: ContentHash::compute(b"a"),
                     path: format!("artifacts/{XSS_PAYLOAD}").into(),
                     name: XSS_PAYLOAD.into(),
+                    source_path: None,
                 },
             },
             RunEvent {

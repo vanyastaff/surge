@@ -233,16 +233,16 @@ impl FakeEngine {
 
 #[async_trait]
 impl EngineResolver for FakeEngine {
-    async fn resolve_human_input(
+    async fn resolve_card(
         &self,
-        run_id: &str,
-        call_id: Option<String>,
+        card: &Card,
         response: serde_json::Value,
     ) -> Result<(), TelegramCockpitError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((run_id.to_owned(), call_id, response));
+        self.calls.lock().unwrap().push((
+            card.run_id.clone(),
+            Some(card.card_id.clone()),
+            response,
+        ));
         Ok(())
     }
 }
@@ -336,7 +336,7 @@ async fn t26_cockpit_edit_callback_defers_until_forced_reply() {
     }
     assert!(
         ctx.engine.calls().is_empty(),
-        "engine.resolve_human_input MUST NOT fire from the edit callback",
+        "engine.resolve_card MUST NOT fire from the edit callback",
     );
 }
 

@@ -9,8 +9,8 @@
 // pre-existing per M2 precedent; not in scope for M3
 #![allow(clippy::excessive_nesting)]
 
-use agent_client_protocol::{
-    Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionModeId,
+use agent_client_protocol::schema::v1::{
+    ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionModeId,
     SetSessionModeRequest,
 };
 use rand::Rng;
@@ -66,7 +66,7 @@ enum PoolOp {
         tx: Reply<PromptResponse>,
     },
     Shutdown {
-        tx: oneshot::Sender<()>,
+        tx: Reply<()>,
     },
 }
 
@@ -270,13 +270,16 @@ impl AgentPool {
     }
 
     /// Gracefully shutdown all agents.
-    pub async fn shutdown(&self) {
+    ///
+    /// # Errors
+    /// Returns an error if the worker cannot confirm all agent cleanup.
+    pub async fn shutdown(&self) -> Result<(), SurgeError> {
         info!("Shutting down agent pool");
         let (tx, rx) = oneshot::channel();
-        if self.send(PoolOp::Shutdown { tx }).is_ok() {
-            let _ = rx.await;
-        }
+        self.send(PoolOp::Shutdown { tx })?;
+        Self::recv(rx).await?;
         info!("Agent pool shutdown complete");
+        Ok(())
     }
 
     /// Get a reference to the health tracker.
@@ -357,11 +360,10 @@ impl Drop for AgentPool {
     fn drop(&mut self) {
         debug!("AgentPool dropped");
         if let Some(worker) = self._worker.take() {
-            // Signal the worker to shut down, then block until it exits so that
-            // agent processes are reaped before the pool disappears.
-            let (tx, _) = tokio::sync::oneshot::channel::<()>();
+            // Nonblocking best effort. Explicit shutdown reports verified cleanup.
+            let (tx, _) = tokio::sync::oneshot::channel();
             let _ = self.op_tx.send(PoolOp::Shutdown { tx });
-            let _ = worker.join();
+            drop(worker);
         }
     }
 }
@@ -548,20 +550,28 @@ fn run_worker(
                 PoolOp::Shutdown { tx } => {
                     let grace = Duration::from_secs(state.borrow().resilience.shutdown_grace_secs);
                     let conns: Vec<_> = state.borrow_mut().connections.drain().collect();
+                    let mut cleanup_error = None;
                     for (name, mut conn) in conns {
                         debug!(agent = name.as_str(), "shutting down agent");
-                        // Untrack process before killing
-                        let _ = state.borrow().process_tracker.untrack(&name);
-                        conn.wait_or_kill(grace).await;
+                        match conn.wait_or_kill(grace).await {
+                            Ok(()) => {
+                                let _ = state.borrow().process_tracker.untrack(&name);
+                            },
+                            Err(error) => {
+                                cleanup_error.get_or_insert(error);
+                            },
+                        }
                     }
                     // Final cleanup of any remaining PID files
-                    state.borrow().process_tracker.cleanup_all();
+                    if cleanup_error.is_none() {
+                        state.borrow().process_tracker.cleanup_all();
+                    }
 
                     // Platform-specific process audit on Windows
                     #[cfg(windows)]
                     audit_orphaned_processes_windows();
 
-                    let _ = tx.send(());
+                    let _ = tx.send(cleanup_error.map_or(Ok(()), Err));
                     break;
                 },
 
@@ -1689,12 +1699,9 @@ mod tests {
         // call must return immediately without panicking.
     }
 
-    /// Dropping an AgentPool must join the worker thread, not detach it.
-    ///
-    /// If `Drop` hangs, the test runner will time out. If it panics, the test
-    /// fails. Either way we catch regressions in the shutdown path.
+    /// Drop only requests cleanup; callers use shutdown for confirmation.
     #[test]
-    fn test_pool_drop_joins_worker() {
+    fn test_pool_drop_requests_cleanup() {
         let mut configs = HashMap::new();
         configs.insert("test-agent".to_string(), test_agent_config());
 
@@ -1708,7 +1715,7 @@ mod tests {
         .unwrap();
 
         // No connections were established, so Shutdown drains nothing.
-        // The worker should exit and join almost immediately.
+        // Drop must return without waiting for the worker.
         drop(pool);
     }
 
@@ -2204,7 +2211,7 @@ mod tests {
             assert!(pid_dir.join("agent-2.pid").exists());
 
             // Shutdown the pool
-            pool.shutdown().await;
+            pool.shutdown().await.unwrap();
 
             // Verify PID files are cleaned up
             assert!(

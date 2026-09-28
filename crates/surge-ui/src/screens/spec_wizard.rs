@@ -1,419 +1,209 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
-use gpui_component::button::{Button, ButtonVariants};
+//! Prompt entry for a daemon-hosted planning run.
+use std::path::PathBuf;
+
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::{Disableable, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use surge_core::id::RunId;
 
 use crate::theme;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WizardStep {
-    Describe,
-    Analysis,
-    ReviewPlan,
-    Criteria,
-    Confirm,
-}
-
-impl WizardStep {
-    fn index(self) -> usize {
-        match self {
-            Self::Describe => 0,
-            Self::Analysis => 1,
-            Self::ReviewPlan => 2,
-            Self::Criteria => 3,
-            Self::Confirm => 4,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Describe => "Describe",
-            Self::Analysis => "AI Analysis",
-            Self::ReviewPlan => "Review Plan",
-            Self::Criteria => "Criteria",
-            Self::Confirm => "Confirm",
-        }
-    }
-
-    fn all() -> &'static [WizardStep] {
-        &[
-            Self::Describe,
-            Self::Analysis,
-            Self::ReviewPlan,
-            Self::Criteria,
-            Self::Confirm,
-        ]
-    }
-
-    fn next(self) -> Option<Self> {
-        Self::all().get(self.index() + 1).copied()
-    }
-    fn prev(self) -> Option<Self> {
-        if self.index() == 0 {
-            None
-        } else {
-            Self::all().get(self.index() - 1).copied()
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PlannedSubtask {
-    title: String,
-    agent: String,
-}
-
 #[derive(Clone, PartialEq)]
 pub enum SpecWizardEvent {
-    Create { title: String, description: String },
+    Create { run_id: RunId, description: String },
+    OpenRun(RunId),
     Cancel,
 }
 
 impl EventEmitter<SpecWizardEvent> for SpecWizardScreen {}
 
+#[derive(Debug, PartialEq)]
+enum SubmissionState {
+    Editing { error: Option<String> },
+    Submitting(RunId),
+    Accepted(RunId),
+}
+
 pub struct SpecWizardScreen {
-    step: WizardStep,
-    description: String,
-    title: String,
-    planned_subtasks: Vec<PlannedSubtask>,
-    criteria: Vec<String>,
+    pub project_path: PathBuf,
+    input: Option<Entity<TextareaState>>,
+    submission: SubmissionState,
 }
 
 impl SpecWizardScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(project_path: PathBuf, _cx: &mut Context<Self>) -> Self {
         Self {
-            step: WizardStep::Describe,
-            description: String::new(),
-            title: String::new(),
-            planned_subtasks: vec![
-                PlannedSubtask {
-                    title: "Parse requirements".into(),
-                    agent: "claude-acp".into(),
-                },
-                PlannedSubtask {
-                    title: "Create data models".into(),
-                    agent: "claude-acp".into(),
-                },
-                PlannedSubtask {
-                    title: "Implement core logic".into(),
-                    agent: "claude-acp".into(),
-                },
-                PlannedSubtask {
-                    title: "Write tests".into(),
-                    agent: "claude-acp".into(),
-                },
-            ],
-            criteria: vec![
-                "All endpoints return correct status codes".into(),
-                "Test coverage above 80%".into(),
-                "No clippy warnings".into(),
-            ],
+            project_path,
+            input: None,
+            submission: SubmissionState::Editing { error: None },
         }
     }
 
-    fn render_stepper(&self) -> Div {
-        let steps: Vec<Div> = WizardStep::all()
-            .iter()
-            .map(|&s| {
-                let is_current = s == self.step;
-                let is_done = s.index() < self.step.index();
-                let color = if is_current {
-                    theme::primary()
-                } else if is_done {
-                    theme::success()
-                } else {
-                    theme::text_muted().opacity(0.3)
-                };
-
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .w(px(24.0))
-                            .h(px(24.0))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(color.opacity(0.2))
-                            .text_color(color)
-                            .text_xs()
-                            .child(if is_done {
-                                "✓".to_string()
-                            } else {
-                                format!("{}", s.index() + 1)
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(color)
-                            .child(s.label().to_string()),
-                    )
-            })
-            .collect();
-
-        div().h_flex().gap_4().justify_center().children(steps)
+    pub fn prompt(&self, cx: &App) -> String {
+        self.input
+            .as_ref()
+            .map_or_else(String::new, |input| input.read(cx).value().to_string())
     }
 
-    fn render_step_content(&self) -> Div {
-        match self.step {
-            WizardStep::Describe => div()
-                .v_flex()
-                .gap_3()
-                .child(
-                    div()
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::text_primary())
-                        .child("What do you want to build?".to_string()),
-                )
-                .child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .bg(theme::background())
-                        .border_1()
-                        .border_color(theme::text_muted().opacity(0.2))
-                        .min_h(px(120.0))
-                        .text_sm()
-                        .text_color(if self.description.is_empty() {
-                            theme::text_muted()
-                        } else {
-                            theme::text_primary()
-                        })
-                        .child(if self.description.is_empty() {
-                            "Describe the feature, bugfix, or refactor...".to_string()
-                        } else {
-                            self.description.clone()
-                        }),
-                ),
-
-            WizardStep::Analysis => div()
-                .v_flex()
-                .gap_3()
-                .child(
-                    div()
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::text_primary())
-                        .child("AI Analysis".to_string()),
-                )
-                .child(
-                    div()
-                        .p_4()
-                        .rounded_md()
-                        .bg(theme::primary().opacity(0.05))
-                        .border_1()
-                        .border_color(theme::primary().opacity(0.2))
-                        .v_flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme::text_primary())
-                                .child("Analyzing your description...".to_string()),
-                        )
-                        .child(div().text_xs().text_color(theme::text_muted()).child(
-                            "The AI will break down your request into subtasks.".to_string(),
-                        )),
-                ),
-
-            WizardStep::ReviewPlan => {
-                let subtasks: Vec<Div> = self
-                    .planned_subtasks
-                    .iter()
-                    .enumerate()
-                    .map(|(i, st)| {
-                        div()
-                            .h_flex()
-                            .gap_3()
-                            .items_center()
-                            .py(px(6.0))
-                            .border_b_1()
-                            .border_color(theme::text_muted().opacity(0.05))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::text_muted())
-                                    .w(px(20.0))
-                                    .child(format!("{}", i + 1)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(theme::text_primary())
-                                    .child(st.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::primary())
-                                    .child(st.agent.clone()),
-                            )
-                    })
-                    .collect();
-
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child("Review Plan".to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_muted())
-                            .child("Drag to reorder. Edit subtasks as needed.".to_string()),
-                    )
-                    .child(div().v_flex().children(subtasks))
-            },
-
-            WizardStep::Criteria => {
-                let items: Vec<Div> = self
-                    .criteria
-                    .iter()
-                    .map(|c| {
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .items_center()
-                            .py(px(4.0))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::success())
-                                    .child("✓".to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::text_primary())
-                                    .child(c.clone()),
-                            )
-                    })
-                    .collect();
-
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child("Acceptance Criteria".to_string()),
-                    )
-                    .child(div().v_flex().gap_1().children(items))
-            },
-
-            WizardStep::Confirm => div()
-                .v_flex()
-                .gap_3()
-                .child(
-                    div()
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::text_primary())
-                        .child("Ready to create".to_string()),
-                )
-                .child(self.summary_row("Subtasks", &format!("{}", self.planned_subtasks.len())))
-                .child(self.summary_row("Criteria", &format!("{}", self.criteria.len())))
-                .child(self.summary_row("Agent", "claude-acp")),
+    pub fn error(&self) -> Option<&str> {
+        match &self.submission {
+            SubmissionState::Editing { error } => error.as_deref(),
+            _ => None,
         }
     }
 
-    fn summary_row(&self, label: &str, value: &str) -> Div {
-        div()
-            .h_flex()
-            .justify_between()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::text_muted())
-                    .child(label.to_string()),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text_primary())
-                    .child(value.to_string()),
-            )
+    pub fn is_submitting(&self, run_id: RunId) -> bool {
+        self.submission == SubmissionState::Submitting(run_id)
+    }
+
+    pub fn is_accepted(&self, run_id: RunId) -> bool {
+        self.submission == SubmissionState::Accepted(run_id)
+    }
+
+    /// A response belongs to precisely the attempt that emitted its run id.
+    pub fn finish_submission(
+        &mut self,
+        run_id: RunId,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_submitting(run_id) {
+            return false;
+        }
+        self.submission = match result {
+            Ok(()) => SubmissionState::Accepted(run_id),
+            Err(error) => SubmissionState::Editing { error: Some(error) },
+        };
+        cx.notify();
+        true
+    }
+
+    fn submit(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.submission, SubmissionState::Editing { .. }) {
+            return;
+        }
+        let description = self.prompt(cx);
+        if description.trim().is_empty() {
+            self.submission = SubmissionState::Editing {
+                error: Some("Describe the work before starting a planning run.".into()),
+            };
+            cx.notify();
+            return;
+        }
+        let run_id = RunId::new();
+        self.submission = SubmissionState::Submitting(run_id);
+        cx.emit(SpecWizardEvent::Create {
+            run_id,
+            description,
+        });
+        cx.notify();
     }
 }
 
 impl Render for SpecWizardScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_last = self.step == WizardStep::Confirm;
-        let has_prev = self.step.prev().is_some();
-
-        div().size_full().v_flex().p_6().gap_6().child(
-            div()
-                .v_flex()
-                .max_w(px(700.0))
-                .gap_6()
-                .p_6()
-                .bg(theme::surface())
-                .rounded_xl()
-                .border_1()
-                .border_color(theme::text_muted().opacity(0.15))
-                .child(self.render_stepper())
-                .child(div().min_h(px(200.0)).child(self.render_step_content()))
-                .child(
-                    div()
-                        .h_flex()
-                        .justify_between()
-                        .child(
-                            div()
-                                .h_flex()
-                                .gap_2()
-                                .child(Button::new("sw-cancel").ghost().label("Cancel").on_click(
-                                    cx.listener(|_this, _e, _w, cx| {
-                                        cx.emit(SpecWizardEvent::Cancel)
-                                    }),
-                                ))
-                                .when(has_prev, |el: Div| {
-                                    el.child(Button::new("sw-back").ghost().label("Back").on_click(
-                                        cx.listener(|this, _e, _w, cx| {
-                                            if let Some(prev) = this.step.prev() {
-                                                this.step = prev;
-                                                cx.notify();
-                                            }
-                                        }),
-                                    ))
-                                }),
-                        )
-                        .child(if is_last {
-                            Button::new("sw-create")
-                                .primary()
-                                .label("Create & Start")
-                                .on_click(cx.listener(|this, _e, _w, cx| {
-                                    cx.emit(SpecWizardEvent::Create {
-                                        title: this.title.clone(),
-                                        description: this.description.clone(),
-                                    });
-                                }))
-                        } else {
-                            Button::new("sw-next")
-                                .primary()
-                                .label("Next")
-                                .on_click(cx.listener(|this, _e, _w, cx| {
-                                    if let Some(next) = this.step.next() {
-                                        this.step = next;
-                                        cx.notify();
-                                    }
-                                }))
-                        }),
-                ),
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = self
+            .input
+            .get_or_insert_with(|| {
+                let input = cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .rows(7)
+                        .placeholder("Describe the feature, bugfix, or refactor…")
+                });
+                cx.subscribe(&input, |_: &mut Self, _, _: &InputEvent, cx| cx.notify())
+                    .detach();
+                input
+            })
+            .clone();
+        let editing = matches!(self.submission, SubmissionState::Editing { .. });
+        let pending = matches!(self.submission, SubmissionState::Submitting(_));
+        let accepted = match self.submission {
+            SubmissionState::Accepted(id) => Some(id),
+            _ => None,
+        };
+        div().size_full().v_flex().p_6().gap_4().child(
+            div().v_flex().max_w(px(700.0)).w_full().gap_4().p_6()
+                .bg(theme::surface()).rounded_xl()
+                .child(div().text_lg().text_color(theme::text_primary()).child("Plan a task"))
+                .child(div().text_sm().text_color(theme::text_muted())
+                    .child(format!("Project: {}", self.project_path.display())))
+                .child(div().text_sm().text_color(theme::text_muted()).child(
+                    "Send your request to the daemon to prepare a description, roadmap, and flow. Review its decisions in Inbox. This starts planning; it does not start the generated implementation."))
+                .child(div().id("planning-prompt-region").min_h(px(200.0)).flex_shrink_0().test_support().debug_selector(|| "planning-prompt".into())
+                    .child(Textarea::new(&input).h(px(200.0)).accessibility_id("planning-prompt").aria_label("Task description").disabled(!editing)))
+                .when_some(self.error().map(str::to_owned), |el, error| {
+                    el.child(div().id("planning-error").role(Role::Label).aria_label(error.clone()).test_support().debug_selector(|| "planning-error".into()).text_sm()
+                        .text_color(theme::error()).child(error))
+                })
+                .when(pending, |el| el.child(div().id("pending-status").role(Role::Label).aria_label("Submitting planning request…").child("Submitting planning request…")))
+                .when_some(accepted, |el, id| el.child(div().id("accepted-status").role(Role::Label).aria_label(format!("Planning request {id} accepted or queued by the daemon.")).text_sm()
+                    .child(format!("Planning request {id} accepted or queued by the daemon."))))
+                .child(div().h_flex().gap_3()
+                    .child(Button::new("planning-back").ghost().label("Back").accessibility_id("planning-back")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SpecWizardEvent::Cancel))))
+                    .child(if let Some(id) = accepted {
+                        Button::new("planning-open").primary().label("Open planning run").accessibility_id("planning-open")
+                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(SpecWizardEvent::OpenRun(id))))
+                    } else {
+                        Button::new("planning-start").primary().label("Start planning").accessibility_id("planning-start")
+                            .debug_selector(|| "planning-submit".into())
+                            .disabled(pending || self.prompt(cx).trim().is_empty())
+                            .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
+                    }))
         )
+    }
+}
+
+#[cfg(test)]
+mod accessibility_tests {
+    use super::{SpecWizardEvent, SpecWizardScreen};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions, px};
+    use std::{cell::Cell, path::PathBuf, rc::Rc};
+
+    #[gpui_kit::test]
+    fn enter_inserts_newline_and_pending_prompt_cannot_be_edited(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                cx.new(|cx| SpecWizardScreen::new(PathBuf::from("/tmp/textarea-test"), cx))
+            })
+            .unwrap()
+        });
+        let submissions = Rc::new(Cell::new(0));
+        let copy = submissions.clone();
+        cx.update(|cx| {
+            cx.subscribe(&view, move |_, event: &SpecWizardEvent, _| {
+                if matches!(event, SpecWizardEvent::Create { .. }) {
+                    copy.set(copy.get() + 1);
+                }
+            })
+            .detach();
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let input_id = ("input", view.read(cx).input.as_ref().unwrap().entity_id());
+            assert!(
+                window.find(input_id).bounds().size.height >= px(180.0),
+                "multiline input must visibly fit seven lines"
+            );
+            window.click("planning-prompt-region", cx);
+            window.input("  first", cx);
+            window.press("enter", cx);
+            window.input("second  ", cx);
+            assert_eq!(view.read(cx).prompt(cx), "  first\nsecond  ");
+        })
+        .unwrap();
+        cx.update(|_| assert_eq!(submissions.get(), 0));
+        cx.update_window(handle, |_, window, cx| {
+            window.click("planning-start", cx);
+            window.click("planning-prompt-region", cx);
+            window.input("unexpected edit", cx);
+            assert_eq!(view.read(cx).prompt(cx), "  first\nsecond  ");
+        })
+        .unwrap();
+        cx.update(|_| assert_eq!(submissions.get(), 1));
     }
 }

@@ -1,70 +1,16 @@
-//! Render-level smoke tests for every screen.
+//! Render-level smoke tests for every screen, with empty and populated state.
 //!
-//! `surge-ui` had zero tests that construct or render a `Screen` type —
-//! `cargo test -p surge-ui` compiled the crate but never proved a screen
-//! survives its own `render()`. A panic in any `Render::render` impl is a
-//! live crash for a user, and before this file nothing in the gate caught
-//! that.
-//!
-//! Each test opens a real `gpui` test window via
-//! [`gpui::TestAppContext::add_window_view`], constructing the screen the
-//! same way `main.rs` does (`gpui_component::init` + `crate::theme::init`
-//! before anything else). Opening the window forces one full
-//! layout/prepaint/paint pass synchronously — see `App::open_window`'s
-//! `window.draw(cx)` call, kept unconditional specifically so a window is
-//! never returned without having rendered at least once — so a
-//! construction panic *or* a render panic both fail the test.
-//!
-//! These are plain `#[test]` functions building `TestAppContext::single()`
-//! directly, not `#[gpui::test]`. Two things about this crate's build make
-//! that necessary, both isolated by bisection (identical content, only the
-//! named condition changed):
-//!
-//! 1. `#[gpui::test]` (`gpui_macros`, unlocked by the `test-support`
-//!    feature) reproducibly overflows rustc's stack while expanding, at
-//!    *any* `#![recursion_limit]` including 8192, only when compiled as
-//!    part of `surge-ui`'s full dependency graph — an otherwise-identical
-//!    `#[gpui::test]` compiles clean at the *default* limit (128) in a
-//!    throwaway crate depending on nothing but `gpui`. `TestAppContext::
-//!    single()` is the same public constructor `#[gpui::test]` calls
-//!    internally (`gpui::TestAppContext::build`/`single` in
-//!    `gpui-0.2.2/src/app/test_context.rs`), so this loses only the
-//!    macro's seeded-retry sugar (unused by a smoke test), not fidelity.
-//! 2. `use gpui::*;` in *this* module reproduces the same stack overflow —
-//!    isolated to a two-line repro (a bare `#[test] fn` calling only
-//!    `TestAppContext::single()`, no screen, no `AppState`): swapping the
-//!    glob for `use gpui::TestAppContext;` alone made it compile, and
-//!    swapping back reliably broke it again, in a freshly `--target-dir`'d
-//!    build (rules out target-directory/sccache staleness) and across
-//!    repeated runs (rules out scheduling flakiness). Every `screens/*.rs`
-//!    file keeps its own `use gpui::*;` without issue, so this is specific
-//!    to something about compiling that particular glob inside a new
-//!    module added to this specific crate graph — left as a build-tooling
-//!    finding, not chased further into `gpui_macros`/rustc internals.
-//!
-//! Screens driven by `AppState` are exercised against both the empty
-//! first-run state (`AppState::new()` — no project, no tasks, no specs, no
-//! runs, no worktrees) and a populated state, because several screens
-//! branch on `state.tasks.is_empty()` / `state.specs.is_empty()` /
-//! `state.worktrees.is_empty()` / `state.runs.is_empty()`, and the empty
-//! branch had never executed under a test before this file.
-//!
-//! `WelcomeScreen` is the one screen this file cannot put in both states:
-//! its recent-projects list comes from `RecentProjects::load()`, which
-//! reads `$SURGE_HOME/recent.toml` from the real environment. Forcing it
-//! via `std::env::set_var("SURGE_HOME", ..)` would be unsound in this
-//! binary — it links vendored C (`libgit2` via `surge-orchestrator`,
-//! bundled `sqlite3` via `surge-persistence`) whose `getenv` reads
-//! `environ` outside std's own lock, so mutating env from a test thread
-//! races with it (the same constraint `crate::project::tests` documents
-//! against `RecentProjects::file_path`). `WelcomeScreen` therefore gets one
-//! smoke test against whatever the ambient environment provides.
+//! These construct GPUI test windows and exercise real layout/paint and input.
+//! Imports stay explicit: a glob also imports GPUI's `test` attribute macro,
+//! shadowing Rust's built-in `#[test]` in this module.
+//! Welcome uses the ambient recent-project list; tests do not mutate process
+//! environment variables while native dependencies can concurrently read them.
 
 use std::path::PathBuf;
 
-// Targeted imports, not `use gpui::*;` — see the module doc above for why
+// Targeted imports, not `use gpui_kit::*;` — see the module doc above for why
 // the glob form is not safe to use in this file.
-use gpui::{AppContext as _, Context, Render, TestAppContext, Window};
+use gpui_kit::{AppContext as _, Context, Render, TestAppContext, Window};
 
 use crate::app_state::{AppState, TaskEntry, UiRun, WorktreeEntry};
 
@@ -84,13 +30,13 @@ use super::spec_wizard::SpecWizardScreen;
 use super::welcome::WelcomeScreen;
 use super::worktrees::WorktreesScreen;
 
-/// Mirrors `main.rs`'s startup sequence. `gpui_component::init` registers
+/// Mirrors `main.rs`'s startup sequence. `gpui_kit::component::init` registers
 /// the globals `Button`/`Input`/`Select`/... read; a screen using one of
 /// those widgets would panic on a bare `TestAppContext` that skipped this.
 fn init_components(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_component::init(cx);
-        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        gpui_kit::init(cx);
+        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
     });
     crate::theme::init();
 }
@@ -357,7 +303,9 @@ fn memory_screen_renders() {
 fn spec_wizard_screen_renders() {
     let mut cx = TestAppContext::single();
     init_components(&mut cx);
-    render_screen(&mut cx, |_, cx| SpecWizardScreen::new(cx));
+    render_screen(&mut cx, |_, cx| {
+        SpecWizardScreen::new(PathBuf::from("/tmp/planning-project"), cx)
+    });
 }
 
 #[test]
@@ -365,4 +313,67 @@ fn welcome_screen_renders() {
     let mut cx = TestAppContext::single();
     init_components(&mut cx);
     render_screen(&mut cx, |_, cx| WelcomeScreen::new(cx));
+}
+
+#[test]
+fn planning_wizard_submits_the_operators_exact_multiline_prompt() {
+    use super::spec_wizard::SpecWizardEvent;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let mut cx = TestAppContext::single();
+    init_components(&mut cx);
+    let view = cx.new(|cx| SpecWizardScreen::new(PathBuf::from("/tmp/planning-project"), cx));
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let output = captured.clone();
+    window.update(|_, cx| {
+        cx.subscribe(&view, move |_, event: &SpecWizardEvent, _| {
+            if let SpecWizardEvent::Create { description, .. } = event {
+                output.borrow_mut().push(description.clone());
+            }
+        })
+        .detach()
+    });
+    let input = window
+        .debug_bounds("planning-prompt")
+        .expect("visible prompt");
+    window.simulate_click(input.center(), gpui_kit::Modifiers::default());
+    let prompt = "  Build a timer\nwith keyboard controls.  ";
+    window.simulate_input(prompt);
+    let submit = window
+        .debug_bounds("planning-submit")
+        .expect("submit button");
+    window.simulate_click(submit.center(), gpui_kit::Modifiers::default());
+    // A second click while awaiting acknowledgment must not send another run.
+    window.simulate_click(submit.center(), gpui_kit::Modifiers::default());
+    assert_eq!(*captured.borrow(), vec![prompt.to_string()]);
+}
+
+#[test]
+fn planning_wizard_rejects_blank_input_without_submission() {
+    use super::spec_wizard::SpecWizardEvent;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let mut cx = TestAppContext::single();
+    init_components(&mut cx);
+    let view = cx.new(|cx| SpecWizardScreen::new(PathBuf::from("/tmp/planning-project"), cx));
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+    let count = Rc::new(Cell::new(0));
+    let captured = count.clone();
+    window.update(|_, cx| {
+        cx.subscribe(&view, move |_, event: &SpecWizardEvent, _| {
+            if matches!(event, SpecWizardEvent::Create { .. }) {
+                captured.set(captured.get() + 1);
+            }
+        })
+        .detach()
+    });
+    let input = window.debug_bounds("planning-prompt").unwrap();
+    window.simulate_click(input.center(), gpui_kit::Modifiers::default());
+    window.simulate_input("  \n  ");
+    let submit = window.debug_bounds("planning-submit").unwrap();
+    window.simulate_click(submit.center(), gpui_kit::Modifiers::default());
+    assert_eq!(count.get(), 0);
 }

@@ -12,6 +12,11 @@
 // Modules added incrementally in Phase 3+.
 pub mod admission;
 pub mod automation_merge_gate;
+mod bootstrap_cancel;
+mod bootstrap_continuation;
+pub mod bootstrap_recovery;
+pub mod bootstrap_runtime;
+pub mod bootstrap_supervisor;
 pub mod broadcast;
 pub mod error;
 pub mod inbox;
@@ -20,7 +25,10 @@ pub mod lifecycle;
 pub mod pidfile;
 pub mod recovery;
 pub mod server;
+pub mod tracked_run;
 pub mod wake_scheduler;
 
 pub use error::DaemonError;
-pub use server::{ServerConfig, run as run_server, run_with_registry};
+pub use server::{
+    ServerConfig, run_runs_only, run_synthetic as run_synthetic_server, run_with_supervisor,
+};

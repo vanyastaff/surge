@@ -1,183 +1,328 @@
-# Refactor archetype: capture behaviour first, then refactor, verify, and
-# require an explicit reviewer pass before terminal success. Encodes the
-# convention that refactors must establish a behavioural baseline before
-# touching production code.
-
+# refactor: explicit specification and profile-compatible input handoffs.
 schema_version = 1
-start = "behaviour_capture"
-
+start = "spec_1"
 [metadata]
-name = "flow_refactor"
+name = "refactor"
 created_at = "2026-05-06T00:00:00Z"
 
-# ── behaviour capture ──
-[nodes.behaviour_capture]
-id = "behaviour_capture"
-
-[nodes.behaviour_capture.position]
+[nodes.spec_1]
+id = "spec_1"
+[nodes.spec_1.position]
 x = 0.0
 y = 0.0
-
-[[nodes.behaviour_capture.declared_outcomes]]
-id = "captured"
-description = "Behaviour characterized via tests/snapshots"
+[[nodes.spec_1.declared_outcomes]]
+id = "drafted"
+description = "drafted"
 edge_kind_hint = "forward"
 is_terminal = false
+[[nodes.spec_1.declared_outcomes]]
+id = "needs_clarification"
+description = "needs clarification"
+edge_kind_hint = "escalate"
+is_terminal = false
+[nodes.spec_1.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[nodes.spec_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+[nodes.spec_1.config.prompt_overrides]
+append_system = "Define the requested work and concrete acceptance criteria. Keep this specification scoped to this run."
+[[nodes.spec_1.config.bindings]]
+target = "milestone"
+[nodes.spec_1.config.bindings.source]
+type = "initial_prompt"
 
+[nodes.behaviour_capture]
+id = "behaviour_capture"
+[nodes.behaviour_capture.position]
+x = 240.0
+y = 0.0
+[[nodes.behaviour_capture.declared_outcomes]]
+id = "ready_for_verification"
+description = "ready for verification"
+edge_kind_hint = "forward"
+is_terminal = false
+[[nodes.behaviour_capture.declared_outcomes]]
+id = "blocked"
+description = "blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[nodes.behaviour_capture.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
 [nodes.behaviour_capture.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "implementer@2.0"
 [nodes.behaviour_capture.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[nodes.behaviour_capture.config.prompt_overrides]
+append_system = "This stage captures existing behavior only. Add characterization tests and record observed baseline results in baseline.md before any production refactor. Include baseline.md in artifacts_produced. If the baseline cannot be established, report blocked."
+[[nodes.behaviour_capture.config.bindings]]
+target = "spec"
+[nodes.behaviour_capture.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
-[nodes.behaviour_capture.config.custom_fields]
-
-# ── implement ──
 [nodes.implement_1]
 id = "implement_1"
-
 [nodes.implement_1.position]
-x = 200.0
+x = 480.0
 y = 0.0
-
 [[nodes.implement_1.declared_outcomes]]
-id = "refactored"
-description = "Refactor applied"
+id = "ready_for_verification"
+description = "ready for verification"
 edge_kind_hint = "forward"
 is_terminal = false
-
+[[nodes.implement_1.declared_outcomes]]
+id = "blocked"
+description = "blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[nodes.implement_1.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
 [nodes.implement_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "implementer@2.0"
 [nodes.implement_1.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[nodes.implement_1.config.prompt_overrides]
+append_system = "Preserve the behavior captured in {{baseline}} while applying the spec. Write changes.patch containing the actual production and test changes for review (include newly created files, not only tracked git diff). Include changes.patch in artifacts_produced."
+[[nodes.implement_1.config.bindings]]
+target = "spec"
+[nodes.implement_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
+[[nodes.implement_1.config.bindings]]
+target = "baseline"
+[nodes.implement_1.config.bindings.source]
+type = "node_output"
+node = "behaviour_capture"
+artifact = "baseline"
 
-[nodes.implement_1.config.custom_fields]
-
-# ── verify ──
 [nodes.verify_1]
 id = "verify_1"
-
 [nodes.verify_1.position]
-x = 400.0
+x = 720.0
 y = 0.0
-
 [[nodes.verify_1.declared_outcomes]]
-id = "pass"
-description = "Behaviour preserved"
+id = "passed"
+description = "passed"
 edge_kind_hint = "forward"
 is_terminal = false
-
+ledger_effect = "verified"
+[[nodes.verify_1.declared_outcomes]]
+id = "failed"
+description = "failed"
+edge_kind_hint = "backtrack"
+is_terminal = false
+ledger_effect = "failed_verification"
 [nodes.verify_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "verifier@2.0"
 [nodes.verify_1.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[[nodes.verify_1.config.bindings]]
+target = "spec"
+[nodes.verify_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
-[nodes.verify_1.config.custom_fields]
-
-# ── reviewer ──
 [nodes.reviewer]
 id = "reviewer"
-
 [nodes.reviewer.position]
-x = 600.0
+x = 960.0
 y = 0.0
-
 [[nodes.reviewer.declared_outcomes]]
 id = "approved"
-description = "Reviewer approved the refactor"
+description = "approved"
 edge_kind_hint = "forward"
 is_terminal = false
-
+[[nodes.reviewer.declared_outcomes]]
+id = "changes_requested"
+description = "changes requested"
+edge_kind_hint = "backtrack"
+is_terminal = false
 [nodes.reviewer.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "reviewer@1.0"
 [nodes.reviewer.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[nodes.reviewer.config.prompt_overrides]
+append_system = "Review the implementation and characterization tests against the specification and baseline. Do not approve missing or incomplete change evidence."
+[[nodes.reviewer.config.bindings]]
+target = "spec"
+[nodes.reviewer.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
+[[nodes.reviewer.config.bindings]]
+target = "diff"
+[nodes.reviewer.config.bindings.source]
+type = "node_output"
+node = "implement_1"
+artifact = "changes"
 
-[nodes.reviewer.config.custom_fields]
-
-# ── terminal ──
 [nodes.end]
 id = "end"
 declared_outcomes = []
-
 [nodes.end.position]
-x = 800.0
+x = 1200.0
 y = 0.0
-
 [nodes.end.config]
 node_kind = "terminal"
-
 [nodes.end.config.kind]
 type = "success"
 
-# ── edges ──
+[nodes.failure]
+id = "failure"
+declared_outcomes = []
+[nodes.failure.position]
+x = 1200.0
+y = 180.0
+[nodes.failure.config]
+node_kind = "terminal"
+[nodes.failure.config.kind]
+type = "failure"
+exit_code = 1
+
 [[edges]]
-id = "e_capture_to_impl"
+id = "e_0"
+to = "behaviour_capture"
+kind = "forward"
+[edges.from]
+node = "spec_1"
+outcome = "drafted"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_1"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "spec_1"
+outcome = "needs_clarification"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_2"
 to = "implement_1"
 kind = "forward"
-
 [edges.from]
 node = "behaviour_capture"
-outcome = "captured"
-
+outcome = "ready_for_verification"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_impl_to_verify"
+id = "e_3"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "behaviour_capture"
+outcome = "blocked"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_4"
+to = "behaviour_capture"
+kind = "backtrack"
+[edges.from]
+node = "behaviour_capture"
+outcome = "partial"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[edges]]
+id = "e_5"
 to = "verify_1"
 kind = "forward"
-
 [edges.from]
 node = "implement_1"
-outcome = "refactored"
-
+outcome = "ready_for_verification"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_verify_to_review"
+id = "e_6"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "implement_1"
+outcome = "blocked"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_7"
+to = "implement_1"
+kind = "backtrack"
+[edges.from]
+node = "implement_1"
+outcome = "partial"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[edges]]
+id = "e_8"
 to = "reviewer"
 kind = "forward"
-
 [edges.from]
 node = "verify_1"
-outcome = "pass"
-
+outcome = "passed"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_review_to_end"
+id = "e_9"
+to = "implement_1"
+kind = "backtrack"
+[edges.from]
+node = "verify_1"
+outcome = "failed"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[edges]]
+id = "e_10"
 to = "end"
 kind = "forward"
-
 [edges.from]
 node = "reviewer"
 outcome = "approved"
-
 [edges.policy]
 on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_11"
+to = "implement_1"
+kind = "backtrack"
+[edges.from]
+node = "reviewer"
+outcome = "changes_requested"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3

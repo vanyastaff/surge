@@ -27,11 +27,16 @@
 //! - `MOCK_ACP_HANDSHAKE_FAIL=1`    — exit(1) before creating the ACP connection
 //! - `MOCK_ACP_LOG=stderr`          — write verbose diagnostics to stderr
 
+#[path = "mock_acp_agent/sdk_v1.rs"]
+mod sdk_v1;
+#[path = "mock_acp_agent/stage_mcp.rs"]
+mod stage_mcp;
+
 use std::cell::Cell;
 use std::env;
 use std::time::Duration;
 
-use agent_client_protocol::{self as acp, Client as _};
+use agent_client_protocol::schema::v1 as acp;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
@@ -136,6 +141,10 @@ fn provider_error_for_key(key: &str) -> acp::Error {
 /// One notification to send to the client, plus a one-shot ack channel so the
 /// sender can wait until the send is flushed before continuing.
 type NotifItem = (acp::SessionNotification, oneshot::Sender<()>);
+type PermissionItem = (
+    acp::RequestPermissionRequest,
+    oneshot::Sender<acp::Result<acp::RequestPermissionResponse>>,
+);
 
 // ── MockAgent ───────────────────────────────────────────────────────────────
 
@@ -145,8 +154,11 @@ struct MockAgent {
     verbose: bool,
     /// Counts how many `prompt` calls have been received (for `crash_after=N`).
     prompt_count: Cell<u32>,
+    cancel_prompt: tokio_util::sync::CancellationToken,
+    stage_peer: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<stage_mcp::Peer>>>>,
     /// Channel to push `SessionNotification`s to the background sender task.
     notif_tx: mpsc::UnboundedSender<NotifItem>,
+    permission_tx: mpsc::UnboundedSender<PermissionItem>,
 }
 
 impl MockAgent {
@@ -155,13 +167,17 @@ impl MockAgent {
         usage_on: bool,
         verbose: bool,
         notif_tx: mpsc::UnboundedSender<NotifItem>,
+        permission_tx: mpsc::UnboundedSender<PermissionItem>,
     ) -> Self {
         Self {
             scenario,
             usage_on,
             verbose,
             prompt_count: Cell::new(0),
+            cancel_prompt: tokio_util::sync::CancellationToken::new(),
+            stage_peer: Default::default(),
             notif_tx,
+            permission_tx,
         }
     }
 
@@ -178,6 +194,27 @@ impl MockAgent {
         ack_rx.await.map_err(|_| acp::Error::internal_error())
     }
 
+    async fn report(&self, session: acp::SessionId, outcome: &str) -> acp::Result<()> {
+        let arguments = json!({"call_id":"report-1","outcome":outcome,"summary":"controlled stage report","artifacts_produced":[]});
+        let peer = self.stage_peer.borrow().clone();
+        if let Some(peer) = peer {
+            let reply = peer.call("report_stage_outcome", arguments).await?;
+            if reply.get("isError") == Some(&serde_json::Value::Bool(true)) {
+                return Err(acp::Error::new(-32000, "stage candidate rejected"));
+            }
+            return Ok(());
+        }
+        self.send_notification(acp::SessionNotification::new(
+            session,
+            acp::SessionUpdate::ToolCall(
+                acp::ToolCall::new("call-report", "report_stage_outcome")
+                    .status(acp::ToolCallStatus::Completed)
+                    .raw_input(arguments),
+            ),
+        ))
+        .await
+    }
+
     fn log(&self, msg: &str) {
         if self.verbose {
             eprintln!("[mock_acp_agent] {msg}");
@@ -185,15 +222,26 @@ impl MockAgent {
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl acp::Agent for MockAgent {
+impl MockAgent {
     async fn initialize(
         &self,
         req: acp::InitializeRequest,
     ) -> Result<acp::InitializeResponse, acp::Error> {
         self.log(&format!("initialize: {req:?}"));
-        Ok(acp::InitializeResponse::new(acp::ProtocolVersion::V1)
-            .agent_info(acp::Implementation::new("mock-acp-agent", "0.0.1")))
+        let args: Vec<_> = env::args().collect();
+        if let Some(index) = args.iter().position(|arg| arg == "--capabilities-file") {
+            let path = args.get(index + 1).ok_or_else(acp::Error::internal_error)?;
+            let bytes = serde_json::to_vec(&req.client_capabilities)
+                .map_err(|_| acp::Error::internal_error())?;
+            std::fs::write(path, bytes).map_err(|_| acp::Error::internal_error())?;
+        }
+        if env::args().any(|arg| arg == "--stall-initialize") {
+            std::future::pending::<()>().await;
+        }
+        Ok(
+            acp::InitializeResponse::new(agent_client_protocol::schema::ProtocolVersion::V1)
+                .agent_info(acp::Implementation::new("mock-acp-agent", "0.0.1")),
+        )
     }
 
     async fn authenticate(
@@ -209,18 +257,113 @@ impl acp::Agent for MockAgent {
         req: acp::NewSessionRequest,
     ) -> Result<acp::NewSessionResponse, acp::Error> {
         self.log(&format!("new_session: {req:?}"));
+        if env::args().any(|arg| arg == "--stage-mcp") || req.mcp_servers.iter().any(|server| matches!(server, acp::McpServer::Stdio(server) if server.name == "surge-stage")) {
+            let peer = stage_mcp::Peer::connect(&req).await?;
+            if !peer
+                .catalog
+                .get("tools")
+                .is_some_and(serde_json::Value::is_array)
+            {
+                return Err(acp::Error::new(-32000, "invalid MCP tools/list response"));
+            }
+            *self.stage_peer.borrow_mut() = Some(peer);
+        }
+        if env::args().any(|arg| arg == "--stall-new-session") {
+            std::future::pending::<()>().await;
+        }
         Ok(acp::NewSessionResponse::new(acp::SessionId::new(
             "mock-session-1",
         )))
     }
 
     async fn prompt(&self, req: acp::PromptRequest) -> Result<acp::PromptResponse, acp::Error> {
+        record_marker("--prompt-file")?;
         let count = self.prompt_count.get() + 1;
         self.prompt_count.set(count);
         self.log(&format!("prompt #{count}: session={:?}", req.session_id));
 
+        if env::args().any(|arg| arg == "--stage-mcp") {
+            let peer = self
+                .stage_peer
+                .borrow()
+                .clone()
+                .ok_or_else(acp::Error::internal_error)?;
+            let case = env::args()
+                .find_map(|arg| arg.strip_prefix("--stage-mcp-case=").map(str::to_owned))
+                .unwrap_or_else(|| "valid".into());
+            if matches!(case.as_str(), "retry" | "retry-exhaust") && count > 1 {
+                let prompt =
+                    serde_json::to_string(&req.prompt).map_err(|_| acp::Error::internal_error())?;
+                if !prompt.contains("rejected by validation") {
+                    return Err(acp::Error::new(-32000, "missing rejection feedback"));
+                }
+                if case == "retry" {
+                    tokio::fs::write("repair-ready", "corrected")
+                        .await
+                        .map_err(|_| acp::Error::internal_error())?;
+                }
+            }
+            // `silent-first` / `silent-always`: end turns without calling
+            // report_stage_outcome, as real agents do after finishing work.
+            let silent = case == "silent-always" || (case == "silent-first" && count == 1);
+            if silent {
+                return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
+            }
+            if case == "silent-first" {
+                let prompt =
+                    serde_json::to_string(&req.prompt).map_err(|_| acp::Error::internal_error())?;
+                if !prompt.contains("without an accepted report_stage_outcome call") {
+                    return Err(acp::Error::new(-32000, "missing outcome reminder"));
+                }
+            }
+            peer.exercise(&case, count).await?;
+            return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
+        }
         let sid = req.session_id.clone();
+        if env::args().any(|arg| arg == "--permission-flood") {
+            return self.permission_flood(sid).await;
+        }
+        if env::args().any(|arg| arg == "--permission") {
+            let request = acp::RequestPermissionRequest::new(
+                sid.clone(),
+                acp::ToolCallUpdate::new(
+                    acp::ToolCallId::new("permission-call"),
+                    acp::ToolCallUpdateFields::new().title(permission_title()),
+                ),
+                vec![acp::PermissionOption::new(
+                    "allow",
+                    "Allow",
+                    acp::PermissionOptionKind::AllowOnce,
+                )],
+            );
+            let (tx, rx) = oneshot::channel();
+            self.permission_tx
+                .send((request, tx))
+                .map_err(|_| acp::Error::internal_error())?;
+            let response = rx.await.map_err(|_| acp::Error::internal_error())??;
+            if !matches!(response.outcome, acp::RequestPermissionOutcome::Selected(_)) {
+                return Err(acp::Error::internal_error());
+            }
+        }
+        if env::args().any(|arg| arg == "--stall-prompt") {
+            self.cancel_prompt.cancelled().await;
+            return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
+        }
+        if env::args().any(|arg| arg == "--exit-during-prompt") {
+            std::process::exit(17);
+        }
 
+        if env::args().any(|arg| arg == "--stream-forever") {
+            loop {
+                self.send_notification(acp::SessionNotification::new(
+                    req.session_id.clone(),
+                    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                        acp::ContentBlock::from("still working"),
+                    )),
+                ))
+                .await?;
+            }
+        }
         match &self.scenario {
             // ── prompt_error=KEY ─────────────────────────────────────────────
             Scenario::PromptError(key) => {
@@ -257,32 +400,10 @@ impl acp::Agent for MockAgent {
 
             // ── report_done ─────────────────────────────────────────────────
             Scenario::ReportDone => {
-                let tool_call = acp::ToolCall::new("call-report-done", "report_stage_outcome")
-                    .status(acp::ToolCallStatus::Completed)
-                    .raw_input(json!({
-                        "outcome": "done",
-                        "summary": "mock report_done"
-                    }));
-                self.send_notification(acp::SessionNotification::new(
-                    sid,
-                    acp::SessionUpdate::ToolCall(tool_call),
-                ))
-                .await?;
+                self.report(sid, "done").await?;
             },
-
-            // ── report_outcome=K ─────────────────────────────────────────────
             Scenario::ReportOutcome(outcome) => {
-                let tool_call = acp::ToolCall::new("call-report-outcome", "report_stage_outcome")
-                    .status(acp::ToolCallStatus::Completed)
-                    .raw_input(json!({
-                        "outcome": outcome,
-                        "summary": format!("mock report_outcome={}", outcome)
-                    }));
-                self.send_notification(acp::SessionNotification::new(
-                    sid,
-                    acp::SessionUpdate::ToolCall(tool_call),
-                ))
-                .await?;
+                self.report(sid, outcome).await?;
             },
 
             // ── crash_after=N ────────────────────────────────────────────────
@@ -367,10 +488,16 @@ impl acp::Agent for MockAgent {
             .await?;
         }
 
+        if env::args().any(|arg| arg == "--error-after-outcome") {
+            // Leave a clear notification-before-error interval for lifecycle tests.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            return Err(acp::Error::internal_error()
+                .data(json!({ "scripted": "error after reported outcome" })));
+        }
         let mut resp = acp::PromptResponse::new(acp::StopReason::EndTurn);
 
         if self.usage_on {
-            // `unstable_session_usage` feature is enabled in the workspace.
+            // `unstable_end_turn_token_usage` feature is enabled in the workspace.
             resp = resp.usage(acp::Usage::new(100, 80, 20));
         }
 
@@ -378,9 +505,22 @@ impl acp::Agent for MockAgent {
     }
 
     async fn cancel(&self, _req: acp::CancelNotification) -> Result<(), acp::Error> {
+        record_marker("--cancel-file")?;
         self.log("cancel");
+        if !env::args().any(|arg| arg == "--ignore-cancel") {
+            self.cancel_prompt.cancel();
+        }
         Ok(())
     }
+}
+
+fn record_marker(flag: &str) -> acp::Result<()> {
+    let args: Vec<_> = env::args().collect();
+    if let Some(index) = args.iter().position(|arg| arg == flag) {
+        let path = args.get(index + 1).ok_or_else(acp::Error::internal_error)?;
+        std::fs::write(path, b"observed").map_err(|_| acp::Error::internal_error())?;
+    }
+    Ok(())
 }
 
 // ── run_agent ────────────────────────────────────────────────────────────────
@@ -393,29 +533,19 @@ async fn run_agent(
     let outgoing = tokio::io::stdout().compat_write();
     let incoming = tokio::io::stdin().compat();
 
-    let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<NotifItem>();
+    let (notif_tx, notif_rx) = mpsc::unbounded_channel::<NotifItem>();
 
     let is_frozen = matches!(scenario, Scenario::Frozen);
-    let agent = MockAgent::new(scenario, usage_on, verbose, notif_tx);
+    let (permission_tx, permission_rx) = mpsc::unbounded_channel::<PermissionItem>();
+    let agent = MockAgent::new(scenario, usage_on, verbose, notif_tx, permission_tx);
 
-    let (conn, handle_io) = acp::AgentSideConnection::new(agent, outgoing, incoming, |fut| {
-        tokio::task::spawn_local(fut);
-    });
-
-    // Background task: drain the notification channel and forward each
-    // `SessionNotification` to the client via `conn.session_notification()`.
-    tokio::task::spawn_local(async move {
-        while let Some((notif, ack)) = notif_rx.recv().await {
-            if let Err(e) = conn.session_notification(notif).await {
-                eprintln!("[mock_acp_agent] session_notification error: {e}");
-                break;
-            }
-            // Signal the agent's send_notification helper that the send is flushed.
-            let _ = ack.send(());
-        }
-    });
-
-    handle_io.await?;
+    let stage_peer = agent.stage_peer.clone();
+    let result = sdk_v1::run(agent, outgoing, incoming, notif_rx, permission_rx).await;
+    let peer = stage_peer.borrow_mut().take();
+    if let Some(peer) = peer {
+        peer.close().await?;
+    }
+    result?;
 
     // ── frozen scenario: never exit ─────────────────────────────────────
     // After `handle_io` returns (because the bridge dropped the connection and
@@ -438,6 +568,15 @@ async fn run_agent(
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
+    if let Some(index) = args.iter().position(|arg| arg == "--pid-file")
+        && let Some(path) = args.get(index + 1)
+    {
+        std::fs::write(path, std::process::id().to_string())?;
+    }
+    if args.iter().any(|arg| arg == "--noisy-startup") {
+        use std::io::Write;
+        std::io::stderr().write_all(&vec![b'x'; 1024 * 1024])?;
+    }
 
     // ── MOCK_ACP_HANDSHAKE_FAIL / --handshake-fail ──────────────────────
     // CLI flag takes precedence so tests don't need to mutate process-global env.
@@ -466,4 +605,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     Ok(())
+}
+
+fn permission_title() -> String {
+    if env::args().any(|arg| arg == "--permission-title-secret") {
+        env::var("SURGE_STAGE_MCP_AUTH").unwrap_or_else(|_| "missing fixture credential".into())
+    } else {
+        "write_file".into()
+    }
+}
+
+impl MockAgent {
+    async fn permission_flood(&self, session: acp::SessionId) -> acp::Result<acp::PromptResponse> {
+        use futures::{StreamExt, stream::FuturesUnordered};
+        let mut replies = FuturesUnordered::new();
+        for index in 0..40 {
+            let request = acp::RequestPermissionRequest::new(
+                session.clone(),
+                acp::ToolCallUpdate::new(
+                    acp::ToolCallId::new(format!("permission-{index}")),
+                    acp::ToolCallUpdateFields::new().title("write_file"),
+                ),
+                vec![acp::PermissionOption::new(
+                    "allow",
+                    "Allow",
+                    acp::PermissionOptionKind::AllowOnce,
+                )],
+            );
+            let (reply, received) = oneshot::channel();
+            self.permission_tx
+                .send((request, reply))
+                .map_err(|_| acp::Error::internal_error())?;
+            replies.push(received);
+        }
+        while let Some(reply) = replies.next().await {
+            if reply.map_err(|_| acp::Error::internal_error())?.is_err() {
+                record_marker("--overload-file")?;
+                self.cancel_prompt.cancelled().await;
+                return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
+            }
+        }
+        Err(acp::Error::new(
+            -32000,
+            "fixture expected callback overload rejection",
+        ))
+    }
 }

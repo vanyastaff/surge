@@ -85,6 +85,8 @@ use crate::recovery::fail_run_in_log_and_registry;
 /// [`crate::recovery`]/[`crate::admission`] (not folded into
 /// `inbox::snooze_scheduler`) and why the clock is injected.
 pub struct WakeScheduler {
+    /// Persisted event source shared with the IPC server.
+    pub tracking: crate::tracked_run::TrackingContext,
     /// Run registry + per-run event logs.
     pub storage: Arc<Storage>,
     /// Engine facade used to resume due runs — the daemon's in-process
@@ -149,7 +151,17 @@ impl WakeScheduler {
                 return;
             },
         };
+        let owned = match self.storage.bootstrap_operation_store().reserved_run_ids() {
+            Ok(owned) => owned,
+            Err(error) => {
+                warn!(%error, "bootstrap ownership unavailable; skipping legacy wake tick");
+                return;
+            },
+        };
         for run in due {
+            if owned.contains(&run.id) {
+                continue;
+            }
             self.wake_one(run.id, now_ms).await;
         }
     }
@@ -214,6 +226,7 @@ impl WakeScheduler {
             run_id,
             worktree_path,
             self.facade.as_ref(),
+            &self.tracking,
             &self.admission,
             &self.broadcast,
         )
@@ -413,6 +426,7 @@ mod tests {
         clock: Arc<MockClock>,
     ) -> WakeScheduler {
         WakeScheduler {
+            tracking: crate::tracked_run::TrackingContext::synthetic(),
             storage,
             facade,
             admission: Arc::new(AdmissionController::new(8, 16)),

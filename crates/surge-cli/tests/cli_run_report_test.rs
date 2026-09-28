@@ -108,6 +108,7 @@ async fn seed_rich_completed_run(home: &Path) -> RunId {
                 artifact: ContentHash::compute(b"diff-content"),
                 path: "artifacts/diff.patch".into(),
                 name: "diff.patch".into(),
+                source_path: None,
             }),
             VersionedEventPayload::new(EventPayload::TokensConsumed {
                 session: surge_core::id::SessionId::new(),

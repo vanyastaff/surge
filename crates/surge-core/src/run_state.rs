@@ -24,7 +24,7 @@ use std::sync::Arc;
 pub struct PendingHumanInput {
     /// The graph node that issued the request.
     pub node: NodeKey,
-    /// Tool-call identifier supplied by the agent; `None` for HumanGate-driven pauses.
+    /// Scoped tool-call key or namespaced GateRequestId; None only in legacy unbound logs.
     pub call_id: Option<String>,
     /// The prompt shown to the human operator.
     pub prompt: String,
@@ -504,6 +504,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 artifact,
                 path,
                 name,
+                ..
             },
         ) => {
             if let RunState::Pipeline {
@@ -691,50 +692,35 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
-        (state @ RunState::Pipeline { .. }, EventPayload::HumanInputResolved { .. }) => {
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::HumanInputResolved { node, call_id, .. }
+            | EventPayload::HumanInputTimedOut { node, call_id, .. },
+        ) => {
             if let RunState::Pipeline {
                 graph,
                 cursor,
                 memory,
                 parked,
-                ..
+                pending_human_input,
             } = state
             {
+                // Latest-pending projection: another request's completion cannot clear it.
+                // Legacy None only matches legacy None; MCP keys include session/generation.
+                let pending_human_input = pending_human_input
+                    .filter(|pending| pending.node != *node || pending.call_id != *call_id);
                 Ok(RunState::Pipeline {
                     graph,
                     cursor,
                     memory,
-                    pending_human_input: None,
                     parked,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
             }
         },
-        (state @ RunState::Pipeline { .. }, EventPayload::HumanInputTimedOut { .. }) => {
-            // Timeout clears the pending field; engine writes a follow-up
-            // StageFailed/RunFailed if appropriate. Fold itself stays in
-            // Pipeline; the terminal transition is driven by the
-            // separately-emitted RunFailed event.
-            if let RunState::Pipeline {
-                graph,
-                cursor,
-                memory,
-                parked,
-                ..
-            } = state
-            {
-                Ok(RunState::Pipeline {
-                    graph,
-                    cursor,
-                    memory,
-                    pending_human_input: None,
-                    parked,
-                })
-            } else {
-                unreachable!()
-            }
-        },
+
         (
             state @ RunState::Pipeline { .. },
             EventPayload::TaskStatusChanged {
@@ -994,6 +980,7 @@ impl RunMemory {
                 artifact,
                 path,
                 name,
+                ..
             } => {
                 let aref = ArtifactRef {
                     hash: *artifact,
@@ -2645,5 +2632,50 @@ mod tests {
             Attention::Working,
             "a woken run must go back to Working, not stay Waiting"
         );
+    }
+    #[test]
+    fn stale_resolution_or_timeout_cannot_clear_newer_pending_input() {
+        let node = NodeKey::try_from("verify_1").unwrap();
+        let current_id = Some(crate::id::GateRequestId::new().to_string());
+        let resolved = |call_id, timeout| {
+            if timeout {
+                EventPayload::HumanInputTimedOut {
+                    node: node.clone(),
+                    call_id,
+                    elapsed_seconds: 1,
+                }
+            } else {
+                EventPayload::HumanInputResolved {
+                    node: node.clone(),
+                    call_id,
+                    response: serde_json::json!({"outcome":"approve"}),
+                }
+            }
+        };
+        for stale_id in [None, Some(crate::id::GateRequestId::new().to_string())] {
+            for timeout in [false, true] {
+                let mut events = ledger_run_prefix();
+                for (seq, call_id) in [(3, stale_id.clone()), (4, current_id.clone())] {
+                    events.push(make_event(
+                        seq,
+                        EventPayload::HumanInputRequested {
+                            node: node.clone(),
+                            session: None,
+                            call_id,
+                            prompt: "current request".into(),
+                            schema: None,
+                        },
+                    ));
+                }
+                events.push(make_event(5, resolved(stale_id.clone(), timeout)));
+                assert_eq!(
+                    fold(&events).unwrap().pending_prompt(),
+                    Some("current request"),
+                    "stale timeout={timeout} cleared newer input"
+                );
+                events.push(make_event(6, resolved(current_id.clone(), timeout)));
+                assert_eq!(fold(&events).unwrap().pending_prompt(), None);
+            }
+        }
     }
 }

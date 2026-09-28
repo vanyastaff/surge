@@ -388,6 +388,23 @@ async fn configured_blind_backoff_reaches_the_park_decision_not_the_hardcoded_de
 /// unmistakable failure, not a silent false pass).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rate_limited_agent_parks_instead_of_dispatching_a_second_node_on_the_same_runtime() {
+    assert_rate_limited_agent_parks(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rate_limited_agent_parks_after_confirmed_forced_cleanup() {
+    assert_rate_limited_agent_parks(Some(
+        surge_acp::bridge::error::CloseSessionError::GracefulTimedOut {
+            session: SessionId::new(),
+            killed: true,
+        },
+    ))
+    .await;
+}
+
+async fn assert_rate_limited_agent_parks(
+    close_error: Option<surge_acp::bridge::error::CloseSessionError>,
+) {
     let profiles_dir = tempfile::tempdir().unwrap();
     drop_profile(profiles_dir.path(), "alias-claude", "claude", &["continue"]);
     drop_profile(
@@ -414,6 +431,7 @@ async fn rate_limited_agent_parks_instead_of_dispatching_a_second_node_on_the_sa
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
     // First call (agent_1): the rate limit this test is actually about.
+    *mock.next_close_error.lock().await = close_error;
     mock.fail_next_send_message(SendMessageError::RateLimited {
         retry_after: None,
         details: "usage limit reached".into(),
@@ -557,6 +575,16 @@ async fn rate_limited_agent_parks_instead_of_dispatching_a_second_node_on_the_sa
         );
     }
     assert!(saw_run_parked, "expected a RunParked event in the log");
+    assert!(
+        events.iter().any(|event| matches!(
+            event.payload.payload,
+            EventPayload::SessionClosed {
+                disposition: surge_core::run_event::SessionDisposition::ForcedClose,
+                ..
+            }
+        )),
+        "the parked run must retain confirmed session cleanup evidence"
+    );
 }
 
 /// Task 12 M3 review, BLOCKING #4 (honesty gap #1): the literal R37
@@ -897,8 +925,9 @@ async fn resuming_a_parked_run_makes_one_real_attempt_and_clears_the_stale_row()
     let after_resume = storage.get_run(&run_id).await.unwrap().unwrap();
     assert_eq!(
         after_resume.status,
-        RunStatus::Running,
-        "resume_run must transition the registry out of Parked"
+        RunStatus::Completed,
+        "resume_run must transition the registry out of Parked, and the engine records the \
+         resumed run's terminal status when it completes"
     );
     assert_eq!(
         after_resume.wake_at_ms, None,

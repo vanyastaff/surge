@@ -53,7 +53,10 @@ impl BootstrapHarness {
             bridge,
             storage.clone(),
             dispatcher,
-            EngineConfig::default(),
+            EngineConfig {
+                profile_registry: Some(Arc::new(bootstrap_registry(memory_dir.path()))),
+                ..EngineConfig::default()
+            },
         ));
         let sessions = (0..session_count)
             .map(|_| SessionId::new())
@@ -152,20 +155,43 @@ impl BootstrapHarness {
         // contention, which surfaced as a low-frequency flake
         // ("timed out waiting for pending bootstrap HumanGate").
         for _ in 0..500 {
-            let result = self
-                .engine
-                .resolve_human_input(
-                    self.run_id,
-                    None,
-                    serde_json::json!({ "outcome": outcome, "comment": comment }),
-                )
-                .await;
-            if result.is_ok() {
-                return;
+            let events = self.read_events().await;
+            let request = events
+                .iter()
+                .rev()
+                .find_map(|event| match event.payload.payload() {
+                    EventPayload::HumanInputRequested {
+                        node,
+                        call_id,
+                        session: None,
+                        ..
+                    } => Some((node.clone(), call_id.clone())),
+                    _ => None,
+                });
+            if let Some((node, call_id)) = request {
+                let result = self
+                    .engine
+                    .resolve_requested_input(
+                        self.run_id,
+                        node,
+                        call_id,
+                        serde_json::json!({ "outcome": outcome, "comment": comment }),
+                    )
+                    .await;
+                if result.is_ok() {
+                    return;
+                }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("timed out waiting for pending bootstrap HumanGate");
+        let events = self.read_events().await;
+        let last_events: Vec<_> = events
+            .iter()
+            .rev()
+            .take(5)
+            .map(|event| &event.payload)
+            .collect();
+        panic!("timed out waiting for pending bootstrap HumanGate; latest events: {last_events:?}");
     }
 
     pub async fn read_events(&self) -> Vec<ReadEvent> {
@@ -176,6 +202,45 @@ impl BootstrapHarness {
             .await
             .unwrap()
     }
+}
+
+/// Exercise real profile inputs and catalog seeding. Artifact contracts and shell
+/// hooks belong to their own integration suite; these scripted fixtures test
+/// bootstrap routing with deliberately minimal document bodies.
+fn bootstrap_registry(
+    root: &std::path::Path,
+) -> surge_orchestrator::profile_loader::ProfileRegistry {
+    use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
+    let profiles = root.join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    for (name, source) in [
+        (
+            "description-author",
+            include_str!("../../../surge-core/bundled/profiles/description-author-1.0.toml"),
+        ),
+        (
+            "roadmap-planner",
+            include_str!("../../../surge-core/bundled/profiles/roadmap-planner-1.0.toml"),
+        ),
+        (
+            "flow-generator",
+            include_str!("../../../surge-core/bundled/profiles/flow-generator-1.0.toml"),
+        ),
+    ] {
+        let mut profile: toml::Value = toml::from_str(source).unwrap();
+        profile.as_table_mut().unwrap().remove("hooks");
+        for outcome in profile["outcomes"].as_array_mut().unwrap() {
+            let outcome = outcome.as_table_mut().unwrap();
+            outcome.remove("required_artifacts");
+            outcome.remove("produced_artifacts");
+        }
+        std::fs::write(
+            profiles.join(format!("{name}-1.0.toml")),
+            toml::to_string(&profile).unwrap(),
+        )
+        .unwrap();
+    }
+    ProfileRegistry::new(DiskProfileSet::scan(&profiles).unwrap())
 }
 
 pub fn event_payloads(events: &[ReadEvent]) -> Vec<&EventPayload> {

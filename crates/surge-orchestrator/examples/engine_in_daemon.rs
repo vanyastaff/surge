@@ -31,6 +31,9 @@ struct NoOpBridge;
 
 #[async_trait::async_trait]
 impl BridgeFacade for NoOpBridge {
+    fn legacy_stage_event_adapter(&self) -> bool {
+        true
+    }
     async fn open_session(&self, _: SessionConfig) -> Result<SessionId, OpenSessionError> {
         Ok(SessionId::new())
     }
@@ -49,7 +52,7 @@ impl BridgeFacade for NoOpBridge {
         &self,
         _: SessionId,
         _: String,
-        _: agent_client_protocol::RequestPermissionResponse,
+        _: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
         Ok(())
     }

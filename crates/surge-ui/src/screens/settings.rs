@@ -1,7 +1,7 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Icon, IconName, StyledExt};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::app_state::AppState;
 use crate::theme;
@@ -503,6 +503,8 @@ impl SettingsScreen {
 
         let base = div()
             .id(SharedString::from(format!("sp-{}", page.label())))
+            .role(Role::Button)
+            .aria_label(format!("Settings: {}", page.label()))
             .h_flex()
             .gap_2p5()
             .px_2()
@@ -732,6 +734,8 @@ impl SettingsScreen {
                 let is_selected = mode == self.appearance_mode;
                 div()
                     .id(SharedString::from(format!("mode-{}", mode.label())))
+                    .role(Role::Button)
+                    .aria_label(format!("Appearance: {}", mode.label()))
                     .flex_1()
                     .v_flex()
                     .items_center()
@@ -803,6 +807,8 @@ impl SettingsScreen {
                 let is_selected = tn == self.selected_theme;
                 div()
                     .id(SharedString::from(format!("theme-{}", tn.label())))
+                    .role(Role::Button)
+                    .aria_label(format!("Theme: {}", tn.label()))
                     .flex_1()
                     .p_3()
                     .rounded_lg()
@@ -889,7 +895,7 @@ impl SettingsScreen {
 
     fn render_accent_color(&self) -> Div {
         let accent = theme::primary();
-        let rgba: gpui::Rgba = accent.into();
+        let rgba: gpui_kit::Rgba = accent.into();
         let hex = format!(
             "#{:02x}{:02x}{:02x}",
             (rgba.r * 255.0) as u8,
@@ -954,7 +960,7 @@ impl SettingsScreen {
             self.default_agent.clone()
         };
 
-        let rows: Vec<(String, bool, String, String, gpui::Hsla)> = state
+        let rows: Vec<(String, bool, String, String, gpui_kit::Hsla)> = state
             .installed_agents
             .iter()
             .map(|a| {
@@ -982,6 +988,8 @@ impl SettingsScreen {
                 let id_for_click = id.clone();
                 div()
                     .id(SharedString::from(format!("set-default-{id}")))
+            .role(Role::Button)
+            .aria_label(format!("Set default agent {id}"))
                     .h_flex()
                     .gap_3()
                     .p_4()
@@ -1197,6 +1205,11 @@ impl SettingsScreen {
 
         div()
             .id(SharedString::from(format!("gate-card-{idx}")))
+            .role(Role::Button)
+            .aria_label(format!(
+                "{name}: {}",
+                if enabled { "enabled" } else { "disabled" }
+            ))
             .flex_1()
             .h_flex()
             .justify_between()
@@ -1375,6 +1388,8 @@ impl SettingsScreen {
                     .child(
                         div()
                             .id(SharedString::from(format!("slider-dec-{label}")))
+            .role(Role::Button)
+            .aria_label(format!("Decrease {label}"))
                             .cursor_pointer()
                             .px(px(4.0))
                             .rounded_md()
@@ -1399,6 +1414,8 @@ impl SettingsScreen {
                     .child(
                         div()
                             .id(SharedString::from(format!("slider-inc-{label}")))
+            .role(Role::Button)
+            .aria_label(format!("Increase {label}"))
                             .cursor_pointer()
                             .px(px(4.0))
                             .rounded_md()
@@ -1549,6 +1566,8 @@ impl SettingsScreen {
                 let is_selected = self.routing_strategy == strategy;
                 div()
                     .id(SharedString::from(format!("routing-{name}")))
+                    .role(Role::Button)
+                    .aria_label(format!("Routing: {name}"))
                     .flex_1()
                     .v_flex()
                     .gap_1()
@@ -1816,7 +1835,7 @@ impl SettingsScreen {
 
     fn render_notification_previews(&self) -> Div {
         use crate::notifications::{SurgeNotification, send_os_notification};
-        use gpui_component::WindowExt as _;
+        use gpui_kit::component::WindowExt as _;
 
         div()
             .v_flex()
@@ -2024,6 +2043,8 @@ impl SettingsScreen {
                 };
                 div()
                     .id(SharedString::from(format!("log-{level}")))
+                    .role(Role::Button)
+                    .aria_label(format!("Log level: {level}"))
                     .flex_1()
                     .v_flex()
                     .items_center()

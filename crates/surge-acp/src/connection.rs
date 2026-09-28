@@ -6,9 +6,11 @@
 // pre-existing per M2 precedent; not in scope for M3
 #![allow(clippy::excessive_nesting)]
 
-use agent_client_protocol::{
-    Agent, AgentCapabilities, ClientCapabilities, ClientSideConnection, Implementation,
-    InitializeRequest, ProtocolVersion,
+use crate::sdk_v1::ClientConnection;
+use agent_client_protocol::schema::ProtocolVersion;
+
+use agent_client_protocol::schema::v1::{
+    AgentCapabilities, ClientCapabilities, Implementation, InitializeRequest,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -101,7 +103,9 @@ pub struct AgentConnection {
     name: String,
 
     /// ACP connection providing Agent trait methods.
-    connection: ClientSideConnection,
+    connection: ClientConnection,
+
+    driver: OwnedDriver,
 
     /// Child process handle (for stdio transport).
     process: Option<Child>,
@@ -114,6 +118,40 @@ pub struct AgentConnection {
 
     /// Builtin registry entry for this agent, if found.
     registry_entry: Option<RegistryEntry>,
+}
+
+/// Retains the task even when a caller cancels an awaited shutdown.
+struct OwnedDriver(Option<tokio::task::JoinHandle<agent_client_protocol::Result<()>>>);
+impl OwnedDriver {
+    async fn join(&mut self, limit: std::time::Duration) -> Result<(), SurgeError> {
+        let Some(task) = self.0.as_mut() else {
+            return Ok(());
+        };
+        let result = tokio::time::timeout(limit, &mut *task).await;
+        match result {
+            Ok(result) => {
+                self.0.take();
+                result
+                    .map_err(|_| SurgeError::AgentConnection("ACP driver task failed".into()))?
+                    .map_err(|_| SurgeError::AgentConnection("ACP driver failed".into()))
+            },
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                self.0.take();
+                Err(SurgeError::AgentConnection(
+                    "ACP driver shutdown timed out; cleanup could not be confirmed".into(),
+                ))
+            },
+        }
+    }
+}
+impl Drop for OwnedDriver {
+    fn drop(&mut self) {
+        if let Some(task) = &self.0 {
+            task.abort();
+        }
+    }
 }
 
 impl AgentConnection {
@@ -137,8 +175,8 @@ impl AgentConnection {
     /// # Note
     ///
     /// All async operations on `AgentConnection` (and the returned
-    /// `ClientSideConnection`) must run inside a `tokio::task::LocalSet`
-    /// because the ACP SDK uses `spawn_local` internally.
+    /// `ClientConnection`) must run inside a `tokio::task::LocalSet`
+    /// because Surge owns local callback tasks on that executor.
     /// Use `AgentPool` (M8+) which handles this automatically.
     pub async fn spawn(
         name: String,
@@ -173,28 +211,40 @@ impl AgentConnection {
         // Compute declared capabilities before permission_policy is moved.
         let declared_caps = surge_client_capabilities(&permission_policy);
 
-        let AgentIo {
-            reader,
-            writer,
-            child,
-        } = io;
-
         let mut client = SurgeClient::new(worktree_root.clone(), permission_policy);
         if let Some(tx) = event_tx {
             client = client.with_events(tx);
         }
 
-        // Establish ACP connection over the transport I/O.
-        let (connection, io_task) = ClientSideConnection::new(client, writer, reader, |fut| {
-            #[allow(clippy::let_underscore_future)]
-            let _ = tokio::task::spawn_local(fut);
-        });
+        Self::connect_with_client(name, io, declared_caps, client).await
+    }
 
-        tokio::task::spawn_local(async move {
-            if let Err(e) = io_task.await {
-                tracing::error!("ACP IO task failed: {:?}", e);
-            }
-        });
+    async fn connect_with_client(
+        name: String,
+        io: AgentIo,
+        declared_caps: ClientCapabilities,
+        client: impl crate::sdk_v1::ClientCallbacks + 'static,
+    ) -> Result<Self, SurgeError> {
+        let AgentIo {
+            reader,
+            writer,
+            child,
+        } = io;
+        // Establish ACP connection over the transport I/O.
+        let (connection, io_task) = ClientConnection::new(client, writer, reader);
+
+        let driver = OwnedDriver(Some(tokio::task::spawn_local(io_task)));
+        let registry_entry = Registry::builtin().find(&name).cloned();
+        // Construct the owner before awaiting handshake: cancellation drops all resources.
+        let mut owner = Self {
+            name: name.clone(),
+            connection,
+            driver,
+            process: child,
+            sessions: HashMap::new(),
+            capabilities: AgentCapabilities::default(),
+            registry_entry,
+        };
 
         // ACP initialization handshake.
         info!("Performing ACP initialization handshake for '{}'", name);
@@ -203,26 +253,21 @@ impl AgentConnection {
         init_request.client_capabilities = declared_caps;
         init_request.client_info = Some(Implementation::new("surge", env!("CARGO_PKG_VERSION")));
 
-        let init_response = connection
-            .initialize(init_request)
-            .await
-            .map_err(|e| SurgeError::Acp(format!("ACP initialization failed: {:?}", e)))?;
+        let init_response = match owner.connection.initialize(init_request).await {
+            Ok(response) => response,
+            Err(_) => {
+                owner.kill().await?;
+                return Err(SurgeError::Acp("ACP initialization failed".into()));
+            },
+        };
 
         info!(
             "Agent '{}' initialized successfully. Capabilities: {:?}",
             name, init_response.agent_capabilities
         );
 
-        let registry_entry = Registry::builtin().find(&name).cloned();
-
-        Ok(Self {
-            name,
-            connection,
-            process: child,
-            sessions: HashMap::new(),
-            capabilities: init_response.agent_capabilities,
-            registry_entry,
-        })
+        owner.capabilities = init_response.agent_capabilities;
+        Ok(owner)
     }
 
     /// Get the agent name.
@@ -259,7 +304,7 @@ impl AgentConnection {
 
     /// Get access to the underlying ACP connection.
     #[must_use]
-    pub fn connection(&self) -> &ClientSideConnection {
+    pub(crate) fn connection(&self) -> &ClientConnection {
         &self.connection
     }
 
@@ -297,34 +342,50 @@ impl AgentConnection {
         }
     }
 
-    /// Attempt graceful shutdown: wait up to `grace` for exit, then kill.
-    pub async fn wait_or_kill(&mut self, grace: std::time::Duration) {
-        let Some(process) = self.process.as_mut() else {
-            return;
+    /// Close the transport and join callbacks, then wait for child exit or force kill.
+    ///
+    /// # Errors
+    /// Returns an error if driver termination or child reaping cannot be confirmed.
+    pub async fn wait_or_kill(&mut self, grace: std::time::Duration) -> Result<(), SurgeError> {
+        self.connection.stop();
+        let driver_result = self
+            .driver
+            .join(crate::sdk_v1::DRIVER_CLEANUP_TIMEOUT)
+            .await;
+        let child_result = if let Some(process) = self.process.as_mut() {
+            if matches!(tokio::time::timeout(grace, process.wait()).await, Ok(Ok(_))) {
+                self.process = None;
+                Ok(())
+            } else {
+                self.kill_process().await
+            }
+        } else {
+            Ok(())
         };
-        match tokio::time::timeout(grace, process.wait()).await {
-            Ok(Ok(_)) => {
-                // Exited cleanly
-            },
-            _ => {
-                // Timed out or wait error — force kill and reap
-                let _ = process.kill().await;
-                let _ = process.wait().await;
-            },
-        }
-        self.process = None;
+        child_result?;
+        driver_result
     }
 
     /// Kill the agent process forcefully with platform-specific handling.
     ///
     /// On Windows, this kills the entire process tree (needed because agents are
-    /// spawned via `cmd /C` which creates child processes). On Unix, sends SIGKILL
-    /// to the process group to ensure all child processes are terminated.
+    /// spawned via `cmd /C` which creates child processes). On Unix, kills and
+    /// reaps the direct child; this does not guarantee descendant termination.
     ///
     /// # Errors
     ///
     /// Returns error if process kill fails.
     pub async fn kill(&mut self) -> Result<(), SurgeError> {
+        self.connection.stop();
+        let driver_result = self
+            .driver
+            .join(crate::sdk_v1::DRIVER_CLEANUP_TIMEOUT)
+            .await;
+        self.kill_process().await?;
+        driver_result
+    }
+
+    async fn kill_process(&mut self) -> Result<(), SurgeError> {
         if let Some(process) = self.process.as_mut() {
             let pid = process.id();
 
@@ -335,27 +396,33 @@ impl AgentConnection {
                 // processes that won't be killed by tokio's kill() alone.
                 if let Some(pid) = pid {
                     debug!("Killing Windows process tree for PID {}", pid);
-                    let output = tokio::process::Command::new("taskkill")
-                        .args(["/F", "/T", "/PID", &pid.to_string()])
-                        .output()
-                        .await;
+                    let output = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        tokio::process::Command::new("taskkill")
+                            .kill_on_drop(true)
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .output(),
+                    )
+                    .await;
 
                     match output {
-                        Ok(out) if out.status.success() => {
+                        Ok(Ok(out)) if out.status.success() => {
                             debug!("Successfully killed process tree for PID {}", pid);
                         },
-                        Ok(out) => {
+                        Ok(Ok(out)) => {
                             // taskkill failed, fall back to tokio kill
                             debug!(
                                 "taskkill failed (exit code {:?}), falling back to tokio kill",
                                 out.status.code()
                             );
-                            let _ = process.kill().await;
+                            process.start_kill().map_err(|e| {
+                                SurgeError::AgentConnection(format!("Agent kill failed: {e}"))
+                            })?;
                         },
-                        Err(e) => {
-                            // taskkill command failed to spawn, fall back to tokio kill
-                            debug!("taskkill spawn failed ({}), falling back to tokio kill", e);
-                            let _ = process.kill().await;
+                        _ => {
+                            process.start_kill().map_err(|e| {
+                                SurgeError::AgentConnection(format!("Agent kill failed: {e}"))
+                            })?;
                         },
                     }
                 } else {
@@ -373,13 +440,16 @@ impl AgentConnection {
                 if let Some(pid) = pid {
                     debug!("Killing Unix process PID {}", pid);
                 }
-                process.kill().await.map_err(|e| {
+                process.start_kill().map_err(|e| {
                     SurgeError::AgentConnection(format!("Failed to kill agent: {}", e))
                 })?;
             }
 
             // Reap the process to prevent zombies
-            let _ = process.wait().await;
+            tokio::time::timeout(std::time::Duration::from_secs(2), process.wait())
+                .await
+                .map_err(|_| SurgeError::AgentConnection("Agent reap timed out".into()))?
+                .map_err(|e| SurgeError::AgentConnection(format!("Agent reap failed: {e}")))?;
         }
         self.process = None;
         Ok(())
@@ -388,6 +458,8 @@ impl AgentConnection {
 
 impl Drop for AgentConnection {
     fn drop(&mut self) {
+        // Best effort only; explicit shutdown is required for verified cleanup.
+        self.connection.stop();
         if let Some(process) = self.process.as_mut() {
             debug!("Dropping AgentConnection '{}', killing process", self.name);
             // start_kill sends the signal synchronously (no await needed)
@@ -400,8 +472,8 @@ impl Drop for AgentConnection {
 ///
 /// The declared capabilities reflect the active [`PermissionPolicy`] so agents
 /// do not attempt operations that Surge will never approve.
-fn surge_client_capabilities(policy: &PermissionPolicy) -> ClientCapabilities {
-    use agent_client_protocol::FileSystemCapabilities;
+pub(crate) fn surge_client_capabilities(policy: &PermissionPolicy) -> ClientCapabilities {
+    use agent_client_protocol::schema::v1::FileSystemCapabilities;
 
     let (allow_read, allow_write) = match policy {
         // Full access or interactive (user decides per-request).
@@ -423,6 +495,113 @@ fn surge_client_capabilities(policy: &PermissionPolicy) -> ClientCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct HeldCallback {
+        entered: std::sync::Arc<tokio::sync::Notify>,
+        dropped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl Drop for HeldCallback {
+        fn drop(&mut self) {
+            self.dropped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    #[async_trait::async_trait(?Send)]
+    impl crate::sdk_v1::ClientCallbacks for HeldCallback {
+        async fn request(
+            &self,
+            _: agent_client_protocol::schema::v1::AgentRequest,
+        ) -> agent_client_protocol::Result<serde_json::Value> {
+            std::future::pending().await
+        }
+        async fn notification(
+            &self,
+            _: agent_client_protocol::schema::v1::AgentNotification,
+        ) -> agent_client_protocol::Result<()> {
+            self.entered.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_driver_errors_reach_connection_caller() {
+        use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for stall in [false, true] {
+                    let (local, _peer) = tokio::io::duplex(32);
+                    let (read, write) = tokio::io::split(local);
+                    let (connection, _) = ClientConnection::new(
+                        SurgeClient::new(PathBuf::from("."), PermissionPolicy::AutoApprove),
+                        write.compat_write(),
+                        read.compat(),
+                    );
+                    let driver = OwnedDriver(Some(tokio::task::spawn_local(async move {
+                        if stall {
+                            std::future::pending::<()>().await;
+                        }
+                        Err(agent_client_protocol::Error::internal_error())
+                    })));
+                    let mut owner = AgentConnection {
+                        name: "fixture".into(),
+                        connection,
+                        driver,
+                        process: None,
+                        sessions: HashMap::new(),
+                        capabilities: AgentCapabilities::default(),
+                        registry_entry: None,
+                    };
+                    let error = owner
+                        .wait_or_kill(std::time::Duration::ZERO)
+                        .await
+                        .unwrap_err()
+                        .to_string();
+                    assert!(
+                        error.contains(if stall { "timed out" } else { "driver failed" }),
+                        "{error}"
+                    );
+                    assert!(owner.driver.0.is_none());
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn kill_joins_legacy_driver_and_closes_transport() {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+        tokio::task::LocalSet::new().run_until(async {
+            let (local, peer) = tokio::io::duplex(4096);
+            let (read, write) = tokio::io::split(local);
+            let (peer_read, mut peer_write) = tokio::io::split(peer);
+            let peer_task = tokio::task::spawn_local(async move {
+                let mut reader = BufReader::new(peer_read);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let response = serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{"protocolVersion":1,"agentCapabilities":{}}});
+                peer_write.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                let notification = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}});
+                peer_write.write_all(format!("{notification}\n").as_bytes()).await.unwrap();
+                let mut rest = Vec::new();
+                reader.read_to_end(&mut rest).await.unwrap();
+            });
+            #[cfg(unix)]
+            let child = Some(tokio::process::Command::new("sleep").arg("60").kill_on_drop(true).spawn().unwrap());
+            #[cfg(not(unix))]
+            let child = None;
+            let io = AgentIo { reader: Box::new(read.compat()), writer: Box::new(write.compat_write()), child };
+            let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+            let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let callbacks = HeldCallback { entered: entered.clone(), dropped: dropped.clone() };
+            let mut connection = AgentConnection::connect_with_client("test".into(), io, ClientCapabilities::default(), callbacks).await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified()).await.unwrap();
+            connection.kill().await.unwrap();
+            assert!(connection.driver.0.is_none());
+            assert!(connection.process.is_none());
+            assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+            tokio::time::timeout(std::time::Duration::from_secs(1), peer_task).await.expect("successful kill must join driver and close transport").unwrap();
+        }).await;
+    }
 
     #[test]
     fn test_surge_client_capabilities() {
@@ -614,9 +793,13 @@ mod tests {
                                 .await;
 
                             match output {
-                                Ok(out) if out.status.success() => {},
+                                Ok(Ok(out)) if out.status.success() => {},
                                 _ => {
-                                    let _ = process.kill().await;
+                                    process.start_kill().map_err(|e| {
+                                        SurgeError::AgentConnection(format!(
+                                            "Agent kill failed: {e}"
+                                        ))
+                                    })?;
                                 },
                             }
                         }
@@ -624,7 +807,7 @@ mod tests {
 
                     #[cfg(not(windows))]
                     {
-                        process.kill().await.map_err(|e| {
+                        process.start_kill().map_err(|e| {
                             SurgeError::AgentConnection(format!("Failed to kill agent: {}", e))
                         })?;
                     }

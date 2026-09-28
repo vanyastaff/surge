@@ -22,3 +22,6 @@ pub mod redact;
 
 pub mod registry;
 pub use registry::{McpContent, McpRegistry, McpToolEntry, McpToolResult};
+
+/// Authenticated per-session stdio stage-tool transport.
+pub mod stage;

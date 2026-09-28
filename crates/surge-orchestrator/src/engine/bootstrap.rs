@@ -40,6 +40,71 @@ pub const VALIDATION_FAILED_OUTCOME: &str = "validation_failed";
 /// produced graph to inside the run's isolated worktree.
 const FLOW_ARTIFACT_FILENAME: &str = "flow.toml";
 
+const FLOW_SERIALIZATION_REFERENCE: &str =
+    include_str!("../../../surge-core/bundled/flows/multi-milestone-1.0.toml");
+
+const ARTIFACT_ITERABLE_REFERENCE: &str = r#"type = "run_artifact"
+[value]
+name = "roadmap"
+jsonpath = "milestones"
+"#;
+const LOOP_ITEM_ITERABLE_REFERENCE: &str = r#"type = "loop_item"
+[value]
+var = "milestone"
+jsonpath = "tasks"
+"#;
+const BINDING_REFERENCE: &str = r#"target = "description_artifact"
+optional = false
+[source]
+type = "run_artifact"
+name = "description"
+"#;
+
+fn iterable_serialization_reference() -> String {
+    format!(
+        "\nFor a roadmap-driven loop, use \
+         the following structure. These snippets are relative to the loop config's \
+         iterates_over table; prefix [value] with that full table path. The approved roadmap is supplied as a run artifact. Do not add a planner \
+         to regenerate it; there is no producer node in the child graph.\n\n\
+         Artifact iterable:\n```toml\n{ARTIFACT_ITERABLE_REFERENCE}```\n\n\
+         Nested task iterable:\n```toml\n{LOOP_ITEM_ITERABLE_REFERENCE}```\n\
+         The value field is a table, never a string. Do not put node/name/jsonpath \
+         or var/jsonpath directly beside type.\n\n\
+         Agent bindings are arrays of records with target and a tagged source table. \
+         This example binds the approved description to a prompt variable; select \
+         the actual artifact appropriate for the profile's required input. For a \
+         node-produced specification use source type node_output with node and artifact. \
+         Never use source = \"file\" or a path field. Prefix [source] with the \
+         binding's full table path:\n```toml\n{BINDING_REFERENCE}```\n\
+         End each loop body with an explicit terminal node and incoming edges; \
+         is_terminal on an agent outcome does not perform that transition."
+    )
+}
+
+fn flow_parse_feedback(error: &toml::de::Error) -> String {
+    format!(
+        "flow.toml parse failed: {error}\n\n\
+         Canonical Graph TOML serialization reference follows. Use its table and enum \
+         structure, including edges and nested subgraphs. Preserve the approved roadmap, \
+         requested runtime constraints, verifier authority and ledger effects. The profile choices are illustrative; adapt them to this run's inputs.\n\n\
+         ```toml\n{FLOW_SERIALIZATION_REFERENCE}\n```{}",
+        iterable_serialization_reference()
+    )
+}
+
+/// Supply exact serialization before the first generation attempt, including
+/// when a disk profile overrides the bundled prompt.
+pub(crate) fn append_flow_serialization_reference(prompt: &str) -> String {
+    format!(
+        "{prompt}\n\n# Executable Graph serialization reference\n\
+         The following bundled graph demonstrates exact TOML syntax for nodes, \
+         tagged enums, edges and nested loop bodies. Preserve this run's approved \
+         requirements and runtime constraints. Adapt its profiles and bindings to this run's inputs; preserve the approved roadmap.\n\n\
+         ```toml\n{FLOW_SERIALIZATION_REFERENCE}\n```{}",
+        iterable_serialization_reference()
+    )
+}
+
 /// Whether `profile_ref` resolves to the Flow Generator family.
 ///
 /// Profile references can be plain (`flow-generator`), pinned (`flow-generator@1.0`),
@@ -129,6 +194,29 @@ pub async fn run_flow_generator_post_processing(
     worktree: &Path,
     writer: &RunWriter,
 ) -> Result<FlowValidationDecision, StageError> {
+    run_flow_generator_post_processing_with_registry(
+        node,
+        memory,
+        edit_loop_cap,
+        worktree,
+        writer,
+        None,
+    )
+    .await
+}
+
+/// Validate generated flows with the same required profile inputs checked at execution.
+///
+/// # Errors
+/// Returns a stage error if validation feedback cannot be persisted.
+pub async fn run_flow_generator_post_processing_with_registry(
+    node: &NodeKey,
+    memory: &RunMemory,
+    edit_loop_cap: u32,
+    worktree: &Path,
+    writer: &RunWriter,
+    registry: Option<&crate::profile_loader::ProfileRegistry>,
+) -> Result<FlowValidationDecision, StageError> {
     let Some(flow_path) = locate_flow_artifact(memory, worktree) else {
         tracing::warn!(
             target: "engine::bootstrap::validation",
@@ -188,35 +276,14 @@ pub async fn run_flow_generator_post_processing(
                 memory,
                 edit_loop_cap,
                 writer,
-                format!("flow.toml parse failed: {e}"),
+                flow_parse_feedback(&e),
             )
             .await;
         },
     };
 
-    if let Err(e) = validate_for_m6(&graph) {
-        return route_validation_failure(
-            node,
-            memory,
-            edit_loop_cap,
-            writer,
-            format!("validate_for_m6 failed: {e}"),
-        )
-        .await;
-    }
-
-    // Task 11: archetype-aware topology check. The materialized graph carries
-    // an optional `[metadata.archetype]` block; when set to `multi-milestone`,
-    // the topology must contain a Loop over `roadmap.milestones`.
-    if let Err(e) = validate_archetype_topology(&graph) {
-        return route_validation_failure(
-            node,
-            memory,
-            edit_loop_cap,
-            writer,
-            format!("archetype topology check failed: {e}"),
-        )
-        .await;
+    if let Err(feedback) = validate_generated_graph(&graph, registry) {
+        return route_validation_failure(node, memory, edit_loop_cap, writer, feedback).await;
     }
 
     let graph_hash = ContentHash::compute(text.as_bytes());
@@ -238,6 +305,19 @@ pub async fn run_flow_generator_post_processing(
         .map_err(|e| StageError::Storage(format!("append PipelineMaterialized: {e}")))?;
 
     Ok(FlowValidationDecision::Materialized)
+}
+
+fn validate_generated_graph(
+    graph: &Graph,
+    registry: Option<&crate::profile_loader::ProfileRegistry>,
+) -> Result<(), String> {
+    validate_for_m6(graph).map_err(|e| format!("validate_for_m6 failed: {e}"))?;
+    if let Some(registry) = registry {
+        crate::engine::validate::validate_profile_inputs(graph, registry).map_err(|e| {
+            format!("required profile inputs failed: {e}. Provide the declared bindings; custom_fields do not supply prompt inputs.")
+        })?;
+    }
+    validate_archetype_topology(graph).map_err(|e| format!("archetype topology check failed: {e}"))
 }
 
 /// Persist the failure-path event suffix (`BootstrapEditRequested` + synthetic
@@ -339,6 +419,24 @@ mod tests {
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::{EventSeq, Storage};
     use tempfile::TempDir;
+
+    #[test]
+    fn generation_reference_preserves_operator_prompt_and_executable_schema() {
+        use surge_core::loop_config::IterableSource;
+        let prompt = append_flow_serialization_reference("Use Codex only. {{literal}}");
+        assert!(prompt.starts_with("Use Codex only. {{literal}}"));
+        assert!(prompt.contains(FLOW_SERIALIZATION_REFERENCE));
+        let reference: Graph = toml::from_str(FLOW_SERIALIZATION_REFERENCE).unwrap();
+        validate_for_m6(&reference).unwrap();
+        let artifact: IterableSource = toml::from_str(ARTIFACT_ITERABLE_REFERENCE).unwrap();
+        let item: IterableSource = toml::from_str(LOOP_ITEM_ITERABLE_REFERENCE).unwrap();
+        assert!(matches!(artifact, IterableSource::RunArtifact { .. }));
+        assert!(matches!(item, IterableSource::LoopItem { .. }));
+        assert!(prompt.contains(ARTIFACT_ITERABLE_REFERENCE));
+        assert!(prompt.contains(LOOP_ITEM_ITERABLE_REFERENCE));
+        let binding: surge_core::agent_config::Binding = toml::from_str(BINDING_REFERENCE).unwrap();
+        assert_eq!(binding.target.0, "description_artifact");
+    }
 
     #[test]
     fn flow_generator_profile_predicate_matches_canonical_and_pinned_refs() {
@@ -513,6 +611,52 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_profile_inputs_retry_before_materialization() {
+        use crate::profile_loader::{DiskProfileSet, ProfileRegistry};
+        let tmp = TempDir::new().unwrap();
+        let worktree = tmp.path().join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(worktree.join(FLOW_ARTIFACT_FILENAME), {
+            let mut graph: Graph = toml::from_str(FLOW_SERIALIZATION_REFERENCE).unwrap();
+            let NodeConfig::Agent(config) = &mut graph
+                .subgraphs
+                .get_mut(&surge_core::keys::SubgraphKey::try_from("task_body").unwrap())
+                .unwrap()
+                .nodes
+                .get_mut(&NodeKey::try_from("impl_task").unwrap())
+                .unwrap()
+                .config
+            else {
+                panic!("expected implementation agent");
+            };
+            config.bindings.clear();
+            toml::to_string(&graph).unwrap()
+        })
+        .unwrap();
+        let profiles = tmp.path().join("profiles");
+        std::fs::create_dir(&profiles).unwrap();
+        let registry = ProfileRegistry::new(DiskProfileSet::scan(&profiles).unwrap());
+        let (storage, run_id, writer) = fresh_writer(tmp.path()).await;
+        let decision = run_flow_generator_post_processing_with_registry(
+            &NodeKey::try_from("flow_generator").unwrap(),
+            &RunMemory::default(),
+            3,
+            &worktree,
+            &writer,
+            Some(&registry),
+        )
+        .await
+        .unwrap();
+        let FlowValidationDecision::EditRequested { feedback } = decision else {
+            panic!("missing inputs must go back to generator");
+        };
+        assert!(feedback.contains("spec"));
+        let kinds = payload_kinds(&storage, run_id).await;
+        assert!(kinds.contains(&"BootstrapEditRequested"));
+        assert!(!kinds.contains(&"PipelineMaterialized"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn valid_flow_emits_pipeline_materialized_and_decision_materialized() {
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
@@ -560,6 +704,9 @@ mod tests {
                     feedback.contains("parse"),
                     "feedback should mention parse error, got: {feedback}"
                 );
+                assert!(feedback.contains(FLOW_SERIALIZATION_REFERENCE));
+                let reference: Graph = toml::from_str(FLOW_SERIALIZATION_REFERENCE).unwrap();
+                validate_for_m6(&reference).expect("reference must remain executable");
             },
             other => panic!("expected EditRequested, got {other:?}"),
         }

@@ -46,6 +46,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(name = "internal-stage-mcp", hide = true)]
+    InternalStageMcp,
     /// Check connection to an agent
     Ping {
         /// Agent name from config (default: uses default_agent)
@@ -372,6 +374,7 @@ async fn main() -> Result<()> {
             | Commands::Profile { .. }
             | Commands::Project { .. }
             | Commands::Skill { .. }
+            | Commands::InternalStageMcp
     );
 
     if should_check_orphans {
@@ -394,6 +397,21 @@ async fn main() -> Result<()> {
 /// Execute the CLI command.
 async fn run_command(command: Commands) -> Result<()> {
     match command {
+        Commands::InternalStageMcp => {
+            // This dedicated subprocess has already settled its MCP service (or
+            // reported unconfirmed cleanup) before exiting. Tokio stdin uses an
+            // uncancellable blocking read; dropping the outer runtime can hang
+            // while the provider keeps stdin open. See:
+            // https://docs.rs/tokio/latest/tokio/io/fn.stdin.html
+            let status = match surge_mcp::stage::serve_stdio().await {
+                Ok(()) => 0,
+                Err(_) => {
+                    eprintln!("Stage MCP helper failed; cleanup could not be confirmed.");
+                    1
+                },
+            };
+            std::process::exit(status);
+        },
         Commands::Ping { agent } => {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
@@ -431,7 +449,7 @@ async fn run_command(command: Commands) -> Result<()> {
             )?;
 
             let result = pool.ping(&agent_name).await;
-            pool.shutdown().await;
+            pool.shutdown().await?;
 
             match result {
                 Ok(()) => {
@@ -491,13 +509,13 @@ async fn run_command(command: Commands) -> Result<()> {
 
             let session = pool.create_session(Some(&agent_name), None, &cwd).await?;
 
-            let content = vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new(message),
+            let content = vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                agent_client_protocol::schema::v1::TextContent::new(message),
             )];
 
             let response = pool.prompt(&session, content).await?;
 
-            pool.shutdown().await;
+            pool.shutdown().await?;
             // Give the print task a moment to flush remaining chunks before exiting
             let _ = tokio::time::timeout(std::time::Duration::from_millis(100), print_task).await;
 

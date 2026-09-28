@@ -8,6 +8,12 @@ use thiserror::Error;
 /// Errors that can be returned by `Engine` methods.
 #[derive(Debug, Error)]
 pub enum EngineError {
+    /// An old run-only response cannot identify the operator request it answers.
+    #[error("gate request identity required; refresh the pending request before answering")]
+    MissingGateRequestIdentity,
+    /// The exact gate request has already settled or been replaced.
+    #[error("gate request is no longer pending; refresh the pending request")]
+    StaleGateRequest,
     /// A run with this ID is already executing in this process.
     #[error("run is already active in this process: {0}")]
     RunAlreadyActive(RunId),

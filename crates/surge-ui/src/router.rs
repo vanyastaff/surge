@@ -1,4 +1,4 @@
-use gpui_component::IconName;
+use gpui_kit::component::IconName;
 
 /// All screens available in Surge UI.
 ///
@@ -46,7 +46,7 @@ impl Screen {
             Self::ContextMemory => "Memory",
             Self::Settings => "Settings",
             Self::SpecExplorer => "Specs",
-            Self::SpecWizard => "New Spec",
+            Self::SpecWizard => "Plan a task",
             Self::AgentHub => "Agent Hub",
             Self::AgentTerminals => "Terminals",
             Self::Worktrees => "Worktrees",

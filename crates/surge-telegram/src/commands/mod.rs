@@ -16,7 +16,7 @@ pub mod status;
 
 pub use abort::{RunAborter, handle_abort};
 pub use feedback::handle_feedback;
-pub use pair::{PairingTokenConsumer, PairingWriter, handle_pair};
+pub use pair::{PairingTokenConsumer, handle_pair};
 pub use run::{RunStarter, handle_run};
 pub use runs::{RunListProvider, RunRow, handle_runs};
 pub use snooze::{CockpitSnoozeWriter, handle_snooze};

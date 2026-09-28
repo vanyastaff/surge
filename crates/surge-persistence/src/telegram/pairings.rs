@@ -59,6 +59,22 @@ pub fn pair(
     user_label: &str,
     now_ms: i64,
 ) -> Result<(), PairingsError> {
+    write_pairing(conn, chat_id, user_label, now_ms)?;
+    tracing::info!(
+        target: "persistence::telegram",
+        chat_id = %chat_id,
+        label = %user_label,
+        "paired chat",
+    );
+    Ok(())
+}
+
+pub(crate) fn write_pairing(
+    conn: &Connection,
+    chat_id: i64,
+    user_label: &str,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO telegram_pairings (chat_id, user_label, paired_at, revoked_at) \
          VALUES (?, ?, ?, NULL) \
@@ -68,12 +84,6 @@ pub fn pair(
             revoked_at = NULL",
         params![chat_id, user_label, now_ms],
     )?;
-    tracing::info!(
-        target: "persistence::telegram",
-        chat_id = %chat_id,
-        label = %user_label,
-        "paired chat",
-    );
     Ok(())
 }
 

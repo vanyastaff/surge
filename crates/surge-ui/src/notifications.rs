@@ -1,5 +1,5 @@
-use gpui::SharedString;
-use gpui_component::notification::Notification;
+use gpui_kit::SharedString;
+use gpui_kit::component::notification::Notification;
 
 /// Surge notification builders — convenience wrappers around gpui-component Notification.
 ///
@@ -103,6 +103,26 @@ impl SurgeNotification {
 static NOTIFY_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<(String, String)>> =
     std::sync::OnceLock::new();
 
+#[cfg(target_os = "macos")]
+fn configure_os_notifications() -> bool {
+    let Some(bundle) = objc2_foundation::NSBundle::mainBundle().bundleIdentifier() else {
+        tracing::debug!("OS notifications unavailable outside an application bundle");
+        return false;
+    };
+    match notify_rust::set_application(&bundle.to_string()) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "Could not configure application notifications");
+            false
+        },
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_os_notifications() -> bool {
+    true
+}
+
 fn ensure_worker() -> &'static std::sync::mpsc::SyncSender<(String, String)> {
     NOTIFY_TX.get_or_init(|| {
         // Bounded so a runaway event source can't grow the queue
@@ -112,7 +132,11 @@ fn ensure_worker() -> &'static std::sync::mpsc::SyncSender<(String, String)> {
         std::thread::Builder::new()
             .name("surge-notifications".into())
             .spawn(move || {
+                let enabled = configure_os_notifications();
                 while let Ok((title, body)) = rx.recv() {
+                    if !enabled {
+                        continue;
+                    }
                     if let Err(e) = notify_rust::Notification::new()
                         .appname("Surge")
                         .summary(&title)

@@ -11,6 +11,10 @@ use surge_persistence::runs::seq::EventSeq;
 pub struct ReplayedState {
     /// Cursor to resume from (from snapshot, or `graph.start` if none).
     pub cursor: Cursor,
+    /// Nested execution context captured with the cursor.
+    pub frames: Vec<crate::engine::frames::Frame>,
+    /// Traversal limits already consumed outside active loop frames.
+    pub root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32>,
     /// Run memory rebuilt by replaying all events from seq 1 onwards.
     pub memory: RunMemory,
     /// Latest graph extracted from `PipelineMaterialized` plus any accepted
@@ -50,11 +54,25 @@ pub async fn replay(
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
     let mut applied_graph_revision_seq = 0;
+    let mut frames = Vec::new();
+    let mut root_traversal_counts = std::collections::HashMap::new();
     let snap_cursor: Option<Cursor> = match snap {
         Some((_seq, blob)) => {
             let snapshot = EngineSnapshot::deserialize(&blob)
                 .map_err(|e| EngineError::Internal(format!("snapshot deserialize: {e}")))?;
             applied_graph_revision_seq = snapshot.applied_graph_revision_seq;
+            frames = snapshot
+                .frames
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| EngineError::Internal(format!("snapshot frames: {error}")))?;
+            for (edge, count) in snapshot.root_traversal_counts {
+                let key = surge_core::keys::EdgeKey::try_from(edge.as_str()).map_err(|error| {
+                    EngineError::Internal(format!("snapshot edge counter: {error}"))
+                })?;
+                root_traversal_counts.insert(key, count);
+            }
             let cursor = snapshot
                 .cursor
                 .into_cursor()
@@ -119,6 +137,8 @@ pub async fn replay(
 
     Ok(ReplayedState {
         cursor,
+        frames,
+        root_traversal_counts,
         memory,
         graph,
         applied_graph_revision_seq,
@@ -134,7 +154,13 @@ fn latest_graph_from_events(
     let mut selected = None;
     for event in events {
         match &event.payload.payload {
-            EventPayload::PipelineMaterialized { graph, graph_hash } => {
+            // Only the first materialization is this run's own graph. A
+            // bootstrap run later appends the *generated* follow-up flow as
+            // another `PipelineMaterialized` (for its implementation child);
+            // taking the last one made a resumed planning run look for its
+            // own gate in the child's graph ("cursor at unknown node").
+            // Fork edits rewrite that same first event (`fork.rs`).
+            EventPayload::PipelineMaterialized { graph, graph_hash } if selected.is_none() => {
                 tracing::debug!(
                     target: "engine_replay",
                     seq = event.seq.as_u64(),
@@ -219,6 +245,39 @@ mod tests {
             edges: vec![],
             subgraphs: BTreeMap::new(),
         }
+    }
+
+    /// A bootstrap run appends the generated follow-up flow as a second
+    /// `PipelineMaterialized`; resuming must keep the run's own graph.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replay_keeps_the_runs_own_graph_after_a_generated_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = RunId::new();
+        let writer = storage
+            .create_run(run_id, dir.path(), None)
+            .await
+            .expect("create_run");
+        let own = surge_core::BundledFlows::by_name_latest("bootstrap")
+            .expect("bundled bootstrap")
+            .graph;
+        let generated = surge_core::BundledFlows::by_name_latest("linear-3")
+            .expect("bundled linear-3")
+            .graph;
+        let materialized = |graph: &Graph| {
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph.clone()),
+                graph_hash: ContentHash::compute(&serde_json::to_vec(graph).unwrap()),
+            })
+        };
+        writer
+            .append_events(vec![materialized(&own), materialized(&generated)])
+            .await
+            .expect("append_events");
+        let reader = storage.open_run_reader(run_id).await.expect("reader");
+        let replayed = replay(&reader).await.expect("replay");
+        assert_eq!(replayed.graph.metadata.name, own.metadata.name);
+        assert!(replayed.graph.nodes.contains_key(&replayed.cursor.node));
     }
 
     /// Persist a `RunStarted` event with non-empty `mcp_servers`, then call

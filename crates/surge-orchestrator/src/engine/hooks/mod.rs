@@ -534,11 +534,7 @@ impl<S: HookCommandSpawner> HookExecutor<S> {
             if failed {
                 match hook.on_failure {
                     HookFailureMode::Reject => {
-                        let reason = if res.stderr.is_empty() {
-                            format!("hook '{}' exited {}", hook.id, res.exit_status)
-                        } else {
-                            res.stderr.trim().to_owned()
-                        };
+                        let reason = rejection_diagnostic(&hook.id, &res);
                         tracing::warn!(
                             target: "engine::hooks",
                             hook_id = %hook.id,
@@ -600,6 +596,20 @@ struct SuppressDirective {
     outcome: String,
 }
 
+fn rejection_diagnostic(hook_id: &str, result: &HookCommandResult) -> String {
+    // Validators often put actionable diagnostics on stdout and only a generic
+    // failure on stderr. Preserve both, bounded before returning them to agents.
+    let mut reason: String = result.stderr.trim().chars().take(4096).collect();
+    if reason.is_empty() {
+        reason = format!("hook '{hook_id}' exited {}", result.exit_status);
+    }
+    if !result.stdout.trim().is_empty() {
+        reason.push_str("\nValidator output:\n");
+        reason.extend(result.stdout.trim().chars().take(4096));
+    }
+    reason
+}
+
 fn parse_suppress(stdout: &str) -> Option<OutcomeKey> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
@@ -638,6 +648,19 @@ pub async fn record_hook_executed(writer: &RunWriter, record: &HookExecutionReco
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejection_keeps_bounded_validator_stdout() {
+        let result = super::HookCommandResult {
+            exit_status: 1,
+            stdout: format!("duplicate key subtasks\n{}", "я".repeat(5000)),
+            stderr: "artifact validation failed".into(),
+            timed_out: false,
+        };
+        let reason = super::rejection_diagnostic("spec", &result);
+        assert!(reason.contains("artifact validation failed"));
+        assert!(reason.contains("duplicate key subtasks"));
+        assert!(reason.chars().count() < 4200);
+    }
     use super::*;
     use std::sync::Arc;
     use std::sync::Mutex;

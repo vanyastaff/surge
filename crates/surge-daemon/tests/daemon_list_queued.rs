@@ -3,7 +3,7 @@
 //! the response with `RunStatus::Awaiting` — alongside the engine's
 //! list of currently-active runs.
 //!
-//! Setup: `run_server` with `max_active=1` and a stub facade whose
+//! Setup: `run_synthetic_server` with `max_active=1` and a stub facade whose
 //! `start_run` holds run 1's events channel open so run 2 must
 //! queue.
 //!
@@ -36,7 +36,7 @@ use std::time::Duration;
 use interprocess::local_socket::tokio::prelude::*;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome, RunStatus};
@@ -225,7 +225,7 @@ async fn list_runs_includes_queued_run_as_awaiting() {
 
     let server_handle = tokio::spawn({
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, stub_for_facade, shutdown).await }
+        async move { run_synthetic_server(cfg, stub_for_facade, shutdown).await }
     });
 
     let stream = connect_stream_with_retry(socket, Duration::from_secs(3))

@@ -166,6 +166,8 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -274,6 +276,8 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
@@ -362,6 +366,8 @@ async fn retry_budget_exhausted_emits_stage_failed() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,

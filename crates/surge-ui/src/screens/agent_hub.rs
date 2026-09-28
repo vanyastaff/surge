@@ -1,6 +1,6 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::{Icon, IconName, StyledExt};
+use gpui_kit::component::{Icon, IconName, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_acp::{
     AgentDetail, AgentSummary, BadgeKind, EffortLevel, InstallMethod, SessionStatus, Usage,
 };
@@ -126,6 +126,8 @@ impl AgentHubScreen {
                 };
                 div()
                     .id(SharedString::from(format!("tab-{:?}", tab)))
+                    .role(Role::Button)
+                    .aria_label(format!("{tab:?}"))
                     .px_3()
                     .py(px(5.0))
                     .cursor_pointer()
@@ -144,7 +146,7 @@ impl AgentHubScreen {
                     .bg(if is_active {
                         theme::primary().opacity(0.1)
                     } else {
-                        gpui::transparent_black()
+                        gpui_kit::transparent_black()
                     })
                     .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
                     .on_click(cx.listener(move |this, _e, _w, cx| {
@@ -170,6 +172,8 @@ impl AgentHubScreen {
 
         div()
             .id(SharedString::from(format!("agent-{}", agent.name)))
+            .role(Role::Button)
+            .aria_label(format!("Select agent {}", agent.name))
             .w_full()
             .h_flex()
             .gap_2()
@@ -181,7 +185,7 @@ impl AgentHubScreen {
             .bg(if is_selected {
                 theme::primary().opacity(0.08)
             } else {
-                gpui::transparent_black()
+                gpui_kit::transparent_black()
             })
             .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
             .on_click(cx.listener(move |this, _e, _w, cx| {
@@ -938,7 +942,7 @@ impl AgentHubScreen {
                     "gemini" => (0.259, 0.522, 0.957),     // #4285F4 - Google
                     _ => (0.5, 0.5, 0.5),                  // Default gray
                 };
-                let vc: Hsla = gpui::rgba(
+                let vc: Hsla = gpui_kit::rgba(
                     ((r * 255.0) as u32) << 24
                         | ((g * 255.0) as u32) << 16
                         | ((b * 255.0) as u32) << 8
@@ -957,7 +961,7 @@ impl AgentHubScreen {
                     .bg(if is_even {
                         theme::surface().opacity(0.5)
                     } else {
-                        gpui::transparent_black()
+                        gpui_kit::transparent_black()
                     })
                     .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.04)))
                     // Vendor avatar (colored initial)
@@ -1048,6 +1052,8 @@ impl AgentHubScreen {
                     .child(
                         div()
                             .id(SharedString::from(format!("install-{}", agent.name)))
+            .role(Role::Button)
+            .aria_label(format!("Install {}", agent.name))
                             .flex_shrink_0()
                             .cursor_pointer()
                             .on_click(cx.listener(move |_this, _e, _window, cx| {
@@ -1120,8 +1126,10 @@ impl AgentHubScreen {
                                 let is_active = f == self.filter;
                                 div()
                                     .id(SharedString::from(format!("cf-{}", f.label())))
+            .role(Role::Button)
+            .aria_label(format!("Filter agents: {}", f.label()))
                                     .px(px(8.0)).py(px(4.0)).rounded_full().cursor_pointer().text_xs()
-                                    .bg(if is_active { theme::primary().opacity(0.12) } else { gpui::transparent_black() })
+                                    .bg(if is_active { theme::primary().opacity(0.12) } else { gpui_kit::transparent_black() })
                                     .text_color(if is_active { theme::primary() } else { theme::text_muted() })
                                     .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.06)))
                                     .on_click(cx.listener(move |this, _e, _w, cx| { this.filter = f; cx.notify(); }))

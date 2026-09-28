@@ -1,6 +1,6 @@
-use gpui::*;
-use gpui_component::StyledExt;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::*;
 
 use crate::router::Screen;
 use crate::theme;
@@ -39,7 +39,7 @@ fn all_commands() -> Vec<Command> {
         Command::nav("Memory", Screen::ContextMemory, Some("Ctrl+8")),
         Command::nav("Settings", Screen::Settings, Some("Ctrl+9")),
         Command::nav("Spec Explorer", Screen::SpecExplorer, None),
-        Command::nav("New Spec", Screen::SpecWizard, None),
+        Command::nav("Plan a task", Screen::SpecWizard, None),
         Command::nav("Agent Hub (catalog)", Screen::AgentHub, None),
         Command::nav("Terminals", Screen::AgentTerminals, None),
         Command::nav("Worktrees", Screen::Worktrees, None),
@@ -105,7 +105,7 @@ impl CommandPalette {
             },
         )
         .detach();
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.input = Some(input.clone());
         input
     }
@@ -136,13 +136,16 @@ impl CommandPalette {
         }
     }
 
-    fn render_item(&self, list_idx: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_item(&self, list_idx: usize, cx: &mut Context<Self>) -> AnyElement {
         let cmd_idx = self.filtered[list_idx];
         let cmd = &self.commands[cmd_idx];
         let is_selected = list_idx == self.selected_index;
 
         let base = div()
-            .id(("palette-cmd", list_idx))
+            .id(("palette-cmd", cmd_idx))
+            .test_support()
+            .role(Role::Button)
+            .aria_label(cmd.label.clone())
             .h_flex()
             .justify_between()
             .px_3()
@@ -191,7 +194,7 @@ impl CommandPalette {
             );
         }
 
-        row
+        row.into_any_element()
     }
 }
 
@@ -199,7 +202,7 @@ impl Render for CommandPalette {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let input = self.ensure_input(window, cx);
         let item_count = self.filtered.len();
-        let items: Vec<Stateful<Div>> = (0..item_count).map(|i| self.render_item(i, cx)).collect();
+        let items: Vec<_> = (0..item_count).map(|i| self.render_item(i, cx)).collect();
 
         div()
             .v_flex()
@@ -225,7 +228,7 @@ impl Render for CommandPalette {
                             .text_color(theme::text_muted())
                             .child("⌘ ".to_string()),
                     )
-                    .child(div().flex_1().child(Input::new(&input).appearance(false))),
+                    .child(div().flex_1().child(Input::new(&input).appearance(false).accessibility_id("command-search").aria_label("Search commands"))),
             )
             // Results
             .child(div().v_flex().px_1().py_1().gap_0p5().children(items))
@@ -251,5 +254,51 @@ impl Render for CommandPalette {
                             .child("type to filter · ⏎ select · click to open · Ctrl+K close".to_string()),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod accessibility_tests {
+    use super::{CommandPalette, CommandSelected};
+    use crate::router::Screen;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, Role, TestAppContext, WindowOptions};
+    use std::{cell::RefCell, rc::Rc};
+
+    #[gpui_kit::test]
+    fn filtered_command_keeps_identity_and_dispatches_its_destination(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let selected = Rc::new(RefCell::new(None));
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                cx.new(CommandPalette::new)
+            })
+            .unwrap()
+        });
+        let copy = selected.clone();
+        cx.update(|cx| {
+            cx.subscribe(&view, move |_, event: &CommandSelected, _| {
+                copy.replace(event.0);
+            })
+            .detach();
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find(("palette-cmd", 4_usize)).label(), Some("Inbox"));
+            let input = view.read(cx).input.clone().unwrap();
+            input.update(cx, |input, cx| input.set_value("Inbox", window, cx));
+        })
+        .unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find(("palette-cmd", 4_usize)).role(),
+                Some(Role::Button)
+            );
+            assert_eq!(window.find(("palette-cmd", 4_usize)).label(), Some("Inbox"));
+            window.click(("palette-cmd", 4_usize), cx);
+        })
+        .unwrap();
+        cx.update(|_| assert_eq!(*selected.borrow(), Some(Screen::Inbox)));
     }
 }

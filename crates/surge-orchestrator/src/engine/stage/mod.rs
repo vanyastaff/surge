@@ -7,6 +7,7 @@ pub mod human_gate;
 pub mod loop_stage;
 pub mod notify;
 pub mod skill_binding;
+mod stage_tools;
 pub mod subgraph_stage;
 pub mod terminal;
 
@@ -122,6 +123,15 @@ pub enum StageError {
     /// Loop body subgraph not found in `Graph::subgraphs`.
     #[error("loop body subgraph not found: {0}")]
     LoopBodyMissing(surge_core::keys::SubgraphKey),
+
+    /// A loop iteration failed under Abort or exhausted its Retry budget.
+    #[error("loop {node} failed after {completed_iterations} iteration(s)")]
+    LoopFailed {
+        /// Loop node whose failure policy stopped execution.
+        node: surge_core::keys::NodeKey,
+        /// Number of distinct items attempted before stopping.
+        completed_iterations: u32,
+    },
 
     /// Loop iterable resolved to more items than `MAX_LOOP_ITEMS_RESOLVED`.
     #[error("loop iterable too large: {count}/{max}")]

@@ -173,6 +173,8 @@ pub async fn drive_tap_loop<S, T, P, R>(
     P: RunSnapshotProvider,
     R: UpdateRoutes,
 {
+    let mut reconcile_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+    reconcile_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
@@ -180,6 +182,7 @@ pub async fn drive_tap_loop<S, T, P, R>(
                 debug!(target: "telegram::cockpit::tap", "shutdown signalled");
                 return;
             }
+            _ = reconcile_tick.tick() => run_reconcile(&runtime).await,
             recv = tap_rx.recv() => {
                 match recv {
                     Ok(tap) => handle_tap(&runtime, tap).await,
@@ -278,6 +281,19 @@ where
     P: RunSnapshotProvider,
     R: UpdateRoutes,
 {
+    match runtime.snapshots.pending_requests().await {
+        Ok(batch) => {
+            for failure in batch.failures {
+                warn!(target: "telegram::cockpit::recover", run_id = %failure.run_id, error = %failure.error, "run request recovery failed; retaining cards and retrying on next tick");
+            }
+            for request in batch.requests {
+                handle_tap(runtime, request).await;
+            }
+        },
+        Err(error) => {
+            warn!(target: "telegram::cockpit::recover", error = %error, "pending request recovery failed; retrying on next tick")
+        },
+    }
     let now_ms = chrono::Utc::now().timestamp_millis();
     let store = runtime.dispatch_ctx.emitter.store();
     let api = runtime.dispatch_ctx.emitter.api();

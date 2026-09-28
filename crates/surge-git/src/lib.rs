@@ -32,6 +32,7 @@
 #![allow(clippy::unused_self)]
 
 pub mod audit;
+pub mod checkpoint;
 pub mod cleanup;
 pub mod orphan;
 pub mod run_worktree;

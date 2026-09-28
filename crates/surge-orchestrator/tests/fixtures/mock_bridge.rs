@@ -67,6 +67,8 @@ pub struct MockBridge {
     /// a second agent's `send_message`, but if it does, it must fail fast
     /// rather than hang waiting for an event nobody scripted").
     next_send_message_errors: Mutex<VecDeque<SendMessageError>>,
+    /// One-shot cleanup failure, for ownership and typed-error propagation tests.
+    pub next_close_error: Mutex<Option<CloseSessionError>>,
 }
 
 impl MockBridge {
@@ -79,6 +81,7 @@ impl MockBridge {
             pinned_session_ids: Mutex::new(VecDeque::new()),
             last_prompt: Mutex::new(None),
             next_send_message_errors: Mutex::new(VecDeque::new()),
+            next_close_error: Mutex::new(None),
         }
     }
 
@@ -177,6 +180,9 @@ impl Default for MockBridge {
 
 #[async_trait]
 impl BridgeFacade for MockBridge {
+    fn legacy_stage_event_adapter(&self) -> bool {
+        true
+    }
     async fn open_session(&self, _config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         self.recorded_calls
             .lock()
@@ -232,9 +238,9 @@ impl BridgeFacade for MockBridge {
         &self,
         session: SessionId,
         request_id: String,
-        response: agent_client_protocol::RequestPermissionResponse,
+        response: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
-        use agent_client_protocol::RequestPermissionOutcome;
+        use agent_client_protocol::schema::v1::RequestPermissionOutcome;
         let option_id = match response.outcome {
             RequestPermissionOutcome::Selected(sel) => Some(sel.option_id.0.as_ref().to_string()),
             RequestPermissionOutcome::Cancelled => None,
@@ -268,7 +274,11 @@ impl BridgeFacade for MockBridge {
             .lock()
             .await
             .push(RecordedCall::CloseSession(session));
-        Ok(())
+        self.next_close_error
+            .lock()
+            .await
+            .take()
+            .map_or(Ok(()), Err)
     }
 
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
@@ -295,6 +305,7 @@ mod tests {
 
     fn minimal_session_config() -> SessionConfig {
         SessionConfig {
+            stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
             working_dir: PathBuf::from("/tmp/wt"),
             system_prompt: "sys".into(),

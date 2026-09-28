@@ -37,6 +37,12 @@ pub enum TelegramCockpitError {
     #[error("pairing token has expired or has already been consumed")]
     PairingTokenExpired,
 
+    /// The one-shot code belongs to another chat.
+    #[error("pairing code belongs to another chat")]
+    PairingTargetMismatch,
+    /// Old codes cannot prove their intended target.
+    #[error("legacy unbound code; repeat surge telegram setup --token-env NAME --chat-id ID")]
+    PairingLegacyCode,
     /// A callback referenced a card the cards table no longer has.
     #[error("card not found")]
     CardNotFound,
@@ -65,14 +71,23 @@ pub enum TelegramCockpitError {
 }
 
 impl From<teloxide::RequestError> for TelegramCockpitError {
-    fn from(value: teloxide::RequestError) -> Self {
-        Self::Transport(value.to_string())
+    fn from(_value: teloxide::RequestError) -> Self {
+        Self::Transport("Bot API request failed".into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bot_api_error_payload_is_not_copied_into_owned_diagnostics() {
+        let raw = teloxide::RequestError::Api(teloxide::ApiError::Unknown(
+            "73123:LOG_SECRET_LITERAL".into(),
+        ));
+        let owned = TelegramCockpitError::from(raw);
+        assert!(!format!("{owned:?} {owned}").contains("73123:LOG_SECRET_LITERAL"));
+    }
 
     #[test]
     fn auth_variant_renders_chat_id() {

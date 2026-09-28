@@ -25,6 +25,7 @@ use surge_core::run_event::EventPayload;
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
+use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::seq::EventSeq;
 use tokio::sync::{Mutex, broadcast};
@@ -54,9 +55,35 @@ fn load_archetype(name: &str) -> Graph {
     toml::from_str(&toml_s).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
+/// Valid `spec` contract artifacts (kind=spec, schema_version=1), reused
+/// from the repo's canonical fixtures — see
+/// `crates/surge-orchestrator/tests/fixtures/artifacts/valid/`.
+const SPEC_TOML: &str = include_str!("fixtures/artifacts/valid/spec.toml");
+const SPEC_MD: &str = include_str!("fixtures/artifacts/valid/spec.md");
+/// Valid `verification-report` contract artifact (kind=verification-report,
+/// schema_version=1), required by `verifier@2.0`'s `passed`/`failed`
+/// outcomes.
+const VERIFICATION_REPORT_TOML: &str =
+    include_str!("fixtures/artifacts/valid/verification-report.toml");
+
+/// Files without a profile artifact contract (`implementer@2.0` declares no
+/// `produced_artifacts`) but that downstream archetype stages bind by name
+/// per their `append_system` prompt hint (e.g. `flow_bug_fix.toml`'s
+/// `implement_1` binds `reproduce_1`'s `reproduction`). Content is
+/// unconstrained since nothing validates it; only the file's existence and
+/// stem (used as the artifact's logical name — see `logical_artifact_name`
+/// in `engine/stage/agent.rs`) matter.
+const UNCONTRACTED_ARTIFACTS: &[(&str, &str)] = &[
+    ("reproduction.md", "# Reproduction\nSteps to reproduce.\n"),
+    ("baseline.md", "# Baseline\nCharacterized behavior.\n"),
+    ("changes.patch", "# Changes\nSummary of the diff.\n"),
+    ("findings.md", "# Findings\nExperiment results.\n"),
+];
+
 struct DeterministicMockBridge {
     tx: broadcast::Sender<BridgeEvent>,
     outcomes: Mutex<HashMap<SessionId, OutcomeKey>>,
+    working_dirs: Mutex<HashMap<SessionId, PathBuf>>,
 }
 
 impl DeterministicMockBridge {
@@ -65,12 +92,16 @@ impl DeterministicMockBridge {
         Self {
             tx,
             outcomes: Mutex::new(HashMap::new()),
+            working_dirs: Mutex::new(HashMap::new()),
         }
     }
 }
 
 #[async_trait]
 impl BridgeFacade for DeterministicMockBridge {
+    fn legacy_stage_event_adapter(&self) -> bool {
+        true
+    }
     async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         let session = SessionId::new();
         let outcome = config
@@ -79,6 +110,10 @@ impl BridgeFacade for DeterministicMockBridge {
             .cloned()
             .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
         self.outcomes.lock().await.insert(session, outcome);
+        self.working_dirs
+            .lock()
+            .await
+            .insert(session, config.working_dir);
         Ok(session)
     }
 
@@ -94,11 +129,42 @@ impl BridgeFacade for DeterministicMockBridge {
             .get(&session)
             .cloned()
             .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
+
+        // Every archetype stage's outcome may be bound downstream by name
+        // (e.g. `flow_bug_fix.toml`'s `implement_1` binds `reproduce_1`'s
+        // `reproduction`), and `spec-author@1.0`/`verifier@2.0` additionally
+        // have a `produced_artifacts` contract (validated by
+        // `validate_profile_artifact_contracts` in `engine/stage/agent.rs`)
+        // requiring specific, schema-valid files. Writing the full superset
+        // into every session's working dir and always reporting it is
+        // harmless for profiles that don't need it —
+        // `validate_profile_artifact_contracts` skips validation entirely
+        // when a profile's outcome declares no `produced_artifacts`, and an
+        // unbound artifact is simply never referenced — while satisfying
+        // every archetype's actual requirement without needing this mock to
+        // know which profile a session belongs to.
+        let mut artifacts_produced = Vec::new();
+        if let Some(working_dir) = self.working_dirs.lock().await.get(&session).cloned() {
+            let _ = std::fs::write(working_dir.join("spec.toml"), SPEC_TOML);
+            let _ = std::fs::write(working_dir.join("spec.md"), SPEC_MD);
+            artifacts_produced.push("spec.toml".to_string());
+            artifacts_produced.push("spec.md".to_string());
+            let _ = std::fs::write(
+                working_dir.join("verification-report.toml"),
+                VERIFICATION_REPORT_TOML,
+            );
+            artifacts_produced.push("verification-report.toml".to_string());
+            for (name, content) in UNCONTRACTED_ARTIFACTS {
+                let _ = std::fs::write(working_dir.join(name), content);
+                artifacts_produced.push((*name).to_string());
+            }
+        }
+
         let _ = self.tx.send(BridgeEvent::OutcomeReported {
             session,
             outcome,
             summary: "deterministic mock outcome".into(),
-            artifacts_produced: vec![],
+            artifacts_produced,
         });
         Ok(())
     }
@@ -124,7 +190,7 @@ impl BridgeFacade for DeterministicMockBridge {
         &self,
         _session: SessionId,
         _request_id: String,
-        _response: agent_client_protocol::RequestPermissionResponse,
+        _response: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
         Ok(())
     }
@@ -140,7 +206,24 @@ async fn run_archetype(name: &str) -> Vec<surge_persistence::runs::reader::ReadE
     let bridge = Arc::new(DeterministicMockBridge::new()) as Arc<dyn BridgeFacade>;
     let dispatcher =
         Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    // Without a `ProfileRegistry`, the engine falls back to the legacy M5
+    // mock path, which never merges a profile's own `[sandbox]` section —
+    // so `verifier@2.0`'s `mode = "read-only"` never lands on the node, and
+    // its `passed` outcome (`ledger_effect = "verified"`) trips the
+    // sealed-verifier gate in `engine/stage/agent.rs` unconditionally. The
+    // gate checks the *resolved* sandbox mode, not actual filesystem
+    // activity, so a wired (bundled-only) registry is required for
+    // `flow_bug_fix`/`flow_refactor` to reach `Completed`.
+    let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+    let engine = Engine::new(
+        bridge,
+        storage.clone(),
+        dispatcher,
+        EngineConfig {
+            profile_registry: Some(profile_registry),
+            ..EngineConfig::default()
+        },
+    );
 
     let run_id = RunId::new();
     let handle = engine
@@ -148,7 +231,12 @@ async fn run_archetype(name: &str) -> Vec<surge_persistence::runs::reader::ReadE
             run_id,
             load_archetype(name),
             dir.path().to_path_buf(),
-            EngineRunConfig::default(),
+            // The archetypes' first stage binds `user_prompt`
+            // (`ArtifactSource::InitialPrompt`), as every real run has one.
+            EngineRunConfig {
+                initial_prompt: format!("Exercise the {name} archetype."),
+                ..EngineRunConfig::default()
+            },
         )
         .await
         .unwrap_or_else(|e| panic!("{name}: start_run failed: {e}"));
@@ -171,8 +259,47 @@ async fn run_archetype(name: &str) -> Vec<surge_persistence::runs::reader::ReadE
         .unwrap()
 }
 
+/// Write a trivial always-succeeding executable that ignores its arguments,
+/// for use as `SURGE_BIN`.
+///
+/// `spec-author@1.0` declares real `on_outcome` hooks (`{surge} artifact
+/// validate --kind spec spec.toml`/`spec.md`, `on_failure = "reject"`) that
+/// `ProcessSpawner` shells out to. With no `SURGE_BIN`, `resolve_surge_bin`
+/// falls back to `current_exe()` — this *test* binary — so the hook would
+/// invoke the test harness itself with `artifact validate ...` as libtest
+/// arguments, which it rejects, driving the outcome into an endless
+/// reject/retry loop this deterministic mock bridge (which always reports
+/// the same first outcome) can never escape. This suite exercises the
+/// engine's archetype/binding plumbing, not the hook's shell-validation path
+/// (covered by `crates/surge-orchestrator/src/engine/hooks/mod.rs`'s own
+/// tests), so a stand-in that always succeeds is the right fixture here.
+fn write_noop_surge_bin(dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let path = dir.join("surge-noop.bat");
+        std::fs::write(&path, "@exit /b 0\r\n").unwrap();
+        path
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("surge-noop.sh");
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn all_archetypes_complete_against_deterministic_mock_bridge() {
+    let bin_dir = tempfile::tempdir().expect("tempdir");
+    let noop_bin = write_noop_surge_bin(bin_dir.path());
+    // SAFETY: this is the only test in this binary and it runs before any
+    // other code reads the environment, so there is no data race.
+    unsafe {
+        std::env::set_var("SURGE_BIN", &noop_bin);
+    }
+
     for name in ARCHETYPES {
         let events = run_archetype(name).await;
         assert!(

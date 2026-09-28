@@ -132,6 +132,52 @@ fn chrono_now() -> String {
     format!("{now}")
 }
 
+/// Canonical git common directory of the repository rooted exactly at
+/// `path` (no upward search). A linked worktree reports its source
+/// repository's common dir, which is what ties an isolated run back to
+/// the project it was started from. `None` when `path` is not a
+/// repository root or no longer exists (e.g. a removed worktree).
+pub fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    let repo = git2::Repository::open(path).ok()?;
+    repo.commondir().canonicalize().ok()
+}
+
+/// Which runs belong to the open project.
+///
+/// Runs record where they executed (`RunStarted.project_path`), which for
+/// isolated runs is a worktree under `$SURGE_HOME/worktrees`. Matching on
+/// that path alone would hide a project's own runs and matching nothing
+/// would mix every project's history into one Fleet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectScope {
+    root: PathBuf,
+    git_common_dir: Option<PathBuf>,
+}
+
+impl ProjectScope {
+    /// Resolve the scope for a project root (does filesystem/git IO once).
+    pub fn resolve(root: &Path) -> Self {
+        Self {
+            root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            git_common_dir: git_common_dir(root),
+        }
+    }
+
+    /// `Some(true/false)` when ownership is decidable from the run's
+    /// recorded identity, `None` when the run's `RunStarted` has not been
+    /// observed yet.
+    pub fn owns(&self, run_path: Option<&Path>, run_common_dir: Option<&Path>) -> Option<bool> {
+        if let (Some(ours), Some(theirs)) = (&self.git_common_dir, run_common_dir) {
+            return Some(ours == theirs);
+        }
+        let run_path = run_path?;
+        let run_path = run_path
+            .canonicalize()
+            .unwrap_or_else(|_| run_path.to_path_buf());
+        Some(run_path.starts_with(&self.root))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +216,65 @@ mod tests {
             RecentProjects::file_path_under(None),
             PathBuf::from(".").join(".surge").join("recent.toml")
         );
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn scope_owns_worktree_runs_of_its_repository_only() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = tmp.path().join("project");
+        let other = tmp.path().join("other");
+        for repo in [&project, &other] {
+            std::fs::create_dir_all(repo).expect("mkdir");
+            git(repo, &["init", "-q", "-b", "main"]);
+            git(
+                repo,
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "base",
+                ],
+            );
+        }
+        let worktree = tmp.path().join("run-wt");
+        git(
+            &project,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                worktree.to_str().expect("utf8"),
+                "-b",
+                "run",
+            ],
+        );
+
+        let scope = ProjectScope::resolve(&project);
+        let owns = |path: &Path| scope.owns(Some(path), git_common_dir(path).as_deref());
+
+        assert_eq!(owns(&worktree), Some(true), "isolated worktree run is ours");
+        assert_eq!(owns(&project), Some(true), "in-place run is ours");
+        assert_eq!(owns(&other), Some(false), "another repository is not ours");
+        // A removed worktree has no git identity left; the path decides.
+        assert_eq!(
+            scope.owns(Some(&tmp.path().join("gone")), None),
+            Some(false)
+        );
+        assert_eq!(scope.owns(None, None), None, "unknown until RunStarted");
     }
 }

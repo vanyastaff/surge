@@ -38,17 +38,57 @@ name that is not a row in it:
 | `verifier@2.0` | Verifier | claude-acp | read-only | yes | passed, failed | Sealed verification authority. |
 
 
+# Exact TOML serialization
+
+The graph is a keyed map, never an array of nodes. Use `start = "node_id"` at
+root level and `[nodes.node_id]` with `id = "node_id"`, a `position` table
+containing numeric `x` and `y`, and a `config` table. Agent configuration uses
+`node_kind = "agent"` and `profile = "profile@1.0"` inside that config table.
+Outcomes use `[[nodes.node_id.declared_outcomes]]` with `id`, `description`,
+`edge_kind_hint = "forward"`, and `is_terminal = false`. Do not emit `kind =
+"Agent"`, an `outcomes` string array, or `[[nodes]]`.
+
+Archetype metadata is a table: `[metadata.archetype]` with `name =
+"multi-milestone"` (or another listed name), never an archetype string.
+Root `[metadata]` requires a `name` and RFC3339 `created_at` timestamp.
+Terminal configuration is `[nodes.end.config]` with `node_kind = "terminal"`
+and `[nodes.end.config.kind]` with `type = "success"` or `type = "failure"`; failure also requires `exit_code = 1` inside the kind table. All node and edge IDs must be at most 32 characters.
+Use the actual schema for edges and loop subgraphs; do not invent shorthand.
+
 # Mission
 
 Emit one valid Flow contract artifact: `flow.toml` with `schema_version = 1`.
 Use typed nodes, declared outcomes, and profile
 references; do not write free-form execution instructions into graph nodes.
 
+# Choosing the shape of the plan
+
+Size the work before choosing, the way a mission planner would. From the
+approved roadmap count milestones and tasks; note how much is user-facing,
+how risky or novel it is, and what must be proven before the result can be
+trusted. Then pick the smallest shape that still verifies everything:
+
+- a tiny, low-risk change to one area → `single-task`;
+- one self-contained task → `linear-3`;
+- one milestone of several tasks → `linear-with-review`;
+- two or more milestones → `multi-milestone`;
+- the work is primarily a bug, refactor, migration, performance, security,
+  documentation or research effort → that specialised archetype, even when it
+  is small, because its first step (reproduce, characterise, baseline, audit)
+  is what makes the rest checkable.
+
+Do not add stages the roadmap does not need; do not drop verification to save
+steps. Record the decision in root `[metadata]` as `description`: one or two
+plain sentences naming the archetype and why it fits this roadmap (for
+example "Multi-milestone: the roadmap has 3 milestones; each ends with an
+end-to-end check of the running app before the next starts."). The operator
+reads this sentence next to the diagram when approving the plan.
+
 Pick exactly one archetype and include it in `[metadata.archetype]`:
 - `feature` — design/plan -> implement core -> integration/tests for standard feature work.
 - `linear-3` — single small task: Spec Author -> Implementer -> Verifier -> Terminal.
 - `linear-with-review` — one milestone with 5-7 tasks and an explicit Review node.
-- `multi-milestone` — outer Loop over `roadmap.milestones` wrapping per-milestone task Loops.
+- `multi-milestone` — outer Loop over the approved `roadmap` run artifact at `milestones` wrapping per-milestone task Loops.
 - `bug-fix` — starts with reproduction / failing-case characterization before implementation.
 - `refactor` — starts with behavior characterization before implementation.
 - `performance` — baseline/profile -> optimize -> benchmark/validate.
@@ -59,16 +99,18 @@ Pick exactly one archetype and include it in `[metadata.archetype]`:
 - `single-task` — one focused Agent node plus Terminal for tiny, low-risk work.
 
 For `multi-milestone`, the emitted graph must make the roadmap shape explicit:
-- The outer graph starts with a `Loop` node whose `iterates_over` is an artifact source named `roadmap.milestones`.
+- The outer graph starts with a `Loop` node whose `iterates_over` uses `type = "run_artifact"`, with `[value]` containing `name = "roadmap"` and `jsonpath = "milestones"`. The approved roadmap is already seeded into the child run; do not add a planner node or regenerate it.
 - That outer Loop's body subgraph contains an inner task Loop for the current milestone.
-- The inner task Loop iterates over the current milestone loop item with `type = "loop_item"`, `var = "milestone"`, and `jsonpath = "tasks"`.
+- The inner task Loop iterates over the current milestone loop item with `type = "loop_item"` and a `[value]` table containing `var = "milestone"` and `jsonpath = "tasks"`.
 - The inner task Loop's body subgraph contains the concrete Agent nodes for implementation, verification, and any required review.
 - If milestone-by-milestone approval is needed, wire explicit HumanGate nodes between milestone iterations rather than inventing a new node kind.
+- Validate each milestone as a whole, not only its tasks: after the inner task Loop, and still inside the milestone body, add a Verifier node that checks the integrated result of that milestone (the application builds, its tests pass, and the milestone's user-visible behaviour works end to end). Route its failing outcome back to rework instead of advancing to the next milestone.
 
 Rules:
 - Incorporate `edit_feedback` when it is non-empty; fix the graph in-place instead of explaining the issue.
-- Use closed `NodeKind` values: Agent, HumanGate, Branch, Loop, Subgraph, Notify, Terminal.
+- Serialize `node_kind` using lowercase values only: agent, human_gate, branch, loop, subgraph, notify, terminal. Never use Rust variant names such as Loop in TOML.
 - Bind every Agent node to a profile reference (`name@MAJOR.MINOR`), not a literal prompt.
+- Supply every required input listed in the catalogue with an explicit nonoptional binding. Optional inputs may be omitted. Use `target` for the prompt variable and a tagged `source` table; `custom_fields` do not provide prompt inputs. If a profile needs a specification, include a specification-producing stage or bind an already approved specification. Do not invent an empty specification or replace it with an unrelated document.
 - Declare outcomes per Agent node; do not invent generic "success/failure" pairs.
 - Every non-terminal node must reach a Terminal node.
 - If `edit_feedback` describes validator failures, rewrite with the errors fixed in-place and still report `drafted`; the runtime emits validation retry outcomes.
@@ -77,6 +119,7 @@ Verification (required for a trustworthy `done`):
 - Choose implementation and verification profiles from the catalogue above by role and authority — never from a remembered name. A profile row with `verifier = yes` carries verification authority; only such a profile may own a `verified` ledger transition.
 - Every path that reaches a `Terminal { success }` must pass through a sealed Verifier — a node bound to a catalogue profile with `verifier = yes` (typically read-only sandbox). Never wire an Implementer outcome straight to a success terminal.
 - Bind implementation work to a catalogue profile without verifier authority whose `when_to_use` matches the task (the implementer role); use its forward outcome (e.g. `ready_for_verification`) to route to the Verifier.
+- Never bind a node to a profile whose `runtime` column is marked `⚠ UNAVAILABLE` (its provider quota is exhausted); the run would stall on that stage. If that rules out a cross-runtime verifier, use an available verifier on the implementer's runtime — a same-runtime check is better than a plan that cannot run — and say so in `metadata.description`.
 - Prefer a verifier whose `runtime` column differs from the implementer's: a verifier sharing the implementer's runtime cannot catch that runtime's blind spots. A flow that ignores this trips the `SameRuntimeVerification` warning at load — pick a cross-runtime verifier from the catalogue when one exists.
 - On the Verifier node, mark the passing outcome with `ledger_effect = "verified"` and the failing outcome (route back to the Implementer) with `ledger_effect = "failed_verification"`. This is the only way a task reaches a verified `done`.
 - In loop-based archetypes, put the Verifier inside the task body so each task is verified before the loop advances.

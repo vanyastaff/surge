@@ -48,6 +48,9 @@ pub enum OpenError {
 /// Failure modes for reads and writes against an open run.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    /// Durable bootstrap ownership could not be read; legacy launchers must fail closed.
+    #[error("bootstrap ownership journal: {0}")]
+    BootstrapJournal(#[from] super::bootstrap_operations::BootstrapStoreError),
     /// SQLite-level error.
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),

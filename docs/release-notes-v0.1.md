@@ -6,8 +6,7 @@
 > **describe → approve roadmap/flow → walk away → return to a PR.**
 > Agent-agnostic (ACP), source-agnostic, sandbox-delegated.
 
-Status: **draft** — finalize the date, crates.io links, and install
-one-liners at tag time.
+Status: **draft** — finalize the date and verify native release builds at tag time.
 
 ## Highlights
 
@@ -35,25 +34,34 @@ one-liners at tag time.
 
 ## Install
 
-> Pending: `cargo publish` of the publishable crates and the Homebrew tap /
-> Scoop manifest. Until then, build from source.
+Release archives contain the CLI **and** its sibling daemon, README, and both
+licenses. Four targets are packaged: GNU Linux x86_64, macOS Intel, macOS
+Apple Silicon (`.tar.gz`), and Windows x86_64 (`.zip`). Download an archive and
+`SHA256SUMS` from [GitHub Releases](https://github.com/vanyastaff/surge/releases)
+once the tag is published. Follow the
+[checksum and installation instructions](getting-started.md#install-a-release-archive),
+keeping both executables in the same directory on `PATH`.
+
+The release workflow builds the Linux archive on Ubuntu 24.04; it requires compatible glibc and
+native libraries, including OpenSSL; it is not a static musl binary. macOS
+archive smoke tests are configured on macOS 15. All four native archive smoke
+tests must pass in the release workflow before publication; a successful native
+release run has not yet been verified for this draft. A manual branch run produces workflow artifacts
+without publishing a release.
+
+crates.io, Homebrew, and Scoop distribution remain pending.
 
 From source (stable Rust ≥ 1.96):
 
 ```shell
 git clone https://github.com/vanyastaff/surge
 cd surge
-cargo build --release
+cargo build --locked --release -p surge-cli -p surge-daemon
 ./target/release/surge --version
+./target/release/surge-daemon --version
 ```
 
-Planned at/after tag:
-
-```shell
-cargo install surge-cli            # once published to crates.io
-brew install vanyastaff/tap/surge  # Homebrew tap (planned)
-scoop install surge                # Scoop manifest, Windows (planned)
-```
+Install both executables together on `PATH` before the first run.
 
 First run:
 

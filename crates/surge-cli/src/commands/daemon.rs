@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 
+/// How long `surge daemon start|restart` waits for the socket to accept.
+const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Subcommands under `surge daemon`.
 #[derive(Subcommand, Debug)]
 pub enum DaemonCommands {
@@ -29,7 +32,12 @@ pub enum DaemonCommands {
     /// Print daemon status (pid, socket, ping ok/err).
     Status,
     /// Restart the daemon (stop + start).
-    Restart,
+    Restart {
+        /// Time to wait for shutdown, including the daemon's grace window.
+        /// Increase this if surge-daemon uses a custom --shutdown-grace.
+        #[arg(long, default_value_t = 45)]
+        wait_timeout_secs: u64,
+    },
     /// Preview (or apply) crash-recovery decisions for non-terminal runs.
     ///
     /// Recovery also runs automatically when the daemon starts. This
@@ -54,12 +62,12 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
         } => start(detached, max_active).await,
         DaemonCommands::Stop { force } => stop(force).await,
         DaemonCommands::Status => status().await,
-        DaemonCommands::Restart => {
+        DaemonCommands::Restart { wait_timeout_secs } => {
             if let Err(e) = stop(false).await {
                 eprintln!("note: stop failed during restart: {e}");
             }
             // Wait for the old daemon to actually exit before spawning the new one.
-            wait_for_daemon_exit(Duration::from_secs(10)).await?;
+            wait_for_daemon_exit(Duration::from_secs(wait_timeout_secs)).await?;
             start(true, 8).await
         },
         DaemonCommands::Recover { dry_run } => recover(dry_run).await,
@@ -225,6 +233,25 @@ async fn start(detached: bool, max_active: usize) -> Result<()> {
 
     let mut cmd = std::process::Command::new(daemon_binary_path()?);
     cmd.arg("--max-active").arg(max_active.to_string());
+    let detached_log = if detached {
+        let daemon_dir = pidfile::daemon_dir()?;
+        std::fs::create_dir_all(&daemon_dir)
+            .with_context(|| format!("create daemon directory {}", daemon_dir.display()))?;
+        let log_path = daemon_dir.join("daemon.log");
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .with_context(|| format!("open daemon log {}", log_path.display()))?;
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(
+                log.try_clone().context("clone daemon log handle")?,
+            ))
+            .stderr(std::process::Stdio::from(log));
+        Some(log_path)
+    } else {
+        None
+    };
     if detached {
         cmd.arg("--detached");
         #[cfg(unix)]
@@ -244,20 +271,38 @@ async fn start(detached: bool, max_active: usize) -> Result<()> {
             cmd.creation_flags(0x0000_0008 | 0x0000_0200);
         }
     }
-    let child = cmd.spawn().context("spawn surge-daemon")?;
+    let mut child = cmd.spawn().context("spawn surge-daemon")?;
     println!("started surge-daemon (pid {})", child.id());
+    if let Some(path) = &detached_log {
+        println!("daemon log: {}", path.display());
+    }
 
     // Poll for daemon readiness via connect attempt.
     // On Windows the named pipe lives in \\.\pipe\ namespace and has no
     // filesystem entry, so socket_path.exists() would always be false.
     // A successful DaemonEngineFacade::connect proves the listener is bound.
     let socket_path = pidfile::socket_path()?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Early exit is detected below, so this only bounds a live daemon that
+    // is slow to bind (cold caches, a loaded machine): 5s produced false
+    // "did not become ready" failures for daemons that came up fine.
+    let deadline = std::time::Instant::now() + DAEMON_READY_TIMEOUT;
     loop {
-        if std::time::Instant::now() >= deadline {
+        if let Some(status) = child.try_wait().context("check surge-daemon startup")? {
+            let details = detached_log
+                .as_ref()
+                .map_or_else(String::new, |path| format!("; see {}", path.display()));
             return Err(anyhow!(
-                "daemon at {} did not become ready within 5s",
-                socket_path.display()
+                "surge-daemon exited during startup ({status}){details}"
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let details = detached_log
+                .as_ref()
+                .map_or_else(String::new, |path| format!("; see {}", path.display()));
+            return Err(anyhow!(
+                "daemon at {} did not become ready within {}s{details}",
+                socket_path.display(),
+                DAEMON_READY_TIMEOUT.as_secs(),
             ));
         }
         match DaemonEngineFacade::connect(socket_path.clone()).await {

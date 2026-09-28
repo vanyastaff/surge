@@ -149,7 +149,7 @@ impl BridgeFacade for RealAcpBridge {
         &self,
         session: SessionId,
         request_id: String,
-        response: agent_client_protocol::RequestPermissionResponse,
+        response: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
         self.inner
             .reply_to_permission(session, request_id, response)

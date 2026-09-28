@@ -136,6 +136,8 @@ pub async fn run_feature_planner(
     let agent_config = feature_planner_agent_config(params.request, params.roadmap)?;
 
     let outcome = execute_agent_stage(AgentStageParams {
+        frames: &[],
+        cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
         agent_config: &agent_config,

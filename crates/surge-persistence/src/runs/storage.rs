@@ -104,6 +104,13 @@ impl Storage {
         crate::task_ledger::TaskLedgerStore::new(self.registry_pool.clone())
     }
 
+    /// Durable bootstrap operation journal; execution is owned by the daemon.
+    pub fn bootstrap_operation_store(
+        &self,
+    ) -> super::bootstrap_operations::BootstrapOperationStore {
+        super::bootstrap_operations::BootstrapOperationStore::new(self.registry_pool.clone())
+    }
+
     /// Mirror a run's folded task-ledger into the cross-run registry index.
     ///
     /// Reads the run's per-run `task_ledger` view (maintained in the append

@@ -32,7 +32,7 @@ use crate::card::emit::{CardStore, TelegramApi};
 use crate::cockpit::callback::{Admission, EngineResolver};
 use crate::cockpit::run::UpdateRoutes;
 use crate::cockpit::snooze::{CockpitSnoozeQueue, CockpitSnoozeRescheduler, DueSnooze};
-use crate::commands::status::RunSnapshotProvider;
+use crate::commands::status::{PendingRequestBatch, PendingRequestFailure, RunSnapshotProvider};
 use crate::error::{Result, TelegramCockpitError};
 
 /// SQLite-backed `CardStore` wrapping `Arc<Storage>`.
@@ -216,35 +216,192 @@ fn build_inline_keyboard(rows: &[Vec<InboxKeyboardButton>]) -> InlineKeyboardMar
     InlineKeyboardMarkup::new(mapped)
 }
 
-/// `RunSnapshotProvider` backed by the persistence layer's
-/// `query::current_status`. Opens a run reader per call; if the run
-/// has no reader (run never started or pruned), surfaces `None`.
+/// Read-only durable snapshots and pending-request recovery.
+/// Unreadable or missing registered journals are errors, never absent runs.
 #[derive(Clone)]
 pub struct PersistenceSnapshots {
     /// Shared storage handle.
     pub storage: Arc<Storage>,
 }
 
+impl PersistenceSnapshots {
+    async fn pending_request_for_run(&self, run_id: RunId) -> Result<Option<RunEventTap>> {
+        let inspection = self
+            .storage
+            .inspect_run(run_id)
+            .await
+            .map_err(|error| TelegramCockpitError::Persistence(error.to_string()))?;
+        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+            inspection.database
+        else {
+            return Err(TelegramCockpitError::Persistence(
+                "registered run event database is missing".into(),
+            ));
+        };
+        pending_request(run_id, &events)
+    }
+}
+
 #[async_trait]
 impl RunSnapshotProvider for PersistenceSnapshots {
-    async fn snapshot(&self, run_id: RunId) -> Result<Option<RunStatusSnapshot>> {
-        let reader = match self.storage.open_run_reader(run_id).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(
-                    target: "telegram::cockpit::production",
-                    %run_id,
-                    error = %e,
-                    "open_run_reader returned err; treating run as unknown"
-                );
-                return Ok(None);
-            },
-        };
-        let snapshot = surge_persistence::runs::query::current_status(&reader, run_id)
+    async fn pending_requests(&self) -> Result<PendingRequestBatch> {
+        let mut batch = PendingRequestBatch::default();
+        for status in [
+            surge_core::RunStatus::Running,
+            surge_core::RunStatus::Bootstrapping,
+        ] {
+            let runs = self
+                .storage
+                .list_runs(surge_persistence::runs::registry::RunFilter {
+                    status: Some(status),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|error| TelegramCockpitError::Persistence(error.to_string()))?;
+            for run in runs {
+                match self.pending_request_for_run(run.id).await {
+                    Ok(Some(request)) => batch.requests.push(request),
+                    Ok(None) => {},
+                    Err(error) => batch.failures.push(PendingRequestFailure {
+                        run_id: run.id,
+                        error,
+                    }),
+                }
+            }
+        }
+        Ok(batch)
+    }
+
+    async fn request_settled(&self, card: &Card) -> Result<bool> {
+        let run_id = card
+            .run_id
+            .parse::<RunId>()
+            .map_err(|_| TelegramCockpitError::CardClosed)?;
+        let inspection = self
+            .storage
+            .inspect_run(run_id)
             .await
             .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
+        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+            inspection.database
+        else {
+            return Err(TelegramCockpitError::Persistence(
+                "approval journal is missing".into(),
+            ));
+        };
+        Ok(exact_request_settled(card, &events))
+    }
+
+    async fn snapshot(&self, run_id: RunId) -> Result<Option<RunStatusSnapshot>> {
+        let inspection = self
+            .storage
+            .inspect_run(run_id)
+            .await
+            .map_err(|error| TelegramCockpitError::Persistence(error.to_string()))?;
+        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+            inspection.database
+        else {
+            if inspection.registry.is_some() || inspection.run_directory_present {
+                return Err(TelegramCockpitError::Persistence(
+                    "run event database is missing".into(),
+                ));
+            }
+            return Ok(None);
+        };
+        let snapshot = surge_persistence::runs::query::aggregate_status(run_id, &events);
         Ok(Some(snapshot))
     }
+}
+
+/// A newer request alone is never evidence that the card's request was settled.
+fn exact_request_settled(card: &Card, events: &[surge_persistence::runs::ReadEvent]) -> bool {
+    use surge_core::EventPayload;
+    let Some(source) = events
+        .iter()
+        .find(|event| i64::try_from(event.seq.0).ok() == Some(card.attempt_index))
+    else {
+        return false;
+    };
+    let EventPayload::HumanInputRequested {
+        node,
+        session: None,
+        call_id: Some(request),
+        ..
+    } = &source.payload.payload
+    else {
+        return false;
+    };
+    if node.as_str() != card.node_key
+        || surge_core::id::GateRequestId::from_event_call_id(request).is_none()
+    {
+        return false;
+    }
+    events
+        .iter()
+        .filter(|event| event.seq.0 > source.seq.0)
+        .any(|event| match &event.payload.payload {
+            EventPayload::HumanInputResolved {
+                node: resolved_node,
+                call_id,
+                ..
+            }
+            | EventPayload::HumanInputTimedOut {
+                node: resolved_node,
+                call_id,
+                ..
+            } => resolved_node == node && call_id.as_ref() == Some(request),
+            _ => false,
+        })
+}
+
+/// Fold one read-only snapshot. A request is actionable only at the current node.
+fn pending_request(
+    run_id: RunId,
+    events: &[surge_persistence::runs::ReadEvent],
+) -> Result<Option<RunEventTap>> {
+    let log: Vec<_> = events
+        .iter()
+        .map(|event| surge_core::run_event::RunEvent {
+            run_id,
+            seq: event.seq.0,
+            timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms)
+                .unwrap_or_default(),
+            payload: event.payload.payload.clone(),
+        })
+        .collect();
+    let state = surge_core::run_state::fold(&log)
+        .map_err(|error| TelegramCockpitError::Persistence(error.to_string()))?;
+    let surge_core::run_state::RunState::Pipeline {
+        cursor,
+        graph,
+        pending_human_input: Some(pending),
+        parked: None,
+        ..
+    } = state
+    else {
+        return Ok(None);
+    };
+    if cursor.node != pending.node || graph.find_node(&pending.node).is_none() {
+        return Ok(None);
+    }
+    let Some(event) = events
+        .iter()
+        .find(|event| event.seq.0 == pending.requested_seq)
+    else {
+        return Ok(None);
+    };
+    match &event.payload.payload {
+        surge_core::EventPayload::HumanInputRequested {
+            session: None,
+            call_id: Some(id),
+            ..
+        } if surge_core::id::GateRequestId::from_event_call_id(id).is_some() => {},
+        _ => return Ok(None), // Legacy unbound requests are readable, never actionable.
+    }
+    Ok(Some(RunEventTap {
+        run_id,
+        event: event.clone(),
+    }))
 }
 
 /// `CockpitSnoozeQueue` backed by the `inbox_action_queue` table.
@@ -284,11 +441,20 @@ impl CockpitSnoozeQueue for PersistenceSnoozeQueue {
     }
 }
 
+/// Shared polling routes tracker inbox callbacks to their owning subsystem.
+#[async_trait]
+pub trait InboxCallbacks: Send + Sync {
+    /// Validate the originating chat and enqueue the existing inbox action.
+    async fn handle(&self, chat_id: i64, data: &str) -> Result<String>;
+}
+
 /// `EngineResolver` wrapping `Arc<dyn EngineFacade>`. Parses the
 /// string `run_id` back into a `RunId` (the callback layer carries the
 /// id as a string column from `telegram_cards`).
 #[derive(Clone)]
 pub struct EngineFacadeResolver {
+    /// Read-only evidence used to bind a card to its original request.
+    pub storage: Arc<Storage>,
     /// Engine facade — production wraps `LocalEngineFacade` or
     /// `DaemonEngineFacade`.
     pub engine: Arc<dyn EngineFacade>,
@@ -296,19 +462,65 @@ pub struct EngineFacadeResolver {
 
 #[async_trait]
 impl EngineResolver for EngineFacadeResolver {
-    async fn resolve_human_input(
-        &self,
-        run_id: &str,
-        call_id: Option<String>,
-        response: serde_json::Value,
-    ) -> Result<()> {
-        let parsed = run_id
-            .parse::<RunId>()
-            .map_err(|e| TelegramCockpitError::Persistence(format!("invalid run_id: {e}")))?;
+    async fn resolve_card(&self, card: &Card, response: serde_json::Value) -> Result<()> {
+        let (run_id, node, request_id) = self.card_request(card).await?;
         self.engine
-            .resolve_human_input(parsed, call_id, response)
+            .resolve_gate_input(run_id, node, request_id, response)
             .await?;
         Ok(())
+    }
+}
+
+impl EngineFacadeResolver {
+    pub(super) async fn card_request(
+        &self,
+        card: &Card,
+    ) -> Result<(
+        RunId,
+        surge_core::keys::NodeKey,
+        surge_core::id::GateRequestId,
+    )> {
+        let run_id = card
+            .run_id
+            .parse::<RunId>()
+            .map_err(|_| TelegramCockpitError::CardClosed)?;
+        let inspection = self
+            .storage
+            .inspect_run(run_id)
+            .await
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
+        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+            inspection.database
+        else {
+            return Err(TelegramCockpitError::Persistence(
+                "approval journal is missing".into(),
+            ));
+        };
+        // Select the source event by the card's immutable sequence first. Current
+        // state only validates that exact request; it never supplies a replacement.
+        let request = events
+            .iter()
+            .find(|event| i64::try_from(event.seq.0).ok() == Some(card.attempt_index))
+            .ok_or(TelegramCockpitError::CardClosed)?;
+        let current = pending_request(run_id, &events)?.ok_or(TelegramCockpitError::CardClosed)?;
+        if card.closed_at.is_some() || current.event.seq != request.seq {
+            return Err(TelegramCockpitError::CardClosed);
+        }
+        let surge_core::EventPayload::HumanInputRequested {
+            node,
+            session: None,
+            call_id: Some(call_id),
+            ..
+        } = request.payload.payload.clone()
+        else {
+            return Err(TelegramCockpitError::CardClosed);
+        };
+        if node.as_str() != card.node_key {
+            return Err(TelegramCockpitError::CardClosed);
+        }
+        let request_id = surge_core::id::GateRequestId::from_event_call_id(&call_id)
+            .ok_or(TelegramCockpitError::CardClosed)?;
+        Ok((run_id, node, request_id))
     }
 }
 
@@ -339,39 +551,24 @@ pub struct PersistencePairingConsumer {
 
 #[async_trait]
 impl crate::commands::PairingTokenConsumer for PersistencePairingConsumer {
-    async fn consume(&self, token: &str, now_ms: i64) -> Result<String> {
-        use surge_persistence::telegram::pairing::{PairingError, consume_pairing_token};
+    async fn pair_with_token(&self, token: &str, chat_id: i64, now_ms: i64) -> Result<String> {
+        use surge_persistence::telegram::pairing::{PairingError, pair_with_token};
         let conn = self
             .storage
             .acquire_registry_conn()
             .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
-        match consume_pairing_token(&conn, token, now_ms) {
+        match pair_with_token(&conn, token, chat_id, now_ms) {
             Ok(label) => Ok(label),
+            Err(PairingError::WrongChat | PairingError::InvalidTarget) => {
+                Err(TelegramCockpitError::PairingTargetMismatch)
+            },
+            Err(PairingError::LegacyUnbound) => Err(TelegramCockpitError::PairingLegacyCode),
             Err(PairingError::NotFound) => Err(TelegramCockpitError::PairingTokenInvalid),
             Err(PairingError::Expired) | Err(PairingError::AlreadyConsumed) => {
                 Err(TelegramCockpitError::PairingTokenExpired)
             },
             Err(other) => Err(TelegramCockpitError::Persistence(other.to_string())),
         }
-    }
-}
-
-/// `PairingWriter` backed by `surge_persistence::telegram::pairings::pair`.
-#[derive(Clone)]
-pub struct PersistencePairingWriter {
-    /// Shared storage handle.
-    pub storage: Arc<Storage>,
-}
-
-#[async_trait]
-impl crate::commands::PairingWriter for PersistencePairingWriter {
-    async fn pair(&self, chat_id: i64, user_label: &str, now_ms: i64) -> Result<()> {
-        let conn = self
-            .storage
-            .acquire_registry_conn()
-            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
-        surge_persistence::telegram::pairings::pair(&conn, chat_id, user_label, now_ms)
-            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))
     }
 }
 
@@ -470,6 +667,8 @@ impl crate::commands::CockpitSnoozeWriter for PersistenceCockpitSnoozeWriter {
 /// `/feedback <run_id> <text>` command is the recommended path.
 #[derive(Clone)]
 pub struct ProductionRoutes {
+    /// Existing tracker-inbox action owner; provided by the daemon.
+    pub inbox: Option<Arc<dyn InboxCallbacks>>,
     /// Pairings allowlist.
     pub admission: PairingsAdmission,
     /// Engine resolver used by the callback router.
@@ -480,8 +679,6 @@ pub struct ProductionRoutes {
     pub bot: teloxide::Bot,
     /// Pairing token consumer (for `/pair`).
     pub pairing_consumer: PersistencePairingConsumer,
-    /// Pairing writer (for `/pair`).
-    pub pairing_writer: PersistencePairingWriter,
     /// Run-status snapshot provider (for `/status`).
     pub snapshots: PersistenceSnapshots,
     /// Run list provider (for `/runs`).
@@ -495,7 +692,7 @@ pub struct ProductionRoutes {
 }
 
 impl ProductionRoutes {
-    async fn admit(&self, chat_id: i64) -> bool {
+    pub(super) async fn admit(&self, chat_id: i64) -> bool {
         match self.admission.is_admitted(chat_id).await {
             Ok(true) => true,
             Ok(false) => {
@@ -521,20 +718,9 @@ impl ProductionRoutes {
 
 #[async_trait]
 impl UpdateRoutes for ProductionRoutes {
-    async fn handle_callback(&self, chat_id: i64, data: &str, _callback_query_id: &str) {
-        let ctx = crate::cockpit::callback::CallbackCtx {
-            store: self.store.clone(),
-            admission: self.admission.clone(),
-            engine: self.engine.clone(),
-        };
-        if let Err(err) = crate::cockpit::callback::handle_callback(chat_id, data, &ctx).await {
-            warn!(
-                target: "telegram::callback",
-                %chat_id,
-                error = %err,
-                "callback handler returned error; cockpit continues",
-            );
-        }
+    async fn handle_callback(&self, chat_id: i64, data: &str, callback_query_id: &str) {
+        self.dispatch_callback(chat_id, data, callback_query_id)
+            .await;
     }
 
     async fn handle_command(&self, chat_id: i64, text: &str) {
@@ -555,20 +741,13 @@ impl UpdateRoutes for ProductionRoutes {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let reply_res: crate::error::Result<crate::commands::CommandReply> = match cmd {
             "/pair" => {
-                crate::commands::handle_pair(
-                    chat_id,
-                    args,
-                    &self.pairing_consumer,
-                    &self.pairing_writer,
-                    now_ms,
-                )
-                .await
+                crate::commands::handle_pair(chat_id, args, &self.pairing_consumer, now_ms).await
             },
             "/status" => crate::commands::handle_status(chat_id, args, &self.snapshots).await,
             "/runs" => crate::commands::handle_runs(chat_id, args, &self.run_list).await,
             "/run" => crate::commands::handle_run(chat_id, args, &self.run_starter).await,
             "/abort" => crate::commands::handle_abort(chat_id, args, &self.run_aborter).await,
-            "/feedback" => crate::commands::handle_feedback(chat_id, args, &self.engine).await,
+            "/feedback" => Ok(crate::commands::handle_feedback()),
             "/snooze" => Ok(crate::commands::CommandReply::new(
                 "ℹ `/snooze <duration>` works only as a *reply* to a cockpit card — reply to the card you want to defer.",
             )),
@@ -599,22 +778,8 @@ impl UpdateRoutes for ProductionRoutes {
     }
 
     async fn handle_reply(&self, chat_id: i64, reply_to_message_id: i64, text: &str) {
-        if !self.admit(chat_id).await {
-            return;
-        }
-        // Forced-reply paths (snooze-by-reply for cards, edit-feedback
-        // forced-reply) require a `CardStore::find_by_chat_message`
-        // lookup that has not been added yet — tracked as a follow-up
-        // alongside the snooze-by-card and Edit-prompt features. For
-        // now we INFO-log the reply and point the operator at the
-        // command equivalents.
-        info!(
-            target: "telegram::cmd::reply",
-            %chat_id,
-            reply_to_message_id,
-            text_len = text.len(),
-            "free-text reply received; use /feedback <run_id> <text> or /snooze (deferred)",
-        );
+        self.dispatch_edit_reply(chat_id, reply_to_message_id, text)
+            .await;
     }
 }
 
@@ -622,7 +787,7 @@ impl ProductionRoutes {
     /// Send a plain-text reply to the originating chat. No `parse_mode`
     /// is set (text rendering uses literal Markdown that we keep as-is;
     /// MarkdownV2 would require pervasive escaping of operator content).
-    async fn send_reply(&self, chat_id: i64, text: &str) {
+    pub(super) async fn send_reply(&self, chat_id: i64, text: &str) {
         use teloxide::prelude::Requester as _;
         if let Err(err) = self
             .bot
@@ -632,7 +797,7 @@ impl ProductionRoutes {
             warn!(
                 target: "telegram::cmd::reply",
                 %chat_id,
-                error = %err,
+                error = %TelegramCockpitError::from(err),
                 "bot.send_message reply failed",
             );
         }
@@ -648,6 +813,8 @@ fn split_command(text: &str) -> (&str, &str) {
 /// of these from its already-built `Storage` + `EngineFacade` + bot
 /// token, then calls [`spawn_cockpit`].
 pub struct CockpitWiring {
+    /// Optional tracker inbox owner sharing this bot's sole update stream.
+    pub inbox: Option<Arc<dyn InboxCallbacks>>,
     /// Shared storage handle (registry pool, secrets, cards, pairings).
     pub storage: Arc<Storage>,
     /// Engine facade for callback → human-input resolution.
@@ -685,6 +852,7 @@ pub struct CockpitHandles {
 #[must_use]
 pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> CockpitHandles {
     let CockpitWiring {
+        inbox,
         storage,
         engine,
         bot,
@@ -710,12 +878,10 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
         storage: Arc::clone(&storage),
     };
     let engine_resolver = EngineFacadeResolver {
+        storage: Arc::clone(&storage),
         engine: Arc::clone(&engine),
     };
     let pairing_consumer = PersistencePairingConsumer {
-        storage: Arc::clone(&storage),
-    };
-    let pairing_writer = PersistencePairingWriter {
         storage: Arc::clone(&storage),
     };
     let run_list = PersistenceRunList {
@@ -734,12 +900,12 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
         admin_chat_id,
     };
     let routes = ProductionRoutes {
+        inbox,
         admission,
         engine: engine_resolver,
         store: card_store.clone(),
         bot: bot_for_routes,
         pairing_consumer,
-        pairing_writer,
         snapshots: snapshots.clone(),
         run_list,
         run_aborter,

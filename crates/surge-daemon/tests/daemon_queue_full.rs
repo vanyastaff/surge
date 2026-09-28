@@ -3,7 +3,7 @@
 //! `Error { code: QueueFull }` instead of growing the daemon's
 //! pending-start map without bound.
 //!
-//! Setup: `run_server` with `max_active=1, max_queue=1` and a stub
+//! Setup: `run_synthetic_server` with `max_active=1, max_queue=1` and a stub
 //! facade whose first `start_run` holds the events channel open
 //! until the test releases it. That keeps run 1 active and the queue
 //! occupied (after run 2 lands), so the third `StartRun` must hit
@@ -30,7 +30,7 @@ use std::time::Duration;
 use interprocess::local_socket::tokio::prelude::*;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -194,7 +194,7 @@ async fn third_start_run_at_saturation_returns_queue_full() {
 
     let server_handle = tokio::spawn({
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, stub_for_facade, shutdown).await }
+        async move { run_synthetic_server(cfg, stub_for_facade, shutdown).await }
     });
 
     // Wait for the listener to come up before connecting.

@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 
-use gpui::Hsla;
+use gpui_kit::Hsla;
 use surge_core::run_event::EventPayload;
 use surge_orchestrator::engine::handle::EngineRunEvent;
 
@@ -89,9 +89,9 @@ pub enum DecisionKind {
     /// `HumanInputRequested` — resolvable via `resolve_human_input`.
     ///
     /// This is the ONLY event a paused gate emits that the operator can
-    /// answer in-band. `call_id: Some` = tool-driven request (response
-    /// forwarded verbatim to the caller); `call_id: None` = a HumanGate
-    /// pause — the engine requires `{"outcome": <key>}` where the valid
+    /// answer in-band. Namespaced `GateRequestId` identifies a gate; other scoped
+    /// call IDs identify tool requests. None is a legacy unbound request that
+    /// cannot authorize a decision. For gate requests the engine requires `{"outcome": <key>}` where the valid
     /// keys are declared in `schema.properties.outcome.enum`. Bootstrap
     /// gates arrive through this same event (their companion
     /// `BootstrapApprovalRequested` is bookkeeping, not a second
@@ -115,6 +115,9 @@ impl DecisionKind {
     /// Short badge label for queue rows.
     pub fn badge(&self) -> &'static str {
         match self {
+            Self::HumanInput {
+                call_id: Some(id), ..
+            } if surge_core::id::GateRequestId::from_event_call_id(id).is_some() => "review gate",
             Self::HumanInput {
                 call_id: Some(_), ..
             } => "human input",
@@ -146,6 +149,9 @@ impl DecisionKind {
         else {
             return Vec::new();
         };
+        if schema.get("x-surge-bootstrap-stage").is_some() {
+            return vec!["approve".into(), "edit".into(), "reject".into()];
+        }
         schema
             .pointer("/properties/outcome/enum")
             .and_then(|v| v.as_array())
@@ -161,6 +167,8 @@ impl DecisionKind {
 /// Folded live view of one run's event stream.
 #[derive(Default)]
 pub struct RunStreamState {
+    /// Immutable produced artifact locations from the durable run stream.
+    pub artifacts: std::collections::HashMap<String, std::path::PathBuf>,
     /// Subscription currently attached and pumping.
     pub live: bool,
     pub log: VecDeque<RunLogRow>,
@@ -171,19 +179,70 @@ pub struct RunStreamState {
     pub cost_usd: f64,
     /// Highest seq observed on this stream.
     pub last_seq: u64,
+    /// Where the run executes, as recorded by `RunStarted` (for isolated
+    /// runs this is the run's git worktree, not the source checkout).
+    pub run_path: Option<std::path::PathBuf>,
+    /// Git common directory of `run_path`, resolved once when `RunStarted`
+    /// is folded. Linked worktrees share the source repository's common
+    /// dir, so this is what ties a worktree run back to its project.
+    pub git_common_dir: Option<std::path::PathBuf>,
+    /// The operator's request that started the run (`RunStarted`).
+    pub prompt: Option<String>,
 }
 
 impl RunStreamState {
     /// Fold one wire event into the view state: log row, stage
     /// pipeline, token/cost counters and the pending-decision set.
     pub fn apply(&mut self, event: &EngineRunEvent) {
-        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.apply_at(event, chrono::Local::now().format("%H:%M:%S").to_string());
+    }
+
+    /// Fold durable history using its recorded time rather than replay time.
+    pub fn apply_recorded(&mut self, event: &EngineRunEvent, timestamp_ms: i64) {
+        let time = chrono::DateTime::from_timestamp_millis(timestamp_ms)
+            .map(|time| {
+                time.with_timezone(&chrono::Local)
+                    .format("%H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".into());
+        self.apply_at(event, time);
+    }
+
+    fn apply_at(&mut self, event: &EngineRunEvent, now: String) {
         match event {
             EngineRunEvent::Persisted { seq, payload } => {
+                if *seq <= self.last_seq {
+                    return;
+                }
+                match payload.as_ref() {
+                    EventPayload::ArtifactProduced { name, path, .. } => {
+                        self.artifacts.insert(name.clone(), path.clone());
+                    },
+                    EventPayload::RunStarted {
+                        project_path,
+                        initial_prompt,
+                        ..
+                    } => {
+                        self.git_common_dir = crate::project::git_common_dir(project_path);
+                        self.run_path = Some(project_path.clone());
+                        let prompt = initial_prompt.trim();
+                        self.prompt = (!prompt.is_empty()).then(|| prompt.to_string());
+                    },
+                    _ => {},
+                }
                 self.last_seq = self.last_seq.max(*seq);
                 self.fold_stages(payload);
                 self.fold_pending(*seq, &now, payload);
                 self.fold_cost(payload);
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::RunCompleted { .. }
+                        | EventPayload::RunFailed { .. }
+                        | EventPayload::RunAborted { .. }
+                ) {
+                    self.pending.clear();
+                }
                 if let Some((kind, tone, text)) = describe(payload) {
                     self.log.push_back(RunLogRow {
                         seq: *seq,
@@ -195,6 +254,19 @@ impl RunStreamState {
                     while self.log.len() > MAX_LOG_ROWS {
                         self.log.pop_front();
                     }
+                }
+            },
+            EngineRunEvent::StreamError { message } => {
+                self.live = false;
+                self.log.push_back(RunLogRow {
+                    seq: self.last_seq,
+                    time: now,
+                    kind: "STREAM",
+                    tone: Tone::Err,
+                    text: format!("Run outcome unconfirmed: {message}"),
+                });
+                while self.log.len() > MAX_LOG_ROWS {
+                    self.log.pop_front();
                 }
             },
             EngineRunEvent::Terminal { .. } => {
@@ -243,6 +315,22 @@ impl RunStreamState {
                     .find(|s| s.node == node.as_str() && s.phase == StagePhase::Running)
                 {
                     row.detail = outcome.as_str().to_string();
+                }
+            },
+            EventPayload::RunCompleted { terminal_node } => {
+                self.set_stage(terminal_node.as_str(), StagePhase::Done, "completed".into());
+            },
+            EventPayload::RunFailed { .. } | EventPayload::RunAborted { .. } => {
+                let detail = if matches!(payload, EventPayload::RunFailed { .. }) {
+                    "run failed"
+                } else {
+                    "run aborted"
+                };
+                for stage in &mut self.stages {
+                    if stage.phase == StagePhase::Running {
+                        stage.phase = StagePhase::Failed;
+                        stage.detail = detail.into();
+                    }
                 }
             },
             EventPayload::LoopIterationStarted { .. } => {
@@ -549,6 +637,115 @@ mod tests {
             call_id: call_id.map(str::to_string),
             prompt: "answer me".into(),
             schema: None,
+        }
+    }
+
+    #[test]
+    fn stream_failure_preserves_last_durable_decision_without_terminal_claim() {
+        let mut stream = RunStreamState {
+            live: true,
+            ..RunStreamState::default()
+        };
+        stream.apply(&persisted(17, human_input("review", Some("call-1"))));
+        stream.apply(&EngineRunEvent::StreamError {
+            message: "catch-up storage unavailable".into(),
+        });
+        assert!(!stream.live);
+        assert_eq!(stream.last_seq, 17);
+        assert_eq!(stream.pending.len(), 1);
+        assert_eq!(stream.pending[0].node, "review");
+        let error = stream.log.back().unwrap();
+        assert_eq!(error.kind, "STREAM");
+        assert!(error.text.contains("catch-up storage unavailable"));
+        assert!(error.text.contains("unconfirmed"));
+    }
+
+    #[test]
+    fn recorded_terminal_uses_durable_time_and_clears_pending() {
+        let mut state = RunStreamState::default();
+        state.apply(&persisted(1, human_input("gate", None)));
+        assert!(!state.pending.is_empty());
+        state.apply_recorded(
+            &persisted(
+                2,
+                EventPayload::RunAborted {
+                    reason: "done".into(),
+                },
+            ),
+            0,
+        );
+        assert!(state.pending.is_empty());
+        let expected = chrono::DateTime::from_timestamp_millis(0)
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%H:%M:%S")
+            .to_string();
+        assert_eq!(state.log.back().unwrap().time, expected);
+    }
+
+    #[test]
+    fn hydration_overlap_does_not_duplicate_or_rewind_events() {
+        let mut state = RunStreamState::default();
+        let entered = persisted(
+            1,
+            EventPayload::StageEntered {
+                node: node("implement"),
+                attempt: 1,
+            },
+        );
+        state.apply(&entered);
+        state.apply(&entered);
+        assert_eq!(state.log.len(), 1);
+        state.apply(&persisted(
+            2,
+            EventPayload::StageFailed {
+                node: node("implement"),
+                reason: "failed".into(),
+                retry_available: false,
+            },
+        ));
+        state.apply(&entered);
+        assert_eq!(state.last_seq, 2);
+        assert_eq!(state.log.len(), 2);
+        assert_eq!(state.stages[0].phase, StagePhase::Failed);
+    }
+
+    #[test]
+    fn terminal_events_settle_running_stage_chips() {
+        for (payload, phase, detail) in [
+            (
+                EventPayload::RunCompleted {
+                    terminal_node: node("end"),
+                },
+                StagePhase::Done,
+                "completed",
+            ),
+            (
+                EventPayload::RunFailed {
+                    error: "error".into(),
+                },
+                StagePhase::Failed,
+                "run failed",
+            ),
+            (
+                EventPayload::RunAborted {
+                    reason: "stop".into(),
+                },
+                StagePhase::Failed,
+                "run aborted",
+            ),
+        ] {
+            let mut state = RunStreamState::default();
+            state.apply(&persisted(
+                1,
+                EventPayload::StageEntered {
+                    node: node("end"),
+                    attempt: 1,
+                },
+            ));
+            state.apply(&persisted(2, payload));
+            assert_eq!(state.stages[0].phase, phase);
+            assert_eq!(state.stages[0].detail, detail);
         }
     }
 

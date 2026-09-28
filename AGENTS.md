@@ -34,7 +34,6 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │
 ├── crates/                          # Workspace members (dependencies flow downward)
 │   ├── surge-core/                  # Leaf: graph, profile, event, sandbox, validation types. No I/O.
-│   ├── surge-spec/                  # Legacy structured-spec format and validation
 │   ├── surge-acp/                   # ACP bridge, agent pool, registry, discovery, mock agent
 │   ├── surge-orchestrator/          # Engine: legacy spec pipeline + graph executor
 │   ├── surge-persistence/           # SQLite stores, event log, materialized views, memory
@@ -43,6 +42,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │   ├── surge-daemon/                # Long-running local engine host (Unix sockets / Windows pipes)
 │   ├── surge-cli/                   # `surge` binary: agents, specs, worktrees, engine, daemon
 │   ├── surge-notify/                # Notification delivery: desktop / webhook / Slack / email / Telegram
+│   ├── surge-telegram/              # Telegram cockpit: cards, callbacks, commands, pairing, recovery
 │   ├── surge-mcp/                   # stdio MCP server lifecycle and tool delegation
 │   └── surge-ui/                    # GPUI desktop shell (in development)
 │
@@ -62,8 +62,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │   └── rules/
 │       └── base.md
 │
-├── .claude/                         # Claude Code: skills + agent definitions
-├── .codex/                          # Codex: skills (mirror of aif skill set)
+├── scripts/                        # Release archive packaging and validation
 ├── .github/                         # CI workflows
 ├── .worktrees/                      # Local convention for in-progress branches (gitignored)
 └── target/                          # cargo build output (gitignored)
@@ -83,8 +82,10 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-cli/src/commands/` | Other per-subcommand modules. |
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
 | `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
+| `crates/surge-git/src/checkpoint.rs` | Immutable Git snapshots of stage-boundary working files, preserving the user index and HEAD. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
 | `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
+| `crates/surge-ui/src/project_init.rs` | Empty-folder desktop project initialization: Git base commit and ignored local runtime configuration. |
 | `crates/surge-orchestrator/src/project_context.rs` | Deterministic project scan, `project.md` generation, and run-level context seeding helpers. |
 | `surge.toml` / `surge.example.toml` | User-facing runtime configuration. The `.example` file documents every field. |
 | `project.md` | Generated stable project summary captured into new runs as `project_context` when present. |
@@ -107,6 +108,9 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Decisions (ADRs) | `docs/adr/` | Architectural decision records with rationale, alternatives rejected, and revisit triggers. |
 | Artifact Conventions | `docs/conventions/README.md` | Canonical generated artifact names, schemas, validators, minimal examples, and profile author guidance. |
 | Agent OS Landscape | `docs/agent-os-landscape.md` | Research note on adjacent agent tools, Agent OS patterns, and Surge product direction. |
+| Developer Vibe Coding Harness | `docs/vibe-coding-harness.md` | Agentlas/Factory comparison, interface direction and application-creation acceptance criteria. |
+| Factory Product Model | `docs/factory-product-model.md` | Detailed Factory documentation evidence and testable implications for Surge. |
+| Native UI Automation | `docs/ui-automation-evaluation.md` | GPUI/egui native interaction evidence and migration criteria. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
 

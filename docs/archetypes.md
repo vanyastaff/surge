@@ -14,9 +14,9 @@ live under [`examples/`](../examples/); the first-party templates used by
 | Linear-3          | [`flow_linear_3.toml`][f2]                       | Spec → Implement → Verify, with explicit success/failure terminals.       |
 | Single loop       | [`flow_single_loop.toml`][f3]                    | Iterate a static collection through an `Implement → Verify` body.          |
 | Multi-milestone   | [`flow_multi_milestone.toml`][f4]                | Outer milestone loop wrapping inner per-milestone task loops.             |
-| Bug-fix           | [`flow_bug_fix.toml`][f5]                        | `Reproduce → Implement → Verify` with `regressed` Backtrack edge.         |
+| Bug-fix           | [`flow_bug_fix.toml`][f5]                        | Spec → Reproduce → Implement → Verify with bounded repair.         |
 | Refactor          | [`flow_refactor.toml`][f6]                       | Capture behaviour first, then refactor under reviewer approval.           |
-| Spike             | [`flow_spike.toml`][f7]                          | Two-node experiment that explicitly skips Architect / Reviewer.            |
+| Spike             | [`flow_spike.toml`][f7]                          | Spec → experiment; records findings without verification authority.            |
 
 Run a bundled archetype directly:
 
@@ -77,53 +77,65 @@ flowchart LR
     Review -->|approved| End((Terminal::Success))
 ```
 
-## Bug-fix — Backtrack on regression
+## Bug-fix — reproduce before patching
 
-`Verify` declares two outcomes — `pass` (forward) and `regressed`
-(`kind = "backtrack"` edge to `Reproduce`). When the verifier discovers
-the patch broke something, the run loops back through `Reproduce → Implement`
-without escalating to a human.
-
-```mermaid
-flowchart LR
-    Reproduce --> |reproduced| Impl[Implement]
-    Impl --> |patched| Verify
-    Verify --> |pass| End((Terminal::Success))
-    Verify -. backtrack:regressed .-> Reproduce
-```
-
-The Backtrack edge has `policy.max_traversals = 3` so a stuck loop is
-bounded — once exceeded, the engine escalates per `on_max_exceeded`.
-
-## Refactor — behaviour-first
-
-Captures the convention that a refactor must establish a behavioural
-baseline before touching production code. The reviewer stage prevents
-unbounded refactors from sneaking through verification alone.
+The spec author turns the initial request into `spec.toml`. Reproduction and
+implementation receive this artifact explicitly. Reproduction writes
+`reproduction.md`; the patch stage consumes those observations. The sealed
+verifier checks the patch against the specification.
 
 ```mermaid
 flowchart LR
-    Capture[Behaviour Capture] --> |captured| Impl[Refactor]
-    Impl --> |refactored| Verify
-    Verify --> |pass| Reviewer
-    Reviewer --> |approved| End((Terminal::Success))
+    Spec -->|drafted| Reproduce
+    Reproduce -->|ready_for_verification| Implement
+    Implement -->|ready_for_verification| Verify
+    Verify -->|passed| Success
+    Verify -. failed .-> Reproduce
 ```
 
-## Spike — minimal experiment
+Failed verification returns to reproduction at most three times. Incomplete
+implementation can retry at most three times; blocked work exits through the
+failure terminal. Reproduction does not certify the patch.
 
-Two-node experiment shape. The spike stage produces a
-`findings_recorded` outcome only — there is no `pass`/`fail` distinction
-because spikes are bounded by time, not correctness.
+## Refactor — preserve observed behavior
+
+The spec precedes behavior capture. Capture produces `baseline.md` before
+production changes. The implementer consumes that baseline and produces
+`changes.patch`, including newly created files, for the reviewer. Both verifier
+and reviewer receive the specification.
 
 ```mermaid
 flowchart LR
-    Spike --> |findings_recorded| End((Terminal::Success))
+    Spec -->|drafted| Capture[Behavior capture]
+    Capture -->|ready_for_verification| Implement[Refactor]
+    Implement -->|ready_for_verification| Verify
+    Verify -->|passed| Reviewer
+    Reviewer -->|approved| Success
+    Verify -. failed .-> Implement
+    Reviewer -. changes_requested .-> Implement
 ```
 
-Use this when you need a deliberate detour from the regular pipeline
-(reading docs, prototyping a library swap, benchmarking) and want the
-event log to record the experiment without a verifier dragging the run
-back through the rest of the chain.
+Repair and review loops have a three-traversal limit. A reviewer cannot approve
+missing change evidence. A passing reviewer follows sealed verification.
+
+## Spike — bounded experiment
+
+The spec defines the hypothesis and acceptance criteria before the experiment.
+The experiment produces `findings.md` with commands, observations, limitations,
+and a recommendation. Success records completion of the experiment; it does
+not emit a verified task transition.
+
+```mermaid
+flowchart LR
+    Spec -->|drafted| Spike
+    Spike -->|ready_for_verification| Success
+    Spike -->|blocked| Failure
+    Spike -. partial .-> Spike
+```
+
+The outcome name follows the implementer profile contract. This archetype has
+no verifier; use a verified implementation flow before treating experimental
+code as production-ready. Partial experiments may retry at most three times.
 
 ## Adding new archetypes
 

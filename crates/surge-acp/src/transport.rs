@@ -27,9 +27,9 @@ use tracing::{debug, info, warn};
 /// ([`super::connection::AgentConnection`]) layers the ACP protocol on top.
 pub struct AgentIo {
     /// Writable channel to the agent (process stdin, socket write-half, etc.).
-    pub writer: Box<dyn futures::AsyncWrite + Unpin>,
+    pub writer: Box<dyn futures::AsyncWrite + Unpin + Send>,
     /// Readable channel from the agent (process stdout, socket read-half, etc.).
-    pub reader: Box<dyn futures::AsyncRead + Unpin>,
+    pub reader: Box<dyn futures::AsyncRead + Unpin + Send>,
     /// Child process handle — present only for local-process transports.
     ///
     /// [`AgentConnection`](super::connection::AgentConnection) uses this for graceful shutdown and kill.
@@ -172,8 +172,8 @@ impl AgentTransport for StdioTransport {
         }
 
         // Wrap in futures-compatible reader/writer as required by the ACP SDK.
-        let writer = Box::new(stdin.compat_write()) as Box<dyn futures::AsyncWrite + Unpin>;
-        let reader = Box::new(stdout.compat()) as Box<dyn futures::AsyncRead + Unpin>;
+        let writer = Box::new(stdin.compat_write()) as Box<dyn futures::AsyncWrite + Unpin + Send>;
+        let reader = Box::new(stdout.compat()) as Box<dyn futures::AsyncRead + Unpin + Send>;
 
         Ok(AgentIo {
             writer,

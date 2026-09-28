@@ -31,6 +31,11 @@ pub struct LoopConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum IterableSource {
+    /// An artifact supplied when the run starts, without an in-graph producer.
+    RunArtifact {
+        name: String,
+        jsonpath: String,
+    },
     Artifact {
         node: NodeKey,
         name: String,

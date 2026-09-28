@@ -450,6 +450,7 @@ impl RunReport {
                     artifact,
                     path,
                     name,
+                    ..
                 } => {
                     report.evidence.push(EvidenceEntry {
                         name: name.clone(),
@@ -636,6 +637,7 @@ impl RunReport {
                 | EventPayload::SessionOpened { .. }
                 | EventPayload::SessionClosed { .. }
                 | EventPayload::EdgeTraversed { .. }
+                | EventPayload::StageToolReceipt { .. }
                 | EventPayload::ToolCalled { .. }
                 | EventPayload::ToolResultReceived { .. }
                 | EventPayload::LoopIterationStarted { .. }

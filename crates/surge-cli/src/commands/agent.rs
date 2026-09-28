@@ -186,7 +186,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             )?;
 
             let result = pool.ping(&name).await;
-            pool.shutdown().await;
+            pool.shutdown().await?;
 
             match result {
                 Ok(()) => {
@@ -355,7 +355,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                 println!();
             }
 
-            pool.shutdown().await;
+            pool.shutdown().await?;
 
             if any_offline {
                 std::process::exit(2);

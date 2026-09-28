@@ -91,6 +91,20 @@ where
             continue;
         };
 
+        if !snapshot.terminal && snapshots.request_settled(&card).await? {
+            if let Some(message_id) = card.message_id {
+                api.edit_message_text(
+                    card.chat_id,
+                    message_id,
+                    "This request has been answered or expired.",
+                    &[],
+                )
+                .await?;
+            }
+            store.close(&card.card_id, now_ms).await?;
+            report.closed += 1;
+            continue;
+        }
         if !snapshot.terminal {
             tracing::debug!(
                 target: "telegram::recover",

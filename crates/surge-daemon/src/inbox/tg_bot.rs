@@ -67,10 +67,8 @@ impl TgInboxBot {
     /// the cockpit's polling listener on the same bot token (running
     /// both produces a `getUpdates` conflict on Telegram's side).
     ///
-    /// Inbox `inbox:*` callbacks are intended to land in the cockpit's
-    /// shared update router as a follow-up; until that lands, callbacks
-    /// from inbox cards stay unprocessed under this path. The outgoing
-    /// delivery (sending tracker inbox cards to Telegram) is unaffected.
+    /// Inbox `inbox:*` callbacks reach `CockpitInboxActions` through the
+    /// cockpit's shared update router. No second polling listener is needed.
     pub async fn run_outgoing_only(self, shutdown: CancellationToken) {
         let outgoing_shutdown = shutdown.clone();
         let outgoing = tokio::spawn(outgoing_loop(
@@ -84,6 +82,41 @@ impl TgInboxBot {
                 info!("TgInboxBot: shutdown signalled (outgoing-only)");
             }
             _ = outgoing => {}
+        }
+    }
+}
+
+/// Inbox action adapter for the cockpit's single Telegram update stream.
+pub struct CockpitInboxActions {
+    /// Registry containing the ticket/token and delivery chat bindings.
+    pub storage: Arc<Storage>,
+}
+
+#[async_trait::async_trait]
+impl surge_telegram::cockpit::production::InboxCallbacks for CockpitInboxActions {
+    async fn handle(&self, chat_id: i64, data: &str) -> surge_telegram::Result<String> {
+        let Some((action, token)) = parse_callback_data(data) else {
+            return Ok("Invalid inbox action.".into());
+        };
+        let authorized = {
+            let conn = self
+                .storage
+                .acquire_registry_conn()
+                .map_err(|e| surge_telegram::TelegramCockpitError::Persistence(e.to_string()))?;
+            let ticket = surge_persistence::intake::IntakeRepo::new(&conn)
+                .fetch_by_callback_token(token)
+                .map_err(|e| surge_telegram::TelegramCockpitError::Persistence(e.to_string()))?;
+            ticket.is_some_and(|ticket| ticket.tg_chat_id == Some(chat_id))
+        };
+        if !authorized {
+            return Ok("Inbox card expired or belongs to another chat.".into());
+        }
+        match handle_action(&self.storage, action, token, ActionChannel::Telegram).await {
+            Ok(()) => Ok("Inbox action recorded.".into()),
+            Err(CallbackHandleError::TokenNotFound) => Ok("Inbox card expired.".into()),
+            Err(CallbackHandleError::Persistence(error)) => {
+                Err(surge_telegram::TelegramCockpitError::Persistence(error))
+            },
         }
     }
 }
@@ -182,7 +215,7 @@ async fn tick_outgoing(bot: &Bot, chat_id: ChatId, storage: &Storage) -> Result<
                 );
             },
             Err(e) => {
-                warn!(error = %e, task_id = %row.task_id, "Telegram send failed; will retry");
+                warn!(error = %surge_telegram::error::TelegramCockpitError::from(e), task_id = %row.task_id, "Telegram send failed; will retry");
                 // Don't mark as delivered — next tick retries.
             },
         }
@@ -309,6 +342,64 @@ pub(crate) async fn handle_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cockpit_inbox_owner_checks_delivery_chat_before_enqueue() {
+        use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+        use surge_telegram::cockpit::production::InboxCallbacks;
+        let home = tempfile::tempdir().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        {
+            let conn = storage.acquire_registry_conn().unwrap();
+            IntakeRepo::new(&conn)
+                .insert(&IntakeRow {
+                    task_id: "fixture".into(),
+                    source_id: "test".into(),
+                    provider: "test".into(),
+                    run_id: None,
+                    triage_decision: None,
+                    duplicate_of: None,
+                    priority: None,
+                    state: TicketState::InboxNotified,
+                    first_seen: Utc::now(),
+                    last_seen: Utc::now(),
+                    snooze_until: None,
+                    callback_token: Some("bound-token".into()),
+                    tg_chat_id: Some(42),
+                    tg_message_id: Some(10),
+                })
+                .unwrap();
+        }
+        let handler = CockpitInboxActions {
+            storage: storage.clone(),
+        };
+        assert!(
+            handler
+                .handle(43, "inbox:start:bound-token")
+                .await
+                .unwrap()
+                .contains("another chat")
+        );
+        assert!(
+            handler
+                .handle(42, "inbox:start:missing")
+                .await
+                .unwrap()
+                .contains("expired")
+        );
+        {
+            let conn = storage.acquire_registry_conn().unwrap();
+            assert!(inbox_queue::list_pending_actions(&conn).unwrap().is_empty());
+        }
+        assert_eq!(
+            handler.handle(42, "inbox:start:bound-token").await.unwrap(),
+            "Inbox action recorded."
+        );
+        let conn = storage.acquire_registry_conn().unwrap();
+        let rows = inbox_queue::list_pending_actions(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].task_id, "fixture");
+    }
 
     #[test]
     fn parse_callback_data_valid_start() {

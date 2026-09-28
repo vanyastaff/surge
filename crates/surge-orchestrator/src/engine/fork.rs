@@ -1,9 +1,9 @@
 //! Fork-from-here: spawn a new run that inherits a parent run's event history
 //! up to a chosen `seq`, then diverges forward from that point.
 //!
-//! Invariant: without [`ForkEdits`], the child log is a faithful copy of the
-//! parent's first `at_seq` event payloads, so
-//! `fold(child_events) == fold(parent_events[1..=at_seq])`. Pre-fork edits
+//! The child inherits the first `at_seq` payloads, rebasing stored artifact paths
+//! to its own copies and, for isolated forks, replacing the execution directory.
+//! Graph and cursor history otherwise remain identical. Pre-fork edits
 //! rewrite a single node in the child's materialized graph (and its hash) so a
 //! fork can retry a stage with a corrective hint or a different profile. The
 //! parent records a `ForkCreated { new_run, fork_at_seq }` event so the lineage
@@ -56,6 +56,9 @@ pub struct ForkRequest {
     pub at_seq: u64,
     /// Edits applied to the child's graph before it resumes.
     pub edits: ForkEdits,
+    /// Optional isolated checkout destination. Requires an exact stage-boundary
+    /// workspace checkpoint; history-only callers may omit it.
+    pub worktree_path: Option<std::path::PathBuf>,
 }
 
 impl ForkRequest {
@@ -67,7 +70,15 @@ impl ForkRequest {
             new_run,
             at_seq,
             edits: ForkEdits::default(),
+            worktree_path: None,
         }
+    }
+
+    /// Restore the boundary checkpoint into an isolated checkout before forking.
+    #[must_use]
+    pub fn with_worktree(mut self, path: std::path::PathBuf) -> Self {
+        self.worktree_path = Some(path);
+        self
     }
 
     /// Attach pre-fork edits to the request.
@@ -90,9 +101,9 @@ pub struct ForkOutcome {
 /// Fork a run: copy parent events `1..=at_seq` into `new_run`, then record a
 /// `ForkCreated { new_run, fork_at_seq }` event on the parent for lineage.
 ///
-/// The child's log copies the parent prefix verbatim (optionally rewriting one
-/// node's prompt/profile per [`ForkEdits`]), so without edits folding it
-/// reproduces the parent's state at `at_seq` exactly. The child does not start
+/// The child inherits the parent prefix, rebasing artifact paths and optionally
+/// its execution directory, plus prompt/profile changes from [`ForkEdits`].
+/// Its graph and cursor reproduce the selected boundary. The child does not start
 /// executing here; the caller resumes it (see `Engine::resume_run`).
 ///
 /// # Errors
@@ -129,7 +140,7 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
     // copied into the child with an impossible event order. The child reuses
     // the parent's project path so the fork stays in the same project (a fresh
     // worktree is provisioned by the caller).
-    let (project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
+    let (mut project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
         Some(EventPayload::RunStarted {
             project_path,
             pipeline_template,
@@ -151,6 +162,12 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         apply_fork_edits(&mut copied, &req.edits)?;
     }
 
+    let inherited_snapshot = reader
+        .latest_snapshot_at_or_before(EventSeq(req.at_seq))
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+    let checkpoint = requested_checkpoint(&req, inherited_snapshot.as_ref())?;
+
     // The fork is not atomic across the two per-run logs (parent and child are
     // separate SQLite databases — there is no shared transaction). To keep the
     // worst-case failure benign we: (1) acquire the parent writer up front so
@@ -164,6 +181,19 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         .open_run_writer(req.parent)
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+    // Reserve a fresh destination before copying bytes. In particular, never
+    // update an existing child's artifact index if its ID was supplied again.
+    tokio::fs::create_dir(storage.home().join("runs").join(req.new_run.to_string()))
+        .await
+        .map_err(|error| {
+            EngineError::ForkInvalid(format!("cannot reserve child directory: {error}"))
+        })?;
+    inherit_artifacts(storage, &req, &mut copied, &project_path).await?;
+    if let Some((checkpoint, destination)) = checkpoint {
+        project_path =
+            restore_child_workspace(req.new_run, checkpoint, destination, &mut copied).await?;
+    }
 
     // Create the child run and write the (possibly edited) prefix payloads.
     // Folding the child reproduces the parent's state at `at_seq` (modulo edits).
@@ -183,16 +213,17 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
     // Inherit the parent's latest snapshot at-or-before the fork point so the
     // child resumes at the fork position rather than `graph.start`. Without
     // this, `replay` would fall back to `graph.start` for a snapshot-less log.
-    if let Some((snap_seq, blob)) = reader
-        .latest_snapshot_at_or_before(EventSeq(req.at_seq))
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?
-    {
+    if let Some((snap_seq, blob)) = inherited_snapshot {
         child_writer
             .write_graph_snapshot(snap_seq, blob)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
     }
+
+    child_writer
+        .close()
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
 
     // Record lineage on the parent last (append-only; valid even after a
     // terminal event, since the triggers block UPDATE/DELETE, not INSERT).
@@ -206,12 +237,116 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
+    parent_writer
+        .close()
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+
     Ok(ForkOutcome {
         new_run: req.new_run,
         // The bounds check guarantees the prefix holds exactly `at_seq`
         // contiguous events (the log has no gaps from seq 1).
         copied_events: req.at_seq,
     })
+}
+
+async fn restore_child_workspace(
+    child: RunId,
+    checkpoint: surge_git::checkpoint::WorkspaceCheckpoint,
+    destination: std::path::PathBuf,
+    copied: &mut [VersionedEventPayload],
+) -> Result<std::path::PathBuf, EngineError> {
+    let restored = tokio::task::spawn_blocking(move || {
+        surge_git::checkpoint::restore(&checkpoint, child, destination)
+    })
+    .await
+    .map_err(|error| EngineError::ForkInvalid(format!("restore worker: {error}")))?
+    .map_err(|error| EngineError::ForkInvalid(format!("restore checkpoint: {error}")))?;
+    if let Some(VersionedEventPayload {
+        payload: EventPayload::RunStarted { project_path, .. },
+        ..
+    }) = copied.first_mut()
+    {
+        project_path.clone_from(&restored.path);
+    }
+    Ok(restored.path)
+}
+
+fn requested_checkpoint(
+    request: &ForkRequest,
+    snapshot: Option<&(EventSeq, Vec<u8>)>,
+) -> Result<
+    Option<(
+        surge_git::checkpoint::WorkspaceCheckpoint,
+        std::path::PathBuf,
+    )>,
+    EngineError,
+> {
+    let Some(destination) = &request.worktree_path else {
+        return Ok(None);
+    };
+    let Some((seq, blob)) = snapshot else {
+        return Err(EngineError::ForkInvalid(
+            "isolated fork requires a saved stage-boundary checkpoint".into(),
+        ));
+    };
+    if seq.as_u64() != request.at_seq {
+        return Err(EngineError::ForkInvalid(format!(
+            "isolated fork requires an exact stage boundary; latest checkpoint is at seq {}",
+            seq.as_u64()
+        )));
+    }
+    let snapshot = crate::engine::snapshot::EngineSnapshot::deserialize(blob)
+        .map_err(|error| EngineError::ForkInvalid(format!("checkpoint snapshot: {error}")))?;
+    if snapshot.at_seq != request.at_seq || snapshot.stage_boundary_seq != request.at_seq {
+        return Err(EngineError::ForkInvalid(
+            "snapshot is not a completed stage boundary".into(),
+        ));
+    }
+    let checkpoint = snapshot.workspace_checkpoint.ok_or_else(|| {
+        EngineError::ForkInvalid("this historical boundary has no Git workspace checkpoint".into())
+    })?;
+    Ok(Some((checkpoint, destination.clone())))
+}
+
+async fn inherit_artifacts(
+    storage: &Storage,
+    request: &ForkRequest,
+    events: &mut [VersionedEventPayload],
+    parent_worktree: &std::path::Path,
+) -> Result<(), EngineError> {
+    let artifacts = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+    for event in events {
+        let EventPayload::ArtifactProduced {
+            node,
+            artifact,
+            path,
+            name,
+            ..
+        } = &mut event.payload
+        else {
+            continue;
+        };
+        let reference = surge_core::run_state::ArtifactRef {
+            hash: *artifact,
+            path: path.clone(),
+            name: name.clone(),
+            produced_by: node.clone(),
+            produced_at_seq: 0,
+        };
+        let bytes = artifacts
+            .open_ref(request.parent, &reference, parent_worktree)
+            .await
+            .map_err(|error| {
+                EngineError::ForkInvalid(format!("cannot inherit artifact {name}: {error}"))
+            })?;
+        let owned = artifacts
+            .put(request.new_run, name, &bytes)
+            .await
+            .map_err(|error| EngineError::Storage(error.to_string()))?;
+        *path = owned.path;
+    }
+    Ok(())
 }
 
 /// Apply pre-fork [`ForkEdits`] to the child's materialized graph, rewriting the
@@ -709,7 +844,123 @@ mod tests {
         (storage, parent)
     }
 
-    /// Read the child's materialized graph back from storage.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork_owns_artifact_bytes_after_parent_copy_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+        let artifacts =
+            surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+        let artifact = artifacts
+            .put(parent, "spec", b"original specification")
+            .await
+            .unwrap();
+        let writer = storage.open_run_writer(parent).await.unwrap();
+        writer
+            .append_events(vec![VersionedEventPayload::new(
+                EventPayload::ArtifactProduced {
+                    node: NodeKey::try_from("implement").unwrap(),
+                    artifact: artifact.hash,
+                    path: artifact.path.clone(),
+                    name: "spec".into(),
+                    source_path: Some("docs/spec.toml".into()),
+                },
+            )])
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        let child = RunId::new();
+        fork(&storage, ForkRequest::new(parent, child, 3))
+            .await
+            .unwrap();
+        let reader = storage.open_run_reader(child).await.unwrap();
+        let events = reader.read_events(EventSeq(3)..EventSeq(4)).await.unwrap();
+        assert!(matches!(&events[0].payload.payload,
+            EventPayload::ArtifactProduced { source_path: Some(path), .. }
+                if path == std::path::Path::new("docs/spec.toml")));
+        std::fs::remove_file(artifact.path).unwrap();
+        assert_eq!(
+            artifacts.open(child, artifact.hash).await.unwrap(),
+            b"original specification"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn isolated_fork_without_checkpoint_leaves_no_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+        let child = RunId::new();
+        let destination = dir.path().join("child");
+        let result = fork(
+            &storage,
+            ForkRequest::new(parent, child, 2).with_worktree(destination.clone()),
+        )
+        .await;
+        assert!(matches!(result, Err(EngineError::ForkInvalid(message))
+            if message.contains("stage-boundary checkpoint")));
+        assert!(!destination.exists());
+        assert!(!storage.home().join("runs").join(child.to_string()).exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork_reused_destination_preserves_existing_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+        let child = RunId::new();
+        let artifacts =
+            surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+        let existing = artifacts.put(child, "spec", b"child-owned").await.unwrap();
+        let index_path = storage
+            .home()
+            .join("runs")
+            .join(child.to_string())
+            .join("artifacts/index.json");
+        let original_index = std::fs::read(&index_path).unwrap();
+
+        let result = fork(&storage, ForkRequest::new(parent, child, 2)).await;
+
+        assert!(matches!(result, Err(EngineError::ForkInvalid(_))));
+        assert_eq!(std::fs::read(index_path).unwrap(), original_index);
+        assert_eq!(
+            artifacts.open(child, existing.hash).await.unwrap(),
+            b"child-owned"
+        );
+        let reader = storage.open_run_reader(parent).await.unwrap();
+        assert_eq!(reader.current_seq().await.unwrap().as_u64(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork_rejects_corrupt_inherited_artifact_without_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+        let artifacts =
+            surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+        let artifact = artifacts.put(parent, "spec", b"original").await.unwrap();
+        let writer = storage.open_run_writer(parent).await.unwrap();
+        writer
+            .append_events(vec![VersionedEventPayload::new(
+                EventPayload::ArtifactProduced {
+                    node: NodeKey::try_from("impl_1").unwrap(),
+                    artifact: artifact.hash,
+                    path: artifact.path.clone(),
+                    name: "spec".into(),
+                    source_path: None,
+                },
+            )])
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        std::fs::write(&artifact.path, b"corrupted").unwrap();
+        let child = RunId::new();
+
+        let result = fork(&storage, ForkRequest::new(parent, child, 3)).await;
+
+        assert!(matches!(result, Err(EngineError::ForkInvalid(message))
+            if message.contains("content hash mismatch")));
+        assert!(artifacts.open(child, artifact.hash).await.is_err());
+        let reader = storage.open_run_reader(parent).await.unwrap();
+        assert_eq!(reader.current_seq().await.unwrap().as_u64(), 3);
+    }
+
     async fn child_graph(storage: &Arc<Storage>, child: RunId) -> Graph {
         let reader = storage.open_run_reader(child).await.unwrap();
         let max = reader.current_seq().await.unwrap();

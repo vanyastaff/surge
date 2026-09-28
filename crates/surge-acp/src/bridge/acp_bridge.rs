@@ -3,9 +3,10 @@
 //! See spec §5.1 for the spawn machinery rationale, §11.6 for per-process
 //! count guidance, §11.8 for the lagged-subscriber contract.
 
+use std::{sync::Arc, time::Duration};
 use surge_core::SessionId;
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::warn;
+use tokio_util::sync::CancellationToken;
 
 use super::command::BridgeCommand;
 use super::error::{
@@ -14,7 +15,26 @@ use super::error::{
 };
 use super::event::BridgeEvent;
 use super::session::{MessageContent, SessionConfig, SessionState};
-use super::worker::bridge_loop;
+/// Deadlines for session setup and verified worker shutdown. Prompts are unbounded.
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeTimeouts {
+    /// Total initialize plus new-session deadline.
+    pub handshake: Duration,
+    /// Maximum wait for verified cleanup before returning an explicit error.
+    pub shutdown: Duration,
+}
+impl Default for BridgeTimeouts {
+    fn default() -> Self {
+        Self {
+            // `npx`-launched adapters resolve the package before they speak
+            // ACP; on a cold cache or a loaded machine that alone exceeded
+            // 30s and failed runs before their first stage. The deadline
+            // only bounds startup — a dead adapter still fails, just later.
+            handshake: Duration::from_secs(120),
+            shutdown: Duration::from_secs(8),
+        }
+    }
+}
 
 /// Public handle to the ACP bridge worker thread.
 ///
@@ -22,22 +42,19 @@ use super::worker::bridge_loop;
 /// tokio context. All work funnels through a dedicated OS thread that runs
 /// a current-thread tokio runtime + `LocalSet` for the SDK's `!Send` futures.
 ///
-/// `Drop` joins the worker thread best-effort. If the worker is stuck inside
-/// a future that never completes (a realistic failure mode once real ACP I/O
-/// lands in Phase 8), `Drop` will block the calling thread indefinitely with
-/// no timeout — `JoinHandle::join` has no timeout overload on stable Rust.
-/// **Always call `shutdown().await` before letting `AcpBridge` go out of
-/// scope in production paths.** Tests are exempt because they run a known
-/// quiescent worker.
+/// `Drop` signals cleanup without blocking. Call `shutdown().await` to verify
+/// that children were reaped and the dedicated worker exited.
 pub struct AcpBridge {
     /// Command channel sender — bounded mpsc.
     cmd_tx: mpsc::Sender<BridgeCommand>,
     /// Broadcast sender for `BridgeEvent`s. Subscribers obtain receivers via
     /// `subscribe()`. Best-effort observability per spec §11.8.
     event_tx: broadcast::Sender<BridgeEvent>,
-    /// Worker thread handle. `Some` until `shutdown()` consumes it; `Drop`
-    /// joins it best-effort if `shutdown()` was not called.
-    worker: Option<std::thread::JoinHandle<()>>,
+    /// Worker thread handle; joined only after verified thread exit.
+    worker: Option<std::thread::JoinHandle<Result<(), BridgeError>>>,
+    shutdown: CancellationToken,
+    timeouts: BridgeTimeouts,
+    open_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl AcpBridge {
@@ -48,32 +65,47 @@ impl AcpBridge {
     /// bounds the broadcast channel; subscribers that lag past this silently
     /// drop oldest events (see spec §11.8 for the durable-consumer pattern).
     pub fn spawn(cmd_capacity: usize, event_capacity: usize) -> Result<Self, BridgeError> {
+        Self::spawn_with_timeouts(cmd_capacity, event_capacity, BridgeTimeouts::default())
+    }
+
+    /// Spawn with explicit setup and cleanup deadlines.
+    pub fn spawn_with_timeouts(
+        cmd_capacity: usize,
+        event_capacity: usize,
+        timeouts: BridgeTimeouts,
+    ) -> Result<Self, BridgeError> {
+        if cmd_capacity == 0
+            || event_capacity == 0
+            || timeouts.handshake.is_zero()
+            || timeouts.shutdown.is_zero()
+        {
+            return Err(BridgeError::InvalidConfig);
+        }
         let (cmd_tx, cmd_rx) = mpsc::channel(cmd_capacity);
         let (event_tx, _) = broadcast::channel(event_capacity);
-        let event_tx_for_worker = event_tx.clone();
-
-        let thread = std::thread::Builder::new()
+        let events = event_tx.clone();
+        let shutdown = CancellationToken::new();
+        let signal = shutdown.clone();
+        let worker = std::thread::Builder::new()
             .name("surge-acp-bridge".into())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
+                let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        warn!("bridge worker failed to build runtime: {e}");
-                        return;
-                    },
-                };
-                let local = tokio::task::LocalSet::new();
-                local.block_on(&rt, bridge_loop(cmd_rx, event_tx_for_worker));
+                    .map_err(|_| BridgeError::WorkerDead)?;
+                tokio::task::LocalSet::new().block_on(
+                    &runtime,
+                    super::lifecycle::run(cmd_rx, events, signal, timeouts),
+                )
             })
             .map_err(|_| BridgeError::WorkerDead)?;
-
         Ok(Self {
             cmd_tx,
             event_tx,
-            worker: Some(thread),
+            worker: Some(worker),
+            shutdown,
+            timeouts,
+            open_slots: Arc::new(tokio::sync::Semaphore::new(cmd_capacity)),
         })
     }
 
@@ -99,17 +131,31 @@ impl AcpBridge {
     /// and returns the freshly-allocated `SessionId`.
     pub async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         let (tx, rx) = oneshot::channel();
+        let permit = tokio::select! {
+            biased;
+            () = self.shutdown.cancelled() => return Err(OpenSessionError::Cancelled),
+            permit = tokio::time::timeout(self.timeouts.handshake + self.timeouts.shutdown, self.open_slots.clone().acquire_owned()) => {
+                permit.map_err(|_| OpenSessionError::Bridge(BridgeError::CleanupUnconfirmed))?
+                    .map_err(|_| OpenSessionError::Cancelled)?
+            },
+        };
         self.cmd_tx
-            .send(BridgeCommand::OpenSession { config, reply: tx })
+            .send(BridgeCommand::OpenSession {
+                config,
+                reply: tx,
+                permit,
+            })
             .await
             .map_err(|e| OpenSessionError::Bridge(BridgeError::CommandSendFailed(e.to_string())))?;
-        rx.await
+        tokio::time::timeout(self.timeouts.handshake + self.timeouts.shutdown, rx)
+            .await
+            .map_err(|_| OpenSessionError::Bridge(BridgeError::CleanupUnconfirmed))?
             .map_err(|_| OpenSessionError::Bridge(BridgeError::ReplyDropped))?
     }
 
-    /// Send a user message to an open session. Returns once the bridge has
-    /// queued the message; the agent's response surfaces via subsequent
-    /// `BridgeEvent::AgentMessage` events.
+    /// Send a user message and await the authoritative prompt result.
+    /// Streaming events and permission requests arrive while this call is pending.
+    /// A second concurrent prompt for the same session is rejected.
     pub async fn send_message(
         &self,
         session: SessionId,
@@ -138,9 +184,12 @@ impl AcpBridge {
         rx.await.map_err(|_| BridgeError::ReplyDropped)?
     }
 
-    /// Close a session gracefully. The bridge sends ACP shutdown to the
-    /// agent and waits up to a grace period before forcibly killing the
-    /// child (see Phase 8.3 close_session_impl for the timeout details).
+    /// Close a session and verify child cleanup. For an active prompt, attempt
+    /// ACP `session/cancel` and wait up to 500 ms for its prompt RPC to settle.
+    /// Then tear down transport, allow a five-second process-exit grace period,
+    /// and kill/reap the child if needed. ACP cancellation is not process shutdown.
+    /// A concurrent close during cleanup returns `CleanupUnconfirmed`;
+    /// success confirms cleanup has settled.
     pub async fn close_session(&self, session: SessionId) -> Result<(), CloseSessionError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -149,7 +198,9 @@ impl AcpBridge {
             .map_err(|e| {
                 CloseSessionError::Bridge(BridgeError::CommandSendFailed(e.to_string()))
             })?;
-        rx.await
+        tokio::time::timeout(self.timeouts.shutdown, rx)
+            .await
+            .map_err(|_| CloseSessionError::Bridge(BridgeError::CleanupUnconfirmed))?
             .map_err(|_| CloseSessionError::Bridge(BridgeError::ReplyDropped))?
     }
 
@@ -219,7 +270,7 @@ impl AcpBridge {
         &self,
         session: SessionId,
         request_id: String,
-        response: agent_client_protocol::RequestPermissionResponse,
+        response: agent_client_protocol::schema::v1::RequestPermissionResponse,
     ) -> Result<(), ReplyToPermissionError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -250,63 +301,37 @@ impl AcpBridge {
         });
     }
 
-    /// Drain pending commands and shut down the worker. Open sessions emit
-    /// `SessionEnded { reason: ForcedClose }`. Joins the worker thread.
-    /// Consumes self — call exactly once.
+    /// Signal shutdown out of band and verify worker exit and child cleanup.
+    /// Timeout is an error; the detached worker continues owning cleanup.
     pub async fn shutdown(mut self) -> Result<(), BridgeError> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(BridgeCommand::Shutdown { reply: tx })
-            .await
-            .map_err(|e| BridgeError::CommandSendFailed(e.to_string()))?;
-        rx.await.map_err(|_| BridgeError::ReplyDropped)?;
-        if let Some(t) = self.worker.take()
-            && let Err(panic_payload) = t.join()
+        self.shutdown.cancel();
+        let deadline = tokio::time::Instant::now() + self.timeouts.shutdown;
+        while self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
         {
-            // Worker panicked after sending the Shutdown reply. Cleanup
-            // already completed; this is a bug to investigate via logs but
-            // not a caller-actionable failure (shutdown succeeded as far as
-            // the caller can observe).
-            tracing::warn!(
-                "bridge worker panicked after shutdown reply: {:?}",
-                panic_payload
-            );
+            if tokio::time::Instant::now() >= deadline {
+                return Err(BridgeError::CleanupUnconfirmed);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        Ok(())
+        self.worker
+            .take()
+            .ok_or(BridgeError::WorkerDead)?
+            .join()
+            .map_err(|_| BridgeError::WorkerDead)?
     }
 }
 
 impl Drop for AcpBridge {
     fn drop(&mut self) {
-        // CORRECTNESS — drop order matters.
-        //
-        // Rust runs custom `Drop::drop(&mut self)` BEFORE the struct's fields
-        // are dropped. If we just called `handle.join()` directly, `self.cmd_tx`
-        // would still be alive — the worker thread is parked inside
-        // `cmd_rx.recv().await` waiting for a command that will never come, and
-        // `join()` would block forever.
-        //
-        // This was masked under `cargo test` because tests follow the happy
-        // path (call `shutdown().await`, which takes the worker out and joins
-        // it itself, so this `Drop` runs with `worker == None`). It surfaced
-        // under `cargo nextest run` as the three "hung integration test"
-        // reports — those tests panic before reaching `shutdown().await` (e.g.
-        // on `bridge.open_session(...).await.unwrap()` if the agent binary is
-        // missing on a cold cache, or on an assertion mid-flow), and the
-        // resulting unwind reaches this `Drop` with the worker still parked.
-        // The process then sat in `join()` until nextest's wall-clock
-        // SLOW/TIMEOUT machinery killed it after 120s.
-        //
-        // Fix: explicitly drop the command sender first by swapping in a
-        // disconnected dummy. Once the real `cmd_tx` is gone the worker's
-        // `cmd_rx.recv()` returns `None`, `bridge_loop` returns, and the
-        // thread exits → `join()` returns promptly. The dummy's matching
-        // receiver is dropped immediately so any later (mistaken) send on the
-        // dummy fails fast rather than enqueuing into a phantom channel.
-        if let Some(handle) = self.worker.take() {
-            let (dummy_tx, _dummy_rx) = mpsc::channel::<BridgeCommand>(1);
-            drop(std::mem::replace(&mut self.cmd_tx, dummy_tx));
-            let _ = handle.join();
+        self.shutdown.cancel();
+        // Never wait on the caller thread. The worker owns its runtime and children.
+        if let Some(worker) = self.worker.take()
+            && worker.is_finished()
+        {
+            let _ = worker.join();
         }
     }
 }
@@ -370,6 +395,7 @@ mod tests {
 
         let bridge = AcpBridge::with_defaults().unwrap();
         let cfg = SessionConfig {
+            stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
             working_dir: std::path::PathBuf::from("/tmp/wt"),
             system_prompt: "sys".into(),

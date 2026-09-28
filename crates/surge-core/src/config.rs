@@ -439,9 +439,10 @@ fn default_poll_interval() -> std::time::Duration {
 ///
 /// `chat_id_env` and `bot_token_env` are the names of the environment
 /// variables to read for the chat ID and bot token respectively. Direct
-/// `chat_id` is allowed for tests / local dev only — secrets never go in
+/// `chat_id` is an explicit nonsecret delivery target — secrets never go in
 /// `surge.toml` (per RFC-0010 pattern).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TelegramConfig {
     /// Name of the env var that holds the numeric chat id.
     #[serde(default)]
@@ -449,7 +450,7 @@ pub struct TelegramConfig {
     /// Name of the env var that holds the bot token.
     #[serde(default)]
     pub bot_token_env: Option<String>,
-    /// Direct chat id (overrides `chat_id_env` if set; intended for tests).
+    /// Explicit delivery chat id (overrides `chat_id_env` if set).
     #[serde(default)]
     pub chat_id: Option<i64>,
 }
@@ -1131,8 +1132,8 @@ impl SurgeConfig {
         let content = std::fs::read_to_string(path).map_err(|e| {
             crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display()))
         })?;
-        let config: Self = toml::from_str(&content).map_err(|e| {
-            crate::SurgeError::Config(format!("Failed to parse {}: {e}", path.display()))
+        let config: Self = toml::from_str(&content).map_err(|_| {
+            crate::SurgeError::Config(format!("Failed to parse {}: invalid configuration; Telegram requires bot_token_env, never inline credentials", path.display()))
         })?;
         config.validate()?;
         Ok(config)
@@ -1369,6 +1370,27 @@ impl SurgeConfig {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn telegram_plaintext_config_is_rejected_without_secret_in_diagnostic() {
+        let directory =
+            std::env::temp_dir().join(format!("surge-telegram-config-{}", crate::id::RunId::new()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("surge.toml");
+        std::fs::write(
+            &path,
+            "[telegram]\nbot_token = \"73123:CONFIG_SECRET_LITERAL\"\nchat_id = 42\n",
+        )
+        .unwrap();
+        let result = SurgeConfig::load(&path);
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(
+            result.is_err(),
+            "plaintext credential field silently accepted"
+        );
+        let error = result.unwrap_err();
+        assert!(!format!("{error:?} {error}").contains("73123:CONFIG_SECRET_LITERAL"));
+    }
 
     #[test]
     fn test_config_discovery() {

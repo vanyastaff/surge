@@ -17,7 +17,8 @@ pub struct Card {
     pub run_id: String,
     /// The originating node in the run's graph.
     pub node_key: String,
-    /// `RunMemory.node_visits[node_key]` at the time the card was created.
+    /// Durable request event sequence for current approval cards. Legacy rows
+    /// used node visits; they are never actionable unless exact request evidence matches.
     pub attempt_index: i64,
     /// Card-kind discriminator (e.g. `"human_gate"`, `"bootstrap_description"`).
     pub kind: String,
@@ -261,6 +262,39 @@ pub fn find_open(conn: &Connection) -> Result<Vec<Card>, CardsError> {
         .query_map([], row_to_card)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(cards)
+}
+
+/// Bind a ForceReply prompt to an open card. Closed cards cannot be reopened.
+///
+/// # Errors
+/// Returns a missing-card error if the card is no longer open, or SQLite errors.
+pub fn set_edit_prompt(
+    conn: &Connection,
+    card_id: &str,
+    message_id: i64,
+    now_ms: i64,
+) -> Result<(), CardsError> {
+    let changed = conn.execute("UPDATE telegram_cards SET pending_edit_prompt_message_id = ?, updated_at = ? WHERE card_id = ? AND closed_at IS NULL", params![message_id, now_ms, card_id])?;
+    if changed == 0 {
+        return Err(CardsError::NotFound(card_id.to_owned()));
+    }
+    Ok(())
+}
+
+/// Find the open card associated with this exact chat and ForceReply prompt.
+///
+/// # Errors
+/// Returns SQLite errors without treating unreadable state as an absent card.
+pub fn find_by_edit_prompt(
+    conn: &Connection,
+    chat_id: i64,
+    message_id: i64,
+) -> Result<Option<Card>, CardsError> {
+    let id: Option<String> = conn.query_row("SELECT card_id FROM telegram_cards WHERE chat_id = ? AND pending_edit_prompt_message_id = ? AND closed_at IS NULL", params![chat_id,message_id], |row| row.get(0)).optional()?;
+    match id {
+        Some(id) => find_by_id(conn, &id),
+        None => Ok(None),
+    }
 }
 
 /// Shared row mapper used by [`find_by_id`] and [`find_open`].

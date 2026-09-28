@@ -32,3 +32,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 tempfile.workspace = true
 wiremock.workspace = true
 ulid.workspace = true
+
+surge-acp.workspace = true
+toml.workspace = true

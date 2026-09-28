@@ -21,3 +21,6 @@ pub use card::{
 };
 pub use cockpit::{CockpitCtx, DispatchOutcome, dispatch};
 pub use error::{Result, TelegramCockpitError};
+
+/// Runtime-only redacted credentials.
+pub mod credentials;

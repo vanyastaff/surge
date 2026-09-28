@@ -214,8 +214,8 @@ pub struct RecoveryOptions {
     /// A run with no new events for longer than this is flagged stuck
     /// instead of auto-resumed.
     pub stuck_threshold: Duration,
-    /// Root under which daemon-launched runs place their worktree at
-    /// `<worktrees_root>/<run_id>` (see the inbox ticket-run launcher).
+    /// Legacy placement hint retained for caller compatibility. Recovery uses
+    /// each run's persisted execution path; this root must not override it.
     pub worktrees_root: std::path::PathBuf,
     /// Wall-clock "now" in Unix epoch ms, used for stuck detection.
     pub now_ms: i64,
@@ -288,6 +288,7 @@ pub async fn plan_recovery(
     // `Bootstrapping` row whose recorded daemon pid is no longer alive is
     // flipped to `Crashed` in the registry. After a daemon crash that is
     // exactly the population we want to recover.
+    let owned = storage.bootstrap_operation_store().reserved_run_ids()?;
     let runs = storage.list_runs(RunFilter::default()).await?;
 
     // Task 12 M3 review, BLOCKING #2: the single source of "is a parked
@@ -304,6 +305,9 @@ pub async fn plan_recovery(
 
     let mut decisions = Vec::new();
     for summary in runs {
+        if owned.contains(&summary.id) {
+            continue;
+        }
         // Candidates are everything NOT genuinely terminal. `Crashed` is a
         // candidate (the prime one), so we exclude only the three real
         // terminal states rather than using `RunStatus::is_terminal`.
@@ -315,15 +319,11 @@ pub async fn plan_recovery(
         }
 
         let run_id = summary.id;
-        // The worktree path is NOT persisted (the registry stores only
-        // `project_path`, and `RunStarted` carries no worktree field), so we
-        // reconstruct the deterministic location daemon-managed runs use:
-        // `<worktrees_root>/<run_id>` (see the inbox ticket-run launcher).
-        // Runs launched via `surge engine run --daemon --worktree <custom>`
-        // do not record their path and are not resumable here — a known
-        // limitation that needs a future event-schema addition.
-        let worktree_path = opts.worktrees_root.join(run_id.to_string());
-        let worktree_exists = worktree_path.exists();
+        // Engine admission persists the actual execution directory as
+        // project_path. Reconstructing a convention-based path loses custom
+        // --worktree runs and can resume a different checkout.
+        let worktree_path = summary.project_path.clone();
+        let worktree_exists = worktree_path.is_dir();
 
         // Read the event-log tail to learn whether the log already reached
         // a terminal event and when the last event landed. A missing or
@@ -609,6 +609,8 @@ pub struct DaemonRecoveryEffects {
     pub storage: std::sync::Arc<surge_persistence::runs::Storage>,
     /// Engine facade used to resume runs.
     pub facade: std::sync::Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    /// Persisted event source shared with the IPC server.
+    pub tracking: crate::tracked_run::TrackingContext,
     /// Shared admission controller (same instance the IPC server uses).
     pub admission: std::sync::Arc<crate::admission::AdmissionController>,
     /// Shared broadcast registry (same instance the IPC server uses).
@@ -630,6 +632,7 @@ impl RecoveryEffects for DaemonRecoveryEffects {
             *run_id,
             worktree_path.to_path_buf(),
             self.facade.as_ref(),
+            &self.tracking,
             &self.admission,
             &self.broadcast,
         )
@@ -763,6 +766,7 @@ pub async fn fail_run_in_log_and_registry(
 pub async fn recover_on_startup(
     storage: &std::sync::Arc<surge_persistence::runs::Storage>,
     facade: &std::sync::Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    tracking: &crate::tracked_run::TrackingContext,
     admission: &std::sync::Arc<crate::admission::AdmissionController>,
     broadcast: &std::sync::Arc<crate::broadcast::BroadcastRegistry>,
     notifier: &std::sync::Arc<dyn surge_notify::NotifyDeliverer>,
@@ -796,6 +800,7 @@ pub async fn recover_on_startup(
     let effects = DaemonRecoveryEffects {
         storage: storage.clone(),
         facade: facade.clone(),
+        tracking: tracking.clone(),
         admission: admission.clone(),
         broadcast: broadcast.clone(),
         notifier: notifier.clone(),
@@ -962,8 +967,9 @@ mod plan_recovery_tests {
 
         // Run A — candidate with a present worktree → Resume.
         let run_a = RunId::new();
-        let _wa = storage.create_run(run_a, "/proj", None).await.unwrap();
-        std::fs::create_dir_all(wt_root.join(run_a.to_string())).unwrap();
+        let custom_path = tmp.path().join("custom-checkout");
+        let _wa = storage.create_run(run_a, &custom_path, None).await.unwrap();
+        std::fs::create_dir_all(&custom_path).unwrap();
 
         // Run B — candidate with an absent worktree → MarkFailedWorktreeLost.
         let run_b = RunId::new();
@@ -992,6 +998,7 @@ mod plan_recovery_tests {
             .find(|d| d.run_id == run_a)
             .expect("A present");
         assert_eq!(a.action, RecoveryAction::Resume);
+        assert_eq!(a.worktree_path, custom_path);
         let b = report
             .decisions
             .iter()
@@ -1011,7 +1018,10 @@ mod plan_recovery_tests {
         let wt_root = tmp.path().join("worktrees");
 
         let run = RunId::new();
-        let _w = storage.create_run(run, "/proj", None).await.unwrap();
+        let _w = storage
+            .create_run(run, wt_root.join(run.to_string()), None)
+            .await
+            .unwrap();
         std::fs::create_dir_all(wt_root.join(run.to_string())).unwrap();
 
         let mut active = HashSet::new();
@@ -1042,7 +1052,7 @@ mod plan_recovery_tests {
         // Not yet due: wake_at in the future.
         let run_waiting = RunId::new();
         let _w1 = storage
-            .create_run(run_waiting, "/proj", None)
+            .create_run(run_waiting, wt_root.join(run_waiting.to_string()), None)
             .await
             .unwrap();
         std::fs::create_dir_all(wt_root.join(run_waiting.to_string())).unwrap();
@@ -1053,7 +1063,10 @@ mod plan_recovery_tests {
 
         // Due: wake_at already passed.
         let run_due = RunId::new();
-        let _w2 = storage.create_run(run_due, "/proj", None).await.unwrap();
+        let _w2 = storage
+            .create_run(run_due, wt_root.join(run_due.to_string()), None)
+            .await
+            .unwrap();
         std::fs::create_dir_all(wt_root.join(run_due.to_string())).unwrap();
         storage
             .set_run_parked(&run_due, NOW - 3_600_000)

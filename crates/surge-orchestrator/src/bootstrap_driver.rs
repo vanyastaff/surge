@@ -68,6 +68,9 @@ pub enum BootstrapError {
     /// Required bootstrap artifact was not produced.
     #[error("bootstrap artifact missing: {0}")]
     ArtifactMissing(String),
+    /// More than one logical name claims the same canonical artifact.
+    #[error("bootstrap artifact has conflicting aliases: {0}")]
+    ArtifactAmbiguous(String),
 }
 
 /// Run the bundled bootstrap flow against an explicit worktree path.
@@ -200,9 +203,15 @@ fn latest_bootstrap_artifacts(events: &[ReadEvent]) -> Result<Vec<ArtifactRef>, 
             artifact,
             path,
             name,
+            ..
         } = &event.payload.payload
         {
-            if !BOOTSTRAP_ARTIFACTS.contains(&name.as_str()) {
+            if !BOOTSTRAP_ARTIFACTS.contains(&name.as_str())
+                && !matches!(
+                    name.as_str(),
+                    "roadmap.toml" | "roadmap-toml" | "roadmap_toml"
+                )
+            {
                 continue;
             }
             by_name.insert(
@@ -218,6 +227,13 @@ fn latest_bootstrap_artifacts(events: &[ReadEvent]) -> Result<Vec<ArtifactRef>, 
         }
     }
 
+    let roadmap = canonical_roadmap_ref(by_name.values(), "roadmap")
+        .map_err(|()| BootstrapError::ArtifactAmbiguous("roadmap".into()))?
+        .cloned();
+    if let Some(mut roadmap) = roadmap {
+        roadmap.name = "roadmap".into();
+        by_name.insert("roadmap".into(), roadmap);
+    }
     BOOTSTRAP_ARTIFACTS
         .iter()
         .map(|name| {
@@ -227,6 +243,33 @@ fn latest_bootstrap_artifacts(events: &[ReadEvent]) -> Result<Vec<ArtifactRef>, 
                 .ok_or_else(|| BootstrapError::ArtifactMissing((*name).to_owned()))
         })
         .collect()
+}
+
+/// Resolve only the bootstrap roadmap aliases; competing aliases are never guessed.
+pub(crate) fn canonical_roadmap_ref<'a>(
+    artifacts: impl IntoIterator<Item = &'a ArtifactRef>,
+    requested: &str,
+) -> Result<Option<&'a ArtifactRef>, ()> {
+    let names: &[&str] = match requested {
+        "roadmap" | "roadmap.toml" => &["roadmap", "roadmap.toml", "roadmap-toml", "roadmap_toml"],
+        "roadmap.md" => &["roadmap.md", "roadmap-md", "roadmap_md"],
+        _ => return Ok(None),
+    };
+    let mut latest: BTreeMap<&str, &ArtifactRef> = BTreeMap::new();
+    for artifact in artifacts {
+        if names.contains(&artifact.name.as_str()) {
+            let entry = latest.entry(&artifact.name).or_insert(artifact);
+            if artifact.produced_at_seq > entry.produced_at_seq {
+                *entry = artifact;
+            } else if artifact.produced_at_seq == entry.produced_at_seq && *entry != artifact {
+                return Err(());
+            }
+        }
+    }
+    if latest.len() > 1 {
+        return Err(());
+    }
+    Ok(latest.into_values().next())
 }
 
 async fn append_bootstrap_telemetry(
@@ -376,6 +419,35 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_duplicate_stems_extract_primary_roadmap() {
+        let events: Vec<_> = [
+            ("description", "description.md"),
+            ("roadmap-toml", "roadmap.toml"),
+            ("roadmap-md", "roadmap.md"),
+            ("flow", "flow.toml"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, path))| {
+            read_event(
+                index as u64 + 1,
+                EventPayload::ArtifactProduced {
+                    node: NodeKey::try_new("roadmap_planner").unwrap(),
+                    artifact: ContentHash::compute(name.as_bytes()),
+                    path: path.into(),
+                    name: name.into(),
+                    source_path: None,
+                },
+            )
+        })
+        .collect();
+        let artifacts = latest_bootstrap_artifacts(&events).unwrap();
+        assert_eq!(artifacts[1].name, "roadmap");
+        assert_eq!(artifacts[1].hash, ContentHash::compute(b"roadmap-toml"));
+        assert_eq!(artifacts[1].path, PathBuf::from("roadmap.toml"));
+    }
+
+    #[test]
     fn latest_bootstrap_artifacts_returns_ordered_latest_refs() {
         let node = NodeKey::try_from("description_author").unwrap();
         let stale = read_event(
@@ -385,6 +457,7 @@ mod tests {
                 artifact: ContentHash::compute(b"old"),
                 path: PathBuf::from("description.md"),
                 name: "description".into(),
+                source_path: None,
             },
         );
         let latest_description = read_event(
@@ -394,6 +467,7 @@ mod tests {
                 artifact: ContentHash::compute(b"new"),
                 path: PathBuf::from("description.md"),
                 name: "description".into(),
+                source_path: None,
             },
         );
         let roadmap = read_event(
@@ -403,6 +477,7 @@ mod tests {
                 artifact: ContentHash::compute(b"roadmap"),
                 path: PathBuf::from("roadmap.md"),
                 name: "roadmap".into(),
+                source_path: None,
             },
         );
         let flow = read_event(
@@ -412,6 +487,7 @@ mod tests {
                 artifact: ContentHash::compute(b"flow"),
                 path: PathBuf::from("flow.toml"),
                 name: "flow".into(),
+                source_path: None,
             },
         );
 

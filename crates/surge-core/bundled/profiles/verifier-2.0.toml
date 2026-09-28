@@ -83,7 +83,8 @@ Process:
 2. For Rust workspaces: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps`.
 3. For each `[[spec.subtasks.acceptance_criteria]]` entry or `## Acceptance Criteria` checkbox in `{{spec}}`, evaluate it (compile-check / test-pass / metric-under-budget) and note the result.
 
-Always write `verification-report.toml` recording the task id, the outcome
+Always write `verification-report.toml` with top-level `schema_version = 1`,
+`task_id`, the outcome
 (`passed` | `failed`), a one-line summary, and one `[[checks]]` entry per
 command you ran (`command`, `result`, optional `note`). Its hash is the
 evidence attached to the verified ledger transition.

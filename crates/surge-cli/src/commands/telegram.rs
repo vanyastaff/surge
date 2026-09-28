@@ -1,11 +1,10 @@
 //! `surge telegram` subcommand group: setup / revoke / list.
 //!
-//! Persists the cockpit bot token, mints one-shot pairing tokens, manages
+//! Stores a token environment reference, mints target-bound pairing codes, manages
 //! the paired-chat allowlist. The actual bot loop runs inside
 //! `surge-daemon`; this CLI only configures the registry SQLite that the
 //! daemon reads.
 
-use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -18,15 +17,17 @@ use surge_persistence::telegram::pairings;
 /// Subcommands for `surge telegram`.
 #[derive(Subcommand)]
 pub enum TelegramCommands {
-    /// Persist a Bot API token and mint a one-shot pairing token.
-    ///
-    /// In interactive mode the token is read from stdin; pass `--token` for
-    /// a script-friendly path. The pairing token is printed once and
-    /// expires after `--ttl-secs` seconds (default 10 minutes).
+    /// Configure a token environment reference and mint a target-bound pairing code.
     Setup {
-        /// Bot API token from BotFather. If omitted, prompts on stdin.
-        #[arg(short, long)]
+        /// Unsupported legacy credential input; always rejected without echoing its value.
+        #[arg(long, hide = true)]
         token: Option<String>,
+        /// Environment variable holding the bot token in the daemon environment.
+        #[arg(long)]
+        token_env: Option<String>,
+        /// Explicit delivery and pairing target.
+        #[arg(long, allow_hyphen_values = true)]
+        chat_id: Option<i64>,
 
         /// Operator-supplied label attached to the resulting paired chat.
         #[arg(short, long, default_value = "operator")]
@@ -58,55 +59,77 @@ pub async fn run(command: TelegramCommands) -> Result<()> {
     match command {
         TelegramCommands::Setup {
             token,
+            token_env,
+            chat_id,
             label,
             ttl_secs,
-        } => setup(token, label, ttl_secs),
+        } => setup(token, token_env, chat_id, label, ttl_secs),
         TelegramCommands::Revoke { chat_id } => revoke(chat_id),
         TelegramCommands::List => list(),
     }
 }
 
-/// `surge telegram setup` — write bot token, mint pairing token, print
-/// instructions.
-fn setup(token: Option<String>, label: String, ttl_secs: u64) -> Result<()> {
-    let bot_token = resolve_bot_token(token)?;
-    let trimmed = bot_token.trim();
-    if trimmed.is_empty() {
+/// Store references only. Never read a bot token in the setup process.
+fn setup(
+    token: Option<String>,
+    token_env: Option<String>,
+    chat_id: Option<i64>,
+    label: String,
+    ttl_secs: u64,
+) -> Result<()> {
+    if token.is_some() {
         return Err(anyhow!(
-            "bot token is empty — paste the token from BotFather"
+            "--token is no longer supported; use --token-env NAME --chat-id ID"
         ));
     }
-    let bot_token = trimmed.to_owned();
-
+    let reference = token_env.ok_or_else(|| {
+        anyhow!("--token-env NAME is required; token input on stdin is not supported")
+    })?;
+    let mut chars = reference.bytes();
+    if !chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+        || !chars.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return Err(anyhow!(
+            "--token-env must name an environment variable, not contain a token"
+        ));
+    }
+    let chat_id = chat_id
+        .filter(|id| *id != 0)
+        .ok_or_else(|| anyhow!("--chat-id must be an explicit nonzero Telegram chat id"))?;
+    let path = std::env::current_dir()?.join("surge.toml");
+    let mut document = if path.exists() {
+        std::fs::read_to_string(&path)?
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| {
+                anyhow!("invalid surge.toml; repair configuration before Telegram setup")
+            })?
+    } else {
+        toml_edit::DocumentMut::new()
+    };
+    let mut telegram = toml_edit::Table::new();
+    telegram["bot_token_env"] = toml_edit::value(reference);
+    telegram["chat_id"] = toml_edit::value(chat_id);
+    document["telegram"] = toml_edit::Item::Table(telegram);
+    // The replaced table removes unsupported inline credentials during migration.
+    std::fs::write(&path, document.to_string()).context("save Telegram environment reference")?;
     let conn = open_registry_connection()?;
-    let now_ms = now_ms();
-
-    secrets::set_secret(&conn, TELEGRAM_BOT_TOKEN_KEY, &bot_token, now_ms)
-        .context("persist telegram bot token")?;
-    tracing::info!(
-        target: "cli::telegram",
-        "bot token stored under {TELEGRAM_BOT_TOKEN_KEY}"
+    secrets::delete_secret(&conn, TELEGRAM_BOT_TOKEN_KEY)
+        .context("remove legacy plaintext Telegram credential")?;
+    let pairing_token = mint_pairing_token(
+        &conn,
+        &label,
+        chat_id,
+        Duration::from_secs(ttl_secs),
+        now_ms(),
+    )
+    .context("mint pairing code")?;
+    println!(
+        "Telegram configured for chat {chat_id}; supply the token environment variable to the daemon."
     );
-
-    let pairing_token = mint_pairing_token(&conn, &label, Duration::from_secs(ttl_secs), now_ms)
-        .context("mint pairing token")?;
-    tracing::info!(
-        target: "cli::telegram",
-        label = %label,
-        ttl_secs = %ttl_secs,
-        "pairing token minted"
-    );
-
-    println!("✅ Telegram cockpit configured.");
-    println!();
-    println!("Pairing token: {pairing_token}");
-    println!();
-    println!("Send the following to your bot from your personal chat within");
-    println!("{ttl_secs} seconds to pair this chat:");
-    println!();
-    println!("    /pair {pairing_token}");
-    println!();
-    println!("Then start the daemon with `surge daemon start` to begin receiving cockpit cards.");
+    println!("Send /pair {pairing_token} from that chat within {ttl_secs} seconds.");
+    println!("Start the daemon with this surge.toml configuration to receive cards.");
     Ok(())
 }
 
@@ -141,20 +164,6 @@ fn list() -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// Resolve the bot token from `--token` or stdin.
-fn resolve_bot_token(token: Option<String>) -> Result<String> {
-    if let Some(t) = token {
-        return Ok(t);
-    }
-    print!("Bot token (paste from BotFather): ");
-    std::io::stdout().flush().context("flush stdout")?;
-    let mut buf = String::new();
-    std::io::stdin()
-        .read_line(&mut buf)
-        .context("read bot token from stdin")?;
-    Ok(buf)
 }
 
 /// Open a single connection on the registry SQLite. Applies migrations as

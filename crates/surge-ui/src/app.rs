@@ -1,9 +1,10 @@
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt as _;
+use gpui_kit::component::StyledExt as _;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::actions::*;
 use crate::app_state::AppState;
@@ -28,13 +29,29 @@ use crate::screens::welcome::{WelcomeEvent, WelcomeScreen};
 use crate::screens::worktrees::WorktreesScreen;
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
-use crate::top_bar::TopBar;
+use crate::top_bar::{TopBar, TopBarEvent};
 
 /// Application mode — Welcome picker or Main project view.
 enum AppMode {
     Welcome(Entity<WelcomeScreen>),
     Project { _path: PathBuf, _name: String },
 }
+
+struct PlanningRequest {
+    run_id: surge_core::RunId,
+    graph: surge_core::graph::Graph,
+    project_path: PathBuf,
+    config: surge_orchestrator::engine::EngineRunConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct BootstrapIndexEntry {
+    operation_id: surge_core::RunId,
+    project_path: PathBuf,
+}
+
+/// Reconnect attempts (1s apart) after a live daemon link drops.
+const DAEMON_RECONNECT_ATTEMPTS: u32 = 60;
 
 /// Root application view.
 pub struct SurgeApp {
@@ -62,21 +79,36 @@ pub struct SurgeApp {
     agent_hub: Option<Entity<AgentHubScreen>>,
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
+    wizard_drafts: HashMap<PathBuf, Entity<SpecWizardScreen>>,
     agent_terminal: Option<Entity<AgentTerminalScreen>>,
     worktrees: Option<Entity<WorktreesScreen>>,
     settings: Option<Entity<SettingsScreen>>,
     /// Queued notifications to flush on next render (needs Window access).
-    pending_notifications: Vec<gpui_component::notification::Notification>,
+    pending_notifications: Vec<gpui_kit::component::notification::Notification>,
     /// Runs we already attached a per-run event subscription for.
     stream_subscribed: HashSet<surge_core::id::RunId>,
     /// Run to focus when the Runs cockpit next renders. Deep links land
     /// here because the RunsScreen entity is created lazily — calling
     /// select_run before it exists would silently drop the selection.
     pending_run_selection: Option<surge_core::id::RunId>,
+    bootstrap_operations: HashMap<
+        surge_core::RunId,
+        (
+            PathBuf,
+            surge_core::bootstrap_operation::BootstrapOperationStatus,
+        ),
+    >,
+    bootstrap_index: Vec<BootstrapIndexEntry>,
 }
 
 impl SurgeApp {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let app = Self::new_shell(state, cx);
+        Self::spawn_daemon_link(&app.state, cx);
+        app
+    }
+
+    fn new_shell(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         let active_screen = Screen::Fleet;
         let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, state.clone(), cx));
@@ -117,14 +149,6 @@ impl SurgeApp {
         )
         .detach();
 
-        // Spawn the daemon connect + global-event subscription task.
-        // The runtime UI is a daemon client (per
-        // `docs/ARCHITECTURE.md`): it watches runs
-        // hosted by `surge-daemon` rather than running them in-process.
-        // This task: try_connect → list_runs → subscribe_global → loop
-        // pumping `GlobalDaemonEvent` into AppState + UI notifications.
-        Self::spawn_daemon_link(&state, cx);
-
         // Start in Welcome mode.
         let welcome = cx.new(WelcomeScreen::new);
         cx.subscribe(
@@ -158,11 +182,14 @@ impl SurgeApp {
             agent_hub: None,
             spec_explorer: None,
             spec_wizard: None,
+            wizard_drafts: HashMap::new(),
             worktrees: None,
             settings: None,
             pending_notifications: Vec::new(),
             stream_subscribed: HashSet::new(),
             pending_run_selection: None,
+            bootstrap_operations: HashMap::new(),
+            bootstrap_index: Self::load_bootstrap_index(),
         }
     }
 
@@ -228,105 +255,131 @@ impl SurgeApp {
         cx.notify();
     }
 
-    /// Start a REAL engine run through the daemon: resolve a flow
-    /// template, seed project context + budget from surge.toml, pass
-    /// the operator's prompt as `initial_prompt`, and attach the
-    /// returned event stream so gates land in the Inbox immediately.
-    ///
-    /// `template` is an archetype name (`"bootstrap"` for the full
-    /// describe → roadmap → flow pipeline).
-    fn dispatch_run(&mut self, prompt: String, template: &'static str, cx: &mut Context<Self>) {
-        let prompt = prompt.trim().to_string();
-        if prompt.is_empty() {
+    /// Submit planning through the existing daemon protocol; the daemon owns the run.
+    /// Start an application from a free-form request (Fleet command bar,
+    /// Backlog dispatch). Goes through the daemon-supervised bootstrap
+    /// operation, which continues from the approved plan into the
+    /// implementation run; a plain planning run stopped after the flow gate
+    /// and never built anything.
+    fn dispatch_run(&mut self, prompt: String, cx: &mut Context<Self>) {
+        self.dispatch_bootstrap(prompt, surge_core::RunId::new(), None, cx);
+    }
+
+    fn dispatch_planning(
+        &mut self,
+        prompt: String,
+        template: &'static str,
+        run_id: surge_core::RunId,
+        origin: Option<Entity<SpecWizardScreen>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            self.dispatch_failed(
+                run_id,
+                origin.as_ref(),
+                "Daemon offline. Start it from the sidebar, then retry.".into(),
+                cx,
+            );
+            return;
+        };
+        self.dispatch_with(
+            prompt,
+            template,
+            run_id,
+            origin,
+            move |request| async move {
+                use surge_orchestrator::engine::facade::EngineFacade as _;
+                facade
+                    .start_run(
+                        request.run_id,
+                        request.graph,
+                        request.project_path,
+                        request.config,
+                    )
+                    .await
+            },
+            cx,
+        );
+    }
+
+    /// The injected start operation is the same submission boundary in production and tests.
+    fn dispatch_with<F, Fut>(
+        &mut self,
+        prompt: String,
+        template: &str,
+        run_id: surge_core::RunId,
+        origin: Option<Entity<SpecWizardScreen>>,
+        start: F,
+        cx: &mut Context<Self>,
+    ) where
+        F: FnOnce(PlanningRequest) -> Fut + 'static,
+        Fut: std::future::Future<
+                Output = Result<
+                    surge_orchestrator::engine::RunHandle,
+                    surge_orchestrator::engine::EngineError,
+                >,
+            > + 'static,
+    {
+        if self.stream_subscribed.contains(&run_id) {
             return;
         }
-        let Some(project_path) = self.state.read(cx).project_path.clone() else {
-            self.pending_notifications
-                .push(SurgeNotification::task_failed(
-                    "dispatch",
-                    "open a project first",
-                ));
-            cx.notify();
-            return;
-        };
-        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
-            self.pending_notifications
-                .push(SurgeNotification::task_failed(
-                    "dispatch",
-                    "daemon offline — click the DAEMON footer to start it",
-                ));
-            cx.notify();
-            return;
-        };
-
-        // Resolve the flow graph like `surge engine run --template` does
-        // (bundled archetypes + any disk overrides).
-        let graph = match surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
-            .map_err(|e| e.to_string())
-            .and_then(|reg| {
-                reg.resolve(template)
-                    .map(|r| r.graph)
-                    .map_err(|e| e.to_string())
-            }) {
-            Ok(graph) => graph,
-            Err(e) => {
-                tracing::error!("template {template} failed to resolve: {e}");
-                self.pending_notifications
-                    .push(SurgeNotification::task_failed("dispatch", &e));
-                cx.notify();
+        let request = (|| {
+            if prompt.trim().is_empty() {
+                return Err("Describe the work before starting a planning run.".to_string());
+            }
+            let state = self.state.read(cx);
+            let project_path = state.project_path.clone().ok_or("Open a project first.")?;
+            if let Some(wizard) = &origin {
+                let wizard = wizard.read(cx);
+                if wizard.project_path != project_path || !wizard.is_submitting(run_id) {
+                    return Err(
+                        "The project changed. Return to this draft's project to submit it.".into(),
+                    );
+                }
+            }
+            let graph = surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
+                .and_then(|registry| registry.resolve(template))
+                .map_err(|error| format!("Could not load planning flow: {error}"))?
+                .graph;
+            let app_config = state.config.clone().unwrap_or_default();
+            let mut config = surge_orchestrator::project_context::with_project_context_seed(
+                surge_orchestrator::engine::EngineRunConfig::default(),
+                &project_path,
+                &app_config,
+            );
+            config.budget = app_config.analytics.budget_guard();
+            config.initial_prompt = prompt;
+            Ok(PlanningRequest {
+                run_id,
+                graph,
+                project_path,
+                config,
+            })
+        })();
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => {
+                self.dispatch_failed(run_id, origin.as_ref(), error, cx);
                 return;
             },
         };
-
-        let app_config = self.state.read(cx).config.clone().unwrap_or_default();
-        let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
-            surge_orchestrator::engine::EngineRunConfig::default(),
-            &project_path,
-            &app_config,
-        );
-        run_config.budget = app_config.analytics.budget_guard();
-        run_config.initial_prompt = prompt.clone();
-
-        let run_id = surge_core::id::RunId::new();
-        // Mark before the await so a racing RunAccepted-driven sync
-        // doesn't double-subscribe; the handle's receiver misses nothing.
+        let project_path = request.project_path.clone();
         self.stream_subscribed.insert(run_id);
-        self.pending_run_selection = Some(run_id);
-
         let state = self.state.downgrade();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            use surge_orchestrator::engine::facade::EngineFacade as _;
-            match facade
-                .start_run(run_id, graph, project_path, run_config)
-                .await
-            {
+            match start(request).await {
                 Ok(handle) => {
                     let mut rx = handle.events;
-                    let _ = cx.update(|cx| {
-                        let _ = state.update(cx, |s, cx| {
-                            s.run_streams.entry(run_id).or_default().live = true;
-                            cx.notify();
-                        });
-                        let _ = this.update(cx, |t, cx| {
-                            t.pending_notifications
-                                .push(SurgeNotification::run_accepted(
-                                    &run_id.short().to_lowercase(),
-                                ));
-                            t.navigate(Screen::Runs, cx);
-                        });
+                    let _ = this.update(cx, |app, cx| {
+                        app.dispatch_accepted(run_id, &project_path, origin.as_ref(), cx);
                     });
                     loop {
                         match rx.recv().await {
                             Ok(event) => {
-                                let alive = cx.update(|cx| {
-                                    state
-                                        .update(cx, |s, cx| {
-                                            s.run_streams.entry(run_id).or_default().apply(&event);
-                                            cx.notify();
-                                        })
-                                        .is_ok()
-                                });
-                                if !matches!(alive, Ok(true)) {
+                                if state.update(cx, |state, cx| {
+                                    state.run_streams.entry(run_id).or_default().apply(&event);
+                                    cx.notify();
+                                }).is_err() {
                                     return;
                                 }
                             },
@@ -336,33 +389,392 @@ impl SurgeApp {
                             },
                         }
                     }
-                    let _ = cx.update(|cx| {
-                        let _ = state.update(cx, |s, cx| {
-                            if let Some(st) = s.run_streams.get_mut(&run_id) {
-                                st.live = false;
-                            }
-                            cx.notify();
-                        });
-                        let _ = this.update(cx, |t, _| {
-                            t.stream_subscribed.remove(&run_id);
-                        });
+                    let _ = state.update(cx, |state, cx| {
+                        if let Some(stream) = state.run_streams.get_mut(&run_id) {
+                            stream.live = false;
+                        }
+                        cx.notify();
+                    });
+                    let _ = this.update(cx, |app, _| { app.stream_subscribed.remove(&run_id); });
+                },
+                Err(error) => {
+                    let message = format!("Could not confirm planning request {run_id}: {error}. Check Runs before retrying; the daemon may have received the request.");
+                    let _ = this.update(cx, |app, cx| {
+                        app.dispatch_failed(run_id, origin.as_ref(), message, cx);
                     });
                 },
-                Err(e) => {
-                    tracing::error!("start_run failed: {e}");
-                    let _ = cx.update(|cx| {
-                        let _ = this.update(cx, |t, cx| {
-                            t.stream_subscribed.remove(&run_id);
-                            t.pending_run_selection = None;
-                            t.pending_notifications
-                                .push(SurgeNotification::task_failed("dispatch", &e.to_string()));
-                            cx.notify();
-                        });
+            }
+        }).detach();
+        cx.notify();
+    }
+
+    /// Submit a stable, daemon-owned application operation and retain its identity locally.
+    fn dispatch_bootstrap(
+        &mut self,
+        prompt: String,
+        operation_id: surge_core::RunId,
+        origin: Option<Entity<SpecWizardScreen>>,
+        cx: &mut Context<Self>,
+    ) {
+        if prompt.trim().is_empty() {
+            self.dispatch_failed(
+                operation_id,
+                origin.as_ref(),
+                "Describe what you want to build before starting.".into(),
+                cx,
+            );
+            return;
+        }
+        let project_path = self.state.read(cx).project_path.clone();
+        let Some(project_path) = project_path else {
+            self.dispatch_failed(
+                operation_id,
+                origin.as_ref(),
+                "Open a configured Git project before starting.".into(),
+                cx,
+            );
+            return;
+        };
+        let budget = self
+            .state
+            .read(cx)
+            .config
+            .clone()
+            .unwrap_or_default()
+            .analytics
+            .budget_guard();
+        if budget.limits.usd.is_some() {
+            self.dispatch_failed(
+                operation_id,
+                origin.as_ref(),
+                "This build cannot start safely: durable application runs cannot enforce a USD cap across planning and implementation yet. Remove the USD cap or set a token-only limit in project Settings, then retry.".into(),
+                cx,
+            );
+            return;
+        }
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            self.dispatch_failed(
+                operation_id,
+                origin.as_ref(),
+                "Daemon offline. Start it from the sidebar, then retry.".into(),
+                cx,
+            );
+            return;
+        };
+        self.stream_subscribed.insert(operation_id);
+        let entry = BootstrapIndexEntry {
+            operation_id,
+            project_path: project_path.clone(),
+        };
+        self.bootstrap_index
+            .retain(|existing| existing.operation_id != operation_id);
+        self.bootstrap_index.push(entry);
+        if let Err(error) = Self::save_bootstrap_index(&self.bootstrap_index) {
+            tracing::warn!(%operation_id, %error, "could not persist desktop bootstrap index");
+        }
+        let state = self.state.downgrade();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = async {
+                let intent = surge_core::bootstrap_operation::BootstrapIntent::new(
+                    project_path.clone(),
+                    prompt,
+                    budget,
+                )
+                .map_err(|error| error.to_string())?;
+                facade
+                    .start_bootstrap(operation_id, intent)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+            .await;
+            match result {
+                Ok(status) => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.bootstrap_operations
+                            .insert(operation_id, (project_path.clone(), status.clone()));
+                        app.dispatch_accepted(
+                            status.planning_run,
+                            &project_path,
+                            origin.as_ref(),
+                            cx,
+                        );
+                        app.track_bootstrap_operation(
+                            facade.clone(),
+                            operation_id,
+                            project_path.clone(),
+                            project_path.clone(),
+                            cx,
+                        );
+                    });
+                },
+                Err(error) => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.dispatch_failed(operation_id, origin.as_ref(), error, cx);
                     });
                 },
             }
         })
         .detach();
+        cx.notify();
+    }
+
+    fn track_bootstrap_operation(
+        &mut self,
+        facade: std::sync::Arc<surge_orchestrator::engine::daemon_facade::DaemonEngineFacade>,
+        operation_id: surge_core::RunId,
+        display_project: PathBuf,
+        project_path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let state = self.state.downgrade();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                let status = facade.bootstrap_status(operation_id).await;
+                match status {
+                    Ok(status) => {
+                        let is_terminal = status.state.phase().is_none();
+                        let _ = this.update(cx, |app, cx| {
+                            app.update_bootstrap_view(
+                                operation_id,
+                                status.clone(),
+                                &display_project,
+                                cx,
+                            );
+                        });
+                        if is_terminal {
+                            break;
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(%operation_id, %error, "bootstrap status refresh failed");
+                        break;
+                    },
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+            }
+            let _ = state.update(cx, |state, cx| {
+                if let Some(stream) = state.run_streams.get_mut(&operation_id) {
+                    stream.live = false;
+                }
+                cx.notify();
+            });
+            let _ = this.update(cx, |app, _| {
+                app.stream_subscribed.remove(&operation_id);
+            });
+        })
+        .detach();
+    }
+
+    fn update_bootstrap_view(
+        &mut self,
+        operation_id: surge_core::RunId,
+        status: surge_core::bootstrap_operation::BootstrapOperationStatus,
+        project_path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) {
+        use surge_core::bootstrap_operation::{BootstrapPhase, BootstrapState};
+        use surge_orchestrator::engine::handle::RunStatus;
+        let snapshot = status.clone();
+        let run_id = match status.state.phase() {
+            Some(
+                BootstrapPhase::QueuedImplementation
+                | BootstrapPhase::PreparingImplementation
+                | BootstrapPhase::Implementing,
+            ) => status.implementation_run,
+            _ => status.planning_run,
+        };
+        let run_status = match status.state {
+            BootstrapState::Completed => RunStatus::Completed,
+            BootstrapState::Failed | BootstrapState::NeedsAttention { .. } => RunStatus::Failed,
+            BootstrapState::Cancelled => RunStatus::Aborted,
+            BootstrapState::Pending { .. } | BootstrapState::Cancelling { .. } => RunStatus::Active,
+        };
+        self.bootstrap_operations
+            .insert(operation_id, (project_path.to_path_buf(), snapshot.clone()));
+        if let Some(entry) = self
+            .bootstrap_index
+            .iter_mut()
+            .find(|entry| entry.operation_id == operation_id)
+        {
+            entry.project_path = project_path.to_path_buf();
+        } else {
+            self.bootstrap_index.push(BootstrapIndexEntry {
+                operation_id,
+                project_path: project_path.to_path_buf(),
+            });
+        }
+        if let Err(error) = Self::save_bootstrap_index(&self.bootstrap_index) {
+            tracing::warn!(%operation_id, %error, "could not update desktop bootstrap index");
+        }
+        self.state.update(cx, |state, cx| {
+            state
+                .bootstrap_operations
+                .insert(operation_id, snapshot.clone());
+            state.run_streams.entry(run_id).or_default().live = !status.state.phase().is_none();
+            if !state.runs.iter().any(|run| run.run_id == run_id) {
+                state.runs.push(crate::app_state::UiRun {
+                    run_id,
+                    status: run_status,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: status.state.phase().is_none().then_some(chrono::Utc::now()),
+                });
+            } else if let Some(run) = state.runs.iter_mut().find(|run| run.run_id == run_id) {
+                run.status = run_status;
+                run.ended_at = status.state.phase().is_none().then_some(chrono::Utc::now());
+            }
+            cx.notify();
+        });
+    }
+
+    fn bootstrap_index_path() -> Option<PathBuf> {
+        surge_core::home::surge_home_dir()
+            .map(|home| home.join("desktop").join("bootstrap-operations.json"))
+    }
+
+    fn load_bootstrap_index() -> Vec<BootstrapIndexEntry> {
+        let Some(path) = Self::bootstrap_index_path() else {
+            return Vec::new();
+        };
+        Self::load_bootstrap_index_at(&path)
+    }
+
+    fn load_bootstrap_index_at(path: &std::path::Path) -> Vec<BootstrapIndexEntry> {
+        let Ok(bytes) = std::fs::read(path) else {
+            return Vec::new();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_default()
+    }
+
+    fn save_bootstrap_index(entries: &[BootstrapIndexEntry]) -> anyhow::Result<()> {
+        let Some(path) = Self::bootstrap_index_path() else {
+            anyhow::bail!("Surge home is unavailable");
+        };
+        Self::save_bootstrap_index_at(path, entries)
+    }
+
+    fn save_bootstrap_index_at(
+        path: PathBuf,
+        entries: &[BootstrapIndexEntry],
+    ) -> anyhow::Result<()> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("invalid Surge home path"))?;
+        std::fs::create_dir_all(parent)?;
+        let bytes = serde_json::to_vec_pretty(entries)?;
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, bytes)?;
+        std::fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    fn recover_bootstrap_operations(
+        &mut self,
+        facade: std::sync::Arc<surge_orchestrator::engine::daemon_facade::DaemonEngineFacade>,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = self.bootstrap_index.clone();
+        let current_project = self.state.read(cx).project_path.clone();
+        for entry in entries {
+            if self.stream_subscribed.insert(entry.operation_id) {
+                self.track_bootstrap_operation(
+                    facade.clone(),
+                    entry.operation_id,
+                    current_project
+                        .as_ref()
+                        .filter(|path| ***path == entry.project_path)
+                        .map_or_else(|| entry.project_path.clone(), Clone::clone),
+                    entry.project_path,
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn handle_wizard_event(
+        &mut self,
+        wizard: Entity<SpecWizardScreen>,
+        event: &crate::screens::spec_wizard::SpecWizardEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::screens::spec_wizard::SpecWizardEvent;
+        match event {
+            SpecWizardEvent::Create {
+                run_id,
+                description,
+            } => {
+                self.dispatch_bootstrap(description.clone(), *run_id, Some(wizard.clone()), cx);
+            },
+            SpecWizardEvent::OpenRun(run_id) => {
+                let draft = wizard.read(cx);
+                if !draft.is_accepted(*run_id)
+                    || self.spec_wizard.as_ref() != Some(&wizard)
+                    || self.state.read(cx).project_path.as_ref() != Some(&draft.project_path)
+                {
+                    return;
+                }
+                let project_path = draft.project_path.clone();
+                if self.wizard_drafts.get(&project_path) == Some(&wizard) {
+                    self.wizard_drafts.remove(&project_path);
+                }
+                self.spec_wizard = None;
+                self.open_run_cockpit(Some(*run_id), cx);
+            },
+            SpecWizardEvent::Cancel => self.navigate(Screen::Backlog, cx),
+        }
+    }
+
+    fn dispatch_failed(
+        &mut self,
+        run_id: surge_core::RunId,
+        origin: Option<&Entity<SpecWizardScreen>>,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.stream_subscribed.remove(&run_id);
+        if let Some(wizard) = origin {
+            wizard.update(cx, |wizard, cx| {
+                wizard.finish_submission(run_id, Err(error), cx);
+            });
+        } else {
+            self.pending_notifications
+                .push(SurgeNotification::task_failed("planning", &error));
+        }
+        cx.notify();
+    }
+
+    fn dispatch_accepted(
+        &mut self,
+        run_id: surge_core::RunId,
+        project_path: &std::path::Path,
+        origin: Option<&Entity<SpecWizardScreen>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.run_streams.entry(run_id).or_default().live = true;
+            cx.notify();
+        });
+        let same_project = self.state.read(cx).project_path.as_deref() == Some(project_path);
+        let show_run = if let Some(wizard) = origin {
+            let applied = wizard.update(cx, |wizard, cx| {
+                wizard.finish_submission(run_id, Ok(()), cx)
+            });
+            applied
+                && same_project
+                && self.active_screen == Screen::SpecWizard
+                && self.spec_wizard.as_ref() == Some(wizard)
+        } else {
+            same_project
+        };
+        if show_run {
+            if origin.is_some() {
+                self.wizard_drafts.remove(project_path);
+                self.spec_wizard = None;
+            }
+            self.open_run_cockpit(Some(run_id), cx);
+        }
         cx.notify();
     }
 
@@ -414,7 +826,7 @@ impl SurgeApp {
             let facade = facade.clone();
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let unmark = |cx: &mut AsyncApp, this: &WeakEntity<Self>| {
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = this.update(cx, |t, _| {
                             t.stream_subscribed.remove(&run_id);
                         });
@@ -431,7 +843,27 @@ impl SurgeApp {
                     },
                 };
                 tracing::info!(run_id = %run_id, "per-run event stream attached");
-                let _ = cx.update(|cx| {
+                // Subscribe first, then replay a read-only durable snapshot.
+                // Live events buffered during hydration are deduplicated by seq.
+                if let Some(home) = surge_core::home::surge_home_dir() {
+                    match surge_persistence::runs::Storage::inspect_existing_run_events(
+                        home.join("runs"), run_id,
+                    ).await {
+                        Ok(events) => cx.update(|cx| {
+                            let _ = state.update(cx, |s, cx| {
+                                let stream = s.run_streams.entry(run_id).or_default();
+                                for event in events {
+                                    stream.apply_recorded(&surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                                        seq: event.seq.as_u64(), payload: Box::new(event.payload.payload),
+                                    }, event.timestamp_ms);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                        Err(error) => tracing::warn!(%run_id, %error, "could not restore run history"),
+                    }
+                }
+                cx.update(|cx| {
                     let _ = state.update(cx, |s, cx| {
                         s.run_streams.entry(run_id).or_default().live = true;
                         cx.notify();
@@ -448,7 +880,7 @@ impl SurgeApp {
                                     })
                                     .is_ok()
                             });
-                            if !matches!(alive, Ok(true)) {
+                            if !alive {
                                 return;
                             }
                         },
@@ -458,7 +890,7 @@ impl SurgeApp {
                         },
                     }
                 }
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = state.update(cx, |s, cx| {
                         if let Some(st) = s.run_streams.get_mut(&run_id) {
                             st.live = false;
@@ -479,7 +911,9 @@ impl SurgeApp {
             WelcomeEvent::OpenProject(path) => {
                 self.open_project(&path, cx);
             },
+            WelcomeEvent::NewProject => self.create_project(cx),
             WelcomeEvent::BrowseProject => {
+                self.close_run_preview(cx);
                 // Native directory picker dialog.
                 let receiver = cx.prompt_for_paths(PathPromptOptions {
                     files: false,
@@ -488,40 +922,16 @@ impl SurgeApp {
                     prompt: Some("Select project directory".into()),
                 });
                 cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                    if let Ok(Ok(Some(paths))) = receiver.await {
-                        if let Some(path) = paths.first() {
-                            let path = path.clone();
-                            cx.update(|cx| {
-                                this.update(cx, |this: &mut Self, cx| {
-                                    this.open_project(&path, cx);
-                                })
+                    if let Ok(Ok(Some(paths))) = receiver.await
+                        && let Some(path) = paths.first()
+                    {
+                        let path = path.clone();
+                        cx.update(|cx| {
+                            this.update(cx, |this: &mut Self, cx| {
+                                this.open_project(&path, cx);
                             })
-                            .ok();
-                        }
-                    }
-                })
-                .detach();
-            },
-            WelcomeEvent::InitProject => {
-                // For now, open the directory picker and then create a project.
-                // TODO: show full init wizard dialog.
-                let receiver = cx.prompt_for_paths(PathPromptOptions {
-                    files: false,
-                    directories: true,
-                    multiple: false,
-                    prompt: Some("Select project directory".into()),
-                });
-                cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                    if let Ok(Ok(Some(paths))) = receiver.await {
-                        if let Some(path) = paths.first() {
-                            let path = path.clone();
-                            cx.update(|cx| {
-                                this.update(cx, |this: &mut Self, cx| {
-                                    this.open_project(&path, cx);
-                                })
-                            })
-                            .ok();
-                        }
+                        })
+                        .ok();
                     }
                 })
                 .detach();
@@ -548,6 +958,7 @@ impl SurgeApp {
     }
 
     fn open_project(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.close_run_preview(cx);
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -564,9 +975,7 @@ impl SurgeApp {
         });
 
         // Create top bar.
-        let name_clone = name.clone();
-        let top_bar = cx.new(|cx| TopBar::new(&name_clone, Screen::Fleet, cx));
-        self.top_bar = Some(top_bar);
+        self.install_top_bar(&name, cx);
 
         // Reset screen entities so they re-read from AppState.
         self.fleet = None;
@@ -594,7 +1003,75 @@ impl SurgeApp {
         cx.notify();
     }
 
+    fn install_top_bar(&mut self, name: &str, cx: &mut Context<Self>) {
+        let top_bar = cx.new(|cx| TopBar::new(name, Screen::Fleet, cx));
+        cx.subscribe(
+            &top_bar,
+            |this, _bar, event: &TopBarEvent, cx| match event {
+                TopBarEvent::ProjectSwitcherOpened => this.close_run_preview(cx),
+                TopBarEvent::SwitchProject(path) => this.open_project(path, cx),
+                TopBarEvent::OpenOther => {
+                    this.handle_welcome_event(WelcomeEvent::BrowseProject, cx);
+                },
+                TopBarEvent::NewProject => this.create_project(cx),
+            },
+        )
+        .detach();
+        self.top_bar = Some(top_bar);
+    }
+
+    fn create_project(&mut self, cx: &mut Context<Self>) {
+        self.close_run_preview(cx);
+        // Reuse the open project's agent settings; on a first launch there is
+        // none, so fall back to the same detected-agent default as
+        // `surge init --default` rather than refusing to create anything.
+        let config = self.state.read(cx).config.clone();
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose an empty folder for your new application".into()),
+        });
+        cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let destination = path.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let config = config.unwrap_or_else(surge_acp::onboarding::default_config);
+                    crate::project_init::initialize(&destination, &config)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(()) => this.open_project(&path, cx),
+                Err(error) => {
+                    this.pending_notifications
+                        .push(SurgeNotification::task_failed(
+                            "new project",
+                            &format!("Could not create project: {error}"),
+                        ));
+                    cx.notify();
+                },
+            });
+        })
+        .detach();
+    }
+
+    fn close_run_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(runs) = &self.runs_screen {
+            runs.update(cx, |screen, cx| screen.close_preview(cx));
+        }
+    }
+
     fn navigate(&mut self, screen: Screen, cx: &mut Context<Self>) {
+        if screen != Screen::Runs {
+            self.close_run_preview(cx);
+        }
         self.active_screen = screen;
         self.sidebar.update(cx, |sb, cx| sb.set_active(screen, cx));
         if let Some(top_bar) = &self.top_bar {
@@ -748,12 +1225,47 @@ impl SurgeApp {
         let state_for_task = state.downgrade();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             // Set Connecting.
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = state_for_task.update(cx, |state, cx| {
                     state.daemon_state = crate::daemon_link::ConnectionState::Connecting;
                     cx.notify();
                 });
             });
+
+            // Durable results remain available after daemon/UI restarts.
+            if let Some(home) = surge_core::home::surge_home_dir() {
+                let limit = std::num::NonZeroU32::new(100).unwrap_or(std::num::NonZeroU32::MIN);
+                match surge_persistence::runs::Storage::inspect_existing_run_summaries(home.clone(), limit).await {
+                    Ok(summaries) => {
+                        for mut summary in summaries {
+                            match surge_persistence::runs::Storage::inspect_existing_run_events(home.join("runs"), summary.id).await {
+                                Ok(events) => cx.update(|cx| { let _ = state_for_task.update(cx, |state, cx| {
+                                    if let Some(event) = events.iter().rev().find(|event| matches!(event.payload.payload,
+                                        surge_core::EventPayload::RunCompleted { .. } | surge_core::EventPayload::RunFailed { .. } | surge_core::EventPayload::RunAborted { .. })) {
+                                        summary.status = match event.payload.payload {
+                                            surge_core::EventPayload::RunCompleted { .. } => surge_core::RunStatus::Completed,
+                                            surge_core::EventPayload::RunFailed { .. } => surge_core::RunStatus::Failed,
+                                            _ => surge_core::RunStatus::Aborted,
+                                        };
+                                        summary.ended_at_ms = Some(event.timestamp_ms);
+                                    }
+                                    state.restore_finished_runs(std::slice::from_ref(&summary));
+                                    let stream = state.run_streams.entry(summary.id).or_default();
+                                    for event in events {
+                                        stream.apply_recorded(&surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                                            seq: event.seq.as_u64(), payload: Box::new(event.payload.payload),
+                                        }, event.timestamp_ms);
+                                    }
+                                    stream.live = false;
+                                    cx.notify();
+                                }); }),
+                                Err(error) => tracing::warn!(%error, run_id = %summary.id, "could not read finished run history"),
+                            }
+                        }
+                    },
+                    Err(error) => tracing::warn!(%error, "could not restore finished runs"),
+                }
+            }
 
             // Try to connect (with retries for freshly spawned daemons).
             let mut last_err = String::new();
@@ -774,7 +1286,7 @@ impl SurgeApp {
             }
             let Some(facade) = facade else {
                 tracing::info!("daemon not reachable ({last_err}); UI continues offline");
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = state_for_task.update(cx, |state, cx| {
                         state.daemon_state =
                             crate::daemon_link::ConnectionState::Failed(last_err.clone());
@@ -786,11 +1298,14 @@ impl SurgeApp {
 
             // Connected — flip state, then list runs once.
             let facade_for_state = facade.clone();
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = state_for_task.update(cx, |state, cx| {
                     state.daemon_state =
                         crate::daemon_link::ConnectionState::Connected(facade_for_state);
                     cx.notify();
+                });
+                let _ = this.update(cx, |this, cx| {
+                    this.recover_bootstrap_operations(facade.clone(), cx);
                 });
             });
 
@@ -798,7 +1313,7 @@ impl SurgeApp {
                 use surge_orchestrator::engine::facade::EngineFacade as _;
                 match facade.list_runs().await {
                     Ok(summaries) => {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             let _ = state_for_task.update(cx, |state, cx| {
                                 state.set_runs_from_summaries(&summaries);
                                 cx.notify();
@@ -824,7 +1339,7 @@ impl SurgeApp {
                     // status pill is honest.
                     tracing::warn!("daemon subscribe_global failed: {e}");
                     let reason = e.to_string();
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = state_for_task.update(cx, |state, cx| {
                             state.daemon_state =
                                 crate::daemon_link::ConnectionState::Failed(reason);
@@ -841,7 +1356,7 @@ impl SurgeApp {
                     Ok(event) => {
                         let event_for_state = event.clone();
                         let event_for_app = event.clone();
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             let _ = state_for_task.update(cx, |state, cx| {
                                 state.apply_global_event(&event_for_state);
                                 cx.notify();
@@ -867,13 +1382,21 @@ impl SurgeApp {
                 }
             }
 
-            // Channel closed — flip back to Disconnected so the UI can
-            // surface a "reconnect" affordance later.
-            let _ = cx.update(|cx| {
+            // Channel closed — the daemon restarted or went away. Flip to
+            // Disconnected, then reconnect on our own: a restart (upgrade,
+            // `surge daemon restart`, crash recovery) must not leave the app
+            // saying "offline" until someone clicks. Bounded: ~1 minute.
+            cx.update(|cx| {
                 let _ = state_for_task.update(cx, |state, cx| {
                     state.daemon_state = crate::daemon_link::ConnectionState::Disconnected;
                     cx.notify();
                 });
+                if let Some(state) = state_for_task.upgrade() {
+                    let _ = this.update(cx, |_this, cx| {
+                        tracing::info!("daemon link dropped; reconnecting");
+                        Self::spawn_daemon_link_with_retries(&state, DAEMON_RECONNECT_ATTEMPTS, cx);
+                    });
+                }
             });
         })
         .detach();
@@ -881,7 +1404,7 @@ impl SurgeApp {
 
     /// Flush queued notifications (called from render where Window is available).
     fn flush_notifications(&mut self, window: &mut Window, cx: &mut App) {
-        use gpui_component::WindowExt as _;
+        use gpui_kit::component::WindowExt as _;
         for notif in self.pending_notifications.drain(..) {
             window.push_notification(notif, cx);
         }
@@ -890,11 +1413,11 @@ impl SurgeApp {
     /// Push a single notification immediately (used from UI button handlers).
     pub fn push_notification(
         &mut self,
-        notif: gpui_component::notification::Notification,
+        notif: gpui_kit::component::notification::Notification,
         window: &mut Window,
         cx: &mut App,
     ) {
-        use gpui_component::WindowExt as _;
+        use gpui_kit::component::WindowExt as _;
         window.push_notification(notif, cx);
     }
 
@@ -907,6 +1430,7 @@ impl SurgeApp {
     }
 
     fn open_palette(&mut self, cx: &mut Context<Self>) {
+        self.close_run_preview(cx);
         let palette = cx.new(CommandPalette::new);
         cx.subscribe(
             &palette,
@@ -1008,7 +1532,7 @@ impl SurgeApp {
                                 this.open_run_cockpit(*run_id, cx);
                             },
                             FleetAction::Dispatch(prompt) => {
-                                this.dispatch_run(prompt.clone(), "bootstrap", cx);
+                                this.dispatch_run(prompt.clone(), cx);
                             },
                         }
                     })
@@ -1018,7 +1542,10 @@ impl SurgeApp {
                 fleet.clone().into_any_element()
             },
             Screen::Flow => {
-                let s = self.flow.get_or_insert_with(|| cx.new(FlowScreen::new));
+                let state = self.state.clone();
+                let s = self
+                    .flow
+                    .get_or_insert_with(|| cx.new(|cx| FlowScreen::with_state(state, cx)));
                 s.clone().into_any_element()
             },
             Screen::Runs => {
@@ -1055,6 +1582,7 @@ impl SurgeApp {
                             InboxAction::OpenRun(run_id) => {
                                 this.open_run_cockpit(Some(*run_id), cx);
                             },
+                            InboxAction::OpenPlan => this.navigate(Screen::Flow, cx),
                             InboxAction::TaskDecision { task_id, approved } => {
                                 this.write_gate_decision(task_id.clone(), *approved, cx);
                             },
@@ -1080,7 +1608,7 @@ impl SurgeApp {
                                 this.navigate(Screen::SpecWizard, cx);
                             },
                             BacklogAction::Dispatch { prompt } => {
-                                this.dispatch_run(prompt.clone(), "bootstrap", cx);
+                                this.dispatch_run(prompt.clone(), cx);
                             },
                         },
                     )
@@ -1131,50 +1659,25 @@ impl SurgeApp {
                 terminal.clone().into_any_element()
             },
             Screen::SpecWizard => {
+                let project_path = self.state.read(cx).project_path.clone().unwrap_or_default();
+                let drafts = &mut self.wizard_drafts;
                 let spec_wizard = self.spec_wizard.get_or_insert_with(|| {
-                    let w = cx.new(SpecWizardScreen::new);
+                    if let Some(draft) = drafts.get(&project_path) {
+                        return draft.clone();
+                    }
+                    let wizard = cx.new(|cx| SpecWizardScreen::new(project_path.clone(), cx));
                     cx.subscribe(
-                        &w,
+                        &wizard,
                         |this: &mut Self,
-                         _w,
+                         wizard,
                          event: &crate::screens::spec_wizard::SpecWizardEvent,
                          cx| {
-                            match event {
-                                crate::screens::spec_wizard::SpecWizardEvent::Create {
-                                    title,
-                                    description,
-                                } => {
-                                    // Land the new work in the backlog as a
-                                    // draft task (in-memory; engine-backed
-                                    // intake is the bootstrap pipeline).
-                                    let now = chrono::Local::now().format("%H:%M").to_string();
-                                    let task = crate::app_state::TaskEntry {
-                                        id: surge_core::TaskId::new(),
-                                        _spec_id: surge_core::SpecId::new(),
-                                        title: title.clone(),
-                                        description: description.clone(),
-                                        state: surge_core::TaskState::Draft,
-                                        agent: None,
-                                        complexity: "unscoped".to_string(),
-                                        _created_at: now.clone(),
-                                        updated_at: now,
-                                    };
-                                    this.state.update(cx, |state, cx| {
-                                        state.tasks.push(task);
-                                        cx.notify();
-                                    });
-                                    this.spec_wizard = None;
-                                    this.navigate(Screen::Backlog, cx);
-                                },
-                                crate::screens::spec_wizard::SpecWizardEvent::Cancel => {
-                                    this.spec_wizard = None;
-                                    this.navigate(Screen::Backlog, cx);
-                                },
-                            }
+                            this.handle_wizard_event(wizard, event, cx);
                         },
                     )
                     .detach();
-                    w
+                    drafts.insert(project_path, wizard.clone());
+                    wizard
                 });
                 spec_wizard.clone().into_any_element()
             },
@@ -1240,6 +1743,8 @@ impl SurgeApp {
                             .child(
                                 div()
                                     .id("task-detail-close")
+                                    .role(Role::Button)
+                                    .aria_label("Close task details")
                                     .cursor_pointer()
                                     .text_sm()
                                     .text_color(theme::text_muted())
@@ -1394,6 +1899,8 @@ impl SurgeApp {
                             .child(
                                 div()
                                     .id("task-detail-close-nf")
+                                    .role(Role::Button)
+                                    .aria_label("Close task details")
                                     .cursor_pointer()
                                     .text_sm()
                                     .text_color(theme::text_muted())
@@ -1458,7 +1965,7 @@ impl SurgeApp {
     /// Client-side titlebar: app mark + drag region + min/max/close.
     /// Styled to our dark chrome; window controls come from gpui-component.
     fn render_title_bar(&self) -> impl IntoElement {
-        gpui_component::TitleBar::new()
+        gpui_kit::component::TitleBar::new()
             .bg(theme::panel())
             .border_color(theme::hairline())
             .child(
@@ -1586,7 +2093,6 @@ impl Render for SurgeApp {
                         )
                         .child(self.render_palette_overlay())
                         .child(self.render_task_detail_overlay(cx))
-                        .children(gpui_component::Root::render_notification_layer(window, cx))
                         .into_any_element()
                 },
             };
@@ -1598,5 +2104,42 @@ impl Render for SurgeApp {
             .bg(theme::background())
             .child(self.render_title_bar())
             .child(div().flex_1().min_h_0().child(content))
+    }
+}
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+mod bootstrap_index_tests {
+    use super::{BootstrapIndexEntry, SurgeApp};
+    use std::path::PathBuf;
+
+    #[test]
+    fn operation_index_round_trips_for_ui_restart_recovery() {
+        let root = std::env::temp_dir().join(format!(
+            "surge-bootstrap-index-{}",
+            surge_core::RunId::new()
+        ));
+        let path = root.join("desktop/bootstrap-operations.json");
+        let entries = vec![BootstrapIndexEntry {
+            operation_id: surge_core::RunId::new(),
+            project_path: PathBuf::from("/tmp/application"),
+        }];
+        SurgeApp::save_bootstrap_index_at(path.clone(), &entries).unwrap();
+        assert_eq!(SurgeApp::load_bootstrap_index_at(&path), entries);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_operation_index_does_not_invent_work() {
+        let path = std::env::temp_dir().join(format!(
+            "surge-bootstrap-corrupt-{}.json",
+            surge_core::RunId::new()
+        ));
+        std::fs::write(&path, b"{bad").unwrap();
+        assert!(SurgeApp::load_bootstrap_index_at(&path).is_empty());
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -11,14 +11,14 @@
 //! - **Milestones** — parsed from the project's `roadmap.toml`
 //!   (`surge_core::roadmap::RoadmapArtifact`, the v2 ledger schema
 //!   with per-task status/size/verified) when present; falls back to
-//!   in-memory specs; labelled sample otherwise.
+//!   in-memory specs; empty until a plan exists.
 //!
 //! "Amend roadmap" is a real workflow (`surge feature describe` →
 //! roadmap-patch → approval) that runs through the engine; the header
 //! points at it instead of faking an in-UI editor.
 
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::component::StyledExt;
+use gpui_kit::*;
 use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
 use surge_core::{BundledFlows, NodeKind};
 
@@ -32,7 +32,7 @@ struct LineStep {
     kind: NodeKind,
 }
 
-/// Milestone view-model (from roadmap.toml, specs, or sample).
+/// Milestone view-model (from roadmap.toml or specs).
 #[derive(Clone)]
 struct MilestoneRow {
     id: String,
@@ -65,7 +65,7 @@ fn status_parts(status: &RoadmapStatus) -> (&'static str, Hsla) {
 enum SourceKind {
     RoadmapToml,
     Specs,
-    Sample,
+    Empty,
 }
 
 /// Roadmap screen — milestones, delivery line and project context.
@@ -89,7 +89,7 @@ impl RoadmapScreen {
         let mut this = Self {
             state,
             cached_project_md: None,
-            cached_milestones: (Vec::new(), SourceKind::Sample),
+            cached_milestones: (Vec::new(), SourceKind::Empty),
             line: Self::compute_line_steps(),
         };
         this.reload(cx);
@@ -217,7 +217,7 @@ impl RoadmapScreen {
             return (rows, SourceKind::Specs);
         }
 
-        (sample_milestones(), SourceKind::Sample)
+        (Vec::new(), SourceKind::Empty)
     }
 
     /// Walk the bundled linear-with-review flow from its start node
@@ -280,11 +280,9 @@ impl RoadmapScreen {
                 SourceKind::Specs => {
                     ui::pill("from specs", theme::accent(), theme::accent().opacity(0.12))
                 },
-                SourceKind::Sample => ui::pill(
-                    "sample · surge bootstrap writes the real one",
-                    theme::text_muted(),
-                    theme::panel_raised(),
-                ),
+                SourceKind::Empty => {
+                    ui::pill("No roadmap yet", theme::text_muted(), theme::panel_raised())
+                },
             })
             .child(ui::meta("amend via `surge feature describe`"))
     }
@@ -570,6 +568,11 @@ impl Render for RoadmapScreen {
         let (milestones, source) = self.cached_milestones.clone();
 
         let mut list = div().v_flex().gap(px(10.0));
+        if milestones.is_empty() {
+            list = list.child(ui::meta(
+                "No milestones yet. Describe your application in Fleet to prepare a roadmap.",
+            ));
+        }
         for (i, m) in milestones.iter().enumerate() {
             list = list.child(self.render_milestone(i, m));
         }
@@ -591,93 +594,22 @@ impl Render for RoadmapScreen {
     }
 }
 
-/// Labelled sample milestones (no roadmap.toml, no specs) — mirrors
-/// the concept so the shape reads before `surge bootstrap` runs.
-fn sample_milestones() -> Vec<MilestoneRow> {
-    vec![
-        MilestoneRow {
-            id: "m1".into(),
-            title: "Harden the intake path".into(),
-            status_label: "completed".into(),
-            status_color: theme::success(),
-            desc: "4 tasks · 4 sized · 4 verified".into(),
-            done: 4,
-            total: 4,
-            tasks: vec![
-                (
-                    "m1-t1".into(),
-                    "OAuth token refresh".into(),
-                    theme::success(),
-                ),
-                ("m1-t2".into(), "Session cache".into(), theme::success()),
-                (
-                    "m1-t3".into(),
-                    "Rate limiter middleware".into(),
-                    theme::success(),
-                ),
-                (
-                    "m1-t4".into(),
-                    "Audit log for logins".into(),
-                    theme::success(),
-                ),
-            ],
-            note: String::new(),
-        },
-        MilestoneRow {
-            id: "m2".into(),
-            title: "Data import v2".into(),
-            status_label: "running".into(),
-            status_color: theme::accent(),
-            desc: "5 tasks · 5 sized · 2 verified".into(),
-            done: 2,
-            total: 5,
-            tasks: vec![
-                (
-                    "m2-t1".into(),
-                    "Streaming CSV parser".into(),
-                    theme::success(),
-                ),
-                ("m2-t2".into(), "Schema inference".into(), theme::success()),
-                ("m2-t3".into(), "Retry logic patch".into(), theme::accent()),
-                (
-                    "m2-t4".into(),
-                    "Config loader refactor".into(),
-                    theme::error(),
-                ),
-                (
-                    "m2-t5".into(),
-                    "Import progress UI".into(),
-                    theme::text_muted(),
-                ),
-            ],
-            note: "m2-t4 failed verification — routed back".into(),
-        },
-        MilestoneRow {
-            id: "m3".into(),
-            title: "Observability & cost controls".into(),
-            status_label: "pending".into(),
-            status_color: theme::text_muted(),
-            desc: "3 tasks · 3 sized · 0 verified".into(),
-            done: 0,
-            total: 3,
-            tasks: vec![
-                (
-                    "m3-t1".into(),
-                    "Structured logging".into(),
-                    theme::text_muted(),
-                ),
-                (
-                    "m3-t2".into(),
-                    "Budget guard per run".into(),
-                    theme::text_muted(),
-                ),
-                (
-                    "m3-t3".into(),
-                    "Token usage dashboard".into(),
-                    theme::text_muted(),
-                ),
-            ],
-            note: String::new(),
-        },
-    ]
+#[cfg(test)]
+mod empty_state_tests {
+    use super::{RoadmapScreen, SourceKind};
+    use crate::app_state::AppState;
+    use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn missing_roadmap_never_invents_milestones(cx: &mut TestAppContext) {
+        let screen = cx.update(|cx| {
+            let state = cx.new(|_| AppState::new());
+            cx.new(|cx| RoadmapScreen::new(state, cx))
+        });
+        screen.update(cx, |screen, cx| {
+            let (milestones, source) = screen.milestones(cx);
+            assert!(milestones.is_empty());
+            assert!(source == SourceKind::Empty);
+        });
+    }
 }

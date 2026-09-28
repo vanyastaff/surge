@@ -1,7 +1,7 @@
 //! Internal command channel payload. Public for tests; production callers
 //! use the `AcpBridge` methods rather than constructing commands directly.
 
-use agent_client_protocol::RequestPermissionResponse;
+use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use surge_core::SessionId;
 use tokio::sync::oneshot;
 
@@ -22,6 +22,8 @@ pub enum BridgeCommand {
     OpenSession {
         /// Open-session parameters.
         config: SessionConfig,
+        /// Admission is acquired by the caller, outside the control loop.
+        permit: tokio::sync::OwnedSemaphorePermit,
         /// Reply channel carrying the new `SessionId` or an `OpenSessionError`.
         reply: oneshot::Sender<Result<SessionId, OpenSessionError>>,
     },

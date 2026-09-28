@@ -21,10 +21,10 @@
 use std::collections::BTreeMap;
 use std::f32::consts::{PI, TAU};
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::StyledExt;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_persistence::memory::MemoryStore;
 
 use crate::theme;
@@ -72,6 +72,7 @@ impl MemKind {
 
 #[derive(Clone)]
 struct MemNode {
+    id: String,
     kind: MemKind,
     title: String,
     desc: String,
@@ -248,7 +249,10 @@ impl MemoryScreen {
                     .border_color(theme::hairline_strong())
                     .child(
                         div().flex_1().child(
-                            Input::new(self.search_input.as_ref().unwrap()).appearance(false),
+                            Input::new(self.search_input.as_ref().unwrap())
+                                .accessibility_id("search-memory")
+                                .aria_label("Search memory")
+                                .appearance(false),
                         ),
                     ),
             )
@@ -314,7 +318,9 @@ impl MemoryScreen {
                     let color = self.nodes[i].kind.color();
                     let title = self.nodes[i].title.clone();
                     div()
-                        .id(SharedString::from(format!("mem-row-{i}")))
+                        .id(SharedString::from(format!("mem-row-{}", self.nodes[i].id)))
+                        .role(Role::Button)
+                        .aria_label(title.clone())
                         .h_flex()
                         .gap(px(8.0))
                         .items_center()
@@ -471,7 +477,9 @@ impl MemoryScreen {
         let color = node.kind.color();
         let title = node.title.clone();
         div()
-            .id(SharedString::from(format!("mem-node-{i}")))
+            .id(SharedString::from(format!("mem-node-{}", node.id)))
+            .role(Role::Button)
+            .aria_label(title.clone())
             .absolute()
             .left(px(pos.0 - 82.0))
             .top(px(pos.1 - 15.0))
@@ -825,6 +833,7 @@ fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<
     let mut nodes = Vec::new();
     for d in results.discoveries {
         nodes.push(MemNode {
+            id: format!("discovery-{}", d.id),
             kind: MemKind::Discovery,
             title: d.title,
             desc: d.content,
@@ -834,6 +843,7 @@ fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<
     }
     for p in results.patterns {
         nodes.push(MemNode {
+            id: format!("pattern-{}", p.id),
             kind: MemKind::Pattern,
             title: p.name,
             desc: p.description,
@@ -847,6 +857,7 @@ fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<
             None => format!("{} → {}", g.description, g.solution),
         };
         nodes.push(MemNode {
+            id: format!("gotcha-{}", g.id),
             kind: MemKind::Gotcha,
             title: g.title,
             desc,
@@ -856,6 +867,7 @@ fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<
     }
     for f in results.file_contexts {
         nodes.push(MemNode {
+            id: format!("filecontext-{}", f.id),
             kind: MemKind::FileContext,
             title: f.file_path,
             desc: f.summary,
@@ -872,6 +884,7 @@ fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<
 fn sample_nodes() -> Vec<MemNode> {
     vec![
         MemNode {
+            id: "sample-1".into(),
             kind: MemKind::Discovery,
             title: "ACP-only agent transport".into(),
             desc: "All agents connect over ACP; no per-CLI stdout parsers. See ADR-0006.".into(),
@@ -879,6 +892,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["spec · transport".into(), "r-4f2a".into()],
         },
         MemNode {
+            id: "sample-2".into(),
             kind: MemKind::Discovery,
             title: "Event-log is source of truth".into(),
             desc: "Crash recovery scans the per-run SQLite event log; no other state is authoritative.".into(),
@@ -886,6 +900,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["r-01aa".into()],
         },
         MemNode {
+            id: "sample-3".into(),
             kind: MemKind::Discovery,
             title: "Per-run MCP, sandbox-delegated".into(),
             desc: "MCP servers are per-run scoped and supervised; sandbox is delegated to the runtime.".into(),
@@ -893,6 +908,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["spec · mcp".into()],
         },
         MemNode {
+            id: "sample-4".into(),
             kind: MemKind::Pattern,
             title: "thiserror for libs, anyhow for CLI".into(),
             desc: "Library crates use thiserror; the CLI uses anyhow. No unwrap in library code.".into(),
@@ -900,6 +916,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["r-4f2a".into(), "r-9c1e".into()],
         },
         MemNode {
+            id: "sample-5".into(),
             kind: MemKind::Pattern,
             title: "ULID for all ids".into(),
             desc: "SpecId / TaskId / RunId use ULID (ulid crate) for sortable unique ids.".into(),
@@ -907,6 +924,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["spec · core".into()],
         },
         MemNode {
+            id: "sample-6".into(),
             kind: MemKind::Gotcha,
             title: "Mutex across await deadlocks".into(),
             desc: "Holding a std Mutex guard across an await point deadlocks; use tokio::sync::Mutex.".into(),
@@ -914,6 +932,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["r-b2e8".into()],
         },
         MemNode {
+            id: "sample-7".into(),
             kind: MemKind::Gotcha,
             title: "Worktree lost → mark failed".into(),
             desc: "If a run's git worktree is gone at recovery, the policy marks it failed, not resumed.".into(),
@@ -921,6 +940,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["r-77b0".into()],
         },
         MemNode {
+            id: "sample-8".into(),
             kind: MemKind::FileContext,
             title: "surge-core/src/node.rs".into(),
             desc: "Closed NodeKind enum (Agent/HumanGate/Branch/Terminal/Notify/Loop/Subgraph) + configs.".into(),
@@ -928,6 +948,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["spec · flow".into()],
         },
         MemNode {
+            id: "sample-9".into(),
             kind: MemKind::FileContext,
             title: "surge-acp/src/client.rs".into(),
             desc: "ACP client trait implementation; AgentPool + AgentConnection wiring.".into(),
@@ -935,6 +956,7 @@ fn sample_nodes() -> Vec<MemNode> {
             seeded: vec!["r-4f2a".into()],
         },
         MemNode {
+            id: "sample-10".into(),
             kind: MemKind::FileContext,
             title: "surge-persistence/memory/store.rs".into(),
             desc: "SQLite + FTS5 memory store: discoveries, patterns, gotchas, file contexts.".into(),

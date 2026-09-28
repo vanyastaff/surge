@@ -1,162 +1,270 @@
-# Bug-fix archetype: Reproduce → Implement → Verify → Terminal.
-# Verify declares `regressed` as a Backtrack edge to Reproduce, so failed
-# verification loops back through the whole chain rather than escalating.
-
+# bug-fix: explicit specification and profile-compatible input handoffs.
 schema_version = 1
-start = "reproduce_1"
-
+start = "spec_1"
 [metadata]
-name = "flow_bug_fix"
+name = "bug-fix"
 created_at = "2026-05-06T00:00:00Z"
 
-# ── reproduce_1 ──
-[nodes.reproduce_1]
-id = "reproduce_1"
-
-[nodes.reproduce_1.position]
+[nodes.spec_1]
+id = "spec_1"
+[nodes.spec_1.position]
 x = 0.0
 y = 0.0
-
-[[nodes.reproduce_1.declared_outcomes]]
-id = "reproduced"
-description = "Bug reproduced with stable repro steps"
+[[nodes.spec_1.declared_outcomes]]
+id = "drafted"
+description = "drafted"
 edge_kind_hint = "forward"
 is_terminal = false
+[[nodes.spec_1.declared_outcomes]]
+id = "needs_clarification"
+description = "needs clarification"
+edge_kind_hint = "escalate"
+is_terminal = false
+[nodes.spec_1.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[nodes.spec_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+[nodes.spec_1.config.prompt_overrides]
+append_system = "Define the requested work and concrete acceptance criteria. Keep this specification scoped to this run."
+[[nodes.spec_1.config.bindings]]
+target = "milestone"
+[nodes.spec_1.config.bindings.source]
+type = "initial_prompt"
 
+[nodes.reproduce_1]
+id = "reproduce_1"
+[nodes.reproduce_1.position]
+x = 240.0
+y = 0.0
+[[nodes.reproduce_1.declared_outcomes]]
+id = "ready_for_verification"
+description = "ready for verification"
+edge_kind_hint = "forward"
+is_terminal = false
+[[nodes.reproduce_1.declared_outcomes]]
+id = "blocked"
+description = "blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[nodes.reproduce_1.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
 [nodes.reproduce_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "implementer@2.0"
 [nodes.reproduce_1.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[nodes.reproduce_1.config.prompt_overrides]
+append_system = "This stage is reproduction only: establish a failing regression before changing production code. Write reproduction.md with commands and observed failure, and include it in artifacts_produced. If reproduction is unavailable, report blocked. Report ready_for_verification only when the reproduction is established; the next stage applies the fix."
+[[nodes.reproduce_1.config.bindings]]
+target = "spec"
+[nodes.reproduce_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
-[nodes.reproduce_1.config.custom_fields]
-
-# ── implement_1 ──
 [nodes.implement_1]
 id = "implement_1"
-
 [nodes.implement_1.position]
-x = 200.0
+x = 480.0
 y = 0.0
-
 [[nodes.implement_1.declared_outcomes]]
-id = "patched"
-description = "Patch implemented"
+id = "ready_for_verification"
+description = "ready for verification"
 edge_kind_hint = "forward"
 is_terminal = false
-
+[[nodes.implement_1.declared_outcomes]]
+id = "blocked"
+description = "blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[nodes.implement_1.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
 [nodes.implement_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "implementer@2.0"
 [nodes.implement_1.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[nodes.implement_1.config.prompt_overrides]
+append_system = "Use the established reproduction in {{reproduction}}. Apply the smallest fix, retain the regression, and rerun relevant checks."
+[[nodes.implement_1.config.bindings]]
+target = "spec"
+[nodes.implement_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
+[[nodes.implement_1.config.bindings]]
+target = "reproduction"
+[nodes.implement_1.config.bindings.source]
+type = "node_output"
+node = "reproduce_1"
+artifact = "reproduction"
 
-[nodes.implement_1.config.custom_fields]
-
-# ── verify_1 (backtrack on `regressed`) ──
 [nodes.verify_1]
 id = "verify_1"
-
 [nodes.verify_1.position]
-x = 400.0
+x = 720.0
 y = 0.0
-
 [[nodes.verify_1.declared_outcomes]]
-id = "pass"
-description = "Verification clean"
+id = "passed"
+description = "passed"
 edge_kind_hint = "forward"
 is_terminal = false
-
+ledger_effect = "verified"
 [[nodes.verify_1.declared_outcomes]]
-id = "regressed"
-description = "Verification surfaced regression — backtrack to reproduce"
+id = "failed"
+description = "failed"
 edge_kind_hint = "backtrack"
 is_terminal = false
-
+ledger_effect = "failed_verification"
 [nodes.verify_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "verifier@2.0"
 [nodes.verify_1.config.limits]
 timeout_seconds = 900
 max_retries = 3
 max_tokens = 200000
+[[nodes.verify_1.config.bindings]]
+target = "spec"
+[nodes.verify_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
-[nodes.verify_1.config.custom_fields]
-
-# ── terminal ──
 [nodes.end]
 id = "end"
 declared_outcomes = []
-
 [nodes.end.position]
-x = 600.0
+x = 960.0
 y = 0.0
-
 [nodes.end.config]
 node_kind = "terminal"
-
 [nodes.end.config.kind]
 type = "success"
 
-# ── edges ──
+[nodes.failure]
+id = "failure"
+declared_outcomes = []
+[nodes.failure.position]
+x = 960.0
+y = 180.0
+[nodes.failure.config]
+node_kind = "terminal"
+[nodes.failure.config.kind]
+type = "failure"
+exit_code = 1
+
 [[edges]]
-id = "e_repro_to_impl"
+id = "e_0"
+to = "reproduce_1"
+kind = "forward"
+[edges.from]
+node = "spec_1"
+outcome = "drafted"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_1"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "spec_1"
+outcome = "needs_clarification"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_2"
 to = "implement_1"
 kind = "forward"
-
 [edges.from]
 node = "reproduce_1"
-outcome = "reproduced"
-
+outcome = "ready_for_verification"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_impl_to_verify"
-to = "verify_1"
+id = "e_3"
+to = "failure"
 kind = "forward"
-
 [edges.from]
-node = "implement_1"
-outcome = "patched"
-
+node = "reproduce_1"
+outcome = "blocked"
 [edges.policy]
 on_max_exceeded = "escalate"
 
 [[edges]]
-id = "e_verify_pass"
-to = "end"
-kind = "forward"
-
-[edges.from]
-node = "verify_1"
-outcome = "pass"
-
-[edges.policy]
-on_max_exceeded = "escalate"
-
-[[edges]]
-id = "e_verify_regressed"
+id = "e_4"
 to = "reproduce_1"
 kind = "backtrack"
+[edges.from]
+node = "reproduce_1"
+outcome = "partial"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
 
+[[edges]]
+id = "e_5"
+to = "verify_1"
+kind = "forward"
+[edges.from]
+node = "implement_1"
+outcome = "ready_for_verification"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_6"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "implement_1"
+outcome = "blocked"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_7"
+to = "implement_1"
+kind = "backtrack"
+[edges.from]
+node = "implement_1"
+outcome = "partial"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3
+
+[[edges]]
+id = "e_8"
+to = "end"
+kind = "forward"
 [edges.from]
 node = "verify_1"
-outcome = "regressed"
-
+outcome = "passed"
 [edges.policy]
-max_traversals = 3
 on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_9"
+to = "reproduce_1"
+kind = "backtrack"
+[edges.from]
+node = "verify_1"
+outcome = "failed"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3

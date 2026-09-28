@@ -109,14 +109,20 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
     let storage = Storage::open(tmp.path()).await.unwrap();
     let worktrees_root = tmp.path().join("worktrees");
 
-    // Run A — worktree present → must be resumed.
+    // Run A — worktree present → must be resumed. Recovery checks the run's
+    // own persisted `project_path` (`summary.project_path.is_dir()`), not a
+    // convention-based `worktrees_root/<run_id>` path, so the fixture must
+    // give run A a real, existing project directory.
     let run_a = RunId::new();
-    let _wa = storage.create_run(run_a, "/proj", None).await.unwrap();
-    std::fs::create_dir_all(worktrees_root.join(run_a.to_string())).unwrap();
+    let project_a = worktrees_root.join(run_a.to_string());
+    std::fs::create_dir_all(&project_a).unwrap();
+    let _wa = storage.create_run(run_a, &project_a, None).await.unwrap();
 
-    // Run B — worktree absent → must be marked Failed.
+    // Run B — worktree absent → must be marked Failed. Its project_path is
+    // never created on disk.
     let run_b = RunId::new();
-    let _wb = storage.create_run(run_b, "/proj", None).await.unwrap();
+    let project_b = worktrees_root.join(run_b.to_string());
+    let _wb = storage.create_run(run_b, &project_b, None).await.unwrap();
 
     let stub = Arc::new(RecoveryStubFacade::new());
     let facade: Arc<dyn EngineFacade> = stub.clone();
@@ -131,6 +137,7 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
     let outcome = surge_daemon::recovery::recover_on_startup(
         &storage,
         &facade,
+        &surge_daemon::tracked_run::TrackingContext::synthetic(),
         &admission,
         &broadcast,
         &notifier,
@@ -175,6 +182,7 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
     let first = surge_daemon::recovery::recover_on_startup(
         &storage,
         &facade,
+        &surge_daemon::tracked_run::TrackingContext::synthetic(),
         &admission,
         &broadcast,
         &notifier,
@@ -188,6 +196,7 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
     let second = surge_daemon::recovery::recover_on_startup(
         &storage,
         &facade,
+        &surge_daemon::tracked_run::TrackingContext::synthetic(),
         &admission,
         &broadcast,
         &notifier,
@@ -263,6 +272,7 @@ async fn recover_reconciles_log_terminal_run() {
     let outcome = surge_daemon::recovery::recover_on_startup(
         &storage,
         &facade,
+        &surge_daemon::tracked_run::TrackingContext::synthetic(),
         &admission,
         &broadcast,
         &notifier,
@@ -292,7 +302,9 @@ async fn recover_flags_stuck_run_instead_of_resuming() {
     let worktrees_root = tmp.path().join("worktrees");
 
     let run = RunId::new();
-    let writer = storage.create_run(run, "/proj", None).await.unwrap();
+    let project = worktrees_root.join(run.to_string());
+    std::fs::create_dir_all(&project).unwrap();
+    let writer = storage.create_run(run, &project, None).await.unwrap();
     writer.append_event(run_started()).await.unwrap();
     writer
         .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
@@ -303,7 +315,6 @@ async fn recover_flags_stuck_run_instead_of_resuming() {
         .unwrap();
     writer.flush().await.unwrap();
     writer.close().await.unwrap();
-    std::fs::create_dir_all(worktrees_root.join(run.to_string())).unwrap();
 
     let stub = Arc::new(RecoveryStubFacade::new());
     let facade: Arc<dyn EngineFacade> = stub.clone();
@@ -315,6 +326,7 @@ async fn recover_flags_stuck_run_instead_of_resuming() {
     let outcome = surge_daemon::recovery::recover_on_startup(
         &storage,
         &facade,
+        &surge_daemon::tracked_run::TrackingContext::synthetic(),
         &admission,
         &broadcast,
         &notifier,

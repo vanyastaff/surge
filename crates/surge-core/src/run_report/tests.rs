@@ -825,6 +825,7 @@ fn artifact_produced_and_bootstrap_artifact_are_both_evidence() {
                 artifact: node_hash,
                 path: PathBuf::from("artifacts/spec.md"),
                 name: "spec.md".into(),
+                source_path: None,
             },
         ),
         event(
@@ -1137,6 +1138,7 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
                 artifact: ContentHash::compute(b"diff"),
                 path: PathBuf::from("artifacts/diff.patch"),
                 name: "diff.patch".into(),
+                source_path: None,
             },
         ),
         event(

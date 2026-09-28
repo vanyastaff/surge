@@ -26,7 +26,7 @@ use surge_acp::bridge::session::{MessageContent, SessionConfig, SessionState};
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
 use surge_core::{OutcomeKey, SessionId};
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::{EngineFacade, LocalEngineFacade};
 use surge_orchestrator::engine::handle::EngineRunEvent;
@@ -81,6 +81,9 @@ impl AutoOutcomeBridge {
 
 #[async_trait]
 impl BridgeFacade for AutoOutcomeBridge {
+    fn legacy_stage_event_adapter(&self) -> bool {
+        true
+    }
     async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         let session = SessionId::new();
         let outcome = config
@@ -247,7 +250,7 @@ async fn parity_terminal_minimal_agent_and_spike_local_vs_daemon() {
     let server_handle = tokio::spawn({
         let facade = daemon_facade_for_server.clone();
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, facade, shutdown).await }
+        async move { run_synthetic_server(cfg, facade, shutdown).await }
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 

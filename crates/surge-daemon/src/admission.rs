@@ -44,6 +44,54 @@ struct Inner {
     queue: VecDeque<RunId>,
 }
 
+/// Keeps physical admission and durable bootstrap acceptance in one critical section.
+/// Dropping without committing releases only this attempt's provisional slot.
+pub(crate) struct BootstrapAdmissionGuard<'a> {
+    inner: tokio::sync::MutexGuard<'a, Inner>,
+    notify: &'a tokio::sync::Notify,
+    max_active: usize,
+    max_queue: usize,
+    provisional: Option<RunId>,
+}
+
+impl BootstrapAdmissionGuard<'_> {
+    pub(crate) fn reserve(
+        &mut self,
+        run: RunId,
+        bootstrap_ids: &HashSet<RunId>,
+        waiting: &[RunId],
+    ) -> usize {
+        let active_bootstrap = self.inner.active.intersection(bootstrap_ids).count();
+        let available = self.inner.active.len() < self.max_active;
+        // An incoming acceptance may fund the free slot, but cannot jump an older
+        // durable waiter. Reconciliation claims this reservation idempotently.
+        let next = waiting
+            .iter()
+            .find(|id| !self.inner.active.contains(id))
+            .copied()
+            .unwrap_or(run);
+        if available && self.inner.active.insert(next) {
+            self.provisional = Some(next);
+        }
+        active_bootstrap
+            + usize::from(self.provisional.is_some())
+            + self.max_queue.saturating_sub(self.inner.queue.len())
+    }
+
+    pub(crate) fn commit(&mut self) {
+        self.provisional = None;
+    }
+}
+
+impl Drop for BootstrapAdmissionGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(run) = self.provisional.take() {
+            self.inner.active.remove(&run);
+            self.notify.notify_waiters();
+        }
+    }
+}
+
 impl AdmissionController {
     /// Construct with a hard cap on concurrent active runs and on the
     /// FIFO admission queue. When both are saturated, [`Self::try_admit`]
@@ -60,6 +108,29 @@ impl AdmissionController {
             max_active,
             max_queue,
         }
+    }
+
+    pub(crate) async fn bootstrap_acceptance(&self) -> BootstrapAdmissionGuard<'_> {
+        BootstrapAdmissionGuard {
+            inner: self.inner.lock().await,
+            notify: &self.notify,
+            max_active: self.max_active,
+            max_queue: self.max_queue,
+            provisional: None,
+        }
+    }
+
+    /// Claim an owned bootstrap slot, including its precommitted reservation.
+    pub(crate) async fn claim_bootstrap_slot(&self, run: RunId) -> bool {
+        let mut inner = self.inner.lock().await;
+        if inner.active.contains(&run) {
+            return true;
+        }
+        if inner.active.len() >= self.max_active {
+            return false;
+        }
+        inner.active.insert(run);
+        true
     }
 
     /// Attempt to admit a run. Returns [`AdmissionDecision::Admitted`]

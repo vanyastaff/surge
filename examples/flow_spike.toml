@@ -1,62 +1,145 @@
-# Spike archetype: a 2-node experiment flow that explicitly skips Architect
-# and Reviewer. The single Implement stage produces a `findings_recorded`
-# outcome; success terminal records the experiment was run to completion.
-
+# spike: explicit specification and profile-compatible input handoffs.
 schema_version = 1
-start = "spike_1"
-
+start = "spec_1"
 [metadata]
-name = "flow_spike"
+name = "spike"
 created_at = "2026-05-06T00:00:00Z"
+
+[nodes.spec_1]
+id = "spec_1"
+[nodes.spec_1.position]
+x = 0.0
+y = 0.0
+[[nodes.spec_1.declared_outcomes]]
+id = "drafted"
+description = "drafted"
+edge_kind_hint = "forward"
+is_terminal = false
+[[nodes.spec_1.declared_outcomes]]
+id = "needs_clarification"
+description = "needs clarification"
+edge_kind_hint = "escalate"
+is_terminal = false
+[nodes.spec_1.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[nodes.spec_1.config.limits]
+timeout_seconds = 1800
+max_retries = 3
+max_tokens = 200000
+[nodes.spec_1.config.prompt_overrides]
+append_system = "Define the requested work and concrete acceptance criteria. Keep this specification scoped to this run."
+[[nodes.spec_1.config.bindings]]
+target = "milestone"
+[nodes.spec_1.config.bindings.source]
+type = "initial_prompt"
 
 [nodes.spike_1]
 id = "spike_1"
-
 [nodes.spike_1.position]
-x = 0.0
+x = 240.0
 y = 0.0
-
 [[nodes.spike_1.declared_outcomes]]
-id = "findings_recorded"
-description = "Spike completed; findings written to artifacts"
+id = "ready_for_verification"
+description = "ready for verification"
 edge_kind_hint = "forward"
 is_terminal = false
-
+[[nodes.spike_1.declared_outcomes]]
+id = "blocked"
+description = "blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+[[nodes.spike_1.declared_outcomes]]
+id = "partial"
+description = "partial"
+edge_kind_hint = "backtrack"
+is_terminal = false
 [nodes.spike_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
-bindings = []
-hooks = []
-
+profile = "implementer@2.0"
 [nodes.spike_1.config.limits]
 timeout_seconds = 1800
-max_retries = 1
+max_retries = 3
 max_tokens = 200000
-
-[nodes.spike_1.config.custom_fields]
+[nodes.spike_1.config.prompt_overrides]
+append_system = "Run the bounded experiment described by the spec. Write findings.md with hypothesis, commands, observations, limitations, and recommendation; include it in artifacts_produced. Completion records that the experiment was performed, not that production code is verified. Use blocked or partial if the experiment remains incomplete."
+[[nodes.spike_1.config.bindings]]
+target = "spec"
+[nodes.spike_1.config.bindings.source]
+type = "node_output"
+node = "spec_1"
+artifact = "spec_toml"
 
 [nodes.end]
 id = "end"
 declared_outcomes = []
-
 [nodes.end.position]
-x = 200.0
+x = 480.0
 y = 0.0
-
 [nodes.end.config]
 node_kind = "terminal"
-
 [nodes.end.config.kind]
 type = "success"
 
+[nodes.failure]
+id = "failure"
+declared_outcomes = []
+[nodes.failure.position]
+x = 480.0
+y = 180.0
+[nodes.failure.config]
+node_kind = "terminal"
+[nodes.failure.config.kind]
+type = "failure"
+exit_code = 1
+
 [[edges]]
-id = "e_spike_to_end"
-to = "end"
+id = "e_0"
+to = "spike_1"
 kind = "forward"
-
 [edges.from]
-node = "spike_1"
-outcome = "findings_recorded"
-
+node = "spec_1"
+outcome = "drafted"
 [edges.policy]
 on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_1"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "spec_1"
+outcome = "needs_clarification"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_2"
+to = "end"
+kind = "forward"
+[edges.from]
+node = "spike_1"
+outcome = "ready_for_verification"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_3"
+to = "failure"
+kind = "forward"
+[edges.from]
+node = "spike_1"
+outcome = "blocked"
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_4"
+to = "spike_1"
+kind = "backtrack"
+[edges.from]
+node = "spike_1"
+outcome = "partial"
+[edges.policy]
+on_max_exceeded = "escalate"
+max_traversals = 3

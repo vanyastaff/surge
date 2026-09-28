@@ -22,6 +22,8 @@ use tokio::sync::oneshot;
 pub struct HumanGateStageParams<'a> {
     /// Key of the human-gate node being executed.
     pub node: &'a NodeKey,
+    /// Identity minted when this resolver was registered.
+    pub request_id: surge_core::id::GateRequestId,
     /// Gate configuration: delivery channels, timeout, options.
     pub gate_config: &'a HumanGateConfig,
     /// Run writer for persisting `HumanInputRequested` / `HumanInputResolved` events.
@@ -30,6 +32,8 @@ pub struct HumanGateStageParams<'a> {
     pub run_memory: &'a RunMemory,
     /// Receiver fed by `Engine::resolve_human_input`. `None` ⇒ test path (timeout immediately).
     pub resolution_rx: Option<oneshot::Receiver<HumanGateResolution>>,
+    /// Cancel only the decision wait, never a decision's persistence sequence.
+    pub cancel: &'a tokio_util::sync::CancellationToken,
     /// Default timeout sourced from `EngineRunConfig` if the gate doesn't override.
     pub default_timeout: Duration,
     /// Bootstrap edit-loop cap from `EngineRunConfig.bootstrap.edit_loop_cap`.
@@ -57,8 +61,16 @@ pub struct HumanGateResolution {
 /// sender for its node immediately before requesting the decision (never
 /// earlier) so a stale, unread entry can never sit in the map — see
 /// `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
-pub type GateResolutions =
-    tokio::sync::Mutex<std::collections::HashMap<NodeKey, oneshot::Sender<HumanGateResolution>>>;
+/// An exact request and its owned response channel.
+pub struct PendingGate {
+    /// Uniquely identifies this registration across visits and restarts.
+    pub request_id: surge_core::id::GateRequestId,
+    /// Consumed only after the request identity matches.
+    pub sender: oneshot::Sender<HumanGateResolution>,
+}
+
+/// Pending node requests; request identity and sender share one lock.
+pub type GateResolutions = tokio::sync::Mutex<std::collections::HashMap<NodeKey, PendingGate>>;
 
 /// Execute a single `NodeKind::HumanGate` stage.
 ///
@@ -75,17 +87,30 @@ pub type GateResolutions =
 #[allow(clippy::too_many_lines)]
 pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResult {
     let summary = render_summary(&p.gate_config.summary, p.run_memory);
-    let timeout = p
-        .gate_config
-        .timeout_seconds
-        .map_or(p.default_timeout, |s| Duration::from_secs(u64::from(s)));
+    // A bootstrap approval (description / roadmap / flow review) with no
+    // explicit timeout waits for the operator: the run is durable and shows
+    // as "needs you", and reading a plan routinely takes longer than the
+    // generic default. Rejecting on that default discarded finished planning
+    // work. `None` = no deadline.
+    let timeout: Option<Duration> = match (p.gate_config.timeout_seconds, &p.gate_config.mode) {
+        (Some(s), _) => Some(Duration::from_secs(u64::from(s))),
+        (None, HumanGateMode::Bootstrap { .. }) => None,
+        (None, HumanGateMode::Generic) => Some(p.default_timeout),
+    };
+    let deadline = async move {
+        match timeout {
+            Some(timeout) => tokio::time::sleep(timeout).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(deadline);
 
-    let schema = build_options_schema(&p.gate_config.options, p.gate_config.allow_freetext);
+    let mut schema = build_options_schema(&p.gate_config.options, p.gate_config.allow_freetext);
 
     // Bootstrap dispatch: when the gate guards a bootstrap stage, mirror the
-    // generic HumanInputRequested with a BootstrapApprovalRequested so the
-    // bootstrap driver / Telegram cockpit / inbox can render a stage-aware
-    // card. The same event log carries both for downstream observers.
+    // generic request with lifecycle metadata for bootstrap observers.
+    // The actionable request carries stage metadata itself; renderers must not
+    // create a second approval card from BootstrapApprovalRequested.
     let bootstrap_stage = match &p.gate_config.mode {
         HumanGateMode::Generic => None,
         HumanGateMode::Bootstrap { stage } => {
@@ -113,12 +138,15 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
         },
     };
 
+    if let Some(stage) = bootstrap_stage {
+        schema["x-surge-bootstrap-stage"] = serde_json::json!(stage);
+    }
     p.writer
         .append_event(VersionedEventPayload::new(
             EventPayload::HumanInputRequested {
                 node: p.node.clone(),
                 session: None,
-                call_id: None,
+                call_id: Some(p.request_id.to_string()),
                 prompt: summary,
                 schema: Some(schema),
             },
@@ -132,6 +160,8 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
 
     let outcome = if let Some(rx) = p.resolution_rx {
         tokio::select! {
+            biased;
+            () = p.cancel.cancelled() => return Err(StageError::Cancelled),
             resolved = rx => match resolved {
                 Ok(res) => {
                     decided_comment = res
@@ -142,7 +172,7 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
                     p.writer
                         .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
                             node: p.node.clone(),
-                            call_id: None,
+                            call_id: Some(p.request_id.to_string()),
                             response: res.response.clone(),
                         }))
                         .await
@@ -151,10 +181,14 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
                 }
                 Err(_) => None,
             },
-            () = tokio::time::sleep(timeout) => None,
+            () = &mut deadline => None,
         }
     } else {
-        tokio::time::sleep(timeout).await;
+        tokio::select! {
+            biased;
+            () = p.cancel.cancelled() => return Err(StageError::Cancelled),
+            () = &mut deadline => {},
+        }
         None
     };
 
@@ -163,8 +197,9 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
             .append_event(VersionedEventPayload::new(
                 EventPayload::HumanInputTimedOut {
                     node: p.node.clone(),
-                    call_id: None,
-                    elapsed_seconds: u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX),
+                    call_id: Some(p.request_id.to_string()),
+                    elapsed_seconds: timeout
+                        .map_or(u32::MAX, |t| u32::try_from(t.as_secs()).unwrap_or(u32::MAX)),
                 },
             ))
             .await
@@ -456,6 +491,106 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn precancelled_gate_does_not_invent_a_decision_or_timeout() {
+        for with_receiver in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let id = surge_core::id::RunId::new();
+            let writer = storage.create_run(id, dir.path(), None).await.unwrap();
+            let cfg = bootstrap_gate_config(BootstrapStage::Flow);
+            let node = NodeKey::try_from("gate").unwrap();
+            let memory = RunMemory::default();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            cancel.cancel();
+            let (tx, rx) = oneshot::channel();
+            tx.send(HumanGateResolution {
+                outcome: "approve".try_into().unwrap(),
+                response: serde_json::json!({"outcome": "approve"}),
+            })
+            .unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                execute_human_gate_stage(HumanGateStageParams {
+                    request_id: surge_core::id::GateRequestId::new(),
+                    node: &node,
+                    gate_config: &cfg,
+                    writer: &writer,
+                    run_memory: &memory,
+                    resolution_rx: with_receiver.then_some(rx),
+                    cancel: &cancel,
+                    default_timeout: Duration::from_secs(60),
+                    bootstrap_edit_loop_cap: 3,
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, Err(StageError::Cancelled)));
+            assert_eq!(
+                collect_payload_kinds(&storage, id).await,
+                ["BootstrapApprovalRequested", "HumanInputRequested"]
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn selected_decision_finishes_persistence_despite_later_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let id = surge_core::id::RunId::new();
+        let writer = storage.create_run(id, dir.path(), None).await.unwrap();
+        let cfg = bootstrap_gate_config(BootstrapStage::Flow);
+        let node = NodeKey::try_from("gate").unwrap();
+        let memory = RunMemory::default();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (tx, rx) = oneshot::channel();
+        tx.send(HumanGateResolution {
+            outcome: "edit".try_into().unwrap(),
+            response: serde_json::json!({"outcome": "edit", "comment": "revise"}),
+        })
+        .unwrap();
+        let stage = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
+            node: &node,
+            gate_config: &cfg,
+            writer: &writer,
+            run_memory: &memory,
+            resolution_rx: Some(rx),
+            cancel: &cancel,
+            default_timeout: Duration::from_secs(60),
+            bootstrap_edit_loop_cap: 3,
+        });
+        let cancellation = async {
+            loop {
+                if collect_payload_kinds(&storage, id)
+                    .await
+                    .contains(&"HumanInputResolved")
+                {
+                    cancel.cancel();
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(stage, cancellation)
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcome.unwrap().as_str(), "edit");
+        assert_eq!(
+            collect_payload_kinds(&storage, id).await,
+            [
+                "BootstrapApprovalRequested",
+                "HumanInputRequested",
+                "HumanInputResolved",
+                "BootstrapApprovalDecided",
+                "BootstrapEditRequested",
+                "OutcomeReported",
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn timeout_with_reject_returns_rejected_error() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
@@ -469,10 +604,12 @@ mod tests {
         let node = NodeKey::try_from("approve_plan").unwrap();
 
         let result = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: None,
             default_timeout: Duration::from_millis(10),
             bootstrap_edit_loop_cap: 3,
@@ -503,10 +640,12 @@ mod tests {
         .unwrap();
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -535,10 +674,12 @@ mod tests {
         .unwrap();
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -562,6 +703,49 @@ mod tests {
         );
     }
 
+    /// A plan review outlives the generic run default: the gate keeps
+    /// waiting and the operator's later approval still lands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bootstrap_gate_without_timeout_outlives_the_run_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+
+        // Real bootstrap gates carry no timeout of their own.
+        let mut cfg = bootstrap_gate_config(BootstrapStage::Roadmap);
+        cfg.timeout_seconds = None;
+        let mem = RunMemory::default();
+        let node = NodeKey::try_from("roadmap_gate").unwrap();
+
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            // Well past the 10ms run default.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = tx.send(HumanGateResolution {
+                outcome: OutcomeKey::try_from("approve").unwrap(),
+                response: serde_json::json!({"outcome": "approve"}),
+            });
+        });
+
+        let outcome = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
+            node: &node,
+            gate_config: &cfg,
+            writer: &writer,
+            run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
+            resolution_rx: Some(rx),
+            default_timeout: Duration::from_millis(10),
+            bootstrap_edit_loop_cap: 3,
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcome.as_ref(), "approve");
+        let kinds = collect_payload_kinds(&storage, run_id).await;
+        assert!(!kinds.contains(&"HumanInputTimedOut"), "{kinds:?}");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bootstrap_mode_edit_emits_edit_requested_with_feedback() {
         let dir = tempfile::tempdir().unwrap();
@@ -582,10 +766,12 @@ mod tests {
         .unwrap();
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -652,10 +838,12 @@ mod tests {
         .unwrap();
 
         let result = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -724,10 +912,12 @@ mod tests {
         .unwrap();
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -771,10 +961,12 @@ mod tests {
         .unwrap();
 
         let result = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 3,
@@ -833,10 +1025,12 @@ mod tests {
         .unwrap();
 
         let outcome = execute_human_gate_stage(HumanGateStageParams {
+            request_id: surge_core::id::GateRequestId::new(),
             node: &node,
             gate_config: &cfg,
             writer: &writer,
             run_memory: &mem,
+            cancel: &tokio_util::sync::CancellationToken::new(),
             resolution_rx: Some(rx),
             default_timeout: Duration::from_secs(60),
             bootstrap_edit_loop_cap: 0,

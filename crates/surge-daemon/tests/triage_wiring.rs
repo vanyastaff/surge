@@ -64,6 +64,9 @@ impl MockBridge {
 
 #[async_trait]
 impl BridgeFacade for MockBridge {
+    fn legacy_stage_event_adapter(&self) -> bool {
+        true
+    }
     async fn open_session(&self, _config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         let id = self
             .pinned_session_ids

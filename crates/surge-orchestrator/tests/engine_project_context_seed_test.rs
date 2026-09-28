@@ -90,6 +90,7 @@ async fn start_run_seeds_project_context_artifact() {
             artifact,
             path,
             name,
+            ..
         } = &payload
             && name == "project_context"
         {
@@ -159,6 +160,7 @@ async fn start_run_seeds_configured_run_artifacts() {
             artifact,
             path,
             name,
+            ..
         } = &payload
             && name == "roadmap_amendment"
         {

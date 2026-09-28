@@ -199,6 +199,13 @@ pub struct EngineRunConfig {
     /// including a resumed one, resolves the same store.
     #[serde(default)]
     pub memory_store_path: Option<std::path::PathBuf>,
+    /// Agent catalog for this run — the project's `[agents.*]` over the
+    /// builtins. Overrides [`EngineConfig::agent_registry`] so one daemon can
+    /// run projects that declare different agents. In-process only: a
+    /// launcher that owns the run (the bootstrap supervisor) rebuilds it on
+    /// every start and resume from the pinned project configuration.
+    #[serde(skip)]
+    pub agent_registry: Option<Arc<surge_acp::Registry>>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -304,6 +311,7 @@ impl Default for EngineRunConfig {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            agent_registry: None,
         }
     }
 }
@@ -376,6 +384,7 @@ mod tests {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            agent_registry: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -411,6 +420,7 @@ mod tests {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            agent_registry: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -460,6 +470,7 @@ mod tests {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            agent_registry: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

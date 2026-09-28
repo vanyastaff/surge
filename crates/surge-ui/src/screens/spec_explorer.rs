@@ -1,7 +1,7 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Icon, IconName, StyledExt};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 use crate::app_state::AppState;
 use crate::theme;
@@ -94,10 +94,10 @@ impl SpecExplorerScreen {
         specs
             .iter()
             .filter(|s| {
-                if let Some(status) = self.filter_status {
-                    if s.status != status {
-                        return false;
-                    }
+                if let Some(status) = self.filter_status
+                    && s.status != status
+                {
+                    return false;
                 }
                 if !self.search_query.is_empty() {
                     let q = self.search_query.to_lowercase();
@@ -125,6 +125,8 @@ impl SpecExplorerScreen {
                 let s = *status;
                 div()
                     .id(SharedString::from(format!("filter-{label}")))
+                    .role(Role::Button)
+                    .aria_label(format!("Filter specs: {label}"))
                     .px_3()
                     .py_1()
                     .rounded_full()
@@ -163,6 +165,8 @@ impl SpecExplorerScreen {
 
         div()
             .id(SharedString::from(format!("spec-{}", spec.id)))
+            .role(Role::Button)
+            .aria_label(format!("Open spec {}", spec.id))
             .v_flex()
             .gap_2()
             .p_4()

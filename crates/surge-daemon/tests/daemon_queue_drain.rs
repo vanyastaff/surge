@@ -1,6 +1,6 @@
 //! Integration test for the queue-drain task.
 //!
-//! Setup: `run_server` with `max_active=1` and a stub facade whose
+//! Setup: `run_synthetic_server` with `max_active=1` and a stub facade whose
 //! `start_run` returns a quickly-terminating `RunHandle`.
 //!
 //! Procedure:
@@ -29,7 +29,7 @@ use std::time::Duration;
 use interprocess::local_socket::tokio::prelude::*;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -200,7 +200,7 @@ async fn queued_run_admitted_after_completion() {
 
     let server_handle = tokio::spawn({
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, stub_for_facade, shutdown).await }
+        async move { run_synthetic_server(cfg, stub_for_facade, shutdown).await }
     });
 
     // Wait for the listener to come up before connecting.

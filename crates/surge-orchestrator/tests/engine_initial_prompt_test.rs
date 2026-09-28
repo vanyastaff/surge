@@ -132,6 +132,7 @@ async fn start_run_seeds_user_prompt_artifact_from_initial_prompt() {
                 artifact,
                 path,
                 name,
+                ..
             } if name == "user_prompt" => {
                 assert_eq!(node, &producer, "synthetic producer node mismatch");
                 assert_eq!(artifact, &expected_hash, "content hash mismatch");

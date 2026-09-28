@@ -9,7 +9,7 @@
 //! caller drops children into (or a finished atom). Interactivity is the
 //! caller's job (wrap in `.id(..).on_click(..)`).
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::theme;
 
@@ -19,6 +19,17 @@ use crate::theme;
 /// on this machine; a plain "JetBrains Mono" falls back to Noto, so we
 /// name the Nerd Font explicitly. Applied once at the app root.
 pub const MONO: &str = "JetBrainsMono Nerd Font";
+
+/// First line of free text, cut to `max` characters with an ellipsis —
+/// how a run's request becomes a list/card headline.
+pub fn headline(text: &str, max: usize) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    if line.chars().count() <= max {
+        return line.to_string();
+    }
+    let cut: String = line.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
+}
 
 /// A small round status dot.
 pub fn status_dot(color: Hsla) -> Div {

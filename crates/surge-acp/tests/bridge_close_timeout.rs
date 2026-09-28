@@ -37,6 +37,7 @@ async fn inner_test() {
     // the child and emits SessionEnded::Timeout. The result is
     // GracefulTimedOut { killed: true }.
     let cfg = SessionConfig {
+        stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "frozen".into()],
         },

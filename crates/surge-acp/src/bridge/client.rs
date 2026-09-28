@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use agent_client_protocol::{
-    Client, CreateTerminalRequest, CreateTerminalResponse, ExtNotification, ExtRequest,
-    ExtResponse, KillTerminalRequest, KillTerminalResponse, PermissionOptionId,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+use agent_client_protocol::schema::v1::{
+    CreateTerminalRequest, CreateTerminalResponse, ExtNotification, ExtRequest, ExtResponse,
+    KillTerminalRequest, KillTerminalResponse, PermissionOptionKind, ReadTextFileRequest,
+    ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     Result as AcpResult, SelectedPermissionOutcome, SessionNotification, TerminalExitStatus,
     TerminalId, TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
@@ -61,20 +61,21 @@ pub(crate) struct BridgeClient {
     pub(crate) terminals: Arc<Mutex<Terminals>>,
 }
 
-/// Pick an `option_id` for the canned Allow/Deny response.
-///
-/// Tries to match `desired_id` (`"allow"` / `"deny"`) against the option IDs
-/// the agent offered in the request. Falls back to constructing a fresh
-/// `PermissionOptionId::new(desired_id)` when the agent omitted the
-/// corresponding option — the SDK will reject genuinely unknown IDs at the
-/// next layer.
-fn pick_option(req: &RequestPermissionRequest, desired_id: &str) -> PermissionOptionId {
-    for opt in &req.options {
-        if opt.option_id.0.as_ref() == desired_id {
-            return opt.option_id.clone();
-        }
-    }
-    PermissionOptionId::new(desired_id)
+/// Return an offered, one-operation option with the requested semantics.
+/// Agent-specific IDs are opaque; never invent an ID or promote a one-time
+/// sandbox decision to a persistent permission grant.
+fn permission_outcome(
+    req: &RequestPermissionRequest,
+    kind: PermissionOptionKind,
+) -> RequestPermissionOutcome {
+    req.options
+        .iter()
+        .find(|option| option.kind == kind)
+        .map_or(RequestPermissionOutcome::Cancelled, |option| {
+            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                option.option_id.clone(),
+            ))
+        })
 }
 
 impl BridgeClient {
@@ -90,7 +91,9 @@ impl BridgeClient {
         capability: String,
     ) -> AcpResult<RequestPermissionResponse> {
         let request_id = Ulid::new().to_string();
-        let tool_name = req.tool_call.fields.title.clone().unwrap_or_default();
+        let tool_name = self
+            .secrets
+            .redact_json(&req.tool_call.fields.title.clone().unwrap_or_default());
         let options: Vec<String> = req
             .options
             .iter()
@@ -189,8 +192,7 @@ impl BridgeClient {
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl Client for BridgeClient {
+impl BridgeClient {
     /// Handle an ACP `request_permission` from the agent.
     ///
     /// Routing:
@@ -205,7 +207,7 @@ impl Client for BridgeClient {
     ///   `AcpBridge::reply_to_permission` decision. Sessions that end with
     ///   pending requests resolve them as `Cancelled` so the agent never
     ///   blocks past session lifetime.
-    async fn request_permission(
+    pub(crate) async fn request_permission(
         &self,
         req: RequestPermissionRequest,
     ) -> AcpResult<RequestPermissionResponse> {
@@ -215,22 +217,20 @@ impl Client for BridgeClient {
         debug!(
             target: "surge_acp.bridge.client",
             session = %self.session_id,
-            tool = %tool_name,
+            tool = %self.secrets.redact_json(&tool_name),
             decision = ?decision,
             "request_permission via Sandbox"
         );
 
         match decision {
-            SandboxDecision::Allow => Ok(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(pick_option(
-                    &req, "allow",
-                ))),
-            )),
-            SandboxDecision::Deny { .. } => Ok(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(pick_option(
-                    &req, "deny",
-                ))),
-            )),
+            SandboxDecision::Allow => Ok(RequestPermissionResponse::new(permission_outcome(
+                &req,
+                PermissionOptionKind::AllowOnce,
+            ))),
+            SandboxDecision::Deny { .. } => Ok(RequestPermissionResponse::new(permission_outcome(
+                &req,
+                PermissionOptionKind::RejectOnce,
+            ))),
             SandboxDecision::Elevate { capability } => self.await_elevation(req, capability).await,
         }
     }
@@ -243,7 +243,10 @@ impl Client for BridgeClient {
     /// the legacy `SurgeClient::resolve_path` pattern — for non-existent paths
     /// it canonicalizes the parent directory, joins the filename, then enforces
     /// the worktree bound.
-    async fn write_text_file(&self, req: WriteTextFileRequest) -> AcpResult<WriteTextFileResponse> {
+    pub(crate) async fn write_text_file(
+        &self,
+        req: WriteTextFileRequest,
+    ) -> AcpResult<WriteTextFileResponse> {
         let safe_path = match resolve_for_write(&self.worktree_root, &req.path) {
             Ok(p) => p,
             Err(e) => {
@@ -252,7 +255,7 @@ impl Client for BridgeClient {
                     error = %e,
                     "path guard rejected write_text_file",
                 );
-                return Err(agent_client_protocol::Error::invalid_params());
+                return Err(agent_client_protocol::schema::v1::Error::invalid_params());
             },
         };
         // Redact secrets from the content before writing? No — content is what
@@ -267,20 +270,23 @@ impl Client for BridgeClient {
                     error = %e,
                     "write_text_file IO failure",
                 );
-                agent_client_protocol::Error::internal_error()
+                agent_client_protocol::schema::v1::Error::internal_error()
             })?;
         Ok(WriteTextFileResponse::new())
     }
 
     /// Read a text file within the worktree. Path-guard enforced before any IO.
-    async fn read_text_file(&self, req: ReadTextFileRequest) -> AcpResult<ReadTextFileResponse> {
+    pub(crate) async fn read_text_file(
+        &self,
+        req: ReadTextFileRequest,
+    ) -> AcpResult<ReadTextFileResponse> {
         ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
             warn!(
                 session = %self.session_id,
                 error = %e,
                 "path guard rejected file access in read_text_file",
             );
-            agent_client_protocol::Error::invalid_params()
+            agent_client_protocol::schema::v1::Error::invalid_params()
         })?;
         let content = tokio::fs::read_to_string(&req.path).await.map_err(|e| {
             debug!(
@@ -289,13 +295,13 @@ impl Client for BridgeClient {
                 error = %e,
                 "read_text_file IO failure",
             );
-            agent_client_protocol::Error::internal_error()
+            agent_client_protocol::schema::v1::Error::internal_error()
         })?;
         Ok(ReadTextFileResponse::new(content))
     }
 
     /// Spawn a new terminal process and return its `TerminalId`.
-    async fn create_terminal(
+    pub(crate) async fn create_terminal(
         &self,
         req: CreateTerminalRequest,
     ) -> AcpResult<CreateTerminalResponse> {
@@ -325,14 +331,14 @@ impl Client for BridgeClient {
                     error = %e,
                     "terminal operation failed",
                 );
-                agent_client_protocol::Error::internal_error()
+                agent_client_protocol::schema::v1::Error::internal_error()
             })?;
 
         Ok(CreateTerminalResponse::new(TerminalId::new(terminal_id)))
     }
 
     /// Get current output and exit status of a terminal without blocking.
-    async fn terminal_output(
+    pub(crate) async fn terminal_output(
         &self,
         req: TerminalOutputRequest,
     ) -> AcpResult<TerminalOutputResponse> {
@@ -347,7 +353,7 @@ impl Client for BridgeClient {
                     error = %e,
                     "terminal operation failed",
                 );
-                agent_client_protocol::Error::internal_error()
+                agent_client_protocol::schema::v1::Error::internal_error()
             })?;
 
         // Build exit status via builder (non_exhaustive struct).
@@ -361,7 +367,7 @@ impl Client for BridgeClient {
     }
 
     /// Block until the terminal's process exits and return its exit status.
-    async fn wait_for_terminal_exit(
+    pub(crate) async fn wait_for_terminal_exit(
         &self,
         req: WaitForTerminalExitRequest,
     ) -> AcpResult<WaitForTerminalExitResponse> {
@@ -376,7 +382,7 @@ impl Client for BridgeClient {
                     error = %e,
                     "terminal operation failed",
                 );
-                agent_client_protocol::Error::internal_error()
+                agent_client_protocol::schema::v1::Error::internal_error()
             })?;
 
         // Build response via constructors (non_exhaustive structs).
@@ -387,7 +393,10 @@ impl Client for BridgeClient {
     }
 
     /// Kill the terminal process without releasing it.
-    async fn kill_terminal(&self, req: KillTerminalRequest) -> AcpResult<KillTerminalResponse> {
+    pub(crate) async fn kill_terminal(
+        &self,
+        req: KillTerminalRequest,
+    ) -> AcpResult<KillTerminalResponse> {
         let id = req.terminal_id.0.as_ref();
         terminal_kill(&self.terminals, id).await.map_err(|e| {
             warn!(
@@ -397,13 +406,13 @@ impl Client for BridgeClient {
                 error = %e,
                 "terminal operation failed",
             );
-            agent_client_protocol::Error::internal_error()
+            agent_client_protocol::schema::v1::Error::internal_error()
         })?;
         Ok(KillTerminalResponse::new())
     }
 
     /// Release a terminal (kills the process if still running, then drops it).
-    async fn release_terminal(
+    pub(crate) async fn release_terminal(
         &self,
         req: ReleaseTerminalRequest,
     ) -> AcpResult<ReleaseTerminalResponse> {
@@ -416,13 +425,13 @@ impl Client for BridgeClient {
                 error = %e,
                 "terminal operation failed",
             );
-            agent_client_protocol::Error::internal_error()
+            agent_client_protocol::schema::v1::Error::internal_error()
         })?;
         Ok(ReleaseTerminalResponse::new())
     }
 
     /// Route incoming session notifications to `bridge::worker::handle_session_notification`.
-    async fn session_notification(&self, notif: SessionNotification) -> AcpResult<()> {
+    pub(crate) async fn session_notification(&self, notif: SessionNotification) -> AcpResult<()> {
         // SessionNotification carries SessionUpdate variants (agent messages,
         // tool calls, token usage). Phase 8 routes these to BridgeEvent emissions
         // via `bridge::worker::handle_session_notification`. For now, log and accept.
@@ -444,13 +453,13 @@ impl Client for BridgeClient {
     }
 
     /// Extension requests are not supported in M3.
-    async fn ext_method(&self, _req: ExtRequest) -> AcpResult<ExtResponse> {
+    pub(crate) async fn ext_method(&self, _req: ExtRequest) -> AcpResult<ExtResponse> {
         // Ext methods are vendor extensions. Bridge does not implement any in M3.
-        Err(agent_client_protocol::Error::method_not_found())
+        Err(agent_client_protocol::schema::v1::Error::method_not_found())
     }
 
     /// Extension notifications are accepted silently in M3.
-    async fn ext_notification(&self, _notif: ExtNotification) -> AcpResult<()> {
+    pub(crate) async fn ext_notification(&self, _notif: ExtNotification) -> AcpResult<()> {
         // No-op accept — bridge does not consume any ext notifications.
         Ok(())
     }
@@ -524,7 +533,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn request_permission_allow_returns_allow_option() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::v1::{
             SessionId as AcpSessionId, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
         };
 
@@ -535,14 +544,80 @@ mod tests {
                 ToolCallId::new("c1"),
                 ToolCallUpdateFields::new().title("read_file".to_string()),
             ),
-            vec![],
+            vec![agent_client_protocol::schema::v1::PermissionOption::new(
+                "approved",
+                "Allow once",
+                PermissionOptionKind::AllowOnce,
+            )],
         );
         let resp = client.request_permission(req).await.unwrap();
         match resp.outcome {
             RequestPermissionOutcome::Selected(s) => {
-                assert_eq!(s.option_id.0.as_ref(), "allow");
+                assert_eq!(s.option_id.0.as_ref(), "approved");
             },
             other => panic!("expected Selected(allow), got {other:?}"),
         }
     }
+    #[test]
+    fn permission_selection_uses_kind_not_misleading_id() {
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, SessionId as AcpSessionId, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        let req = RequestPermissionRequest::new(
+            AcpSessionId::new("sess"),
+            ToolCallUpdate::new("call", ToolCallUpdateFields::new()),
+            vec![
+                PermissionOption::new("allow", "Reject", PermissionOptionKind::RejectOnce),
+                PermissionOption::new(
+                    "approved-for-session",
+                    "Always allow",
+                    PermissionOptionKind::AllowAlways,
+                ),
+                PermissionOption::new("approved", "Allow", PermissionOptionKind::AllowOnce),
+            ],
+        );
+        let RequestPermissionOutcome::Selected(allowed) =
+            permission_outcome(&req, PermissionOptionKind::AllowOnce)
+        else {
+            panic!("missing allow option")
+        };
+        assert_eq!(allowed.option_id.0.as_ref(), "approved");
+        let RequestPermissionOutcome::Selected(denied) =
+            permission_outcome(&req, PermissionOptionKind::RejectOnce)
+        else {
+            panic!("missing deny option")
+        };
+        assert_eq!(denied.option_id.0.as_ref(), "allow");
+    }
+
+    #[test]
+    fn permission_selection_never_invents_ids_or_persistent_grants() {
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, SessionId as AcpSessionId, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        for options in [
+            vec![],
+            vec![PermissionOption::new(
+                "allow",
+                "Always allow",
+                PermissionOptionKind::AllowAlways,
+            )],
+        ] {
+            let req = RequestPermissionRequest::new(
+                AcpSessionId::new("sess"),
+                ToolCallUpdate::new("call", ToolCallUpdateFields::new()),
+                options,
+            );
+            assert!(matches!(
+                permission_outcome(&req, PermissionOptionKind::AllowOnce),
+                RequestPermissionOutcome::Cancelled
+            ));
+            assert!(matches!(
+                permission_outcome(&req, PermissionOptionKind::RejectOnce),
+                RequestPermissionOutcome::Cancelled
+            ));
+        }
+    }
 }
+
+crate::sdk_v1::client_callbacks!(BridgeClient);

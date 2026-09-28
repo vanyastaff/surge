@@ -1,0 +1,59 @@
+# Smallest possible flow.toml — single Terminal node.
+#
+# When run via `surge engine run examples/flow_terminal_only.toml`,
+# the run starts, immediately hits the Terminal node, emits
+# RunCompleted, and exits cleanly — no agent / no MCP / no human
+# input required. The fastest possible demo of the pipeline +
+# persistence + IPC.
+
+schema_version = 1
+start = "gate"
+
+
+[metadata]
+name = "flow_terminal_only"
+created_at = "2026-05-05T00:00:00Z"
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 0.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[nodes.gate]
+id = "gate"
+[nodes.gate.position]
+x = 0.0
+y = 0.0
+[[nodes.gate.declared_outcomes]]
+id = "approve"
+description = "Approved"
+edge_kind_hint = "forward"
+is_terminal = false
+[nodes.gate.config]
+node_kind = "human_gate"
+delivery_channels = []
+mode = { bootstrap = { stage = "description" } }
+[nodes.gate.config.summary]
+title = "Approval"
+body = "Decide"
+[[nodes.gate.config.options]]
+outcome = "approve"
+label = "Approve"
+[[edges]]
+id = "approved"
+to = "end"
+kind = "forward"
+[edges.from]
+node = "gate"
+outcome = "approve"
+[edges.policy]
+on_max_exceeded = "escalate"

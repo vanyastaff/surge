@@ -24,6 +24,8 @@ pub type RequestId = u64;
 pub enum ErrorCode {
     /// The request is malformed or missing required fields.
     BadRequest,
+    /// The requested capability has no production supervisor yet.
+    NotReady,
     /// `start_run` for an already-active run id.
     RunAlreadyActive,
     /// Lookup of a run id that the daemon never saw.
@@ -65,6 +67,38 @@ pub enum DaemonRequest {
     Ping {
         /// Client-assigned identifier echoed in the response.
         request_id: RequestId,
+    },
+    /// Submit durable bootstrap intent (unavailable until supervisor support).
+    StartBootstrap {
+        /// Client request identity.
+        request_id: RequestId,
+        /// Stable idempotency identity selected by the client.
+        operation_id: RunId,
+        /// Validated allowlisted client intent.
+        intent: Box<surge_core::bootstrap_operation::BootstrapIntent>,
+    },
+    /// Read durable bootstrap status.
+    BootstrapStatus {
+        /// Client request identity.
+        request_id: RequestId,
+        /// Operation to inspect.
+        operation_id: RunId,
+    },
+    /// Request monotonic cancellation of a bootstrap operation.
+    CancelBootstrap {
+        /// Client request identity.
+        request_id: RequestId,
+        /// Operation to cancel.
+        operation_id: RunId,
+    },
+    /// Explicitly retry attention after restoring the original pinned inputs.
+    RetryBootstrap {
+        /// Client request identity.
+        request_id: RequestId,
+        /// Operation to retry.
+        operation_id: RunId,
+        /// Last observed revision, used to reject stale retries.
+        revision: u64,
     },
     /// Begin a new run.
     StartRun {
@@ -110,6 +144,19 @@ pub enum DaemonRequest {
         target: RoadmapPatchTarget,
         /// Validated roadmap patch application result.
         patch_result: Box<RoadmapPatchApplyResult>,
+    },
+    /// Resolve only a specific registered `HumanGate` request.
+    ResolveGateInput {
+        /// Client correlation ID.
+        request_id: RequestId,
+        /// Run owning the request.
+        run_id: RunId,
+        /// Node captured from the durable request.
+        node: surge_core::keys::NodeKey,
+        /// Exact registration captured from the durable request.
+        gate_request_id: surge_core::id::GateRequestId,
+        /// Operator response containing the selected outcome.
+        response: serde_json::Value,
     },
     /// Provide an answer to a paused run waiting on human input.
     ResolveHumanInput {
@@ -220,11 +267,16 @@ impl DaemonRequest {
     pub fn request_id(&self) -> RequestId {
         match self {
             Self::Ping { request_id }
+            | Self::StartBootstrap { request_id, .. }
+            | Self::BootstrapStatus { request_id, .. }
+            | Self::CancelBootstrap { request_id, .. }
+            | Self::RetryBootstrap { request_id, .. }
             | Self::StartRun { request_id, .. }
             | Self::ResumeRun { request_id, .. }
             | Self::StopRun { request_id, .. }
             | Self::SubmitRoadmapAmendment { request_id, .. }
             | Self::ResolveHumanInput { request_id, .. }
+            | Self::ResolveGateInput { request_id, .. }
             | Self::SubmitSteer { request_id, .. }
             | Self::ListSteers { request_id, .. }
             | Self::CancelSteer { request_id, .. }
@@ -280,6 +332,13 @@ impl McpProbeReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    /// Committed bootstrap operation status; never an execution acknowledgement.
+    BootstrapOperation {
+        /// Client request identity.
+        request_id: RequestId,
+        /// Durable journal status.
+        status: Box<surge_core::bootstrap_operation::BootstrapOperationStatus>,
+    },
     /// Reply to [`DaemonRequest::Ping`]. Carries the daemon binary version string.
     PingOk {
         /// Echoed `request_id` from the originating [`DaemonRequest::Ping`].
@@ -414,7 +473,8 @@ impl DaemonResponse {
     #[must_use]
     pub fn request_id(&self) -> RequestId {
         match self {
-            Self::PingOk { request_id, .. }
+            Self::BootstrapOperation { request_id, .. }
+            | Self::PingOk { request_id, .. }
             | Self::StartRunOk { request_id, .. }
             | Self::StartRunQueued { request_id, .. }
             | Self::ResumeRunOk { request_id }

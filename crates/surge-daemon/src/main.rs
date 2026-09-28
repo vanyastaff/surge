@@ -9,7 +9,7 @@ use std::time::Duration;
 use surge_acp::bridge::AcpBridge;
 use surge_core::config::TaskSourceConfig;
 use surge_daemon::broadcast::BroadcastRegistry;
-use surge_daemon::{ServerConfig, intake_completion, lifecycle, pidfile, run_with_registry};
+use surge_daemon::{ServerConfig, intake_completion, lifecycle, pidfile, run_with_supervisor};
 use surge_intake::TaskSource;
 use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
 use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
@@ -134,13 +134,18 @@ fn main() -> std::process::ExitCode {
         // `EngineConfig::capacity` below (Task 12 M3, acceptance
         // criterion B) — moved up from where it previously loaded (after
         // engine construction, only for the TaskRouter) for that reason.
-        let config = match surge_core::config::SurgeConfig::discover() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load surge.toml; using defaults");
-                surge_core::config::SurgeConfig::default()
+        let config_path = std::env::current_dir().ok().and_then(|cwd| {
+            cwd.ancestors().map(|directory| directory.join("surge.toml")).find(|path| path.is_file())
+        });
+        let (config, bootstrap_configured) = match config_path.as_deref().map(surge_core::SurgeConfig::load) {
+            Some(Ok(config)) => (config, true),
+            Some(Err(error)) => {
+                tracing::warn!(%error, "failed to load surge.toml; bootstrap admission is disabled");
+                (surge_core::SurgeConfig::default(), false)
             },
+            None => (surge_core::SurgeConfig::default(), false),
         };
+        let agent_registry = Arc::new(surge_acp::Registry::for_run(&config));
 
         let engine = Arc::new(Engine::new_full(
             Arc::clone(&bridge),
@@ -148,13 +153,13 @@ fn main() -> std::process::ExitCode {
             tool_dispatcher,
             Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
-            Some(profile_registry),
+            Some(profile_registry.clone()),
             EngineConfig {
                 capacity: (&config.capacity).into(),
                 // The unified catalog: user `[agents.*]` over builtins, so a
                 // daemon-dispatched run resolves a custom provider exactly
                 // like a builtin one.
-                agent_registry: Some(Arc::new(surge_acp::Registry::for_run(&config))),
+                agent_registry: Some(agent_registry.clone()),
                 ..EngineConfig::default()
             },
         ));
@@ -162,6 +167,7 @@ fn main() -> std::process::ExitCode {
         // Keep a clone of the concrete engine handle for the cockpit's
         // `subscribe_tap()` (the facade does not expose this surface).
         let cockpit_engine = Arc::clone(&engine);
+        let tracking = surge_daemon::tracked_run::TrackingContext::new(engine.clone(), storage.clone());
 
         let facade: Arc<dyn surge_orchestrator::engine::facade::EngineFacade> =
             Arc::new(LocalEngineFacade::new(engine));
@@ -245,7 +251,7 @@ fn main() -> std::process::ExitCode {
 
         // The broadcast registry is owned by main so that the run-completion
         // consumer (RFC-0010 acceptance #5) can subscribe to global events
-        // alongside the wire-level subscribers handled by `run_with_registry`.
+        // alongside the wire-level subscribers handled by `run_with_supervisor`.
         let broadcast_registry = Arc::new(BroadcastRegistry::new());
         // Subscribe BOTH global-event consumers (run-completion → tracker
         // comment, and the L3 auto-merge gate) up front, BEFORE crash
@@ -278,10 +284,30 @@ fn main() -> std::process::ExitCode {
         // flow through the shared admission + broadcast registry so
         // recovered runs publish RunFinished globally.
         let worktrees_root = surge_runs_dir().join("worktrees");
+        let bootstrap_runtime = if bootstrap_configured {
+            surge_orchestrator::profile_loader::profiles_dir().ok().and_then(|profiles_root| {
+                surge_daemon::bootstrap_runtime::BootstrapRuntime::new(
+                    Arc::new(config.clone()), profile_registry.clone(), agent_registry,
+                    worktrees_root.clone(), profiles_root,
+                ).map_err(|error| tracing::error!(%error, "bootstrap runtime unavailable")).ok()
+            })
+        } else { None };
+        let bootstrap = surge_daemon::bootstrap_supervisor::BootstrapSupervisor::new(
+            surge_daemon::bootstrap_supervisor::BootstrapServices {
+                engine: cockpit_engine.clone(), facade: facade.clone(), storage: storage.clone(),
+                runtime: bootstrap_runtime, admission: admission.clone(), broadcast: broadcast_registry.clone(),
+                shutdown: shutdown.clone(),
+            },
+        );
+        if let Err(error) = bootstrap.reconcile().await {
+            tracing::error!(%error, "bootstrap startup reconciliation failed; journal retained");
+        }
+        let bootstrap_handle = tokio::spawn(bootstrap.clone().run());
         let now_ms = chrono::Utc::now().timestamp_millis();
         let recovery_outcome = surge_daemon::recovery::recover_on_startup(
             &storage,
             &facade,
+            &tracking,
             &admission,
             &broadcast_registry,
             &notifier,
@@ -309,6 +335,7 @@ fn main() -> std::process::ExitCode {
         // completing first, before this scheduler starts polling, means
         // there is no window for the two to race the same run at all.
         let wake_scheduler = surge_daemon::wake_scheduler::WakeScheduler {
+            tracking: tracking.clone(),
             storage: Arc::clone(&storage),
             facade: Arc::clone(&facade),
             admission: Arc::clone(&admission),
@@ -380,7 +407,7 @@ fn main() -> std::process::ExitCode {
             let admission = Arc::clone(&admission);
             async move {
                 if let Err(e) =
-                    run_with_registry(server_cfg, facade, broadcast, admission, shutdown_for_server)
+                    run_with_supervisor(server_cfg, facade, tracking, broadcast, admission, shutdown_for_server, bootstrap)
                         .await
                 {
                     tracing::error!(err = %e, "server exited with error; cancelling shutdown token");
@@ -389,9 +416,20 @@ fn main() -> std::process::ExitCode {
             }
         });
 
-        // Wait for shutdown signal, then give forwarders the grace window.
-        lifecycle::drain(shutdown, args.shutdown_grace).await;
+        // Keep the grace deadline, but exit early once every tracked owner and
+        // connection has settled and run forwarders have deregistered.
+        lifecycle::drain_until(shutdown, args.shutdown_grace, || async {
+            server_handle.is_finished()
+                && bootstrap_handle.is_finished()
+                && admission.snapshot().await.active == 0
+                && broadcast_registry.active_count().await == 0
+        }).await;
         server_handle.abort();
+        if !bootstrap_handle.is_finished() {
+            tracing::warn!("bootstrap shutdown grace expired; unfinished journal phases remain recoverable");
+            bootstrap_handle.abort();
+        }
+        let _ = bootstrap_handle.await;
         0u8
     });
 
@@ -1464,59 +1502,22 @@ async fn spawn_inbox_subsystems(
     let shutdown_for_desktop = shutdown.clone();
     tokio::spawn(desktop.run(shutdown_for_desktop));
 
-    // Telegram bot (only if config provides a chat ID + token).
-    //
-    // Token resolution order:
-    //   1. Secrets store under `telegram.cockpit.bot_token` —
-    //      populated by `surge telegram setup`.
-    //   2. Env var named by `[telegram].bot_token_env` (legacy path,
-    //      kept for back-compat with `.env`-style deployments).
-    //
-    // The secrets path is preferred so the documented CLI flow
-    // (`surge telegram setup` → `/pair`) actually wires the daemon's
-    // bot — without this lookup the persisted token was silently
-    // ignored and only the env var path worked.
     if let Some(tg_cfg) = config.telegram.as_ref() {
-        let chat_id = tg_cfg.chat_id.or_else(|| {
-            tg_cfg
-                .chat_id_env
-                .as_deref()
-                .and_then(|env| std::env::var(env).ok().and_then(|s| s.parse::<i64>().ok()))
-        });
-        let token = resolve_bot_token_from_secrets(&storage).or_else(|| {
-            tg_cfg
-                .bot_token_env
-                .as_deref()
-                .and_then(|env| std::env::var(env).ok())
-        });
-        match (chat_id, token) {
-            (Some(chat_id), Some(token)) => {
-                // Two subsystems share the bot:
-                //  1. `TgInboxBot` — tracker-inbox card delivery. Its
-                //     outgoing loop posts pending inbox cards every
-                //     500ms; the legacy incoming loop runs its own
-                //     `getUpdates` via teloxide's `Dispatcher`.
-                //  2. The cockpit (`spawn_telegram_cockpit`) — its
-                //     polling adapter also calls `getUpdates`.
-                //
-                // Telegram rejects two concurrent `getUpdates` requests
-                // with `Conflict: terminated by other getUpdates`. We
-                // therefore run TgInboxBot in outgoing-only mode so it
-                // keeps delivering inbox cards while the cockpit owns
-                // the single bot poll. Inbox `inbox:*` callbacks will
-                // be routed through the cockpit's shared update stream
-                // in a follow-up.
-                let bot_for_inbox = teloxide::Bot::new(token.clone());
+        if !telegram_legacy_credentials_absent(&storage) {
+            return;
+        }
+        match surge_telegram::credentials::TelegramCredentials::load(tg_cfg) {
+            Ok(credentials) => {
+                let bot = credentials.bot();
+                let chat_id = credentials.chat_id;
                 let tg = TgInboxBot::new(
-                    bot_for_inbox,
+                    bot.clone(),
                     teloxide::types::ChatId(chat_id),
                     Arc::clone(&storage),
                 );
-                let shutdown_for_tg = shutdown.clone();
-                tokio::spawn(tg.run_outgoing_only(shutdown_for_tg));
-
+                tokio::spawn(tg.run_outgoing_only(shutdown.clone()));
                 spawn_telegram_cockpit(
-                    &token,
+                    bot,
                     chat_id,
                     Arc::clone(&storage),
                     Arc::clone(&engine),
@@ -1525,43 +1526,33 @@ async fn spawn_inbox_subsystems(
                     shutdown.clone(),
                 );
             },
-            _ => {
-                tracing::warn!(
-                    "telegram config present but chat_id or bot_token missing — TgInboxBot not spawned"
-                );
-            },
+            Err(error) => tracing::warn!(%error, "Telegram disabled: invalid runtime credentials"),
         }
     } else {
         tracing::info!("no [telegram] config — TgInboxBot skipped");
     }
 }
 
-/// Read the cockpit bot token from the secrets store. Returns `None`
-/// when the row is absent or the registry connection cannot be
-/// acquired (a missing token is the common "not configured" case, not
-/// a fatal error, so we log at debug and fall through to the env-var
-/// fallback in the caller).
-fn resolve_bot_token_from_secrets(
+/// Never read or fall back to the legacy plaintext value.
+fn telegram_legacy_credentials_absent(
     storage: &Arc<surge_persistence::runs::storage::Storage>,
-) -> Option<String> {
-    use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, get_secret};
-    match storage.acquire_registry_conn() {
-        Ok(conn) => match get_secret(&conn, TELEGRAM_BOT_TOKEN_KEY) {
-            Ok(token) => token,
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    "secrets store lookup for cockpit bot token failed; trying env var"
-                );
-                None
-            },
-        },
-        Err(e) => {
-            tracing::debug!(
-                error = %e,
-                "could not acquire registry conn for cockpit bot token lookup"
+) -> bool {
+    use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, has_secret};
+    let result = storage
+        .acquire_registry_conn()
+        .map_err(|_| ())
+        .and_then(|conn| has_secret(&conn, TELEGRAM_BOT_TOKEN_KEY).map_err(|_| ()));
+    match result {
+        Ok(false) => true,
+        Ok(true) => {
+            tracing::warn!(
+                "Telegram disabled: legacy stored token must be migrated with surge telegram setup --token-env NAME --chat-id ID"
             );
-            None
+            false
+        },
+        Err(()) => {
+            tracing::warn!("Telegram disabled: could not check legacy credential storage");
+            false
         },
     }
 }
@@ -1575,7 +1566,7 @@ fn resolve_bot_token_from_secrets(
 /// gives up at `ERROR` level (the rest of the daemon — engine, inbox,
 /// IPC — keeps running so the operator can still drive via CLI).
 fn spawn_telegram_cockpit(
-    token: &str,
+    bot: teloxide::Bot,
     chat_id: i64,
     storage: Arc<surge_persistence::runs::storage::Storage>,
     engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
@@ -1583,8 +1574,6 @@ fn spawn_telegram_cockpit(
     snooze_poll_interval: std::time::Duration,
     shutdown: CancellationToken,
 ) {
-    let bot = teloxide::Bot::new(token.to_owned());
-
     // Live long-poll listener. Teloxide's Polling exposes its update
     // stream via `AsUpdateStream::as_stream(&'a mut self)` — the stream is
     // borrowed from `&mut Polling` (GAT workaround), so we cannot hand it
@@ -1651,7 +1640,7 @@ fn spawn_telegram_cockpit(
                     Some(Err(e)) => {
                         tracing::warn!(
                             target: "daemon::cockpit",
-                            error = %e,
+                            error = %surge_telegram::error::TelegramCockpitError::from(e),
                             "polling error; teloxide backoff will retry"
                         );
                     }
@@ -1676,6 +1665,9 @@ fn spawn_telegram_cockpit(
     );
 
     let wiring = surge_telegram::cockpit::production::CockpitWiring {
+        inbox: Some(Arc::new(surge_daemon::inbox::tg_bot::CockpitInboxActions {
+            storage: Arc::clone(&storage),
+        })),
         storage,
         engine,
         bot,
@@ -1699,4 +1691,28 @@ fn spawn_telegram_cockpit(
     // own `select!` on `shutdown.cancelled()` is the canonical exit
     // path.
     drop(handles);
+}
+
+#[cfg(test)]
+mod telegram_credentials_tests {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn legacy_plaintext_presence_disables_telegram_until_migrated() {
+        use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, delete_secret, set_secret};
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        assert!(super::telegram_legacy_credentials_absent(&storage));
+        let conn = storage.acquire_registry_conn().unwrap();
+        set_secret(
+            &conn,
+            TELEGRAM_BOT_TOKEN_KEY,
+            "73123:LEGACY_RUNTIME_LITERAL",
+            0,
+        )
+        .unwrap();
+        assert!(!super::telegram_legacy_credentials_absent(&storage));
+        delete_secret(&conn, TELEGRAM_BOT_TOKEN_KEY).unwrap();
+        assert!(super::telegram_legacy_credentials_absent(&storage));
+    }
 }

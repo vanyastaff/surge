@@ -154,7 +154,7 @@ pub(crate) struct RunTaskParams {
     pub capacity_precheck_bypass_once: std::sync::atomic::AtomicBool,
 }
 
-pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
+pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
     // Capture the per-run MCP registry so it is torn down on *every*
     // terminal path (completed / failed / aborted), not just the
     // happy one — rmcp's Drop is async best-effort and can orphan
@@ -164,7 +164,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
     // Box the large inner future so `execute`'s own future stays small
     // at the spawn site (clippy::large_futures; also keeps stack use
     // bounded for the per-run task).
-    let outcome = Box::pin(execute_inner(params)).await;
+    let outcome = Box::pin(execute_inner(&mut params)).await;
     if let Some(reg) = mcp_registry {
         let budget = std::time::Duration::from_secs(20);
         if tokio::time::timeout(budget, reg.shutdown()).await.is_err() {
@@ -175,25 +175,28 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             );
         }
     }
+    if let Err(error) = params.writer.close().await {
+        tracing::error!(%error, "run event writer did not close cleanly");
+    }
     outcome
 }
 
-async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
-    let mut state = match initial_execution_state(&params).await {
+async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
+    let mut state = match initial_execution_state(params).await {
         Ok(state) => state,
-        Err(error) => return failed(&params, error).await,
+        Err(error) => return failed(params, error).await,
     };
 
     loop {
         if state.frames.is_empty()
-            && let Err(error) = drain_roadmap_queue(&mut params, &mut state).await
+            && let Err(error) = drain_roadmap_queue(params, &mut state).await
         {
-            return failed(&params, format!("apply queued roadmap amendments: {error}")).await;
+            return failed(params, format!("apply queued roadmap amendments: {error}")).await;
         }
 
         apply_pending_revisions(&mut state);
 
-        if let Some(outcome) = abort_if_cancelled(&params).await {
+        if let Some(outcome) = abort_if_cancelled(params).await {
             return outcome;
         }
 
@@ -203,38 +206,29 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
             n.clone()
         } else {
             let err = format!("cursor at unknown node {}", state.cursor.node);
-            return failed(&params, err).await;
+            return failed(params, err).await;
         };
 
-        let stage_start_seq = match enter_stage(&params, &state.cursor).await {
+        let stage_start_seq = match enter_stage(params, &state.cursor).await {
             Ok(seq) => seq,
-            Err(error) => return failed(&params, error).await,
+            Err(error) => return failed(params, error).await,
         };
 
-        let stage_result = match dispatch_node_stage(&params, &mut state, &node).await {
+        let stage_result = match dispatch_node_stage(params, &mut state, &node).await {
             StageDispatch::StageResult(result) => result,
             StageDispatch::Continue => continue,
-            StageDispatch::Failed(error) => return failed(&params, error).await,
+            StageDispatch::Failed(error) => return failed(params, error).await,
             StageDispatch::Park {
                 wake_at,
                 basis,
                 runtime,
                 details,
             } => {
-                return parked(
-                    &params,
-                    &state.cursor.node,
-                    wake_at,
-                    basis,
-                    runtime,
-                    details,
-                )
-                .await;
+                return parked(params, &state.cursor.node, wake_at, basis, runtime, details).await;
             },
         };
 
-        let resolution = match resolve_stage_result(&params, &mut state, &node, stage_result).await
-        {
+        let resolution = match resolve_stage_result(params, &mut state, &node, stage_result).await {
             Ok(resolution) => resolution,
             Err(outcome) => return outcome,
         };
@@ -243,9 +237,9 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
             StageResolution::Terminal(outcome) => return outcome,
             StageResolution::Outcome(outcome) => {
                 if let Err(error) =
-                    route_and_snapshot(&params, &mut state, &outcome, stage_start_seq).await
+                    route_and_snapshot(params, &mut state, &outcome, stage_start_seq).await
                 {
-                    return failed(&params, error).await;
+                    return failed(params, error).await;
                 }
             },
         }
@@ -255,10 +249,10 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
         // run's budget here — warn once at the threshold, abort on breach.
         // A failure to durably record an abort decision is fatal (the run must
         // never terminate without a persisted reason).
-        match enforce_budget(&params, &mut state).await {
+        match enforce_budget(params, &mut state).await {
             Ok(Some(outcome)) => return outcome,
             Ok(None) => {},
-            Err(error) => return failed(&params, error).await,
+            Err(error) => return failed(params, error).await,
         }
     }
 }
@@ -545,22 +539,33 @@ fn apply_pending_revisions(state: &mut RunExecutionState) {
 }
 
 async fn abort_if_cancelled(params: &RunTaskParams) -> Option<RunOutcome> {
-    if !params.cancel.is_cancelled() {
-        return None;
+    if params.cancel.is_cancelled() {
+        Some(abort_run(params).await)
+    } else {
+        None
     }
+}
 
+async fn abort_run(params: &RunTaskParams) -> RunOutcome {
     let reason = "stop_run requested".to_string();
-    let _ = params
+    if let Err(error) = params
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
             reason: reason.clone(),
         }))
+        .await
+    {
+        return failed(
+            params,
+            format!("persist RunAborted after cancellation: {error}"),
+        )
         .await;
+    }
     let outcome = RunOutcome::Aborted { reason };
     let _ = params.event_tx.send(EngineRunEvent::Terminal {
         outcome: outcome.clone(),
     });
-    Some(outcome)
+    outcome
 }
 
 /// Pure check for the [`checkpoint_exit_if_requested`] fault-injection seam:
@@ -704,9 +709,9 @@ async fn dispatch_agent_node_with_capacity_gate(
     // Resolved once, reused by both the precheck and (on a non-rate-limited
     // result) the post-dispatch clear below — one profile resolve per
     // dispatch, not two.
-    let runtime = crate::engine::stage::agent::resolve_profile_runtime_id(
+    let runtime = crate::engine::stage::agent::resolve_node_runtime_id(
         params.profile_registry.as_deref(),
-        cfg.profile.as_ref(),
+        cfg,
     );
 
     // Task 12 M3 review, BLOCKING #1: a run resuming from `RunStatus::
@@ -944,6 +949,8 @@ async fn execute_agent_node(
     // should apply to the re-attempt too.
     let steers_backup = steers.clone();
     let stage_result = execute_agent_stage(AgentStageParams {
+        frames: &state.frames,
+        cancel: params.cancel.clone(),
         node: &state.cursor.node,
         steers,
         agent_config: cfg,
@@ -1153,12 +1160,13 @@ async fn handle_flow_generator_result(
     let Ok(outcome) = stage_result else {
         return stage_result;
     };
-    match crate::engine::bootstrap::run_flow_generator_post_processing(
+    match crate::engine::bootstrap::run_flow_generator_post_processing_with_registry(
         &state.cursor.node,
         &state.memory,
         params.run_config.bootstrap.edit_loop_cap,
         &params.worktree_path,
         &params.writer,
+        params.profile_registry.as_deref(),
     )
     .await
     {
@@ -1200,7 +1208,7 @@ async fn dispatch_terminal_node(
             .map(StageOutcome::Terminal);
             StageDispatch::StageResult(result)
         },
-        TerminalSignal::LoopIterDone => finish_loop_iteration(params, state).await,
+        TerminalSignal::LoopIterDone => finish_loop_iteration(params, state, cfg).await,
         TerminalSignal::SubgraphDone => finish_subgraph_frame(params, state).await,
     }
 }
@@ -1208,8 +1216,9 @@ async fn dispatch_terminal_node(
 async fn finish_loop_iteration(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
+    terminal: &surge_core::terminal_config::TerminalConfig,
 ) -> StageDispatch {
-    let just_completed = match latest_loop_outcome(state) {
+    let just_completed = match loop_terminal_outcome(terminal) {
         Ok(outcome) => outcome,
         Err(error) => return StageDispatch::Failed(error),
     };
@@ -1227,16 +1236,16 @@ async fn finish_loop_iteration(
     }
 }
 
-fn latest_loop_outcome(state: &RunExecutionState) -> Result<OutcomeKey, String> {
-    if let Some(record) = state
-        .memory
-        .outcomes
-        .get(&state.cursor.node)
-        .and_then(|records| records.last())
-    {
-        return Ok(record.outcome.clone());
-    }
-    OutcomeKey::try_from("completed").map_err(|e| format!("loop default outcome key: {e}"))
+fn loop_terminal_outcome(
+    terminal: &surge_core::terminal_config::TerminalConfig,
+) -> Result<OutcomeKey, String> {
+    use surge_core::terminal_config::TerminalKind;
+    let outcome = match terminal.kind {
+        TerminalKind::Success => "completed",
+        TerminalKind::Failure { .. } => "failed",
+        TerminalKind::Aborted => "aborted",
+    };
+    OutcomeKey::try_from(outcome).map_err(|error| format!("loop terminal outcome: {error}"))
 }
 
 async fn finish_subgraph_frame(
@@ -1287,17 +1296,22 @@ async fn execute_human_gate_node(
     cfg: &surge_core::human_gate_config::HumanGateConfig,
 ) -> Result<StageOutcome, StageError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    params
-        .gate_resolutions
-        .lock()
-        .await
-        .insert(state.cursor.node.clone(), tx);
+    let request_id = surge_core::id::GateRequestId::new();
+    params.gate_resolutions.lock().await.insert(
+        state.cursor.node.clone(),
+        crate::engine::stage::human_gate::PendingGate {
+            request_id,
+            sender: tx,
+        },
+    );
     let result = execute_human_gate_stage(HumanGateStageParams {
+        request_id,
         node: &state.cursor.node,
         gate_config: cfg,
         writer: &params.writer,
         run_memory: &state.memory,
         resolution_rx: Some(rx),
+        cancel: &params.cancel,
         default_timeout: params.run_config.human_input_timeout,
         bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
     })
@@ -1324,6 +1338,7 @@ async fn enter_loop_node(
         crate::engine::stage::loop_stage::LoopStageParams {
             node: &state.cursor.node,
             loop_config: cfg,
+            worktree_path: &params.worktree_path,
             graph: &state.active_graph,
             run_memory: &state.memory,
             writer: &params.writer,
@@ -1407,7 +1422,12 @@ async fn resolve_stage_result(
     stage_result: Result<StageOutcome, StageError>,
 ) -> Result<StageResolution, RunOutcome> {
     match stage_result {
-        Ok(StageOutcome::Routed(outcome)) => Ok(StageResolution::Outcome(outcome)),
+        Ok(StageOutcome::Routed(outcome)) => {
+            if let Some(aborted) = abort_if_cancelled(params).await {
+                return Err(aborted);
+            }
+            Ok(StageResolution::Outcome(outcome))
+        },
         Ok(StageOutcome::Terminal(terminal)) => {
             let outcome = terminal_run_outcome(terminal);
             let _ = params.event_tx.send(EngineRunEvent::Terminal {
@@ -1415,6 +1435,7 @@ async fn resolve_stage_result(
             });
             Ok(StageResolution::Terminal(outcome))
         },
+        Err(StageError::Cancelled) => Err(abort_run(params).await),
         Err(error) => resolve_stage_error(params, state, node, error)
             .await
             .map(StageResolution::Outcome),
@@ -1657,6 +1678,20 @@ async fn write_stage_boundary_snapshot(
         current_seq.as_u64(),
     );
     snapshot.applied_graph_revision_seq = state.applied_graph_revision_seq;
+    snapshot.frames = state.frames.iter().cloned().map(Into::into).collect();
+    snapshot.root_traversal_counts = state
+        .root_traversal_counts
+        .iter()
+        .map(|(edge, count)| (edge.to_string(), *count))
+        .collect();
+    let worktree = params.worktree_path.clone();
+    let run = params.run_id;
+    snapshot.workspace_checkpoint = tokio::task::spawn_blocking(move || {
+        surge_git::checkpoint::capture_record(&worktree, run, current_seq.as_u64())
+    })
+    .await
+    .map_err(|error| format!("checkpoint worker: {error}"))?
+    .map_err(|error| format!("workspace checkpoint: {error}"))?;
     let blob = serde_json::to_vec(&snapshot).map_err(|e| format!("snapshot serialize: {e}"))?;
     params
         .writer

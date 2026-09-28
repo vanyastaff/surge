@@ -56,10 +56,11 @@ fn has_roadmap_milestone_outer_loop(graph: &surge_core::graph::Graph) -> bool {
         let NodeConfig::Loop(config) = &node.config else {
             return false;
         };
-        let IterableSource::Artifact { name, .. } = &config.iterates_over else {
+        let IterableSource::RunArtifact { name, jsonpath } = &config.iterates_over else {
             return false;
         };
-        name == "roadmap.milestones"
+        name == "roadmap"
+            && jsonpath == "milestones"
             && graph.subgraphs.get(&config.body).is_some_and(|body| {
                 body.nodes
                     .values()

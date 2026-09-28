@@ -1,7 +1,7 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::Icon;
-use gpui_component::StyledExt;
+use gpui_kit::component::Icon;
+use gpui_kit::component::StyledExt;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_orchestrator::engine::handle::RunStatus;
 
 use crate::app_state::AppState;
@@ -70,24 +70,7 @@ impl AppSidebar {
     /// Count of decisions blocked on the operator — the Inbox badge.
     /// Live gates from run streams + tasks in review + failed runs.
     fn needs_you_count(&self, cx: &Context<Self>) -> usize {
-        use surge_core::TaskState;
-        let state = self.state.read(cx);
-        let live = state
-            .run_streams
-            .values()
-            .map(|s| s.pending.len())
-            .sum::<usize>();
-        let reviews = state
-            .tasks
-            .iter()
-            .filter(|t| matches!(t.state, TaskState::HumanReview | TaskState::QaReview { .. }))
-            .count();
-        let failed = state
-            .runs
-            .iter()
-            .filter(|r| matches!(r.status, RunStatus::Failed | RunStatus::Aborted))
-            .count();
-        live + reviews + failed
+        self.state.read(cx).needs_you_count()
     }
 
     fn render_nav_item(&self, screen: Screen, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -103,6 +86,8 @@ impl AppSidebar {
 
         let base = div()
             .id(SharedString::from(format!("nav-{label}")))
+            .role(Role::Button)
+            .aria_label(label)
             .h_flex()
             .gap(px(9.0))
             .items_center()
@@ -191,9 +176,9 @@ impl AppSidebar {
             },
         };
 
-        let total = state.runs.len();
-        let active = state
-            .runs
+        let runs = state.project_runs();
+        let total = runs.len();
+        let active = runs
             .iter()
             .filter(|r| matches!(r.status, RunStatus::Active))
             .count();
@@ -202,6 +187,8 @@ impl AppSidebar {
         if self.collapsed {
             return div()
                 .id("daemon-footer")
+                .role(if offline { Role::Button } else { Role::Label })
+                .aria_label(format!("{label}, {stats}"))
                 .py(px(12.0))
                 .flex()
                 .justify_center()
@@ -216,6 +203,8 @@ impl AppSidebar {
 
         div()
             .id("daemon-footer")
+            .role(if offline { Role::Button } else { Role::Label })
+            .aria_label(format!("{label}, {stats}"))
             .v_flex()
             .gap(px(8.0))
             .px(px(14.0))
@@ -287,7 +276,7 @@ impl AppSidebar {
     }
 
     fn render_toggle_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        use gpui_component::IconName;
+        use gpui_kit::component::IconName;
         let icon_name = if self.collapsed {
             IconName::PanelLeftOpen
         } else {
@@ -295,6 +284,12 @@ impl AppSidebar {
         };
         div()
             .id("sidebar-toggle")
+            .role(Role::Button)
+            .aria_label(if self.collapsed {
+                "Expand sidebar"
+            } else {
+                "Collapse sidebar"
+            })
             .h_flex()
             .justify_center()
             .py(px(8.0))

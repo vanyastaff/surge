@@ -34,6 +34,9 @@ pub struct EngineSnapshot {
     pub applied_graph_revision_seq: u64,
     /// Non-`None` when the run was paused waiting for human input.
     pub pending_human_input: Option<PendingHumanInputSnapshot>,
+    /// Git checkpoint for the exact working files at this stage boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_checkpoint: Option<surge_git::checkpoint::WorkspaceCheckpoint>,
 }
 
 /// Serde-friendly mirror of `surge_core::run_state::Cursor`.
@@ -180,12 +183,12 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
                 // `iterable_source_json` field is `null` for that variant.
                 let iterable_source_json = match &lf.config.iterates_over {
                     IterableSource::Static(_) => None,
-                    src @ (IterableSource::Artifact { .. } | IterableSource::LoopItem { .. }) => {
-                        Some(
-                            serde_json::to_string(src)
-                                .expect("non-static IterableSource is json-serializable"),
-                        )
-                    },
+                    src @ (IterableSource::Artifact { .. }
+                    | IterableSource::RunArtifact { .. }
+                    | IterableSource::LoopItem { .. }) => Some(
+                        serde_json::to_string(src)
+                            .expect("non-static IterableSource is json-serializable"),
+                    ),
                 };
                 Self::Loop(SerializableLoopFrame {
                     loop_node: lf.loop_node.to_string(),
@@ -395,6 +398,7 @@ impl EngineSnapshot {
             stage_boundary_seq,
             applied_graph_revision_seq: 0,
             pending_human_input: None,
+            workspace_checkpoint: None,
         }
     }
 
@@ -428,6 +432,7 @@ impl EngineSnapshot {
                     stage_boundary_seq: v1.stage_boundary_seq,
                     applied_graph_revision_seq: 0,
                     pending_human_input: v1.pending_human_input,
+                    workspace_checkpoint: None,
                 })
             },
             Some(2) => serde_json::from_value(value)
@@ -641,6 +646,20 @@ mod tests {
             return_to: NodeKey::try_from("after").unwrap(),
             traversal_counts: HashMap::new(),
         };
+
+        let mut seeded = original.clone();
+        seeded.config.iterates_over = IterableSource::RunArtifact {
+            name: "roadmap".into(),
+            jsonpath: "milestones".into(),
+        };
+        let saved: SerializableFrame = Frame::Loop(seeded.clone()).into();
+        let encoded = serde_json::to_string(&saved).unwrap();
+        let decoded: SerializableFrame = serde_json::from_str(&encoded).unwrap();
+        let restored: Frame = decoded.try_into().unwrap();
+        let Frame::Loop(restored) = restored else {
+            panic!("expected loop")
+        };
+        assert_eq!(restored.config.iterates_over, seeded.config.iterates_over);
 
         let serialised: SerializableFrame = Frame::Loop(original.clone()).into();
         let back: Frame = serialised.try_into().expect("reverse conversion");

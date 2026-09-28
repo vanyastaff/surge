@@ -1,11 +1,11 @@
-//! End-to-end smoke: spin up `run_server` inline (no subprocess),
+//! End-to-end smoke: spin up `run_synthetic_server` inline (no subprocess),
 //! connect a [`DaemonEngineFacade`] over a real local socket, call
 //! `list_runs`, shutdown, verify the server task exits within 2s.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
 use tempfile::TempDir;
@@ -93,7 +93,7 @@ async fn ping_round_trip() {
     let server_handle = tokio::spawn({
         let facade = facade.clone();
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, facade, shutdown).await }
+        async move { run_synthetic_server(cfg, facade, shutdown).await }
     });
 
     // Wait briefly for the listener to start.

@@ -123,6 +123,31 @@ This is one possible medium feature flow. The Flow Generator can add or remove n
 
 For a roadmap-driven run, the graph can contain nested loops: an outer loop over milestones and an inner loop over tasks inside the active milestone.
 
+Bootstrap supplies the approved structured `roadmap.toml` as the run artifact
+`roadmap`. The outer loop reads this seed without introducing another planner:
+
+```toml
+[nodes.milestone_loop.config.iterates_over]
+type = "run_artifact"
+[nodes.milestone_loop.config.iterates_over.value]
+name = "roadmap"
+jsonpath = "milestones"
+```
+
+The nested task loop uses `type = "loop_item"`, with `var = "milestone"` and
+`jsonpath = "tasks"` in its `value` table. Admission rejects missing, duplicate,
+or malformed loop seeds. Loop entry resolves paths against the run worktree and
+checks the recorded content hash before parsing. Markdown roadmaps must be
+converted to structured TOML and approved before using them as executable loop
+inputs; automatic partial extraction is not accepted.
+
+The bundled `linear-3` flow runs Spec Author → Implementer → Verifier. Both
+consumers bind the structured `spec_toml` output from the specification stage.
+The multi-milestone flow repeats this sequence for each task, then creates a
+whole-roadmap specification and performs a separate final verification. Failed
+verification returns to implementation with a bounded backtrack. Bindings to a
+repeated producer select its most recent matching artifact.
+
 ```mermaid
 flowchart TD
     Roadmap[Approved roadmap.md]

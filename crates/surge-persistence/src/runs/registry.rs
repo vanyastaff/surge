@@ -106,6 +106,13 @@ pub fn get_run(
     run_id: &RunId,
 ) -> Result<Option<RunSummary>, StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    get_run_connection(&conn, run_id)
+}
+
+pub(crate) fn get_run_connection(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<Option<RunSummary>, StorageError> {
     match conn.query_row(
         "SELECT id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid, wake_at
          FROM runs WHERE id = ?",
@@ -125,6 +132,13 @@ pub fn list_runs(
 ) -> Result<Vec<RunSummary>, StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
 
+    list_runs_connection(&conn, filter)
+}
+
+pub(crate) fn list_runs_connection(
+    conn: &rusqlite::Connection,
+    filter: &RunFilter,
+) -> Result<Vec<RunSummary>, StorageError> {
     let mut sql = String::from(
         "SELECT id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid, wake_at \
          FROM runs WHERE 1=1",

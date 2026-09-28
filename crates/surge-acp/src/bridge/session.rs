@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use agent_client_protocol::ContentBlock;
+use agent_client_protocol::schema::v1::ContentBlock;
 use surge_core::{OutcomeKey, SessionId};
 
 use super::sandbox::Sandbox;
@@ -99,6 +99,34 @@ impl AgentKind {
     }
 }
 
+/// Engine-owned stdio MCP descriptor, bound to a preallocated local session ID.
+#[derive(Clone)]
+pub struct StageMcpConfig {
+    /// Session identity pinned before the provider's new-session request.
+    pub session: SessionId,
+    /// Transient descriptor carrying helper authentication for the trusted provider.
+    pub server: agent_client_protocol::schema::v1::McpServerStdio,
+}
+
+impl StageMcpConfig {
+    pub(crate) fn authentication(&self) -> Option<&String> {
+        self.server
+            .env
+            .iter()
+            .find(|entry| entry.name == "SURGE_STAGE_MCP_AUTH")
+            .map(|entry| &entry.value)
+    }
+}
+
+impl std::fmt::Debug for StageMcpConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StageMcpConfig")
+            .field("session", &self.session)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Open-session input. Constructed by the engine, passed to `AcpBridge::open_session`.
 ///
 /// `SessionConfig` deliberately does **not** derive `Clone`: it carries
@@ -107,6 +135,8 @@ impl AgentKind {
 /// it calls `Sandbox::boxed_clone()` and reconstructs the box. Callers that
 /// want to hold a config across multiple opens must rebuild it from inputs.
 pub struct SessionConfig {
+    /// Present only for engine stages. One-shot sessions do not expose stage tools.
+    pub stage_mcp: Option<Box<StageMcpConfig>>,
     /// Agent flavor — drives subprocess invocation. The bridge resolves the
     /// binary path and CLI flags from this; for `Mock`, the bridge consults
     /// `CARGO_BIN_EXE_mock_acp_agent`.
@@ -164,6 +194,33 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
+    /// Exact sandbox-filtered catalog exported to the stage MCP helper.
+    #[must_use]
+    pub fn stage_tools(&self) -> Vec<ToolDef> {
+        let tools =
+            super::tools::build_injected_tools(&self.declared_outcomes, self.allows_escalation);
+        let (mut visible, _) = super::worker::filter_visible_tools(tools, self.sandbox.as_ref());
+        for tool in &mut visible {
+            if let Some(schema) = tool.input_schema.as_object_mut() {
+                let properties = schema
+                    .entry("properties")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(properties) = properties.as_object_mut() {
+                    properties.insert("call_id".into(), serde_json::json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_.-]+$","description":"Stable retry identity for this call; reuse only with identical arguments."}));
+                }
+                let required = schema
+                    .entry("required")
+                    .or_insert_with(|| serde_json::json!([]));
+                if let Some(required) = required.as_array_mut()
+                    && !required.iter().any(|value| value == "call_id")
+                {
+                    required.push(serde_json::json!("call_id"));
+                }
+            }
+        }
+        visible
+    }
+
     /// Validate the config before subprocess spawn. Returns the same error
     /// types as `OpenSessionError` so the bridge can `?`-propagate.
     pub fn validate(&self) -> Result<(), super::error::OpenSessionError> {
@@ -213,8 +270,34 @@ mod tests {
     use crate::client::PermissionPolicy;
     use std::str::FromStr;
 
+    #[test]
+    fn stage_descriptor_diagnostics_hide_environment_values() {
+        use agent_client_protocol::schema::v1::{EnvVariable, McpServerStdio};
+        let secret = "opaque-stage-capability-for-test";
+        let stage = StageMcpConfig {
+            session: SessionId::new(),
+            server: McpServerStdio::new("surge-stage", "/tmp/surge")
+                .args(vec!["internal-stage-mcp".into()])
+                .env(vec![EnvVariable::new("SURGE_STAGE_MCP_AUTH", secret)]),
+        };
+        let diagnostics = serde_json::json!({"stage": format!("{stage:?}")}).to_string();
+        assert!(!diagnostics.contains(secret));
+        let redactor =
+            crate::shared::secrets::SecretsRedactor::with_literal(stage.authentication());
+        let diagnostic = serde_json::json!({"provider_error": secret}).to_string();
+        assert!(!redactor.redact_json(&diagnostic).contains(secret));
+        // The wire payload deliberately conveys the capability to the trusted
+        // provider. It is not a diagnostics serialization surface.
+        assert!(
+            serde_json::to_string(&stage.server)
+                .unwrap()
+                .contains(secret)
+        );
+    }
+
     fn cfg_with(outcomes: Vec<&str>, tools: Vec<ToolDef>) -> SessionConfig {
         SessionConfig {
+            stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
             working_dir: PathBuf::from("/tmp/wt"),
             system_prompt: "sys".into(),

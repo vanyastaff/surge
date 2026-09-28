@@ -1,25 +1,16 @@
 //! Fleet — the run constellation (mission-control home).
 //!
-//! Adapted from the "Surge - Interactive" concept: runs are nodes
-//! branching off the `main` trunk. This is *inspired by* the mockup,
-//! not a pixel copy — it renders **real** runs from [`AppState::runs`]
-//! when the daemon link is live, and falls back to a clearly-labelled
-//! sample constellation when there are none, so the shape of the idea
-//! is legible offline without ever faking live data.
-//!
-//! Geometry is a fixed, centered "stage" (robust in flexbox) rather
-//! than the concept's freeform bezier canvas — nodes alternate above /
-//! below a horizontal trunk with straight connectors. True curved edges
-//! via `gpui::canvas` are a later polish.
+//! Displays daemon run summaries only. An empty run list is an onboarding
+//! state, never a source of sample activity or invented review requests.
 
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::StyledExt;
+use gpui_kit::component::StyledExt;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use surge_orchestrator::engine::handle::RunStatus;
 
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 
 use crate::app_state::AppState;
 use crate::theme;
@@ -36,8 +27,7 @@ const CARD_W: f32 = 188.0;
 /// What the operator can trigger from the Fleet surface.
 #[derive(Clone)]
 pub enum FleetAction {
-    /// Open a run's cockpit. `None` = sample node (no real run) —
-    /// the cockpit opens unfocused.
+    /// Open a run's cockpit.
     OpenRun(Option<surge_core::id::RunId>),
     /// Operator described new work in the command bar — dispatch a
     /// bootstrap run with this prompt.
@@ -50,33 +40,31 @@ impl EventEmitter<FleetAction> for FleetScreen {}
 
 #[derive(Clone, Copy, PartialEq)]
 enum NodeKind {
-    Merged,
+    Completed,
     Failed,
     Aborted,
     Active,
-    Review,
     Queued,
 }
 
 impl NodeKind {
     fn color(self) -> Hsla {
         match self {
-            Self::Merged => theme::success(),
+            Self::Completed => theme::success(),
             Self::Failed | Self::Aborted => theme::error(),
-            Self::Active | Self::Review => theme::accent(),
+            Self::Active => theme::accent(),
             Self::Queued => theme::text_muted(),
         }
     }
 
     fn status_label(self) -> &'static str {
         match self {
-            Self::Merged => "merged",
+            Self::Completed => "completed",
             Self::Failed => "failed",
             // Same word the Runs rail and Inbox use for this status —
             // one run must not read "failed" here and "aborted" there.
             Self::Aborted => "aborted",
             Self::Active => "active",
-            Self::Review => "review gate",
             Self::Queued => "queued",
         }
     }
@@ -86,13 +74,11 @@ impl NodeKind {
 #[derive(Clone)]
 struct FleetNode {
     id: String,
-    /// Real daemon run id (None for sample nodes).
+    /// Real daemon run id.
     run_id: Option<surge_core::id::RunId>,
     title: String,
     meta: String,
     kind: NodeKind,
-    /// Whether this is real daemon data (vs. sample fallback).
-    live: bool,
 }
 
 /// A curved branch edge to paint on the canvas (trunk → card anchor).
@@ -103,7 +89,11 @@ struct EdgeSpec {
     color: Hsla,
 }
 
-/// Fleet screen — reads runs from shared state, renders the constellation.
+/// Card headline from the operator's request: its first line, cut to fit.
+fn card_title(prompt: &str) -> String {
+    ui::headline(prompt, 34)
+}
+
 /// Fleet screen — reads runs from shared state, renders the constellation.
 pub struct FleetScreen {
     state: Entity<AppState>,
@@ -134,44 +124,47 @@ impl FleetScreen {
         cx.emit(FleetAction::Dispatch(prompt));
     }
 
-    /// Build nodes from real runs, or a labelled sample when offline.
+    /// Build nodes exclusively from daemon run summaries.
     fn nodes(&self, cx: &Context<Self>) -> (Vec<FleetNode>, bool) {
         let state = self.state.read(cx);
-        if state.runs.is_empty() {
-            return (sample_nodes(), false);
-        }
+        let live = state.daemon_state.facade().is_some();
 
         let nodes = state
-            .runs
-            .iter()
+            .project_runs()
+            .into_iter()
             .take(6)
             .map(|r| {
                 let kind = match r.status {
                     RunStatus::Active => NodeKind::Active,
-                    RunStatus::Completed => NodeKind::Merged,
+                    RunStatus::Completed => NodeKind::Completed,
                     RunStatus::Failed => NodeKind::Failed,
                     RunStatus::Aborted => NodeKind::Aborted,
                     _ => NodeKind::Queued,
                 };
                 let short = r.run_id.short().to_lowercase();
-                let seq = r
-                    .last_event_seq
-                    .map(|s| format!("seq {s}"))
-                    .unwrap_or_else(|| "—".to_string());
+                let started = r.started_at.with_timezone(&chrono::Local).format("%H:%M");
+                let seq = r.last_event_seq.map_or_else(
+                    || format!("started {started}"),
+                    |s| format!("started {started} · seq {s}"),
+                );
                 FleetNode {
                     id: format!("r-{short}"),
                     run_id: Some(r.run_id),
-                    title: format!(
-                        "started {}",
-                        r.started_at.with_timezone(&chrono::Local).format("%H:%M")
+                    title: state.run_prompt(&r.run_id).map_or_else(
+                        || {
+                            format!(
+                                "started {}",
+                                r.started_at.with_timezone(&chrono::Local).format("%H:%M")
+                            )
+                        },
+                        card_title,
                     ),
                     meta: seq,
                     kind,
-                    live: true,
                 }
             })
             .collect();
-        (nodes, true)
+        (nodes, live)
     }
 
     // ── stage pieces ────────────────────────────────────────────────
@@ -291,10 +284,9 @@ impl FleetScreen {
 
         let id_for_click = node.id.clone();
         let run_id_for_click = node.run_id;
-        let is_review = node.kind == NodeKind::Review;
         let is_failed = matches!(node.kind, NodeKind::Failed | NodeKind::Aborted);
 
-        // Node dot on the trunk; active / review dots gently pulse.
+        // Node dot on the trunk; active dots gently pulse.
         let dot_base = div()
             .absolute()
             .left(px(x - 5.0))
@@ -305,7 +297,7 @@ impl FleetScreen {
             .bg(color)
             .border_2()
             .border_color(theme::panel_deep());
-        let dot = if matches!(node.kind, NodeKind::Active | NodeKind::Review) {
+        let dot = if matches!(node.kind, NodeKind::Active) {
             dot_base
                 .with_animation(
                     SharedString::from(format!("fleet-pulse-{}", node.id)),
@@ -318,7 +310,9 @@ impl FleetScreen {
         };
 
         let card = div()
-            .id(SharedString::from(format!("fleet-card-{}", node.id)))
+            .id(SharedString::from(format!("fleet-card-{}", node.run_id.map_or_else(|| node.id.clone(), |id| id.to_string()))))
+            .role(Role::Button)
+            .aria_label(node.title.clone())
             .absolute()
             .left(px(x - CARD_W / 2.0))
             .top(px(card_top))
@@ -329,9 +323,7 @@ impl FleetScreen {
             .rounded_lg()
             .bg(theme::panel_raised())
             .border_1()
-            .border_color(if is_review {
-                theme::accent().opacity(0.5)
-            } else if is_failed {
+            .border_color(if is_failed {
                 theme::error().opacity(0.4)
             } else {
                 theme::hairline()
@@ -339,7 +331,7 @@ impl FleetScreen {
             .cursor_pointer()
             .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.6)))
             .on_click(cx.listener(move |_this, _e, _w, cx| {
-                if is_review || is_failed {
+                if is_failed {
                     cx.emit(FleetAction::OpenGate(id_for_click.clone()));
                 } else {
                     cx.emit(FleetAction::OpenRun(run_id_for_click));
@@ -384,7 +376,7 @@ impl FleetScreen {
         vec![dot, card]
     }
 
-    fn render_chips(&self, active: usize, needs: usize, merged: usize, live: bool) -> Div {
+    fn render_chips(&self, active: usize, needs: usize, completed: usize, live: bool) -> Div {
         let chip = |dot: Hsla, text: String, fg: Hsla| {
             div()
                 .h_flex()
@@ -413,13 +405,13 @@ impl FleetScreen {
             ))
             .child(chip(
                 theme::success(),
-                format!("{merged} merged"),
+                format!("{completed} completed"),
                 theme::text_muted(),
             ))
             .when(!live, |el| {
                 el.child(
                     ui::pill(
-                        "sample · start the daemon for live runs",
+                        "Daemon disconnected · showing last known runs",
                         theme::text_muted(),
                         theme::panel_raised(),
                     )
@@ -431,13 +423,15 @@ impl FleetScreen {
 
     fn render_inspector(&self, node: FleetNode, cx: &mut Context<Self>) -> impl IntoElement {
         let id = node.id.clone();
-        let live = node.live;
-        let primary_label = if live { "Open run" } else { "Approve & merge" };
+        let primary_label = "Open Inbox";
 
         // primary button
         let id_primary = id.clone();
         let primary = div()
             .id("fleet-inspector-primary")
+            .test_support()
+            .role(Role::Button)
+            .aria_label(primary_label)
             .flex()
             .items_center()
             .justify_center()
@@ -474,11 +468,7 @@ impl FleetScreen {
                             .text_size(px(10.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(node.kind.color())
-                            .child(if live {
-                                "NEEDS ATTENTION"
-                            } else {
-                                "REVIEW GATE"
-                            }),
+                            .child("NEEDS ATTENTION"),
                     )
                     .child(div().flex_1())
                     .child(ui::meta(node.id.clone())),
@@ -495,11 +485,7 @@ impl FleetScreen {
                     .text_size(px(11.0))
                     .line_height(px(17.0))
                     .text_color(theme::text_muted())
-                    .child(if live {
-                        "This run ended without merging. Open its cockpit to inspect what happened."
-                    } else {
-                        "Branch ready to merge into main. Awaiting your call."
-                    }),
+                    .child("This run needs attention. Open Inbox to inspect what happened."),
             )
             .child(primary)
     }
@@ -558,12 +544,15 @@ impl FleetScreen {
                     ))
                     .child(
                         div().flex_1().child(
-                            Input::new(self.command_input.as_ref().unwrap()).appearance(false),
+                            Input::new(self.command_input.as_ref().unwrap())
+                                .accessibility_id("fleet-task")
+                                .aria_label("Describe a task")
+                                .appearance(false),
                         ),
                     )
                     .child(ui::kbd("↵")),
             )
-            .child(ui::meta(format!("{agents} agents")))
+            .child(ui::meta(format!("{agents} agents installed")))
     }
 }
 
@@ -572,29 +561,34 @@ impl Render for FleetScreen {
         let (nodes, live) = self.nodes(cx);
         let agents = self.state.read(cx).installed_agents.len();
 
-        let active = nodes.iter().filter(|n| n.kind == NodeKind::Active).count();
-        let needs = nodes
-            .iter()
-            .filter(|n| {
-                matches!(
-                    n.kind,
-                    NodeKind::Failed | NodeKind::Aborted | NodeKind::Review
-                )
-            })
-            .count();
-        let merged = nodes.iter().filter(|n| n.kind == NodeKind::Merged).count();
+        // Counts cover every project run, not just the cards that fit.
+        let (active, needs, completed) = {
+            let state = self.state.read(cx);
+            let runs = state.project_runs();
+            (
+                runs.iter()
+                    .filter(|r| r.status == RunStatus::Active)
+                    .count(),
+                state.needs_you_count(),
+                runs.iter()
+                    .filter(|r| r.status == RunStatus::Completed)
+                    .count(),
+            )
+        };
 
-        // The node the inspector focuses on: review gate first, else a
-        // failing run needing attention.
-        let attention = nodes
-            .iter()
-            .find(|n| n.kind == NodeKind::Review)
-            .or_else(|| {
-                nodes
-                    .iter()
-                    .find(|n| matches!(n.kind, NodeKind::Failed | NodeKind::Aborted))
-            })
-            .cloned();
+        // Only failures the operator has not dismissed ask for attention.
+        let attention = {
+            let state = self.state.read(cx);
+            let open: Vec<_> = state
+                .unacknowledged_failures()
+                .into_iter()
+                .map(|r| r.run_id)
+                .collect();
+            nodes
+                .iter()
+                .find(|n| n.run_id.is_some_and(|id| open.contains(&id)))
+                .cloned()
+        };
 
         // Branch edges painted on the canvas layer (behind everything).
         let edges: Vec<EdgeSpec> = nodes
@@ -614,7 +608,9 @@ impl Render for FleetScreen {
         // coords anchor to the stage box: canvas (back) → trunk → nodes.
         let mut stage_children: Vec<AnyElement> =
             vec![self.render_stage_canvas(edges).into_any_element()];
-        stage_children.extend(self.render_trunk());
+        if !nodes.is_empty() {
+            stage_children.extend(self.render_trunk());
+        }
         for (i, node) in nodes.iter().enumerate() {
             stage_children.extend(self.render_node(node, i, cx));
         }
@@ -638,58 +634,120 @@ impl Render for FleetScreen {
                     .items_center()
                     .justify_center()
                     .bg(theme::panel_deep())
-                    .child(stage)
-                    .child(self.render_chips(active, needs, merged, live))
+                    .when(nodes.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .id("fleet-empty")
+                                .test_support()
+                                .aria_label("Create your first application")
+                                .v_flex()
+                                .gap(px(12.0))
+                                .max_w(px(480.0))
+                                .p(px(32.0))
+                                .child(div().text_size(px(24.0)).font_weight(FontWeight::BOLD).text_color(theme::text_primary()).child("Create your first application"))
+                                .child(ui::meta(if live {
+                                    "Describe what you want to build below. Surge will prepare a plan and bring decisions to your Inbox."
+                                } else {
+                                    "Connect the daemon to start work. Your actual runs will appear here."
+                                })),
+                        )
+                    })
+                    .when(!nodes.is_empty(), |el| el.child(stage))
+                    .child(self.render_chips(active, needs, completed, live))
                     .children(attention.map(|n| self.render_inspector(n, cx))),
             )
             .child(self.render_command_bar(agents, window, cx))
     }
 }
 
-/// Clearly-labelled sample constellation shown only when there are no
-/// real runs (offline / daemon not started). Mirrors the concept's five
-/// missions so the idea reads without a live daemon.
-fn sample_nodes() -> Vec<FleetNode> {
-    vec![
-        FleetNode {
-            id: "r-01aa".into(),
-            run_id: None,
-            title: "OAuth token refresh".into(),
-            meta: "verifier-1 · +98 −12".into(),
-            kind: NodeKind::Merged,
-            live: false,
-        },
-        FleetNode {
-            id: "r-4f2a".into(),
-            run_id: None,
-            title: "Session cache".into(),
-            meta: "claude-1 · +214 −40".into(),
-            kind: NodeKind::Merged,
-            live: false,
-        },
-        FleetNode {
-            id: "r-77b0".into(),
-            run_id: None,
-            title: "Config loader refactor".into(),
-            meta: "claude-1 · qa 3/6".into(),
-            kind: NodeKind::Failed,
-            live: false,
-        },
-        FleetNode {
-            id: "r-b2e8".into(),
-            run_id: None,
-            title: "Retry logic patch".into(),
-            meta: "gpt-runner · qa 5/6".into(),
-            kind: NodeKind::Active,
-            live: false,
-        },
-        FleetNode {
-            id: "r-9c1e".into(),
-            run_id: None,
-            title: "Rate limiter middleware".into(),
-            meta: "claude-1 · +142 −18".into(),
-            kind: NodeKind::Review,
-            live: false,
-        },
-    ]
+#[cfg(test)]
+mod accessibility_tests {
+    use super::{FleetAction, FleetScreen};
+    use crate::app_state::AppState;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui_kit::test]
+    fn empty_fleet_contains_no_invented_runs(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            let state = cx.new(|_| AppState::new());
+            gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                cx.new(|cx| FleetScreen::new(state, cx))
+            })
+            .unwrap()
+        });
+        view.update(cx, |view, cx| {
+            let (nodes, live) = view.nodes(cx);
+            assert!(nodes.is_empty(), "empty daemon data must stay empty");
+            assert!(!live);
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("fleet-empty").label(),
+                Some("Create your first application")
+            );
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn card_title_uses_the_first_request_line_and_fits_the_card() {
+        assert_eq!(
+            super::card_title("Add dark mode\nand tests"),
+            "Add dark mode"
+        );
+        let long =
+            super::card_title("Create and implement a complete offline countdown timer web app");
+        assert_eq!(long.chars().count(), 34);
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn workflow_completion_does_not_claim_a_git_merge() {
+        assert_eq!(super::NodeKind::Completed.status_label(), "completed");
+    }
+
+    #[gpui_kit::test]
+    fn inspector_names_the_inbox_action_it_dispatches(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.runs.push(crate::app_state::UiRun {
+                    run_id: surge_core::id::RunId::new(),
+                    status: surge_orchestrator::engine::handle::RunStatus::Failed,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: None,
+                });
+                state
+            });
+            gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                cx.new(|cx| FleetScreen::new(state, cx))
+            })
+            .unwrap()
+        });
+        let inbox_actions = Rc::new(Cell::new(0));
+        let captured = inbox_actions.clone();
+        cx.update(|cx| {
+            cx.subscribe(&view, move |_, event: &FleetAction, _| {
+                assert!(matches!(event, FleetAction::OpenGate(_)));
+                captured.set(captured.get() + 1);
+            })
+            .detach();
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("fleet-inspector-primary").label(),
+                Some("Open Inbox")
+            );
+            window.click("fleet-inspector-primary", cx);
+        })
+        .unwrap();
+        cx.update(|_| assert_eq!(inbox_actions.get(), 1));
+    }
 }

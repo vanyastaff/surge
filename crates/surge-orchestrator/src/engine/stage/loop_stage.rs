@@ -21,7 +21,9 @@ pub struct LoopStageParams<'a> {
     pub loop_config: &'a LoopConfig,
     /// Frozen pipeline graph (used for body subgraph lookup).
     pub graph: &'a Graph,
-    /// In-progress run memory (artifacts / outcomes used to resolve `IterableSource::Artifact`).
+    /// Worktree root for resolving portable artifact paths.
+    pub worktree_path: &'a std::path::Path,
+    /// In-progress run memory containing recorded artifact references.
     pub run_memory: &'a RunMemory,
     /// Run writer for persisting events.
     pub writer: &'a RunWriter,
@@ -49,7 +51,13 @@ pub async fn execute_loop_entry(p: LoopStageParams<'_>) -> Result<LoopEntryEffec
         .get(&p.loop_config.body)
         .ok_or_else(|| StageError::LoopBodyMissing(p.loop_config.body.clone()))?;
 
-    let items = resolve_iterable(&p.loop_config.iterates_over, p.run_memory, p.frames).await?;
+    let items = resolve_iterable(
+        &p.loop_config.iterates_over,
+        p.run_memory,
+        p.frames,
+        p.worktree_path,
+    )
+    .await?;
 
     if items.len() > MAX_LOOP_ITEMS_RESOLVED {
         return Err(StageError::LoopItemsTooLarge {
@@ -104,6 +112,7 @@ async fn resolve_iterable(
     src: &IterableSource,
     memory: &RunMemory,
     frames: &[Frame],
+    worktree: &std::path::Path,
 ) -> Result<Vec<toml::Value>, StageError> {
     match src {
         IterableSource::Static(items) => Ok(items.clone()),
@@ -111,14 +120,21 @@ async fn resolve_iterable(
             node: _,
             name,
             jsonpath,
-        } => {
+        }
+        | IterableSource::RunArtifact { name, jsonpath } => {
             let artifact = memory.artifacts.get(name).ok_or_else(|| {
                 StageError::Internal(format!("artifact '{name}' not in RunMemory"))
             })?;
 
-            let bytes = tokio::fs::read(&artifact.path).await.map_err(|e| {
+            let path = worktree.join(&artifact.path);
+            let bytes = tokio::fs::read(&path).await.map_err(|e| {
                 StageError::Internal(format!("read artifact {}: {e}", artifact.path.display()))
             })?;
+            if surge_core::content_hash::ContentHash::compute(&bytes) != artifact.hash {
+                return Err(StageError::Internal(format!(
+                    "iterable artifact '{name}' changed since it was recorded"
+                )));
+            }
 
             // M6 supports TOML artifacts with a simple dotted path.
             // (JSON support could be added later; current Surge artifacts
@@ -129,9 +145,7 @@ async fn resolve_iterable(
                     artifact.path.display()
                 ))
             })?;
-            let parsed: toml::Value = toml::from_str(content).map_err(|e| {
-                StageError::Internal(format!("toml parse {}: {e}", artifact.path.display()))
-            })?;
+            let parsed = parse_iterable_artifact(name, content)?;
 
             resolve_array_path(&parsed, jsonpath)
         },
@@ -161,7 +175,22 @@ async fn resolve_iterable(
     }
 }
 
-fn resolve_array_path(root: &toml::Value, path: &str) -> Result<Vec<toml::Value>, StageError> {
+/// Read structured loop data. Markdown must be converted and approved before execution.
+pub(crate) fn parse_iterable_artifact(
+    name: &str,
+    content: &str,
+) -> Result<toml::Value, StageError> {
+    toml::from_str(content).map_err(|error| {
+        StageError::Internal(format!(
+            "iterable '{name}' must be structured TOML; convert and approve a Markdown roadmap before execution: {error}"
+        ))
+    })
+}
+
+pub(crate) fn resolve_array_path(
+    root: &toml::Value,
+    path: &str,
+) -> Result<Vec<toml::Value>, StageError> {
     let mut cursor = root;
     for segment in normalise_iterable_path(path)? {
         cursor = cursor.get(&segment).ok_or_else(|| {
@@ -368,6 +397,7 @@ pub async fn on_loop_iteration_done(
     let item = lf.items[lf.current_index as usize].clone();
     let loop_id = lf.loop_node.clone();
     let index = lf.current_index;
+    lf.attempts_remaining = initial_attempts_remaining(&lf.config.on_iteration_failure);
     cursor.node = body_start;
     cursor.attempt = 1;
 
@@ -420,13 +450,19 @@ async fn exit_loop(
         .map_err(|e| StageError::Internal(format!("'{final_outcome_str}' outcome key: {e}")))?;
     writer
         .append_event(VersionedEventPayload::new(EventPayload::LoopCompleted {
-            loop_id: loop_node,
+            loop_id: loop_node.clone(),
             completed_iterations,
             final_outcome,
         }))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
     frames.pop();
+    if final_outcome_str == "aborted" {
+        return Err(StageError::LoopFailed {
+            node: loop_node,
+            completed_iterations,
+        });
+    }
     cursor.node = return_to;
     cursor.attempt = 1;
     Ok(())
@@ -544,6 +580,7 @@ mod tests {
             loop_config: &cfg,
             graph: &graph,
             run_memory: &memory,
+            worktree_path: std::path::Path::new("."),
             writer: &writer,
             frames: &mut frames,
             return_to: NodeKey::try_from("after").unwrap(),
@@ -581,6 +618,7 @@ mod tests {
             loop_config: &cfg,
             graph: &graph,
             run_memory: &memory,
+            worktree_path: std::path::Path::new("."),
             writer: &writer,
             frames: &mut frames,
             return_to: NodeKey::try_from("after").unwrap(),
@@ -623,6 +661,7 @@ mod tests {
             loop_config: &cfg,
             graph: &graph,
             run_memory: &memory,
+            worktree_path: std::path::Path::new("."),
             writer: &writer,
             frames: &mut frames,
             return_to: NodeKey::try_from("after").unwrap(),
@@ -753,10 +792,46 @@ tasks = ["task1", "task2", "task3"]
         };
 
         let frames: Vec<Frame> = Vec::new();
-        let items = resolve_iterable(&src, &memory, &frames).await.unwrap();
+        let items = resolve_iterable(&src, &memory, &frames, std::path::Path::new("."))
+            .await
+            .unwrap();
         assert_eq!(items.len(), 3);
         assert_eq!(items[0], toml::Value::String("task1".into()));
         assert_eq!(items[2], toml::Value::String("task3".into()));
+        let seeded = IterableSource::RunArtifact {
+            name: "plan.toml".into(),
+            jsonpath: "tasks".into(),
+        };
+        assert_eq!(
+            resolve_iterable(&seeded, &memory, &frames, std::path::Path::new("."))
+                .await
+                .unwrap(),
+            items
+        );
+        assert!(
+            resolve_iterable(
+                &seeded,
+                &RunMemory::default(),
+                &frames,
+                std::path::Path::new(".")
+            )
+            .await
+            .is_err()
+        );
+        let path = &memory.artifacts["plan.toml"].path;
+        std::fs::write(path, "tasks = ['unapproved']").unwrap();
+        let error = resolve_iterable(&seeded, &memory, &frames, std::path::Path::new("."))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("changed since it was recorded"));
+    }
+
+    #[test]
+    fn markdown_roadmap_is_not_silently_reduced_to_partial_task_data() {
+        let document =
+            "# Roadmap\n\n## Milestones\n\n- [ ] **Timer**\n  - [ ] **Pause countdown**\n";
+        assert!(parse_iterable_artifact("roadmap", document).is_err());
+        assert!(parse_iterable_artifact("roadmap", "milestones = [").is_err());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -793,7 +868,9 @@ tasks = ["task1", "task2", "task3"]
             jsonpath: "$.tasks[*]".into(),
         };
 
-        let resolved = resolve_iterable(&src, &memory, &frames).await.unwrap();
+        let resolved = resolve_iterable(&src, &memory, &frames, std::path::Path::new("."))
+            .await
+            .unwrap();
         assert_eq!(
             resolved,
             vec![
@@ -848,7 +925,9 @@ tasks = ["task1", "task2", "task3"]
             jsonpath: "$.tasks[*]".into(),
         };
 
-        let err = resolve_iterable(&src, &memory, &frames).await.unwrap_err();
+        let err = resolve_iterable(&src, &memory, &frames, std::path::Path::new("."))
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, StageError::Internal(ref message) if message.contains("out of range")),
             "expected stale inner frame to produce an index error, got {err:?}"

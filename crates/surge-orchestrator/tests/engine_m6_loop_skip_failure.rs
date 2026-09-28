@@ -1,11 +1,53 @@
-//! M6 placeholder: loop body failure with `on_iteration_failure = Skip`.
-//! Requires a mock agent that emits a failure outcome on iteration N, so the
-//! loop skips that iteration and continues. Full e2e needs mock_acp_agent
-//! scripted to fail on a specific iteration.
+//! Skip policy must record failures and advance through every item.
+mod fixtures;
+#[path = "fixtures/loop_failure.rs"]
+mod scenario;
 
-#[test]
-#[ignore = "M6 loop skip failure: requires mock agent scripted to fail specific iterations (M7)"]
-fn loop_body_failure_with_skip_policy_continues_loop() {
-    // M7: build a loop with on_iteration_failure = Skip and a mock agent that
-    // emits a failure outcome on iteration 2. Verify iteration 3 still runs.
+use surge_core::loop_config::FailurePolicy;
+use surge_core::run_event::EventPayload;
+use surge_orchestrator::engine::RunOutcome;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loop_failure_with_skip_continues_through_all_items() {
+    let (outcome, events) = scenario::failing_body(FailurePolicy::Skip).await;
+    let completions: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            EventPayload::LoopIterationCompleted { index, outcome, .. } => {
+                Some((*index, outcome.as_ref()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        completions,
+        vec![(0, "failed"), (1, "failed"), (2, "failed")]
+    );
+    assert!(
+        matches!(outcome, RunOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loop_body_failure_with_skip_policy_continues_loop() {
+    let (outcome, events) =
+        scenario::scripted_body(FailurePolicy::Skip, &["done", "failed", "done"]).await;
+    assert!(
+        matches!(outcome, RunOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    let results: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            EventPayload::LoopIterationCompleted { index, outcome, .. } => {
+                Some((*index, outcome.as_ref()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        vec![(0, "completed"), (1, "failed"), (2, "completed")]
+    );
 }

@@ -93,6 +93,7 @@ pub fn maintain(
             artifact,
             path,
             name,
+            ..
         } => {
             // INSERT OR IGNORE — row may already exist from a prior `StoreArtifact`
             // command (which writes the real size_bytes from the on-disk content).
@@ -451,6 +452,7 @@ pub fn maintain(
         | GraphRevisionAccepted { .. }
         | StageInputsResolved { .. }
         | SessionOpened { .. }
+        | EventPayload::StageToolReceipt { .. }
         | ToolCalled { .. }
         | ToolResultReceived { .. }
         | OutcomeReported { .. }
@@ -633,6 +635,63 @@ mod tests {
 
     fn o(s: &str) -> OutcomeKey {
         OutcomeKey::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn stage_tool_receipt_does_not_complete_materialized_stage() {
+        use surge_core::{
+            RunId,
+            id::StageGenerationId,
+            stage_tool::{
+                StageOutcomeCandidate, StageToolContext, StageToolReceipt, StageToolResult,
+            },
+        };
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        maintain(
+            &tx,
+            EventSeq(1),
+            1,
+            &EventPayload::StageEntered {
+                node: n("impl"),
+                attempt: 1,
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(2),
+            2,
+            &EventPayload::StageToolReceipt {
+                receipt: StageToolReceipt {
+                    context: StageToolContext {
+                        run: RunId::new(),
+                        node: n("impl"),
+                        session: SessionId::new(),
+                        generation: StageGenerationId::new(),
+                    },
+                    call_id: "candidate-1".to_owned().try_into().unwrap(),
+                    arguments_hash: ContentHash::compute(b"args"),
+                    result: StageToolResult::OutcomeCandidate {
+                        candidate: StageOutcomeCandidate {
+                            outcome: o("done"),
+                            summary: "proposed".into(),
+                            artifacts_produced: vec![],
+                        },
+                    },
+                },
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let state: (Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT ended_seq, outcome FROM stage_executions WHERE node_id = 'impl'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, (None, None));
     }
 
     #[test]
@@ -838,6 +897,7 @@ mod tests {
                 artifact: hash,
                 path: PathBuf::from("artifacts/spec.md"),
                 name: "spec.md".into(),
+                source_path: None,
             },
         )
         .unwrap();
@@ -910,6 +970,7 @@ mod tests {
                 artifact: hash,
                 path: PathBuf::from("artifacts/spec.md"),
                 name: "spec.md".into(),
+                source_path: None,
             },
         )
         .unwrap();

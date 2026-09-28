@@ -52,7 +52,7 @@ The product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) describes a riche
 | Create a focused feature/task run | `surge bootstrap "..."` or `surge engine run --template single-task --watch` | Bootstrap is now available; richer daemon/Telegram approval UX is still target behavior. |
 | Run a full roadmap/flow | `surge bootstrap "..."` or manually create `flow.toml`, then `surge engine run <flow.toml> --watch` | Bootstrap generates roadmap and flow; tracker intake and richer approval channels are still target UX. |
 | Amend an existing roadmap with a new feature | `surge feature describe "..." --project` or `surge feature describe "..." --run <run_id>` | Active-run pickup is stored through amendment events; Telegram rich cards are still target UX. |
-| Run AFK through a daemon | `surge daemon start` and `surge engine run <flow.toml> --daemon --watch` | Daemon exists; the full Telegram approval bot and tracker intake loop are still target UX. |
+| Run AFK through a daemon | `surge daemon start --detached` and `surge engine run <flow.toml> --daemon --watch` | Daemon exists; the full Telegram approval bot and tracker intake loop are still target UX. |
 | Start from GitHub Issues or Linear | No direct CLI equivalent | GitHub / Linear issue intake should normalize tracker payloads into the same bootstrap path; not a user-facing command yet. |
 
 ## Bootstrap And Template Skip
@@ -61,7 +61,29 @@ The product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) describes a riche
 
 `surge bootstrap resume <run_id>` resumes a cleanly interrupted bootstrap run and then starts the same materialized follow-up graph once the bootstrap event log is complete.
 
+Resuming may display historical events, but the console requests approval only
+for newly emitted input requests; previously resolved gates are not answered again.
+
 `surge engine run <flow.toml>` and `surge engine run --template <name>` both skip bootstrap. `SPEC_PATH` and `--template` are mutually exclusive; use a path for a custom graph, or a template name such as `linear-3`, `linear-with-review`, `multi-milestone`, `bug-fix`, `refactor`, `spike`, or `single-task`.
+
+Local `engine run` waits for execution and cleanup even without `--watch`; that
+flag adds event output. A completed run exits successfully. Failed, aborted,
+parked (not yet completed), or unconfirmed execution exits nonzero. Only
+`engine run --daemon` without `--watch` returns after admission while the daemon
+continues running; its successful exit confirms acceptance, not completion.
+
+`engine watch --daemon` reports an error if the event stream fails, closes before
+terminal confirmation, or loses events. This means observation is incomplete; it
+does not mark the run aborted or failed. An explicit terminal event confirms that
+watching finished and prints the run's outcome.
+
+Local `engine run` cannot answer human approval requests. On a request, or lost
+events that could hide one, it cancels and joins the run and reports an error.
+Use daemon execution with an approval client, or `surge bootstrap` for its
+console approval flow. The bootstrap console never treats closed input (EOF)
+as approval; an actual blank Enter retains its approve default. Bootstrap also
+reports failures in the generated follow-up run. Console prompting remains
+synchronous, so signal responsiveness while waiting for input is limited.
 
 ## Replay And Fork (Time-Travel)
 
@@ -82,6 +104,15 @@ at the fork point rather than the graph start — and records a `ForkCreated`
 lineage event on the parent. The fork is immediately inspectable with
 `surge engine replay <new_id>` and resumable with
 `surge engine resume <new_id> --daemon`.
+
+`N` must identify an exact saved stage boundary with a Git workspace checkpoint.
+The CLI restores that commit into `${SURGE_HOME}/worktrees/<new_id>` and copies
+historical artifacts into the child's store. Later parent edits are not inherited.
+Resume uses the run's recorded directory, independent of the CLI's current folder.
+Old runs without file checkpoints and non-Git runs cannot be isolated this way;
+the command rejects them instead of sharing the parent's working directory.
+Ignored untracked files are not captured. Nested repositories/submodules are not
+supported by checkpoint capture.
 
 Use fork to retry a run from just before the stage that went wrong without
 re-executing the stages that already succeeded — optionally *with a fix*:
@@ -265,16 +296,12 @@ surge task ...          create a focused task run
 ## Telegram Cockpit
 
 ```text
-surge telegram setup [--token <BOT_TOKEN>] [--label <NAME>] [--ttl-secs N]
+surge telegram setup --token-env <ENV_NAME> --chat-id <CHAT_ID> [--label <NAME>] [--ttl-secs N]
 surge telegram revoke <chat_id>
 surge telegram list
 ```
 
-`surge telegram setup` persists the Bot API token under
-`telegram.cockpit.bot_token` in the registry SQLite, mints a 6-character
-base32 pairing token (default TTL 10 min), and prints the chat-side
-instructions. The operator then sends `/pair <TOKEN>` to the bot from
-their personal chat to enter the `telegram_pairings` allowlist.
+`surge telegram setup` writes only the token environment variable name and explicit target chat to the current `surge.toml`, and mints a target-bound one-shot code (default TTL 10 min). Supply that environment variable to the daemon, then send `/pair <CODE>` from the configured chat. Raw `--token` and stdin credential input are rejected. Setup removes the old plaintext registry credential; legacy unbound pairing codes cannot authorize a chat.
 
 Full reference: [telegram.md](telegram.md) — setup, command list,
 card kinds, snooze, recovery, troubleshooting.
@@ -283,7 +310,7 @@ card kinds, snooze, recovery, troubleshooting.
 
 `surge mcp` is a request-scoped operator surface over the daemon for the
 servers configured in `surge.toml` `[[mcp_servers]]` (requires a running
-daemon — `surge daemon start`):
+daemon — `surge daemon start --detached`):
 
 ```text
 surge mcp list [--format json]   probe every configured server; print health + tool count

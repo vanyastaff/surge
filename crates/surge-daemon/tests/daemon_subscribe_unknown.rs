@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use surge_core::id::RunId;
-use surge_daemon::{ServerConfig, run_server};
+use surge_daemon::{ServerConfig, run_synthetic_server};
 use surge_orchestrator::engine::EngineError;
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
@@ -107,7 +107,7 @@ async fn subscribe_unknown_run_returns_run_not_active() {
     let server_handle = tokio::spawn({
         let facade = facade.clone();
         let shutdown = shutdown.clone();
-        async move { run_server(cfg, facade, shutdown).await }
+        async move { run_synthetic_server(cfg, facade, shutdown).await }
     });
 
     // Wait for the listener with retry — macOS CI runners have shown
