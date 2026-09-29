@@ -17,7 +17,9 @@ use surge_core::roadmap_patch::{
     RoadmapPatchOperation, RoadmapPatchStatus, RoadmapPatchTarget,
 };
 use surge_core::run_event::{EscalationCause, EventPayload, VersionedEventPayload};
-use surge_core::{Graph, RoadmapArtifact, RoadmapMilestone, RoadmapPatch, RoadmapStatus, RunId};
+use surge_core::{
+    Graph, MilestoneId, RoadmapArtifact, RoadmapMilestone, RoadmapPatch, RoadmapStatus, RunId,
+};
 use surge_notify::{
     NotifyMessage, RoadmapAmendmentNotificationKind, RoadmapAmendmentNotificationPayload,
 };
@@ -453,7 +455,7 @@ pub fn follow_up_result_from_patch(patch: &RoadmapPatch) -> RoadmapPatchApplyRes
         match operation {
             RoadmapPatchOperation::AddMilestone { milestone, .. } => {
                 let mut milestone = pending_follow_up_milestone(milestone);
-                milestone.id = unique_id(&milestone.id, &mut used_milestone_ids);
+                milestone.id = unique_id(milestone.id.as_str(), &mut used_milestone_ids);
                 inserted_milestones.push(milestone.id.clone());
                 roadmap.milestones.push(milestone);
             },
@@ -488,7 +490,7 @@ pub fn follow_up_result_from_patch(patch: &RoadmapPatch) -> RoadmapPatchApplyRes
                 match replacement {
                     RoadmapPatchItem::Milestone { milestone } => {
                         let mut milestone = pending_follow_up_milestone(milestone);
-                        milestone.id = unique_id(&milestone.id, &mut used_milestone_ids);
+                        milestone.id = unique_id(milestone.id.as_str(), &mut used_milestone_ids);
                         inserted_milestones.push(milestone.id.clone());
                         roadmap.milestones.push(milestone);
                     },
@@ -1037,19 +1039,20 @@ fn pending_follow_up_milestone(milestone: &RoadmapMilestone) -> RoadmapMilestone
     milestone
 }
 
-fn unique_id(base: &str, used: &mut BTreeSet<String>) -> String {
+fn unique_id(base: &str, used: &mut BTreeSet<MilestoneId>) -> MilestoneId {
     let base = if base.trim().is_empty() {
-        "follow-up".to_owned()
+        "follow-up"
     } else {
-        base.to_owned()
+        base
     };
-    if used.insert(base.clone()) {
-        return base;
+    let first = MilestoneId::from(base);
+    if used.insert(first.clone()) {
+        return first;
     }
 
     let mut suffix = 2_u32;
     loop {
-        let candidate = format!("{base}-{suffix}");
+        let candidate = MilestoneId::from(format!("{base}-{suffix}"));
         if used.insert(candidate.clone()) {
             return candidate;
         }

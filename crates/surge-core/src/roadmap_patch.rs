@@ -8,7 +8,8 @@ use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
 use crate::content_hash::ContentHash;
 use crate::id::RunId;
 use crate::roadmap::{
-    RoadmapArtifact, RoadmapDependency, RoadmapMilestone, RoadmapStatus, RoadmapTask,
+    MilestoneId, RoadmapArtifact, RoadmapDependency, RoadmapMilestone, RoadmapStatus, RoadmapTask,
+    RoadmapTaskId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -239,7 +240,7 @@ pub struct RoadmapPatchApplyResult {
     /// Deterministic markdown rendering for `roadmap.md`.
     pub markdown: String,
     /// Milestone ids inserted by the patch.
-    pub inserted_milestones: Vec<String>,
+    pub inserted_milestones: Vec<MilestoneId>,
     /// Task refs inserted by the patch.
     pub inserted_tasks: Vec<RoadmapItemRef>,
     /// Existing draft refs replaced by the patch.
@@ -328,7 +329,7 @@ pub fn apply_roadmap_patch(
 
 struct RoadmapPatchApplyContext {
     roadmap: RoadmapArtifact,
-    inserted_milestones: Vec<String>,
+    inserted_milestones: Vec<MilestoneId>,
     inserted_tasks: Vec<RoadmapItemRef>,
     replaced_items: Vec<RoadmapItemRef>,
     dependencies_added: Vec<RoadmapPatchDependency>,
@@ -401,12 +402,12 @@ impl RoadmapPatchApplyContext {
 
     fn insert_milestone_near(
         &mut self,
-        target_id: &str,
+        target_id: &MilestoneId,
         milestone: RoadmapMilestone,
         side: InsertSide,
     ) {
         let target_ref = RoadmapItemRef::Milestone {
-            milestone_id: target_id.to_owned(),
+            milestone_id: target_id.clone(),
         };
         let Some(index) = self.find_milestone_index(target_id) else {
             self.push_missing(target_ref);
@@ -427,7 +428,7 @@ impl RoadmapPatchApplyContext {
     /// Put `new_id` into the mission and the stage that own `anchor_id`, next
     /// to it. No-op for a grouping the roadmap does not declare or whose
     /// lists do not contain the anchor.
-    fn join_mission_of(&mut self, anchor_id: &str, new_id: &str, side: InsertSide) {
+    fn join_mission_of(&mut self, anchor_id: &MilestoneId, new_id: &MilestoneId, side: InsertSide) {
         let groups = self
             .roadmap
             .missions
@@ -446,25 +447,25 @@ impl RoadmapPatchApplyContext {
                     InsertSide::Before => position,
                     InsertSide::After => position + 1,
                 };
-                milestones.insert(at, new_id.to_owned());
+                milestones.insert(at, new_id.clone());
             }
         }
     }
 
     fn add_task(
         &mut self,
-        milestone_id: &str,
+        milestone_id: &MilestoneId,
         task: &RoadmapTask,
         insertion: Option<&InsertionPoint>,
     ) {
         let Some(milestone_index) = self.find_milestone_index(milestone_id) else {
             self.push_missing(RoadmapItemRef::Milestone {
-                milestone_id: milestone_id.to_owned(),
+                milestone_id: milestone_id.clone(),
             });
             return;
         };
         let milestone_ref = RoadmapItemRef::Milestone {
-            milestone_id: milestone_id.to_owned(),
+            milestone_id: milestone_id.clone(),
         };
         if self.push_status_conflict(
             milestone_ref,
@@ -474,7 +475,7 @@ impl RoadmapPatchApplyContext {
         }
         if self.has_task_in_milestone(milestone_index, &task.id) {
             self.push_duplicate(RoadmapItemRef::Task {
-                milestone_id: milestone_id.to_owned(),
+                milestone_id: milestone_id.clone(),
                 task_id: task.id.clone(),
             });
             return;
@@ -485,7 +486,7 @@ impl RoadmapPatchApplyContext {
         };
         let task = pending_task(task);
         self.inserted_tasks.push(RoadmapItemRef::Task {
-            milestone_id: milestone_id.to_owned(),
+            milestone_id: milestone_id.clone(),
             task_id: task.id.clone(),
         });
         self.roadmap.milestones[milestone_index]
@@ -496,7 +497,7 @@ impl RoadmapPatchApplyContext {
     fn task_insert_index(
         &mut self,
         milestone_index: usize,
-        milestone_id: &str,
+        milestone_id: &MilestoneId,
         insertion: Option<&InsertionPoint>,
     ) -> Option<usize> {
         match insertion {
@@ -533,13 +534,13 @@ impl RoadmapPatchApplyContext {
     fn task_insert_index_near(
         &mut self,
         milestone_index: usize,
-        milestone_id: &str,
-        task_id: &str,
+        milestone_id: &MilestoneId,
+        task_id: &RoadmapTaskId,
         side: InsertSide,
     ) -> Option<usize> {
         let target_ref = RoadmapItemRef::Task {
-            milestone_id: milestone_id.to_owned(),
-            task_id: task_id.to_owned(),
+            milestone_id: milestone_id.clone(),
+            task_id: task_id.clone(),
         };
         let Some(task_index) = find_task_index(&self.roadmap.milestones[milestone_index], task_id)
         else {
@@ -573,9 +574,9 @@ impl RoadmapPatchApplyContext {
         }
     }
 
-    fn replace_milestone(&mut self, milestone_id: &str, replacement: &RoadmapMilestone) {
+    fn replace_milestone(&mut self, milestone_id: &MilestoneId, replacement: &RoadmapMilestone) {
         let target_ref = RoadmapItemRef::Milestone {
-            milestone_id: milestone_id.to_owned(),
+            milestone_id: milestone_id.clone(),
         };
         let Some(index) = self.find_milestone_index(milestone_id) else {
             self.push_missing(target_ref);
@@ -584,14 +585,14 @@ impl RoadmapPatchApplyContext {
         if self.push_status_conflict(target_ref.clone(), self.roadmap.milestones[index].status) {
             return;
         }
-        if replacement.id != milestone_id && self.has_milestone(&replacement.id) {
+        if replacement.id != *milestone_id && self.has_milestone(&replacement.id) {
             self.push_duplicate(RoadmapItemRef::Milestone {
                 milestone_id: replacement.id.clone(),
             });
             return;
         }
         self.roadmap.milestones[index] = pending_milestone(replacement);
-        if replacement.id != milestone_id {
+        if replacement.id != *milestone_id {
             for id in self
                 .roadmap
                 .missions
@@ -612,9 +613,14 @@ impl RoadmapPatchApplyContext {
         self.replaced_items.push(target_ref);
     }
 
-    fn replace_task(&mut self, milestone_id: &str, task_id: &str, replacement: &RoadmapTask) {
+    fn replace_task(
+        &mut self,
+        milestone_id: &MilestoneId,
+        task_id: &RoadmapTaskId,
+        replacement: &RoadmapTask,
+    ) {
         let milestone_ref = RoadmapItemRef::Milestone {
-            milestone_id: milestone_id.to_owned(),
+            milestone_id: milestone_id.clone(),
         };
         let Some(milestone_index) = self.find_milestone_index(milestone_id) else {
             self.push_missing(milestone_ref);
@@ -627,8 +633,8 @@ impl RoadmapPatchApplyContext {
             return;
         }
         let target_ref = RoadmapItemRef::Task {
-            milestone_id: milestone_id.to_owned(),
-            task_id: task_id.to_owned(),
+            milestone_id: milestone_id.clone(),
+            task_id: task_id.clone(),
         };
         let Some(task_index) = find_task_index(&self.roadmap.milestones[milestone_index], task_id)
         else {
@@ -639,10 +645,11 @@ impl RoadmapPatchApplyContext {
         if self.push_status_conflict(target_ref.clone(), task_status) {
             return;
         }
-        if replacement.id != task_id && self.has_task_in_milestone(milestone_index, &replacement.id)
+        if replacement.id != *task_id
+            && self.has_task_in_milestone(milestone_index, &replacement.id)
         {
             self.push_duplicate(RoadmapItemRef::Task {
-                milestone_id: milestone_id.to_owned(),
+                milestone_id: milestone_id.clone(),
                 task_id: replacement.id.clone(),
             });
             return;
@@ -685,18 +692,18 @@ impl RoadmapPatchApplyContext {
         ok
     }
 
-    fn add_milestone_dependency(&mut self, from: &str, to: &str, reason: &str) {
+    fn add_milestone_dependency(&mut self, from: &MilestoneId, to: &MilestoneId, reason: &str) {
         let exists = self
             .roadmap
             .dependencies
             .iter()
-            .any(|dependency| dependency.from == from && dependency.to == to);
+            .any(|dependency| dependency.from == *from && dependency.to == *to);
         if exists {
             return;
         }
         self.roadmap.dependencies.push(RoadmapDependency {
-            from: from.to_owned(),
-            to: to.to_owned(),
+            from: from.clone(),
+            to: to.clone(),
             reason: reason.to_owned(),
         });
     }
@@ -717,25 +724,25 @@ impl RoadmapPatchApplyContext {
         })
     }
 
-    fn has_milestone(&self, milestone_id: &str) -> bool {
+    fn has_milestone(&self, milestone_id: &MilestoneId) -> bool {
         self.roadmap
             .milestones
             .iter()
-            .any(|milestone| milestone.id == milestone_id)
+            .any(|milestone| milestone.id == *milestone_id)
     }
 
-    fn has_task_in_milestone(&self, milestone_index: usize, task_id: &str) -> bool {
+    fn has_task_in_milestone(&self, milestone_index: usize, task_id: &RoadmapTaskId) -> bool {
         self.roadmap.milestones[milestone_index]
             .tasks
             .iter()
-            .any(|task| task.id == task_id)
+            .any(|task| task.id == *task_id)
     }
 
-    fn find_milestone_index(&self, milestone_id: &str) -> Option<usize> {
+    fn find_milestone_index(&self, milestone_id: &MilestoneId) -> Option<usize> {
         self.roadmap
             .milestones
             .iter()
-            .position(|milestone| milestone.id == milestone_id)
+            .position(|milestone| milestone.id == *milestone_id)
     }
 
     fn contains_ref(&self, reference: &RoadmapItemRef) -> bool {
@@ -808,8 +815,8 @@ fn pending_task(task: &RoadmapTask) -> RoadmapTask {
     task
 }
 
-fn find_task_index(milestone: &RoadmapMilestone, task_id: &str) -> Option<usize> {
-    milestone.tasks.iter().position(|task| task.id == task_id)
+fn find_task_index(milestone: &RoadmapMilestone, task_id: &RoadmapTaskId) -> Option<usize> {
+    milestone.tasks.iter().position(|task| task.id == *task_id)
 }
 
 const fn status_conflict_code(status: RoadmapStatus) -> Option<RoadmapPatchConflictCode> {
@@ -913,31 +920,31 @@ pub enum InsertionPoint {
     /// Insert before an existing milestone.
     BeforeMilestone {
         /// Existing milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
     },
     /// Insert after an existing milestone.
     AfterMilestone {
         /// Existing milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
     },
     /// Append a task to an existing milestone.
     AppendToMilestone {
         /// Existing milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
     },
     /// Insert before an existing task.
     BeforeTask {
         /// Existing milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
         /// Existing task ID.
-        task_id: String,
+        task_id: RoadmapTaskId,
     },
     /// Insert after an existing task.
     AfterTask {
         /// Existing milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
         /// Existing task ID.
-        task_id: String,
+        task_id: RoadmapTaskId,
     },
 }
 
@@ -947,7 +954,7 @@ impl InsertionPoint {
             Self::AppendToRoadmap => false,
             Self::BeforeMilestone { milestone_id }
             | Self::AfterMilestone { milestone_id }
-            | Self::AppendToMilestone { milestone_id } => milestone_id.trim().is_empty(),
+            | Self::AppendToMilestone { milestone_id } => milestone_id.as_str().trim().is_empty(),
             Self::BeforeTask {
                 milestone_id,
                 task_id,
@@ -955,7 +962,7 @@ impl InsertionPoint {
             | Self::AfterTask {
                 milestone_id,
                 task_id,
-            } => milestone_id.trim().is_empty() || task_id.trim().is_empty(),
+            } => milestone_id.as_str().trim().is_empty() || task_id.as_str().trim().is_empty(),
         }
     }
 }
@@ -975,7 +982,7 @@ pub enum RoadmapPatchOperation {
     /// Insert a new task into an existing milestone.
     AddTask {
         /// Existing milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
         /// New task.
         task: RoadmapTask,
         /// Position for the new task.
@@ -1022,25 +1029,25 @@ pub enum RoadmapItemRef {
     /// Milestone reference.
     Milestone {
         /// Milestone ID.
-        milestone_id: String,
+        milestone_id: MilestoneId,
     },
     /// Task reference.
     Task {
         /// Milestone ID containing the task.
-        milestone_id: String,
+        milestone_id: MilestoneId,
         /// Task ID.
-        task_id: String,
+        task_id: RoadmapTaskId,
     },
 }
 
 impl RoadmapItemRef {
     fn is_empty(&self) -> bool {
         match self {
-            Self::Milestone { milestone_id } => milestone_id.trim().is_empty(),
+            Self::Milestone { milestone_id } => milestone_id.as_str().trim().is_empty(),
             Self::Task {
                 milestone_id,
                 task_id,
-            } => milestone_id.trim().is_empty() || task_id.trim().is_empty(),
+            } => milestone_id.as_str().trim().is_empty() || task_id.as_str().trim().is_empty(),
         }
     }
 }
@@ -1360,7 +1367,7 @@ fn validate_add_milestone(
     issues: &mut Vec<RoadmapPatchValidationIssue>,
 ) {
     validate_required_text(
-        &milestone.id,
+        milestone.id.as_str(),
         RoadmapPatchValidationCode::MissingTargetReference,
         format!("operations[{index}].milestone.id"),
         "new milestone id must not be empty",
@@ -1378,20 +1385,20 @@ fn validate_add_milestone(
 
 fn validate_add_task(
     index: usize,
-    milestone_id: &str,
+    milestone_id: &MilestoneId,
     task: &RoadmapTask,
     insertion: Option<&InsertionPoint>,
     issues: &mut Vec<RoadmapPatchValidationIssue>,
 ) {
     validate_required_text(
-        milestone_id,
+        milestone_id.as_str(),
         RoadmapPatchValidationCode::MissingTargetReference,
         format!("operations[{index}].milestone_id"),
         "target milestone id must not be empty",
         issues,
     );
     validate_required_text(
-        &task.id,
+        task.id.as_str(),
         RoadmapPatchValidationCode::MissingTargetReference,
         format!("operations[{index}].task.id"),
         "new task id must not be empty",
@@ -1423,7 +1430,7 @@ fn validate_replace_draft_item(
     match replacement {
         RoadmapPatchItem::Milestone { milestone } => {
             validate_required_text(
-                &milestone.id,
+                milestone.id.as_str(),
                 RoadmapPatchValidationCode::MissingTargetReference,
                 format!("operations[{index}].replacement.milestone.id"),
                 "replacement milestone id must not be empty",
@@ -1439,7 +1446,7 @@ fn validate_replace_draft_item(
         },
         RoadmapPatchItem::Task { task } => {
             validate_required_text(
-                &task.id,
+                task.id.as_str(),
                 RoadmapPatchValidationCode::MissingTargetReference,
                 format!("operations[{index}].replacement.task.id"),
                 "replacement task id must not be empty",

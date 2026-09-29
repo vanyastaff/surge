@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use crate::engine::validate::validate_for_m6;
 use chrono::{DateTime, Utc};
+use surge_core::MilestoneId;
 use surge_core::agent_config::{AgentConfig, ArtifactSource, Binding, TemplateVar};
 use surge_core::content_hash::ContentHash;
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
@@ -446,7 +447,7 @@ fn next_edge_key(existing: &mut BTreeSet<EdgeKey>) -> Result<EdgeKey, FlowAmendm
 
 fn item_ref_label(reference: &RoadmapItemRef) -> String {
     match reference {
-        RoadmapItemRef::Milestone { milestone_id } => milestone_id.clone(),
+        RoadmapItemRef::Milestone { milestone_id } => milestone_id.to_string(),
         RoadmapItemRef::Task {
             milestone_id,
             task_id,
@@ -456,12 +457,12 @@ fn item_ref_label(reference: &RoadmapItemRef) -> String {
     }
 }
 
-fn milestone_label(patch_result: &RoadmapPatchApplyResult, milestone_id: &str) -> String {
+fn milestone_label(patch_result: &RoadmapPatchApplyResult, milestone_id: &MilestoneId) -> String {
     let title = patch_result
         .roadmap
         .milestones
         .iter()
-        .find(|milestone| milestone.id == milestone_id)
+        .find(|milestone| milestone.id == *milestone_id)
         .map(|milestone| milestone.title.as_str());
     match title {
         Some(title) => format!("Implement roadmap milestone {milestone_id}: {title}"),

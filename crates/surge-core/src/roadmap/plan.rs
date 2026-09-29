@@ -11,7 +11,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapMission {
     /// Stable identifier, for example `mission-1`.
-    pub id: String,
+    pub id: MissionId,
     /// Human-readable mission title.
     pub title: String,
     /// The outcome this mission delivers, in one or two sentences.
@@ -20,7 +20,7 @@ pub struct RoadmapMission {
     #[serde(default, skip_serializing_if = "RoadmapStatus::is_pending")]
     pub status: RoadmapStatus,
     /// Ids of the milestones this mission owns, in execution order.
-    pub milestones: Vec<String>,
+    pub milestones: Vec<MilestoneId>,
     /// Behavioural assertions that define the mission as done.
     #[serde(default)]
     pub validation_contract: Vec<ValidationAssertion>,
@@ -29,7 +29,11 @@ pub struct RoadmapMission {
 impl RoadmapMission {
     /// Create a pending mission with no milestones or assertions.
     #[must_use]
-    pub fn new(id: impl Into<String>, title: impl Into<String>, goal: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<MissionId>,
+        title: impl Into<String>,
+        goal: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
@@ -45,7 +49,7 @@ impl RoadmapMission {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ValidationAssertion {
     /// Stable id with an area prefix, for example `VAL-AUTH-001`.
-    pub id: String,
+    pub id: AssertionId,
     /// Short title.
     pub title: String,
     /// Observable pass/fail condition, phrased as behaviour a user or test
@@ -61,7 +65,7 @@ pub struct ValidationAssertion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapMilestone {
     /// Stable human-authored identifier, for example `m1`.
-    pub id: String,
+    pub id: MilestoneId,
     /// Human-readable milestone title.
     pub title: String,
     /// Current execution status for amendment safety checks.
@@ -78,7 +82,7 @@ pub struct RoadmapMilestone {
 impl RoadmapMilestone {
     /// Create an empty milestone.
     #[must_use]
-    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<MilestoneId>, title: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
@@ -93,7 +97,7 @@ impl RoadmapMilestone {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapTask {
     /// Stable human-authored identifier, for example `m1-t1`.
-    pub id: String,
+    pub id: RoadmapTaskId,
     /// Human-readable task title.
     pub title: String,
     /// Current execution status for amendment safety checks.
@@ -110,12 +114,12 @@ pub struct RoadmapTask {
     /// Schema v2. Task-granularity edges for the ledger; milestone-level
     /// ordering stays in [`RoadmapArtifact::dependencies`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<RoadmapTaskId>,
     /// Task id this task was discovered from while executing that task.
     ///
     /// Schema v2. Captures mid-task discovered work instead of dropping it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub discovered_from: Option<String>,
+    pub discovered_from: Option<RoadmapTaskId>,
     /// Context-budget size class.
     ///
     /// Schema v2, required by the validator at v2: every task must be
@@ -132,7 +136,7 @@ pub struct RoadmapTask {
     /// Only the leaf task that completes an assertion claims it;
     /// infrastructure tasks leave this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fulfills: Vec<String>,
+    pub fulfills: Vec<AssertionId>,
     /// Optional scheduling priority; `p0` is the most urgent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<TaskPriority>,
@@ -148,7 +152,7 @@ pub struct RoadmapTask {
 impl RoadmapTask {
     /// Create a task with no optional description or criteria.
     #[must_use]
-    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<RoadmapTaskId>, title: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
@@ -206,14 +210,14 @@ impl std::fmt::Display for TaskPriority {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapStage {
     /// Stable identifier, for example `stage-1`.
-    pub id: String,
+    pub id: StageId,
     /// Human-readable stage title.
     pub title: String,
     /// The outcome this release delivers, in one or two sentences.
     #[serde(default)]
     pub goal: String,
     /// Ids of the milestones this stage owns, in execution order.
-    pub milestones: Vec<String>,
+    pub milestones: Vec<MilestoneId>,
     /// Observable conditions that must hold before the stage is done.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exit_criteria: Vec<String>,
@@ -222,7 +226,7 @@ pub struct RoadmapStage {
 impl RoadmapStage {
     /// Create a stage with no milestones or exit criteria.
     #[must_use]
-    pub fn new(id: impl Into<String>, title: impl Into<String>, goal: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<StageId>, title: impl Into<String>, goal: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
@@ -263,9 +267,9 @@ impl std::fmt::Display for TaskSize {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapDependency {
     /// Milestone that must finish first.
-    pub from: String,
+    pub from: MilestoneId,
     /// Milestone that depends on `from`.
-    pub to: String,
+    pub to: MilestoneId,
     /// Human-readable reason for the dependency.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,

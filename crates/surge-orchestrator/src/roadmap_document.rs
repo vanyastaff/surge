@@ -8,7 +8,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use surge_core::roadmap::{RoadmapArtifact, RoadmapMilestone, RoadmapStatus, RoadmapTask};
+use surge_core::roadmap::{
+    MilestoneId, RoadmapArtifact, RoadmapMilestone, RoadmapStatus, RoadmapTask, RoadmapTaskId,
+};
 use surge_core::roadmap_patch::{RoadmapItemRef, RoadmapPatchApplyResult};
 use thiserror::Error;
 
@@ -360,11 +362,8 @@ fn render_markdown_amendment(
             .extend(block);
     }
 
-    let inserted_milestone_ids: BTreeSet<&str> = patch_result
-        .inserted_milestones
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let inserted_milestone_ids: BTreeSet<&MilestoneId> =
+        patch_result.inserted_milestones.iter().collect();
 
     for task_ref in &patch_result.inserted_tasks {
         let RoadmapItemRef::Task {
@@ -374,17 +373,13 @@ fn render_markdown_amendment(
         else {
             continue;
         };
-        if inserted_milestone_ids.contains(milestone_id.as_str()) {
+        if inserted_milestone_ids.contains(milestone_id) {
             continue;
         }
         let Some(location) = markdown.milestones.get(milestone_id.as_str()) else {
             continue;
         };
-        let Some(task) = find_task(
-            &patch_result.roadmap,
-            milestone_id.as_str(),
-            task_id.as_str(),
-        ) else {
+        let Some(task) = find_task(&patch_result.roadmap, milestone_id, task_id) else {
             continue;
         };
         insertions
@@ -409,19 +404,16 @@ fn validate_markdown_append_only_insertions(
     parsed: &ParsedRoadmapDocument,
     patch_result: &RoadmapPatchApplyResult,
 ) -> Result<(), RoadmapDocumentError> {
-    let inserted_milestones: BTreeSet<&str> = patch_result
-        .inserted_milestones
-        .iter()
-        .map(String::as_str)
-        .collect();
-    let inserted_tasks: BTreeSet<(&str, &str)> = patch_result
+    let inserted_milestones: BTreeSet<&MilestoneId> =
+        patch_result.inserted_milestones.iter().collect();
+    let inserted_tasks: BTreeSet<(&MilestoneId, &RoadmapTaskId)> = patch_result
         .inserted_tasks
         .iter()
         .filter_map(|item| match item {
             RoadmapItemRef::Task {
                 milestone_id,
                 task_id,
-            } => Some((milestone_id.as_str(), task_id.as_str())),
+            } => Some((milestone_id, task_id)),
             RoadmapItemRef::Milestone { .. } => None,
         })
         .collect();
@@ -432,11 +424,11 @@ fn validate_markdown_append_only_insertions(
 
 fn reject_non_append_milestones(
     roadmap: &RoadmapArtifact,
-    inserted_milestones: &BTreeSet<&str>,
+    inserted_milestones: &BTreeSet<&MilestoneId>,
 ) -> Result<(), RoadmapDocumentError> {
     let mut saw_inserted = false;
     for milestone in &roadmap.milestones {
-        if inserted_milestones.contains(milestone.id.as_str()) {
+        if inserted_milestones.contains(&milestone.id) {
             saw_inserted = true;
             continue;
         }
@@ -452,7 +444,7 @@ fn reject_non_append_milestones(
 fn reject_non_append_tasks(
     original: &RoadmapArtifact,
     amended: &RoadmapArtifact,
-    inserted_tasks: &BTreeSet<(&str, &str)>,
+    inserted_tasks: &BTreeSet<(&MilestoneId, &RoadmapTaskId)>,
 ) -> Result<(), RoadmapDocumentError> {
     for original_milestone in &original.milestones {
         let Some(amended_milestone) = find_milestone(amended, &original_milestone.id) else {
@@ -460,8 +452,7 @@ fn reject_non_append_tasks(
         };
         let mut saw_inserted = false;
         for task in &amended_milestone.tasks {
-            let is_inserted =
-                inserted_tasks.contains(&(original_milestone.id.as_str(), task.id.as_str()));
+            let is_inserted = inserted_tasks.contains(&(&original_milestone.id, &task.id));
             if is_inserted {
                 saw_inserted = true;
                 continue;
@@ -488,23 +479,23 @@ fn render_milestone_block(milestone: &RoadmapMilestone) -> Vec<String> {
 
 fn find_milestone<'a>(
     roadmap: &'a RoadmapArtifact,
-    milestone_id: &str,
+    milestone_id: &MilestoneId,
 ) -> Option<&'a RoadmapMilestone> {
     roadmap
         .milestones
         .iter()
-        .find(|milestone| milestone.id == milestone_id)
+        .find(|milestone| milestone.id == *milestone_id)
 }
 
 fn find_task<'a>(
     roadmap: &'a RoadmapArtifact,
-    milestone_id: &str,
-    task_id: &str,
+    milestone_id: &MilestoneId,
+    task_id: &RoadmapTaskId,
 ) -> Option<&'a RoadmapTask> {
     find_milestone(roadmap, milestone_id)?
         .tasks
         .iter()
-        .find(|task| task.id == task_id)
+        .find(|task| task.id == *task_id)
 }
 
 fn render_task_line(task: &RoadmapTask) -> String {

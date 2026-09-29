@@ -58,7 +58,7 @@ pub struct LoopFrame {
 /// a body stage nested inside a task loop can attribute its ledger events to
 /// the current task. `None` when no active loop iterates over identified items.
 #[must_use]
-pub fn active_task_id(frames: &[Frame]) -> Option<String> {
+pub fn active_task_id(frames: &[Frame]) -> Option<surge_core::roadmap::RoadmapTaskId> {
     frames.iter().rev().find_map(|frame| {
         let Frame::Loop(loop_frame) = frame else {
             return None;
@@ -68,7 +68,7 @@ pub fn active_task_id(frames: &[Frame]) -> Option<String> {
             .get(loop_frame.current_index as usize)
             .and_then(|item| item.get("id"))
             .and_then(toml::Value::as_str)
-            .map(str::to_owned)
+            .map(surge_core::roadmap::RoadmapTaskId::from)
     })
 }
 
@@ -202,7 +202,7 @@ mod tests {
             vec![task_item("m1-t1"), task_item("m1-t2")],
             1,
         )];
-        assert_eq!(active_task_id(&frames).as_deref(), Some("m1-t2"));
+        assert_eq!(active_task_id(&frames), Some("m1-t2".into()));
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
             loop_frame_over(vec![task_item("m1")], 0),
             loop_frame_over(vec![task_item("m1-t3")], 0),
         ];
-        assert_eq!(active_task_id(&frames).as_deref(), Some("m1-t3"));
+        assert_eq!(active_task_id(&frames), Some("m1-t3".into()));
     }
 
     #[test]

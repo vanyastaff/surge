@@ -19,6 +19,7 @@ use surge_core::edge::EdgeKind;
 use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
 use surge_core::node::{LedgerEffect, OutcomeDecl};
+use surge_core::roadmap::RoadmapTaskId;
 use surge_core::run_event::EventPayload;
 use surge_core::sandbox::{SandboxConfig, SandboxMode};
 use surge_orchestrator::engine::hooks::HookExecutor;
@@ -79,7 +80,7 @@ async fn run_stage(
     node_name: &str,
     outcome: &str,
     artifacts_produced: Vec<String>,
-    active_task_id: Option<String>,
+    active_task_id: Option<surge_core::roadmap::RoadmapTaskId>,
 ) -> (Result<OutcomeKey, String>, Vec<EventPayload>) {
     run_stage_steered(
         dir,
@@ -105,7 +106,7 @@ async fn run_stage_steered(
     node_name: &str,
     outcome: &str,
     artifacts_produced: Vec<String>,
-    active_task_id: Option<String>,
+    active_task_id: Option<surge_core::roadmap::RoadmapTaskId>,
     steers: Vec<surge_orchestrator::engine::steer::QueuedSteer>,
 ) -> (
     (Result<OutcomeKey, String>, Vec<EventPayload>),
@@ -294,7 +295,7 @@ async fn discovered_tasks_artifact_emits_task_discovered() {
     .await;
 
     assert_eq!(result.unwrap().as_ref(), "implemented");
-    let discovered: Vec<(String, String, String)> = payloads
+    let discovered: Vec<(RoadmapTaskId, RoadmapTaskId, String)> = payloads
         .iter()
         .filter_map(|p| match p {
             EventPayload::TaskDiscovered {

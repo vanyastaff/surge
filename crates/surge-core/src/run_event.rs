@@ -337,7 +337,7 @@ pub enum EventPayload {
     /// Schema v5.
     TaskStatusChanged {
         /// Ledger task id (matches `RoadmapTask::id`).
-        task_id: String,
+        task_id: crate::roadmap::RoadmapTaskId,
         /// Status before the transition.
         from: crate::roadmap::RoadmapStatus,
         /// Status after the transition.
@@ -351,9 +351,9 @@ pub enum EventPayload {
     /// Schema v5.
     TaskDiscovered {
         /// Newly discovered task id.
-        task_id: String,
+        task_id: crate::roadmap::RoadmapTaskId,
         /// Task id this work was discovered from.
-        discovered_from: String,
+        discovered_from: crate::roadmap::RoadmapTaskId,
         /// Human-readable title of the discovered task.
         title: String,
     },
@@ -366,7 +366,7 @@ pub enum EventPayload {
     /// Schema v5.
     TaskVerified {
         /// Ledger task id that was verified.
-        task_id: String,
+        task_id: crate::roadmap::RoadmapTaskId,
         /// Verification-authority node that confirmed the task.
         node: NodeKey,
         /// Content hash of the verification-report artifact.

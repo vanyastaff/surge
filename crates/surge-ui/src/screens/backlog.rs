@@ -21,7 +21,7 @@ use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::RunId;
-use surge_core::roadmap::RoadmapStatus;
+use surge_core::roadmap::{RoadmapStatus, RoadmapTaskId};
 
 use crate::app_state::AppState;
 use crate::backlog_source::{self, BacklogTask};
@@ -109,7 +109,7 @@ pub struct BacklogScreen {
     loading: bool,
     loaded_for: Option<(Option<std::path::PathBuf>, Vec<String>)>,
     /// Cards opened for detail: (run, task id).
-    open: HashSet<(RunId, String)>,
+    open: HashSet<(RunId, RoadmapTaskId)>,
     /// Show one mission's tasks only.
     mission_filter: Option<RunId>,
 }

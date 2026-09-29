@@ -12,13 +12,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
+use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus, RoadmapTaskId};
 use surge_core::{EventPayload, RunId};
 
 /// One task on the board.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BacklogTask {
-    pub id: String,
+    pub id: RoadmapTaskId,
     pub title: String,
     pub description: Option<String>,
     pub acceptance: Vec<String>,
@@ -28,16 +28,16 @@ pub struct BacklogTask {
     pub implementation_run: RunId,
     pub status: RoadmapStatus,
     pub verified: bool,
-    pub discovered_from: Option<String>,
+    pub discovered_from: Option<RoadmapTaskId>,
     /// Unfinished tasks of the same mission this one waits for.
-    pub blocked_by: Vec<String>,
+    pub blocked_by: Vec<RoadmapTaskId>,
     /// The mission's build has ended — nothing will pick this task up
     /// unless you start it again.
     pub mission_ended: bool,
 }
 
 /// Ledger view of one task: status + verified.
-pub type Ledger = HashMap<String, (RoadmapStatus, bool)>;
+pub type Ledger = HashMap<RoadmapTaskId, (RoadmapStatus, bool)>;
 
 fn done(status: RoadmapStatus) -> bool {
     matches!(status, RoadmapStatus::Completed | RoadmapStatus::Skipped)
@@ -50,11 +50,11 @@ pub fn assemble(
     implementation_run: RunId,
     roadmap: Option<&RoadmapArtifact>,
     ledger: &Ledger,
-    discovered: &[(String, String, String)],
+    discovered: &[(RoadmapTaskId, String, RoadmapTaskId)],
     mission_ended: bool,
 ) -> Vec<BacklogTask> {
     let mut tasks: Vec<BacklogTask> = Vec::new();
-    let mut depends: HashMap<String, Vec<String>> = HashMap::new();
+    let mut depends: HashMap<RoadmapTaskId, Vec<RoadmapTaskId>> = HashMap::new();
     if let Some(roadmap) = roadmap {
         for m in &roadmap.milestones {
             for t in &m.tasks {
@@ -105,7 +105,7 @@ pub fn assemble(
             mission_ended,
         });
     }
-    let finished: HashMap<String, bool> = tasks
+    let finished: HashMap<RoadmapTaskId, bool> = tasks
         .iter()
         .map(|t| (t.id.clone(), done(t.status)))
         .collect();
@@ -157,7 +157,7 @@ pub async fn load(project_root: &Path, surge_home: &Path) -> Vec<BacklogTask> {
             })
             .unwrap_or_default()
             .into_iter()
-            .map(|row| (row.task_id, (row.status, row.verified)))
+            .map(|row| (row.task_id.into(), (row.status, row.verified)))
             .collect();
         let events: Vec<EventPayload> =
             surge_persistence::runs::Storage::inspect_existing_run_events(
@@ -167,7 +167,7 @@ pub async fn load(project_root: &Path, surge_home: &Path) -> Vec<BacklogTask> {
             .await
             .map(|e| e.into_iter().map(|e| e.payload.payload).collect())
             .unwrap_or_default();
-        let discovered: Vec<(String, String, String)> = events
+        let discovered: Vec<(RoadmapTaskId, String, RoadmapTaskId)> = events
             .iter()
             .filter_map(|e| match e {
                 EventPayload::TaskDiscovered {
@@ -207,7 +207,7 @@ pub async fn load(project_root: &Path, surge_home: &Path) -> Vec<BacklogTask> {
 mod tests {
     use super::{Ledger, assemble};
     use surge_core::RunId;
-    use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
+    use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus, RoadmapTaskId};
 
     fn roadmap() -> RoadmapArtifact {
         toml::from_str(
@@ -234,12 +234,12 @@ depends_on = ["a"]
     #[test]
     fn ledger_status_wins_and_dependencies_block_until_done() {
         let run = RunId::new();
-        let ledger: Ledger = [("a".to_string(), (RoadmapStatus::Running, false))].into();
+        let ledger: Ledger = [("a".into(), (RoadmapStatus::Running, false))].into();
         let tasks = assemble("idea", run, Some(&roadmap()), &ledger, &[], false);
         assert_eq!(tasks[0].status, RoadmapStatus::Running);
         assert_eq!(tasks[1].blocked_by, ["a"]);
 
-        let ledger: Ledger = [("a".to_string(), (RoadmapStatus::Completed, true))].into();
+        let ledger: Ledger = [("a".into(), (RoadmapStatus::Completed, true))].into();
         let tasks = assemble("idea", run, Some(&roadmap()), &ledger, &[], false);
         assert!(tasks[0].verified);
         assert!(tasks[1].blocked_by.is_empty());
@@ -248,11 +248,7 @@ depends_on = ["a"]
     #[test]
     fn discovered_tasks_join_their_origin_milestone() {
         let run = RunId::new();
-        let discovered = vec![(
-            "c".to_string(),
-            "Fix flaky timer".to_string(),
-            "a".to_string(),
-        )];
+        let discovered = vec![("c".into(), "Fix flaky timer".to_string(), "a".into())];
         let tasks = assemble(
             "idea",
             run,
@@ -262,7 +258,10 @@ depends_on = ["a"]
             true,
         );
         let c = tasks.iter().find(|t| t.id == "c").unwrap();
-        assert_eq!(c.discovered_from.as_deref(), Some("a"));
+        assert_eq!(
+            c.discovered_from.as_ref().map(RoadmapTaskId::as_str),
+            Some("a")
+        );
         assert_eq!(c.milestone.as_deref(), Some("Core"));
         assert_eq!(c.status, RoadmapStatus::Pending);
         assert!(c.mission_ended);

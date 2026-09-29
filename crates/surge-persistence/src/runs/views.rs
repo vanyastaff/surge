@@ -368,7 +368,7 @@ pub fn maintain(
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![
-                    task_id,
+                    task_id.as_str(),
                     to.to_string(),
                     authority_node.as_str(),
                     seq.0 as i64,
@@ -386,7 +386,7 @@ pub fn maintain(
                 "INSERT OR IGNORE INTO task_ledger
                     (task_id, status, verified, discovered_from, updated_seq)
                  VALUES (?, 'pending', 0, ?, ?)",
-                rusqlite::params![task_id, discovered_from, seq.0 as i64],
+                rusqlite::params![task_id.as_str(), discovered_from.as_str(), seq.0 as i64],
             )?;
         },
         TaskVerified { task_id, node, .. } => {
@@ -413,7 +413,7 @@ pub fn maintain(
                     verified = 1,
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
-                rusqlite::params![task_id, node.as_str(), seq.0 as i64],
+                rusqlite::params![task_id.as_str(), node.as_str(), seq.0 as i64],
             )?;
         },
         // All other variants currently produce no view changes. Every

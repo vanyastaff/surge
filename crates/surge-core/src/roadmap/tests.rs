@@ -168,8 +168,8 @@ fn test_roadmap_artifact_toml_roundtrip() {
 
     let mut artifact = RoadmapArtifact::new(vec![milestone]);
     artifact.dependencies.push(RoadmapDependency {
-        from: "m1".to_string(),
-        to: "m2".to_string(),
+        from: "m1".into(),
+        to: "m2".into(),
         reason: "contracts unblock validators".to_string(),
     });
     artifact.risks.push(RoadmapRisk {
@@ -222,7 +222,7 @@ fn ledger_roadmap(tasks: Vec<RoadmapTask>) -> RoadmapArtifact {
 fn sized_task(id: &str, depends_on: &[&str]) -> RoadmapTask {
     let mut task = RoadmapTask::new(id, id);
     task.size = Some(TaskSize::M);
-    task.depends_on = depends_on.iter().map(ToString::to_string).collect();
+    task.depends_on = depends_on.iter().map(|&id| id.into()).collect();
     task
 }
 
@@ -245,37 +245,31 @@ fn validate_ledger_flags_duplicate_ids() {
 
     let issues = roadmap.validate_ledger();
 
-    assert!(issues.contains(&RoadmapLedgerIssue::DuplicateTaskId {
-        task: "t1".to_string()
-    }));
+    assert!(issues.contains(&RoadmapLedgerIssue::DuplicateTaskId { task: "t1".into() }));
     assert!(issues.contains(&RoadmapLedgerIssue::DuplicateMilestoneId {
-        milestone: "m1".to_string()
+        milestone: "m1".into()
     }));
 }
 
 #[test]
 fn validate_ledger_flags_unknown_and_self_references() {
     let mut discovered = sized_task("t2", &["missing"]);
-    discovered.discovered_from = Some("t2".to_string());
+    discovered.discovered_from = Some("t2".into());
     let mut self_dep = sized_task("t1", &["t1"]);
-    self_dep.discovered_from = Some("ghost".to_string());
+    self_dep.discovered_from = Some("ghost".into());
     let roadmap = ledger_roadmap(vec![self_dep, discovered]);
 
     let issues = roadmap.validate_ledger();
 
-    assert!(issues.contains(&RoadmapLedgerIssue::SelfDependency {
-        task: "t1".to_string()
-    }));
+    assert!(issues.contains(&RoadmapLedgerIssue::SelfDependency { task: "t1".into() }));
     assert!(issues.contains(&RoadmapLedgerIssue::UnknownDependsOn {
-        task: "t2".to_string(),
-        missing: "missing".to_string()
+        task: "t2".into(),
+        missing: "missing".into()
     }));
-    assert!(issues.contains(&RoadmapLedgerIssue::SelfDiscovery {
-        task: "t2".to_string()
-    }));
+    assert!(issues.contains(&RoadmapLedgerIssue::SelfDiscovery { task: "t2".into() }));
     assert!(issues.contains(&RoadmapLedgerIssue::UnknownDiscoveredFrom {
-        task: "t1".to_string(),
-        missing: "ghost".to_string()
+        task: "t1".into(),
+        missing: "ghost".into()
     }));
 }
 
@@ -292,12 +286,7 @@ fn validate_ledger_reports_cycle_deterministically() {
     assert_eq!(
         issues,
         vec![RoadmapLedgerIssue::DependencyCycle {
-            cycle: vec![
-                "t1".to_string(),
-                "t3".to_string(),
-                "t2".to_string(),
-                "t1".to_string()
-            ]
+            cycle: vec!["t1".into(), "t3".into(), "t2".into(), "t1".into()]
         }]
     );
 }
@@ -313,7 +302,7 @@ fn validate_ledger_detects_deep_cycle_without_stack_overflow() {
             let next = (i + 1) % n;
             let mut task = RoadmapTask::new(format!("t{i}"), format!("Task {i}"));
             task.size = Some(TaskSize::M);
-            task.depends_on = vec![format!("t{next}")];
+            task.depends_on = vec![format!("t{next}").into()];
             task
         })
         .collect();
@@ -333,9 +322,7 @@ fn validate_ledger_requires_size_only_at_v2() {
     let mut roadmap = ledger_roadmap(vec![RoadmapTask::new("t1", "No size")]);
     assert_eq!(
         roadmap.validate_ledger(),
-        vec![RoadmapLedgerIssue::MissingSize {
-            task: "t1".to_string()
-        }]
+        vec![RoadmapLedgerIssue::MissingSize { task: "t1".into() }]
     );
 
     roadmap.schema_version = 1;
@@ -346,15 +333,15 @@ fn validate_ledger_requires_size_only_at_v2() {
 fn validate_ledger_flags_unknown_milestone_dependency() {
     let mut roadmap = ledger_roadmap(vec![sized_task("t1", &[])]);
     roadmap.dependencies.push(RoadmapDependency {
-        from: "m1".to_string(),
-        to: "m9".to_string(),
+        from: "m1".into(),
+        to: "m9".into(),
         reason: String::new(),
     });
 
     assert_eq!(
         roadmap.validate_ledger(),
         vec![RoadmapLedgerIssue::UnknownMilestoneDependency {
-            missing: "m9".to_string()
+            missing: "m9".into()
         }]
     );
 }
@@ -363,15 +350,15 @@ fn validate_ledger_flags_unknown_milestone_dependency() {
 fn validate_ledger_flags_self_referencing_milestone_dependency() {
     let mut roadmap = ledger_roadmap(vec![sized_task("t1", &[])]);
     roadmap.dependencies.push(RoadmapDependency {
-        from: "m1".to_string(),
-        to: "m1".to_string(),
+        from: "m1".into(),
+        to: "m1".into(),
         reason: String::new(),
     });
 
     let issues = roadmap.validate_ledger();
     assert!(
         issues.contains(&RoadmapLedgerIssue::MilestoneSelfDependency {
-            milestone: "m1".to_string()
+            milestone: "m1".into()
         })
     );
 }
@@ -379,7 +366,7 @@ fn validate_ledger_flags_self_referencing_milestone_dependency() {
 #[test]
 fn task_ledger_fields_roundtrip_via_toml() {
     let mut task = sized_task("t2", &["t1"]);
-    task.discovered_from = Some("t1".to_string());
+    task.discovered_from = Some("t1".into());
     task.verified = true;
     task.status = RoadmapStatus::ReadyForVerification;
     let roadmap = ledger_roadmap(vec![sized_task("t1", &[]), task]);
@@ -443,7 +430,7 @@ fn assertion(id: &str) -> ValidationAssertion {
 
 fn fulfilling(id: &str, fulfills: &[&str]) -> RoadmapTask {
     let mut task = sized_task(id, &[]);
-    task.fulfills = fulfills.iter().map(ToString::to_string).collect();
+    task.fulfills = fulfills.iter().map(|&id| id.into()).collect();
     task
 }
 
@@ -480,7 +467,9 @@ fn well_formed_missions_validate_and_round_trip() {
     let parsed: RoadmapArtifact = toml::from_str(&text).unwrap();
     assert_eq!(parsed, roadmap);
     assert_eq!(
-        parsed.mission_of_milestone("m2").map(|m| m.id.as_str()),
+        parsed
+            .mission_of_milestone(&"m2".into())
+            .map(|m| m.id.as_str()),
         Some("mission-1")
     );
 }

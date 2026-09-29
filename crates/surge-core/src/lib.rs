@@ -85,9 +85,10 @@ pub use event::{
 };
 pub use id::{MemoryClaimId, RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{
-    DiscoveredTaskEntry, DiscoveredTaskIssue, DiscoveredTasksArtifact, Priority, RoadmapArtifact,
-    RoadmapDependency, RoadmapItem, RoadmapLedgerIssue, RoadmapMilestone, RoadmapRisk,
-    RoadmapStage, RoadmapStatus, RoadmapTask, TaskPriority, TaskSize, Timeline, TimelineBatch,
+    AssertionId, DiscoveredTaskEntry, DiscoveredTaskIssue, DiscoveredTasksArtifact, MilestoneId,
+    MissionId, Priority, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapLedgerIssue,
+    RoadmapMilestone, RoadmapMission, RoadmapRisk, RoadmapStage, RoadmapStatus, RoadmapTask,
+    RoadmapTaskId, StageId, TaskPriority, TaskSize, Timeline, TimelineBatch, ValidationAssertion,
     VerificationCheck, VerificationReportArtifact, VerificationReportOutcome,
 };
 pub use roadmap_patch::{

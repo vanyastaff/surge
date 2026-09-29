@@ -9,7 +9,7 @@ fn task(id: usize, depends_on: Vec<usize>) -> RoadmapTask {
     task.size = Some(TaskSize::M);
     task.depends_on = depends_on
         .into_iter()
-        .map(|dependency| format!("t{dependency}"))
+        .map(|dependency| format!("t{dependency}").into())
         .collect();
     task
 }
@@ -84,14 +84,14 @@ proptest! {
     ) {
         let mut tasks = tasks;
         let index = victim.index(tasks.len());
-        tasks[index].depends_on.push("missing-task".to_string());
+        tasks[index].depends_on.push("missing-task".into());
         let victim_id = tasks[index].id.clone();
         let roadmap = roadmap_with_tasks(tasks);
 
         let issues = roadmap.validate_ledger();
         let expected = RoadmapLedgerIssue::UnknownDependsOn {
             task: victim_id,
-            missing: "missing-task".to_string(),
+            missing: "missing-task".into(),
         };
         prop_assert!(issues.contains(&expected), "missing {expected:?} in {issues:?}");
     }

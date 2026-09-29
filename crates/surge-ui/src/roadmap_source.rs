@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use surge_core::RunId;
 use surge_core::content_hash::ContentHash;
-use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
+use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus, RoadmapTaskId};
 
 /// Where the shown plan was read from.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +77,7 @@ pub fn read_run_artifact(surge_home: &Path, run_id: RunId, name: &str) -> Option
 /// Tasks the ledger never touched keep their planned status.
 pub fn apply_ledger(
     artifact: &mut RoadmapArtifact,
-    ledger: &HashMap<String, (RoadmapStatus, bool)>,
+    ledger: &HashMap<RoadmapTaskId, (RoadmapStatus, bool)>,
 ) {
     for milestone in &mut artifact.milestones {
         for task in &mut milestone.tasks {
@@ -174,7 +174,7 @@ pub async fn planned(project_root: &Path, surge_home: &Path) -> Option<LoadedRoa
             tracing::warn!(run = %op.planning_run, "planned roadmap did not parse");
             continue;
         };
-        let ledger: HashMap<String, (RoadmapStatus, bool)> =
+        let ledger: HashMap<RoadmapTaskId, (RoadmapStatus, bool)> =
             match surge_persistence::runs::Storage::open(surge_home).await {
                 Ok(storage) => storage
                     .task_ledger_store()
@@ -187,7 +187,7 @@ pub async fn planned(project_root: &Path, surge_home: &Path) -> Option<LoadedRoa
                     })
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|row| (row.task_id, (row.status, row.verified)))
+                    .map(|row| (row.task_id.into(), (row.status, row.verified)))
                     .collect(),
                 Err(_) => HashMap::new(),
             };
@@ -235,7 +235,7 @@ status = "pending"
     #[test]
     fn ledger_overrides_planned_status_and_verification() {
         let mut artifact = plan();
-        let ledger = HashMap::from([("t1".to_string(), (RoadmapStatus::Completed, true))]);
+        let ledger = HashMap::from([("t1".into(), (RoadmapStatus::Completed, true))]);
         apply_ledger(&mut artifact, &ledger);
         let tasks = &artifact.milestones[0].tasks;
         assert_eq!(tasks[0].status, RoadmapStatus::Completed);

@@ -22,8 +22,8 @@ use gpui_kit::component::{Disableable, Icon, IconName, Selectable, Sizable, Styl
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::roadmap::{
-    RoadmapArtifact, RoadmapMilestone, RoadmapStage, RoadmapStatus, RoadmapTask, TaskPriority,
-    TaskSize,
+    MilestoneId, RoadmapArtifact, RoadmapMilestone, RoadmapStage, RoadmapStatus, RoadmapTask,
+    RoadmapTaskId, TaskPriority, TaskSize,
 };
 
 use crate::app_state::AppState;
@@ -220,8 +220,8 @@ pub struct RoadmapScreen {
     facts: Option<Vec<(String, String)>>,
     describing: bool,
     describe_error: Option<String>,
-    expanded: HashSet<String>,
-    open_task: Option<(String, String)>,
+    expanded: HashSet<MilestoneId>,
+    open_task: Option<(MilestoneId, RoadmapTaskId)>,
     filter: Filter,
     /// What the last load was for; a state change that leaves it equal
     /// (streaming events, UI toggles) does not touch the disk again.
@@ -561,10 +561,15 @@ impl RoadmapScreen {
             )
     }
 
-    fn render_task(&self, milestone_id: &str, task: &RoadmapTask, cx: &mut Context<Self>) -> Div {
+    fn render_task(
+        &self,
+        milestone_id: &MilestoneId,
+        task: &RoadmapTask,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let (label, role) = status_look(task.status);
         let color = role.color();
-        let key = (milestone_id.to_string(), task.id.clone());
+        let key = (milestone_id.clone(), task.id.clone());
         let open = self.open_task.as_ref() == Some(&key);
         let toggle_key = key.clone();
         let done_unverified = task.status == RoadmapStatus::Completed && !task.verified;
@@ -1049,7 +1054,7 @@ fn render_task_details(task: &RoadmapTask) -> Div {
         .gap(px(12.0))
         .text_size(px(10.5))
         .text_color(theme::text_dim())
-        .child(task.id.clone());
+        .child(task.id.to_string());
     if let Some(size) = task.size {
         meta = meta.child(format!("size {}", size_label(size)));
     }

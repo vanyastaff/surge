@@ -87,7 +87,7 @@ impl RoadmapArtifact {
                     "### {}: {} ({})\n",
                     mission.id,
                     mission.title,
-                    mission.milestones.join(", ")
+                    join_ids(&mission.milestones, ", ")
                 ));
                 if mission.status != RoadmapStatus::Pending {
                     out.push_str(&format!("Status: {}\n", mission.status));
@@ -116,7 +116,7 @@ impl RoadmapArtifact {
             {
                 out.push_str(&format!("Stages: {rationale}\n\n"));
             }
-            let mut rendered: HashSet<&str> = HashSet::new();
+            let mut rendered: HashSet<&MilestoneId> = HashSet::new();
             for stage in &self.stages {
                 out.push_str(&format!("# Stage {}: {}\n", stage.id, stage.title));
                 if !stage.goal.trim().is_empty() {
@@ -130,14 +130,14 @@ impl RoadmapArtifact {
                     .milestones
                     .iter()
                     .filter_map(|id| self.milestones.iter().find(|milestone| milestone.id == *id));
-                for milestone in owned.filter(|milestone| rendered.insert(milestone.id.as_str())) {
+                for milestone in owned.filter(|milestone| rendered.insert(&milestone.id)) {
                     push_milestone_markdown(&mut out, milestone);
                 }
             }
             // Milestones a malformed roadmap left outside every stage still
             // show up, so the rendering never hides work.
             for milestone in &self.milestones {
-                if !rendered.contains(milestone.id.as_str()) {
+                if !rendered.contains(&milestone.id) {
                     push_milestone_markdown(&mut out, milestone);
                 }
             }
@@ -165,6 +165,13 @@ impl RoadmapArtifact {
         }
         out
     }
+}
+
+fn join_ids<T: std::fmt::Display>(ids: &[T], separator: &str) -> String {
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(separator)
 }
 
 fn push_milestone_markdown(out: &mut String, milestone: &RoadmapMilestone) {
@@ -204,7 +211,10 @@ fn push_milestone_markdown(out: &mut String, milestone: &RoadmapMilestone) {
             out.push_str(&format!("  - AC: {criterion}\n"));
         }
         if !task.fulfills.is_empty() {
-            out.push_str(&format!("  - Fulfills: {}\n", task.fulfills.join(", ")));
+            out.push_str(&format!(
+                "  - Fulfills: {}\n",
+                join_ids(&task.fulfills, ", ")
+            ));
         }
     }
     out.push('\n');
@@ -232,12 +242,14 @@ fn default_verification_report_schema_version() -> u32 {
 }
 
 mod discovered;
+mod ids;
 mod ledger;
 mod plan;
 mod timeline;
 mod verification;
 
 pub use discovered::*;
+pub use ids::{AssertionId, MilestoneId, MissionId, RoadmapTaskId, StageId};
 pub use ledger::*;
 use plan::markdown_checkbox;
 pub use plan::*;

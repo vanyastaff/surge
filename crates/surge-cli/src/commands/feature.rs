@@ -21,7 +21,7 @@ use surge_core::roadmap_patch::{
 };
 use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
 use surge_core::sandbox::SandboxMode;
-use surge_core::{ContentHash, RoadmapMilestone, RoadmapStatus, RunId, SurgeConfig};
+use surge_core::{ContentHash, MilestoneId, RoadmapMilestone, RoadmapStatus, RunId, SurgeConfig};
 use surge_git::GitManager;
 use surge_orchestrator::engine::hooks::HookExecutor;
 use surge_orchestrator::engine::tools::ToolDispatcher;
@@ -1298,7 +1298,7 @@ fn rewrite_operation_for_deferred_milestone(
     operation: &mut RoadmapPatchOperation,
     roadmap: &RoadmapArtifact,
     conflicts: &[RoadmapPatchConflict],
-    generated_milestone_ids: &mut BTreeSet<String>,
+    generated_milestone_ids: &mut BTreeSet<MilestoneId>,
 ) -> Result<()> {
     match operation {
         RoadmapPatchOperation::AddMilestone { insertion, .. } => {
@@ -1361,10 +1361,10 @@ fn rewrite_operation_for_deferred_milestone(
 }
 
 fn deferred_replacement_operation(
-    milestone_id: &str,
+    milestone_id: &MilestoneId,
     replacement: &RoadmapPatchItem,
     roadmap: &RoadmapArtifact,
-    generated_milestone_ids: &mut BTreeSet<String>,
+    generated_milestone_ids: &mut BTreeSet<MilestoneId>,
 ) -> RoadmapPatchOperation {
     match replacement {
         RoadmapPatchItem::Milestone { milestone } => {
@@ -1406,7 +1406,7 @@ fn deferred_replacement_operation(
     }
 }
 
-fn existing_milestone_ids(roadmap: &RoadmapArtifact) -> BTreeSet<String> {
+fn existing_milestone_ids(roadmap: &RoadmapArtifact) -> BTreeSet<MilestoneId> {
     roadmap
         .milestones
         .iter()
@@ -1414,13 +1414,14 @@ fn existing_milestone_ids(roadmap: &RoadmapArtifact) -> BTreeSet<String> {
         .collect()
 }
 
-fn unique_cli_id(base: &str, used: &mut BTreeSet<String>) -> String {
-    if used.insert(base.to_owned()) {
-        return base.to_owned();
+fn unique_cli_id(base: &str, used: &mut BTreeSet<MilestoneId>) -> MilestoneId {
+    let first = MilestoneId::from(base);
+    if used.insert(first.clone()) {
+        return first;
     }
     let mut suffix = 2_u32;
     loop {
-        let candidate = format!("{base}-{suffix}");
+        let candidate = MilestoneId::from(format!("{base}-{suffix}"));
         if used.insert(candidate.clone()) {
             return candidate;
         }
@@ -1428,7 +1429,7 @@ fn unique_cli_id(base: &str, used: &mut BTreeSet<String>) -> String {
     }
 }
 
-fn conflict_milestone_for_item(item: &RoadmapItemRef) -> &str {
+fn conflict_milestone_for_item(item: &RoadmapItemRef) -> &MilestoneId {
     match item {
         RoadmapItemRef::Milestone { milestone_id } | RoadmapItemRef::Task { milestone_id, .. } => {
             milestone_id
@@ -1438,7 +1439,7 @@ fn conflict_milestone_for_item(item: &RoadmapItemRef) -> &str {
 
 fn conflicts_reference_running_milestone(
     conflicts: &[RoadmapPatchConflict],
-    milestone_id: &str,
+    milestone_id: &MilestoneId,
 ) -> bool {
     conflicts.iter().any(|conflict| {
         conflict.code == RoadmapPatchConflictCode::RunningMilestone
@@ -1446,7 +1447,7 @@ fn conflicts_reference_running_milestone(
     })
 }
 
-fn insertion_milestone_id(insertion: &InsertionPoint) -> Option<&str> {
+fn insertion_milestone_id(insertion: &InsertionPoint) -> Option<&MilestoneId> {
     match insertion {
         InsertionPoint::BeforeMilestone { milestone_id }
         | InsertionPoint::AfterMilestone { milestone_id }
@@ -1457,7 +1458,10 @@ fn insertion_milestone_id(insertion: &InsertionPoint) -> Option<&str> {
     }
 }
 
-fn safe_milestone_insertion_after(roadmap: &RoadmapArtifact, milestone_id: &str) -> InsertionPoint {
+fn safe_milestone_insertion_after(
+    roadmap: &RoadmapArtifact,
+    milestone_id: &MilestoneId,
+) -> InsertionPoint {
     next_pending_milestone_after(roadmap, milestone_id).map_or(
         InsertionPoint::AppendToRoadmap,
         |next_id| InsertionPoint::BeforeMilestone {
@@ -1466,11 +1470,14 @@ fn safe_milestone_insertion_after(roadmap: &RoadmapArtifact, milestone_id: &str)
     )
 }
 
-fn next_pending_milestone_after(roadmap: &RoadmapArtifact, milestone_id: &str) -> Option<String> {
+fn next_pending_milestone_after(
+    roadmap: &RoadmapArtifact,
+    milestone_id: &MilestoneId,
+) -> Option<MilestoneId> {
     let start_index = roadmap
         .milestones
         .iter()
-        .position(|milestone| milestone.id == milestone_id)?;
+        .position(|milestone| milestone.id == *milestone_id)?;
     roadmap
         .milestones
         .iter()

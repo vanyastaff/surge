@@ -139,18 +139,18 @@ const fn ledger_issue_code(issue: &RoadmapLedgerIssue) -> ArtifactDiagnosticCode
 
 fn ledger_issue_location(issue: &RoadmapLedgerIssue) -> Option<String> {
     match issue {
-        RoadmapLedgerIssue::DuplicateMilestoneId { milestone } => Some(milestone.clone()),
+        RoadmapLedgerIssue::DuplicateMilestoneId { milestone } => Some(milestone.to_string()),
         RoadmapLedgerIssue::DuplicateTaskId { task }
         | RoadmapLedgerIssue::SelfDependency { task }
         | RoadmapLedgerIssue::UnknownDependsOn { task, .. }
         | RoadmapLedgerIssue::SelfDiscovery { task }
-        | RoadmapLedgerIssue::UnknownDiscoveredFrom { task, .. } => Some(task.clone()),
+        | RoadmapLedgerIssue::UnknownDiscoveredFrom { task, .. } => Some(task.to_string()),
         RoadmapLedgerIssue::MissingSize { task } => Some(format!("{task}.size")),
-        RoadmapLedgerIssue::UnknownMilestoneDependency { missing } => Some(missing.clone()),
-        RoadmapLedgerIssue::MilestoneSelfDependency { milestone } => Some(milestone.clone()),
-        RoadmapLedgerIssue::DependencyCycle { cycle } => cycle.first().cloned(),
+        RoadmapLedgerIssue::UnknownMilestoneDependency { missing } => Some(missing.to_string()),
+        RoadmapLedgerIssue::MilestoneSelfDependency { milestone } => Some(milestone.to_string()),
+        RoadmapLedgerIssue::DependencyCycle { cycle } => cycle.first().map(ToString::to_string),
         RoadmapLedgerIssue::DuplicateMissionId { mission }
-        | RoadmapLedgerIssue::EmptyMission { mission } => Some(mission.clone()),
+        | RoadmapLedgerIssue::EmptyMission { mission } => Some(mission.to_string()),
         RoadmapLedgerIssue::EmptyValidationContract { mission } => {
             Some(format!("{mission}.validation_contract"))
         },
@@ -159,22 +159,24 @@ fn ledger_issue_location(issue: &RoadmapLedgerIssue) -> Option<String> {
         },
         RoadmapLedgerIssue::MilestoneInSeveralMissions { milestone }
         | RoadmapLedgerIssue::MilestoneWithoutMission { milestone }
-        | RoadmapLedgerIssue::MissionOrderMismatch { milestone } => Some(milestone.clone()),
+        | RoadmapLedgerIssue::MissionOrderMismatch { milestone } => Some(milestone.to_string()),
         RoadmapLedgerIssue::DuplicateAssertionId { assertion }
         | RoadmapLedgerIssue::UnclaimedAssertion { assertion, .. }
-        | RoadmapLedgerIssue::AssertionClaimedTwice { assertion, .. } => Some(assertion.clone()),
+        | RoadmapLedgerIssue::AssertionClaimedTwice { assertion, .. } => {
+            Some(assertion.to_string())
+        },
         RoadmapLedgerIssue::UnknownFulfills { task, .. }
         | RoadmapLedgerIssue::FulfillsOutsideMission { task, .. } => {
             Some(format!("{task}.fulfills"))
         },
         RoadmapLedgerIssue::DuplicateStageId { stage }
-        | RoadmapLedgerIssue::EmptyStage { stage } => Some(stage.clone()),
+        | RoadmapLedgerIssue::EmptyStage { stage } => Some(stage.to_string()),
         RoadmapLedgerIssue::UnknownStageMilestone { stage, .. } => {
             Some(format!("{stage}.milestones"))
         },
         RoadmapLedgerIssue::MilestoneInSeveralStages { milestone }
         | RoadmapLedgerIssue::MilestoneWithoutStage { milestone }
-        | RoadmapLedgerIssue::StageOrderMismatch { milestone } => Some(milestone.clone()),
+        | RoadmapLedgerIssue::StageOrderMismatch { milestone } => Some(milestone.to_string()),
         RoadmapLedgerIssue::EmptyParallelGroup { task }
         | RoadmapLedgerIssue::ParallelGroupDependency { task, .. } => {
             Some(format!("{task}.parallel_group"))

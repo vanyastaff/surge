@@ -175,7 +175,7 @@ pub fn render_markdown(report: &RunReport) -> String {
         for verdict in &report.verdicts {
             out.push_str(&format!(
                 "- task `{}` ({}): {}\n",
-                escape_markdown(&verdict.task_id),
+                escape_markdown(verdict.task_id.as_str()),
                 escape_markdown_display(&verdict.node),
                 verdict_label(&verdict.result)
             ));
@@ -783,7 +783,7 @@ fn render_verdicts_section(report: &RunReport) -> String {
         };
         items.push_str(&format!(
             "<li>task <code>{}</code> ({}): <span class=\"{class}\">{}</span></li>\n",
-            escape_html(&verdict.task_id),
+            escape_html(verdict.task_id.as_str()),
             escape_display(&verdict.node),
             label,
         ));

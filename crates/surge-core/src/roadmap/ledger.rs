@@ -16,9 +16,9 @@ impl RoadmapArtifact {
     pub fn validate_ledger(&self) -> Vec<RoadmapLedgerIssue> {
         let mut issues = Vec::new();
 
-        let mut milestone_ids: HashSet<&str> = HashSet::new();
+        let mut milestone_ids: HashSet<&MilestoneId> = HashSet::new();
         for milestone in &self.milestones {
-            if !milestone_ids.insert(milestone.id.as_str()) {
+            if !milestone_ids.insert(&milestone.id) {
                 issues.push(RoadmapLedgerIssue::DuplicateMilestoneId {
                     milestone: milestone.id.clone(),
                 });
@@ -26,9 +26,9 @@ impl RoadmapArtifact {
         }
 
         let mut has_duplicate_task_ids = false;
-        let mut task_ids: HashSet<&str> = HashSet::new();
+        let mut task_ids: HashSet<&RoadmapTaskId> = HashSet::new();
         for task in self.tasks() {
-            if !task_ids.insert(task.id.as_str()) {
+            if !task_ids.insert(&task.id) {
                 has_duplicate_task_ids = true;
                 issues.push(RoadmapLedgerIssue::DuplicateTaskId {
                     task: task.id.clone(),
@@ -42,7 +42,7 @@ impl RoadmapArtifact {
                     issues.push(RoadmapLedgerIssue::SelfDependency {
                         task: task.id.clone(),
                     });
-                } else if !task_ids.contains(dependency.as_str()) {
+                } else if !task_ids.contains(dependency) {
                     issues.push(RoadmapLedgerIssue::UnknownDependsOn {
                         task: task.id.clone(),
                         missing: dependency.clone(),
@@ -54,7 +54,7 @@ impl RoadmapArtifact {
                     issues.push(RoadmapLedgerIssue::SelfDiscovery {
                         task: task.id.clone(),
                     });
-                } else if !task_ids.contains(origin.as_str()) {
+                } else if !task_ids.contains(origin) {
                     issues.push(RoadmapLedgerIssue::UnknownDiscoveredFrom {
                         task: task.id.clone(),
                         missing: origin.clone(),
@@ -75,7 +75,7 @@ impl RoadmapArtifact {
                 });
             }
             for milestone in [&dependency.from, &dependency.to] {
-                if !milestone_ids.contains(milestone.as_str()) {
+                if !milestone_ids.contains(milestone) {
                     issues.push(RoadmapLedgerIssue::UnknownMilestoneDependency {
                         missing: milestone.clone(),
                     });
@@ -99,7 +99,7 @@ impl RoadmapArtifact {
 
     /// The mission that owns `milestone_id`, if missions are declared.
     #[must_use]
-    pub fn mission_of_milestone(&self, milestone_id: &str) -> Option<&RoadmapMission> {
+    pub fn mission_of_milestone(&self, milestone_id: &MilestoneId) -> Option<&RoadmapMission> {
         self.missions
             .iter()
             .find(|mission| mission.milestones.iter().any(|id| id == milestone_id))
@@ -116,14 +116,14 @@ impl RoadmapArtifact {
     /// no orphans, no duplicates).
     fn validate_missions(
         &self,
-        milestone_ids: &HashSet<&str>,
+        milestone_ids: &HashSet<&MilestoneId>,
         issues: &mut Vec<RoadmapLedgerIssue>,
     ) {
-        let mut mission_ids: HashSet<&str> = HashSet::new();
-        let mut owner: HashMap<&str, &str> = HashMap::new();
+        let mut mission_ids: HashSet<&MissionId> = HashSet::new();
+        let mut owner: HashMap<&MilestoneId, &MissionId> = HashMap::new();
         let mut structure_ok = true;
         for mission in &self.missions {
-            if !mission_ids.insert(mission.id.as_str()) {
+            if !mission_ids.insert(&mission.id) {
                 issues.push(RoadmapLedgerIssue::DuplicateMissionId {
                     mission: mission.id.clone(),
                 });
@@ -140,16 +140,13 @@ impl RoadmapArtifact {
                 });
             }
             for milestone in &mission.milestones {
-                if !milestone_ids.contains(milestone.as_str()) {
+                if !milestone_ids.contains(milestone) {
                     structure_ok = false;
                     issues.push(RoadmapLedgerIssue::UnknownMissionMilestone {
                         mission: mission.id.clone(),
                         milestone: milestone.clone(),
                     });
-                } else if owner
-                    .insert(milestone.as_str(), mission.id.as_str())
-                    .is_some()
-                {
+                } else if owner.insert(milestone, &mission.id).is_some() {
                     structure_ok = false;
                     issues.push(RoadmapLedgerIssue::MilestoneInSeveralMissions {
                         milestone: milestone.clone(),
@@ -159,7 +156,7 @@ impl RoadmapArtifact {
         }
         if !self.missions.is_empty() {
             for milestone in &self.milestones {
-                if !owner.contains_key(milestone.id.as_str()) {
+                if !owner.contains_key(&milestone.id) {
                     structure_ok = false;
                     issues.push(RoadmapLedgerIssue::MilestoneWithoutMission {
                         milestone: milestone.id.clone(),
@@ -184,11 +181,11 @@ impl RoadmapArtifact {
         }
 
         // Assertion id -> owning mission.
-        let mut assertion_mission: HashMap<&str, &str> = HashMap::new();
+        let mut assertion_mission: HashMap<&AssertionId, &MissionId> = HashMap::new();
         for mission in &self.missions {
             for assertion in &mission.validation_contract {
                 if assertion_mission
-                    .insert(assertion.id.as_str(), mission.id.as_str())
+                    .insert(&assertion.id, &mission.id)
                     .is_some()
                 {
                     issues.push(RoadmapLedgerIssue::DuplicateAssertionId {
@@ -198,9 +195,9 @@ impl RoadmapArtifact {
             }
         }
 
-        let mut claims: HashMap<&str, Vec<String>> = HashMap::new();
+        let mut claims: HashMap<&AssertionId, Vec<RoadmapTaskId>> = HashMap::new();
         let fulfilled = self.milestones.iter().flat_map(|milestone| {
-            let task_mission = owner.get(milestone.id.as_str()).copied();
+            let task_mission = owner.get(&milestone.id).copied();
             milestone.tasks.iter().flat_map(move |task| {
                 task.fulfills
                     .iter()
@@ -208,7 +205,7 @@ impl RoadmapArtifact {
             })
         });
         for (task_mission, task, assertion) in fulfilled {
-            match assertion_mission.get(assertion.as_str()) {
+            match assertion_mission.get(assertion) {
                 None => issues.push(RoadmapLedgerIssue::UnknownFulfills {
                     task: task.id.clone(),
                     assertion: assertion.clone(),
@@ -217,18 +214,15 @@ impl RoadmapArtifact {
                     issues.push(RoadmapLedgerIssue::FulfillsOutsideMission {
                         task: task.id.clone(),
                         assertion: assertion.clone(),
-                        mission: (*mission).to_owned(),
+                        mission: (*mission).clone(),
                     });
                 },
-                Some(_) => claims
-                    .entry(assertion.as_str())
-                    .or_default()
-                    .push(task.id.clone()),
+                Some(_) => claims.entry(assertion).or_default().push(task.id.clone()),
             }
         }
         for mission in &self.missions {
             for assertion in &mission.validation_contract {
-                match claims.get(assertion.id.as_str()).map(Vec::as_slice) {
+                match claims.get(&assertion.id).map(Vec::as_slice) {
                     None | Some([]) => issues.push(RoadmapLedgerIssue::UnclaimedAssertion {
                         mission: mission.id.clone(),
                         assertion: assertion.id.clone(),
@@ -250,15 +244,19 @@ impl RoadmapArtifact {
     /// the concatenated stage milestone lists reproducing the roadmap
     /// milestone order. The number of stages is never constrained: one is
     /// valid.
-    fn validate_stages(&self, milestone_ids: &HashSet<&str>, issues: &mut Vec<RoadmapLedgerIssue>) {
+    fn validate_stages(
+        &self,
+        milestone_ids: &HashSet<&MilestoneId>,
+        issues: &mut Vec<RoadmapLedgerIssue>,
+    ) {
         if self.stages.is_empty() {
             return;
         }
-        let mut stage_ids: HashSet<&str> = HashSet::new();
-        let mut owner: HashSet<&str> = HashSet::new();
+        let mut stage_ids: HashSet<&StageId> = HashSet::new();
+        let mut owner: HashSet<&MilestoneId> = HashSet::new();
         let mut structure_ok = true;
         for stage in &self.stages {
-            if !stage_ids.insert(stage.id.as_str()) {
+            if !stage_ids.insert(&stage.id) {
                 issues.push(RoadmapLedgerIssue::DuplicateStageId {
                     stage: stage.id.clone(),
                 });
@@ -270,13 +268,13 @@ impl RoadmapArtifact {
                 });
             }
             for milestone in &stage.milestones {
-                if !milestone_ids.contains(milestone.as_str()) {
+                if !milestone_ids.contains(milestone) {
                     structure_ok = false;
                     issues.push(RoadmapLedgerIssue::UnknownStageMilestone {
                         stage: stage.id.clone(),
                         milestone: milestone.clone(),
                     });
-                } else if !owner.insert(milestone.as_str()) {
+                } else if !owner.insert(milestone) {
                     structure_ok = false;
                     issues.push(RoadmapLedgerIssue::MilestoneInSeveralStages {
                         milestone: milestone.clone(),
@@ -285,7 +283,7 @@ impl RoadmapArtifact {
             }
         }
         for milestone in &self.milestones {
-            if !owner.contains(milestone.id.as_str()) {
+            if !owner.contains(&milestone.id) {
                 structure_ok = false;
                 issues.push(RoadmapLedgerIssue::MilestoneWithoutStage {
                     milestone: milestone.id.clone(),
@@ -313,13 +311,13 @@ impl RoadmapArtifact {
     /// A dependency counts whether direct or transitive (through tasks in any
     /// group), because either way the two members cannot run concurrently.
     fn validate_parallel_groups(&self, issues: &mut Vec<RoadmapLedgerIssue>) {
-        let dependencies: HashMap<&str, &[String]> = self
+        let dependencies: HashMap<&RoadmapTaskId, &[RoadmapTaskId]> = self
             .tasks()
-            .map(|task| (task.id.as_str(), task.depends_on.as_slice()))
+            .map(|task| (&task.id, task.depends_on.as_slice()))
             .collect();
-        let group_of: HashMap<&str, &str> = self
+        let group_of: HashMap<&RoadmapTaskId, &str> = self
             .tasks()
-            .filter_map(|task| Some((task.id.as_str(), task.parallel_group.as_deref()?)))
+            .filter_map(|task| Some((&task.id, task.parallel_group.as_deref()?)))
             .collect();
 
         for task in self.tasks() {
@@ -332,21 +330,21 @@ impl RoadmapArtifact {
                 });
                 continue;
             }
-            let mut visited: HashSet<&str> = HashSet::new();
-            let mut pending: Vec<&str> = task.depends_on.iter().map(String::as_str).collect();
+            let mut visited: HashSet<&RoadmapTaskId> = HashSet::new();
+            let mut pending: Vec<&RoadmapTaskId> = task.depends_on.iter().collect();
             while let Some(candidate) = pending.pop() {
                 if !visited.insert(candidate) {
                     continue;
                 }
-                if candidate != task.id && group_of.get(candidate) == Some(&group) {
+                if *candidate != task.id && group_of.get(candidate) == Some(&group) {
                     issues.push(RoadmapLedgerIssue::ParallelGroupDependency {
                         group: group.to_owned(),
                         task: task.id.clone(),
-                        depends_on: candidate.to_owned(),
+                        depends_on: candidate.clone(),
                     });
                 }
                 if let Some(next) = dependencies.get(candidate) {
-                    pending.extend(next.iter().map(String::as_str));
+                    pending.extend(next.iter());
                 }
             }
         }
@@ -382,9 +380,9 @@ impl RoadmapArtifact {
                 })
             })
             .collect();
-        let mut index_of: HashMap<&str, usize> = HashMap::with_capacity(entries.len());
+        let mut index_of: HashMap<&RoadmapTaskId, usize> = HashMap::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
-            index_of.entry(entry.task.id.as_str()).or_insert(index);
+            index_of.entry(&entry.task.id).or_insert(index);
         }
 
         let mut batches: Vec<Vec<&RoadmapTask>> = Vec::new();
@@ -392,9 +390,9 @@ impl RoadmapArtifact {
             let wave = batches.len();
             // A dependency is settled when it is unknown or already placed in
             // an earlier wave; a self edge never settles.
-            let is_settled = |index: usize, dependency: &String| {
+            let is_settled = |index: usize, dependency: &RoadmapTaskId| {
                 index_of
-                    .get(dependency.as_str())
+                    .get(dependency)
                     .is_none_or(|&target| target != index && placed_before(&entries, target, wave))
             };
             let ready: Vec<usize> = (0..entries.len())
@@ -444,16 +442,16 @@ impl RoadmapArtifact {
     /// Uses an explicit-stack iterative DFS (not recursion): a linear chain of
     /// tens of thousands of tasks would blow a recursive call stack, and a
     /// depth cap would silently miss deep cycles.
-    fn find_task_cycle(&self) -> Option<Vec<String>> {
-        let dependencies: HashMap<&str, &[String]> = self
+    fn find_task_cycle(&self) -> Option<Vec<RoadmapTaskId>> {
+        let dependencies: HashMap<&RoadmapTaskId, &[RoadmapTaskId]> = self
             .tasks()
-            .map(|task| (task.id.as_str(), task.depends_on.as_slice()))
+            .map(|task| (&task.id, task.depends_on.as_slice()))
             .collect();
 
-        let mut marks: HashMap<&str, CycleMark> = HashMap::new();
+        let mut marks: HashMap<&RoadmapTaskId, CycleMark> = HashMap::new();
 
         for task in self.tasks() {
-            if let Some(cycle) = find_cycle_from(task.id.as_str(), &dependencies, &mut marks) {
+            if let Some(cycle) = find_cycle_from(&task.id, &dependencies, &mut marks) {
                 return Some(cycle);
             }
         }
@@ -470,7 +468,7 @@ enum CycleMark {
 /// One entry in the explicit DFS stack: a node and the index of the next
 /// child (dependency) to visit from it.
 struct CycleFrame<'a> {
-    node: &'a str,
+    node: &'a RoadmapTaskId,
     next_child: usize,
 }
 
@@ -481,10 +479,10 @@ struct CycleFrame<'a> {
 /// a fully-explored node is `Done`. Encountering a `Visiting` node means the
 /// active path plus that node closes a cycle.
 fn find_cycle_from<'a>(
-    start: &'a str,
-    dependencies: &HashMap<&'a str, &'a [String]>,
-    marks: &mut HashMap<&'a str, CycleMark>,
-) -> Option<Vec<String>> {
+    start: &'a RoadmapTaskId,
+    dependencies: &HashMap<&'a RoadmapTaskId, &'a [RoadmapTaskId]>,
+    marks: &mut HashMap<&'a RoadmapTaskId, CycleMark>,
+) -> Option<Vec<RoadmapTaskId>> {
     if marks.get(start) == Some(&CycleMark::Done) {
         return None;
     }
@@ -500,7 +498,7 @@ fn find_cycle_from<'a>(
         let children = dependencies.get(node).copied().unwrap_or_default();
 
         if frame.next_child < children.len() {
-            let target = children[frame.next_child].as_str();
+            let target = &children[frame.next_child];
             frame.next_child += 1;
 
             // Only follow edges to known tasks; unknown ids are a separate
@@ -513,11 +511,9 @@ fn find_cycle_from<'a>(
                 Some(CycleMark::Visiting) => {
                     // Back edge: close the cycle at `target`.
                     let start_idx = path.iter().position(|f| f.node == target)?;
-                    let mut cycle: Vec<String> = path[start_idx..]
-                        .iter()
-                        .map(|f| f.node.to_owned())
-                        .collect();
-                    cycle.push(target.to_owned());
+                    let mut cycle: Vec<RoadmapTaskId> =
+                        path[start_idx..].iter().map(|f| f.node.clone()).collect();
+                    cycle.push(target.clone());
                     return Some(cycle);
                 },
                 None => {
@@ -543,167 +539,167 @@ pub enum RoadmapLedgerIssue {
     /// Two milestones share the same id.
     DuplicateMilestoneId {
         /// The duplicated milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// Two tasks share the same id (across all milestones).
     DuplicateTaskId {
         /// The duplicated task id.
-        task: String,
+        task: RoadmapTaskId,
     },
     /// A task depends on itself.
     SelfDependency {
         /// The task id.
-        task: String,
+        task: RoadmapTaskId,
     },
     /// A task depends on a task id that does not exist.
     UnknownDependsOn {
         /// The task declaring the dependency.
-        task: String,
+        task: RoadmapTaskId,
         /// The missing task id.
-        missing: String,
+        missing: RoadmapTaskId,
     },
     /// A task claims to be discovered from itself.
     SelfDiscovery {
         /// The task id.
-        task: String,
+        task: RoadmapTaskId,
     },
     /// A task's `discovered_from` references a task id that does not exist.
     UnknownDiscoveredFrom {
         /// The task declaring the origin.
-        task: String,
+        task: RoadmapTaskId,
         /// The missing task id.
-        missing: String,
+        missing: RoadmapTaskId,
     },
     /// A milestone-level dependency references a missing milestone id.
     UnknownMilestoneDependency {
         /// The missing milestone id.
-        missing: String,
+        missing: MilestoneId,
     },
     /// A milestone dependency references itself.
     MilestoneSelfDependency {
         /// The milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// The task-level `depends_on` graph contains a cycle.
     DependencyCycle {
         /// The cycle as a task-id path; first and last entries are equal.
-        cycle: Vec<String>,
+        cycle: Vec<RoadmapTaskId>,
     },
     /// A schema-v2 task is missing its required `size`.
     MissingSize {
         /// The task id.
-        task: String,
+        task: RoadmapTaskId,
     },
     /// Two missions share the same id.
     DuplicateMissionId {
         /// The duplicated mission id.
-        mission: String,
+        mission: MissionId,
     },
     /// A mission lists no milestones.
     EmptyMission {
         /// The mission id.
-        mission: String,
+        mission: MissionId,
     },
     /// A mission has no validation contract assertions.
     EmptyValidationContract {
         /// The mission id.
-        mission: String,
+        mission: MissionId,
     },
     /// A mission lists a milestone id that does not exist.
     UnknownMissionMilestone {
         /// The mission id.
-        mission: String,
+        mission: MissionId,
         /// The missing milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// A milestone is listed by more than one mission.
     MilestoneInSeveralMissions {
         /// The milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// Missions are declared but this milestone belongs to none of them.
     MilestoneWithoutMission {
         /// The milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// Concatenated mission milestone lists diverge from the milestone order
     /// at this milestone.
     MissionOrderMismatch {
         /// First milestone found out of mission order.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// Two assertions (in any missions) share the same id.
     DuplicateAssertionId {
         /// The duplicated assertion id.
-        assertion: String,
+        assertion: AssertionId,
     },
     /// A task's `fulfills` names an assertion no mission declares.
     UnknownFulfills {
         /// The task id.
-        task: String,
+        task: RoadmapTaskId,
         /// The unknown assertion id.
-        assertion: String,
+        assertion: AssertionId,
     },
     /// A task fulfills an assertion owned by a mission other than its own.
     FulfillsOutsideMission {
         /// The task id.
-        task: String,
+        task: RoadmapTaskId,
         /// The assertion id.
-        assertion: String,
+        assertion: AssertionId,
         /// Mission that owns the assertion.
-        mission: String,
+        mission: MissionId,
     },
     /// No task in the mission fulfills this assertion.
     UnclaimedAssertion {
         /// The mission id.
-        mission: String,
+        mission: MissionId,
         /// The unclaimed assertion id.
-        assertion: String,
+        assertion: AssertionId,
     },
     /// More than one task claims to fulfill the same assertion.
     AssertionClaimedTwice {
         /// The assertion id.
-        assertion: String,
+        assertion: AssertionId,
         /// Every task claiming it.
-        tasks: Vec<String>,
+        tasks: Vec<RoadmapTaskId>,
     },
     /// Two stages share the same id.
     DuplicateStageId {
         /// The duplicated stage id.
-        stage: String,
+        stage: StageId,
     },
     /// A stage lists no milestones; empty stages are ceremony, not structure.
     EmptyStage {
         /// The stage id.
-        stage: String,
+        stage: StageId,
     },
     /// A stage lists a milestone id that does not exist.
     UnknownStageMilestone {
         /// The stage id.
-        stage: String,
+        stage: StageId,
         /// The missing milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// A milestone is listed by more than one stage.
     MilestoneInSeveralStages {
         /// The milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// Stages are declared but this milestone belongs to none of them.
     MilestoneWithoutStage {
         /// The milestone id.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// Concatenated stage milestone lists diverge from the milestone order at
     /// this milestone.
     StageOrderMismatch {
         /// First milestone found out of stage order.
-        milestone: String,
+        milestone: MilestoneId,
     },
     /// A task's `parallel_group` is blank.
     EmptyParallelGroup {
         /// The task id.
-        task: String,
+        task: RoadmapTaskId,
     },
     /// A task depends (directly or transitively) on another member of its
     /// own `parallel_group`, so the two cannot run concurrently.
@@ -711,9 +707,9 @@ pub enum RoadmapLedgerIssue {
         /// The group name.
         group: String,
         /// The dependent task.
-        task: String,
+        task: RoadmapTaskId,
         /// The group member it depends on.
-        depends_on: String,
+        depends_on: RoadmapTaskId,
     },
 }
 
@@ -721,69 +717,76 @@ impl std::fmt::Display for RoadmapLedgerIssue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DuplicateMilestoneId { milestone } => {
-                write!(formatter, "duplicate milestone id {milestone:?}")
+                write!(formatter, "duplicate milestone id \"{milestone}\"")
             },
-            Self::DuplicateTaskId { task } => write!(formatter, "duplicate task id {task:?}"),
+            Self::DuplicateTaskId { task } => write!(formatter, "duplicate task id \"{task}\""),
             Self::MilestoneSelfDependency { milestone } => {
-                write!(formatter, "milestone {milestone:?} depends on itself")
+                write!(formatter, "milestone \"{milestone}\" depends on itself")
             },
             Self::SelfDependency { task } => {
-                write!(formatter, "task {task:?} depends on itself")
+                write!(formatter, "task \"{task}\" depends on itself")
             },
             Self::UnknownDependsOn { task, missing } => write!(
                 formatter,
-                "task {task:?} depends on unknown task {missing:?}"
+                "task \"{task}\" depends on unknown task \"{missing}\""
             ),
             Self::SelfDiscovery { task } => {
-                write!(formatter, "task {task:?} is discovered from itself")
+                write!(formatter, "task \"{task}\" is discovered from itself")
             },
             Self::UnknownDiscoveredFrom { task, missing } => write!(
                 formatter,
-                "task {task:?} is discovered from unknown task {missing:?}"
+                "task \"{task}\" is discovered from unknown task \"{missing}\""
             ),
             Self::UnknownMilestoneDependency { missing } => write!(
                 formatter,
-                "milestone dependency references unknown milestone {missing:?}"
+                "milestone dependency references unknown milestone \"{missing}\""
             ),
             Self::DependencyCycle { cycle } => {
-                write!(formatter, "task dependency cycle: {}", cycle.join(" -> "))
+                write!(
+                    formatter,
+                    "task dependency cycle: {}",
+                    join_ids(cycle, " -> ")
+                )
             },
             Self::MissingSize { task } => write!(
                 formatter,
-                "task {task:?} is missing its required size (schema v2)"
+                "task \"{task}\" is missing its required size (schema v2)"
             ),
             Self::DuplicateMissionId { mission } => {
-                write!(formatter, "duplicate mission id {mission:?}")
+                write!(formatter, "duplicate mission id \"{mission}\"")
             },
             Self::EmptyMission { mission } => {
-                write!(formatter, "mission {mission:?} lists no milestones")
+                write!(formatter, "mission \"{mission}\" lists no milestones")
             },
             Self::EmptyValidationContract { mission } => write!(
                 formatter,
-                "mission {mission:?} has an empty validation_contract; write the assertions that define done before splitting work"
+                "mission \"{mission}\" has an empty validation_contract; write the assertions that define done before splitting work"
             ),
             Self::UnknownMissionMilestone { mission, milestone } => write!(
                 formatter,
-                "mission {mission:?} lists unknown milestone {milestone:?}"
+                "mission \"{mission}\" lists unknown milestone \"{milestone}\""
             ),
             Self::MilestoneInSeveralMissions { milestone } => write!(
                 formatter,
-                "milestone {milestone:?} is listed by more than one mission"
+                "milestone \"{milestone}\" is listed by more than one mission"
             ),
             Self::MilestoneWithoutMission { milestone } => write!(
                 formatter,
-                "milestone {milestone:?} belongs to no mission; when missions are declared every milestone needs one"
+                "milestone \"{milestone}\" belongs to no mission; when missions are declared every milestone needs one"
             ),
             Self::MissionOrderMismatch { milestone } => write!(
                 formatter,
-                "milestone {milestone:?} is out of mission order; list missions and their milestones in roadmap order"
+                "milestone \"{milestone}\" is out of mission order; list missions and their milestones in roadmap order"
             ),
             Self::DuplicateAssertionId { assertion } => {
-                write!(formatter, "duplicate validation assertion id {assertion:?}")
+                write!(
+                    formatter,
+                    "duplicate validation assertion id \"{assertion}\""
+                )
             },
             Self::UnknownFulfills { task, assertion } => write!(
                 formatter,
-                "task {task:?} fulfills unknown assertion {assertion:?}"
+                "task \"{task}\" fulfills unknown assertion \"{assertion}\""
             ),
             Self::FulfillsOutsideMission {
                 task,
@@ -791,40 +794,40 @@ impl std::fmt::Display for RoadmapLedgerIssue {
                 mission,
             } => write!(
                 formatter,
-                "task {task:?} fulfills {assertion:?}, which belongs to another mission ({mission:?})"
+                "task \"{task}\" fulfills \"{assertion}\", which belongs to another mission (\"{mission}\")"
             ),
             Self::UnclaimedAssertion { mission, assertion } => write!(
                 formatter,
-                "assertion {assertion:?} in mission {mission:?} is fulfilled by no task"
+                "assertion \"{assertion}\" in mission \"{mission}\" is fulfilled by no task"
             ),
             Self::AssertionClaimedTwice { assertion, tasks } => write!(
                 formatter,
-                "assertion {assertion:?} is fulfilled by several tasks ({}); exactly one leaf task must claim it",
-                tasks.join(", ")
+                "assertion \"{assertion}\" is fulfilled by several tasks ({}); exactly one leaf task must claim it",
+                join_ids(tasks, ", ")
             ),
-            Self::DuplicateStageId { stage } => write!(formatter, "duplicate stage id {stage:?}"),
+            Self::DuplicateStageId { stage } => write!(formatter, "duplicate stage id \"{stage}\""),
             Self::EmptyStage { stage } => write!(
                 formatter,
-                "stage {stage:?} lists no milestones; drop it or give it work (a stage marks a real release boundary)"
+                "stage \"{stage}\" lists no milestones; drop it or give it work (a stage marks a real release boundary)"
             ),
             Self::UnknownStageMilestone { stage, milestone } => write!(
                 formatter,
-                "stage {stage:?} lists unknown milestone {milestone:?}"
+                "stage \"{stage}\" lists unknown milestone \"{milestone}\""
             ),
             Self::MilestoneInSeveralStages { milestone } => write!(
                 formatter,
-                "milestone {milestone:?} is listed by more than one stage"
+                "milestone \"{milestone}\" is listed by more than one stage"
             ),
             Self::MilestoneWithoutStage { milestone } => write!(
                 formatter,
-                "milestone {milestone:?} belongs to no stage; when stages are declared every milestone needs one"
+                "milestone \"{milestone}\" belongs to no stage; when stages are declared every milestone needs one"
             ),
             Self::StageOrderMismatch { milestone } => write!(
                 formatter,
-                "milestone {milestone:?} is out of stage order; list stages and their milestones in roadmap order"
+                "milestone \"{milestone}\" is out of stage order; list stages and their milestones in roadmap order"
             ),
             Self::EmptyParallelGroup { task } => {
-                write!(formatter, "task {task:?} has a blank parallel_group")
+                write!(formatter, "task \"{task}\" has a blank parallel_group")
             },
             Self::ParallelGroupDependency {
                 group,
@@ -832,7 +835,7 @@ impl std::fmt::Display for RoadmapLedgerIssue {
                 depends_on,
             } => write!(
                 formatter,
-                "task {task:?} depends on {depends_on:?} but both are in parallel group {group:?}; tasks in one group must be independent"
+                "task \"{task}\" depends on \"{depends_on}\" but both are in parallel group {group:?}; tasks in one group must be independent"
             ),
         }
     }

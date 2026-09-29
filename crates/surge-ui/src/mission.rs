@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use surge_core::graph::Graph;
 use surge_core::node::{Node, NodeConfig};
-use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
+use surge_core::roadmap::{MilestoneId, RoadmapArtifact, RoadmapStatus, RoadmapTaskId};
 use surge_core::{BootstrapDecision, BootstrapStage, EventPayload};
 
 use crate::flow_diagram::{Lane, lane_of};
@@ -44,18 +44,18 @@ pub struct Step {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskView {
-    pub id: String,
+    pub id: RoadmapTaskId,
     pub title: String,
     pub status: RoadmapStatus,
     pub verified: bool,
     pub steps: Vec<Step>,
     /// Found while doing another task.
-    pub discovered_from: Option<String>,
+    pub discovered_from: Option<RoadmapTaskId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilestoneView {
-    pub id: String,
+    pub id: MilestoneId,
     pub title: String,
     /// Steps the milestone runs itself (around its task loop).
     pub steps: Vec<Step>,
@@ -292,11 +292,11 @@ pub fn fold(
                 let title = item_str(item, "title").unwrap_or_else(|| id.clone());
                 let is_milestone = item.get("tasks").is_some_and(toml::Value::is_array);
                 if is_milestone {
-                    let index = match mission.milestones.iter().position(|m| m.id == id) {
+                    let index = match mission.milestones.iter().position(|m| m.id.as_str() == id) {
                         Some(i) => i,
                         None => {
                             mission.milestones.push(MilestoneView {
-                                id: id.clone(),
+                                id: id.clone().into(),
                                 title,
                                 steps: Vec::new(),
                                 tasks: Vec::new(),
@@ -332,11 +332,11 @@ pub fn fold(
                     };
                     let m = &mut mission.milestones[milestone];
                     m.started = true;
-                    let index = match m.tasks.iter().position(|t| t.id == id) {
+                    let index = match m.tasks.iter().position(|t| t.id.as_str() == id) {
                         Some(i) => i,
                         None => {
                             m.tasks.push(TaskView {
-                                id: id.clone(),
+                                id: id.clone().into(),
                                 title,
                                 status: RoadmapStatus::Pending,
                                 verified: false,
@@ -460,7 +460,7 @@ pub fn fold(
                     let milestone = mission
                         .milestones
                         .iter()
-                        .position(|m| m.tasks.iter().any(|t| &t.id == discovered_from))
+                        .position(|m| m.tasks.iter().any(|t| t.id == *discovered_from))
                         .or_else(|| mission.milestones.len().checked_sub(1));
                     if let Some(i) = milestone {
                         mission.milestones[i].tasks.push(TaskView {
@@ -530,12 +530,12 @@ fn with_step(
     }
 }
 
-fn task_mut<'a>(mission: &'a mut Mission, id: &str) -> Option<&'a mut TaskView> {
+fn task_mut<'a>(mission: &'a mut Mission, id: &RoadmapTaskId) -> Option<&'a mut TaskView> {
     mission
         .milestones
         .iter_mut()
         .flat_map(|m| m.tasks.iter_mut())
-        .find(|t| t.id == id)
+        .find(|t| t.id == *id)
 }
 
 /// A plain headline for a run's terminal error; the raw text stays

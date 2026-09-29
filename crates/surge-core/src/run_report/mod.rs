@@ -236,8 +236,10 @@ impl RunReport {
         // (this module's doc explains why `compile` does not share that):
         // only the two fields [`NodeOutcome`] needs, not the whole
         // `LedgerTask`.
-        let mut ledger_task_ids: std::collections::BTreeMap<String, (RoadmapStatus, bool)> =
-            std::collections::BTreeMap::new();
+        let mut ledger_task_ids: std::collections::BTreeMap<
+            crate::roadmap::RoadmapTaskId,
+            (RoadmapStatus, bool),
+        > = std::collections::BTreeMap::new();
 
         for event in events {
             // Positional header timestamps — every event updates these,
@@ -736,14 +738,17 @@ fn upsert_verdict(verdicts: &mut Vec<VerifierVerdict>, verdict: VerifierVerdict)
 /// for `ledger_task_ids`: upsert the entry, always set `status = to`, and
 /// clear `verified` unless `to == Completed`.
 fn record_task_status_change(
-    ledger_task_ids: &mut std::collections::BTreeMap<String, (RoadmapStatus, bool)>,
+    ledger_task_ids: &mut std::collections::BTreeMap<
+        crate::roadmap::RoadmapTaskId,
+        (RoadmapStatus, bool),
+    >,
     verdicts: &mut Vec<VerifierVerdict>,
-    task_id: &str,
+    task_id: &crate::roadmap::RoadmapTaskId,
     to: RoadmapStatus,
     authority_node: &NodeKey,
 ) {
     let entry = ledger_task_ids
-        .entry(task_id.to_owned())
+        .entry(task_id.clone())
         .or_insert((RoadmapStatus::Pending, false));
     entry.0 = to;
     if to != RoadmapStatus::Completed {
@@ -754,7 +759,7 @@ fn record_task_status_change(
             upsert_verdict(
                 verdicts,
                 VerifierVerdict {
-                    task_id: task_id.to_owned(),
+                    task_id: task_id.clone(),
                     node: authority_node.clone(),
                     result: VerdictResult::Rejected,
                 },
@@ -785,11 +790,11 @@ fn record_task_status_change(
             // spurious `Superseded` row in `verdicts`; it is still tracked
             // for `evidence_backed` via `ledger_task_ids`, just not
             // displayed in the "Verifier verdicts" section.
-            if verdicts.iter().any(|v| v.task_id == task_id) {
+            if verdicts.iter().any(|v| v.task_id == *task_id) {
                 upsert_verdict(
                     verdicts,
                     VerifierVerdict {
-                        task_id: task_id.to_owned(),
+                        task_id: task_id.clone(),
                         node: authority_node.clone(),
                         result: VerdictResult::Superseded,
                     },
@@ -977,7 +982,7 @@ pub enum OutcomeStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VerifierVerdict {
     /// Ledger task id the verdict concerns.
-    pub task_id: String,
+    pub task_id: crate::roadmap::RoadmapTaskId,
     /// The node that authored the verdict.
     pub node: NodeKey,
     /// The verdict itself.

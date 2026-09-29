@@ -21,6 +21,7 @@ use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::node::{LedgerEffect, OutcomeDecl};
 use surge_core::profile::registry::ResolvedProfile;
+use surge_core::roadmap::RoadmapTaskId;
 use surge_core::run_event::{
     EscalationCause, EventPayload, SessionDisposition, VersionedEventPayload,
 };
@@ -128,7 +129,7 @@ pub struct AgentStageParams<'a> {
     /// stage executes within a task loop. When `Some` and the reported outcome
     /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
     /// emits the matching task-ledger event. `None` outside a task loop.
-    pub active_task_id: Option<String>,
+    pub active_task_id: Option<RoadmapTaskId>,
 }
 
 fn append_completion_contract(mut prompt: String, outcomes: &[OutcomeKey]) -> String {
@@ -1224,7 +1225,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // ledger event (TaskStatusChanged / TaskVerified). The
                 // sealed-verifier gate above guarantees a `Verified` effect
                 // only reaches here from a read-only sandbox.
-                if let Some(task_id) = p.active_task_id.as_deref() {
+                if let Some(task_id) = p.active_task_id.as_ref() {
                     emit_ledger_event(
                         p.writer,
                         p.node,
@@ -1661,7 +1662,7 @@ async fn emit_ledger_event(
     writer: &RunWriter,
     node: &NodeKey,
     memory: &surge_core::run_state::RunMemory,
-    task_id: &str,
+    task_id: &RoadmapTaskId,
     effect: LedgerEffect,
     produced_hashes: &BTreeMap<String, ContentHash>,
 ) -> Result<(), StageError> {
@@ -1681,7 +1682,7 @@ async fn emit_ledger_event(
                 .get(task_id)
                 .map_or(RoadmapStatus::Pending, |task| task.status);
             EventPayload::TaskStatusChanged {
-                task_id: task_id.to_owned(),
+                task_id: task_id.clone(),
                 from,
                 to,
                 authority_node: node.clone(),
@@ -1692,9 +1693,9 @@ async fn emit_ledger_event(
                 .get("verification-report")
                 .or_else(|| produced_hashes.values().next())
                 .copied()
-                .unwrap_or_else(|| ContentHash::compute(task_id.as_bytes()));
+                .unwrap_or_else(|| ContentHash::compute(task_id.as_str().as_bytes()));
             EventPayload::TaskVerified {
-                task_id: task_id.to_owned(),
+                task_id: task_id.clone(),
                 node: node.clone(),
                 evidence,
             }
@@ -1742,7 +1743,7 @@ fn stamp_memory_bytes(
 async fn emit_discovered_tasks(
     writer: &RunWriter,
     node: &NodeKey,
-    discovered_from: &str,
+    discovered_from: &RoadmapTaskId,
     bytes: &[u8],
 ) -> Result<(), StageError> {
     let text = match std::str::from_utf8(bytes) {
@@ -1783,7 +1784,7 @@ async fn emit_discovered_tasks(
         writer
             .append_event(VersionedEventPayload::new(EventPayload::TaskDiscovered {
                 task_id: entry.id,
-                discovered_from: discovered_from.to_owned(),
+                discovered_from: discovered_from.clone(),
                 title: entry.title,
             }))
             .await

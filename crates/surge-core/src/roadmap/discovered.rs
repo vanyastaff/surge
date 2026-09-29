@@ -28,12 +28,12 @@ pub enum DiscoveredTaskIssue {
     /// Two task entries share the same id.
     DuplicateId {
         /// The duplicated id.
-        id: String,
+        id: RoadmapTaskId,
     },
     /// A task entry has an empty title.
     EmptyTitle {
         /// The id of the task with the empty title.
-        id: String,
+        id: RoadmapTaskId,
     },
 }
 
@@ -58,11 +58,11 @@ impl DiscoveredTasksArtifact {
     #[must_use]
     pub fn validate(&self) -> Vec<DiscoveredTaskIssue> {
         let mut issues = Vec::new();
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: HashSet<&RoadmapTaskId> = HashSet::new();
         for entry in &self.tasks {
-            if entry.id.trim().is_empty() {
+            if entry.id.as_str().trim().is_empty() {
                 issues.push(DiscoveredTaskIssue::EmptyId);
-            } else if !seen.insert(entry.id.as_str()) {
+            } else if !seen.insert(&entry.id) {
                 issues.push(DiscoveredTaskIssue::DuplicateId {
                     id: entry.id.clone(),
                 });
@@ -81,7 +81,7 @@ impl DiscoveredTasksArtifact {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DiscoveredTaskEntry {
     /// Stable id for the discovered task.
-    pub id: String,
+    pub id: RoadmapTaskId,
     /// Human-readable title.
     pub title: String,
     /// Optional short description.

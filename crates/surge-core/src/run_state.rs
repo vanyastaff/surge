@@ -7,7 +7,7 @@ use crate::graph::Graph;
 use crate::id::SessionId;
 use crate::keys::{NodeKey, OutcomeKey};
 use crate::node::LedgerEffect;
-use crate::roadmap::RoadmapStatus;
+use crate::roadmap::{RoadmapStatus, RoadmapTaskId};
 use crate::roadmap_patch::{
     ActivePickupPolicy, RoadmapPatchApprovalDecision, RoadmapPatchId, RoadmapPatchStatus,
     RoadmapPatchTarget,
@@ -259,7 +259,7 @@ pub struct RunMemory {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LedgerState {
     /// Per-task ledger record, keyed by task id.
-    pub tasks: BTreeMap<String, LedgerTask>,
+    pub tasks: BTreeMap<RoadmapTaskId, LedgerTask>,
     /// Count of `TaskVerified` events rejected because the reporting node
     /// lacked verification authority in the active graph. Deterministic
     /// (folded from the log); surfaced so callers can flag tampered logs.
@@ -272,8 +272,14 @@ impl LedgerState {
     /// Clears `verified` when the new status is not `Completed`, preventing
     /// an inconsistent state where `verified=true` but the task is not
     /// completed (e.g. due to a reordered event log).
-    fn record_status_change(&mut self, task_id: &str, to: RoadmapStatus, node: &NodeKey, seq: u64) {
-        let entry = self.tasks.entry(task_id.to_owned()).or_default();
+    fn record_status_change(
+        &mut self,
+        task_id: &RoadmapTaskId,
+        to: RoadmapStatus,
+        node: &NodeKey,
+        seq: u64,
+    ) {
+        let entry = self.tasks.entry(task_id.clone()).or_default();
         entry.status = to;
         if to != RoadmapStatus::Completed {
             entry.verified = false;
@@ -285,13 +291,18 @@ impl LedgerState {
     /// Insert a discovered task as pending with a `discovered_from` edge.
     /// First-write-wins: a later duplicate discovery for the same id is a
     /// no-op so replay stays idempotent.
-    fn record_discovered(&mut self, task_id: &str, discovered_from: &str, seq: u64) {
+    fn record_discovered(
+        &mut self,
+        task_id: &RoadmapTaskId,
+        discovered_from: &RoadmapTaskId,
+        seq: u64,
+    ) {
         self.tasks
-            .entry(task_id.to_owned())
+            .entry(task_id.clone())
             .or_insert_with(|| LedgerTask {
                 status: RoadmapStatus::Pending,
                 verified: false,
-                discovered_from: Some(discovered_from.to_owned()),
+                discovered_from: Some(discovered_from.clone()),
                 last_authority_node: None,
                 updated_seq: seq,
             });
@@ -301,12 +312,18 @@ impl LedgerState {
     /// active graph (the node must declare a `LedgerEffect::Verified` outcome).
     /// An unauthorized verification leaves the task unverified and bumps the
     /// rejection counter — defense in depth against a tampered log.
-    fn record_verified(&mut self, task_id: &str, node: &NodeKey, authorized: bool, seq: u64) {
+    fn record_verified(
+        &mut self,
+        task_id: &RoadmapTaskId,
+        node: &NodeKey,
+        authorized: bool,
+        seq: u64,
+    ) {
         if !authorized {
             self.rejected_verifications += 1;
             return;
         }
-        let entry = self.tasks.entry(task_id.to_owned()).or_default();
+        let entry = self.tasks.entry(task_id.clone()).or_default();
         entry.status = RoadmapStatus::Completed;
         entry.verified = true;
         entry.last_authority_node = Some(node.clone());
@@ -322,7 +339,7 @@ pub struct LedgerTask {
     /// True only once a verification-authority node confirmed the task.
     pub verified: bool,
     /// Task id this task was discovered from, when discovered mid-run.
-    pub discovered_from: Option<String>,
+    pub discovered_from: Option<RoadmapTaskId>,
     /// Node that last transitioned this task (audit trail head).
     pub last_authority_node: Option<NodeKey>,
     /// Seq of the last event that touched this task.
@@ -2255,7 +2272,10 @@ mod tests {
         let t2 = &memory.ledger.tasks["m1-t2"];
         assert_eq!(t2.status, RoadmapStatus::Pending);
         assert!(!t2.verified);
-        assert_eq!(t2.discovered_from.as_deref(), Some("m1-t1"));
+        assert_eq!(
+            t2.discovered_from.as_ref().map(RoadmapTaskId::as_str),
+            Some("m1-t1")
+        );
         assert_eq!(memory.ledger.rejected_verifications, 0);
     }
 
@@ -2330,7 +2350,10 @@ mod tests {
         };
         assert_eq!(a.ledger, b.ledger);
         assert_eq!(
-            a.ledger.tasks["m1-t1"].discovered_from.as_deref(),
+            a.ledger.tasks["m1-t1"]
+                .discovered_from
+                .as_ref()
+                .map(RoadmapTaskId::as_str),
             Some("seed")
         );
         assert!(a.ledger.tasks["m1-t1"].verified);

@@ -40,7 +40,7 @@ pub(in crate::artifact_contract) fn validate_discovered_tasks(
             DiscoveredTaskIssue::EmptyId => (ArtifactDiagnosticCode::MissingField, None),
             DiscoveredTaskIssue::DuplicateId { id } => (
                 ArtifactDiagnosticCode::DuplicateIdentifier,
-                Some(id.clone()),
+                Some(id.to_string()),
             ),
             DiscoveredTaskIssue::EmptyTitle { id } => (
                 ArtifactDiagnosticCode::MissingField,
