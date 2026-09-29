@@ -45,9 +45,9 @@ use surge_core::bootstrap_operation::BootstrapIntent;
 use surge_core::{RunId, RunState};
 use surge_orchestrator::engine::daemon_facade::{BootstrapClientError, DaemonEngineFacade};
 use surge_orchestrator::operator::{
-    AttentionGroup, LedgerQuery, OperatorError, PendingInput, ReadyQuery, build_answer, classify,
-    collect_entries, compile_report, compile_trace, deliver_answer, fold_run_state,
-    inspect_pending, query_ledger, query_memory, query_ready, queue_steer,
+    AttentionGroup, LedgerQuery, OperatorAnswer, OperatorError, PendingInput, PendingKind,
+    ReadyQuery, classify, collect_entries, compile_report, compile_trace, deliver_answer,
+    fold_run_state, inspect_pending, query_ledger, query_memory, query_ready, queue_steer,
 };
 use surge_persistence::memory::MemoryStore;
 use surge_persistence::runs::Storage;
@@ -800,27 +800,14 @@ impl SurgeMcpServer {
                 note: params.note.as_deref(),
             },
         )?;
-        let (_, response) = match &authorized.answer {
-            Answer::FreeForm(text) => build_answer(
-                true,
-                authorized.pending.call_id.clone(),
-                &authorized.pending.gate_options,
-                None,
-                None,
-                Some(text),
-                None,
-            ),
-            Answer::Outcome(outcome) => build_answer(
-                false,
-                authorized.pending.call_id.clone(),
-                &authorized.pending.gate_options,
-                Some(outcome),
-                authorized.note,
-                None,
-                None,
-            ),
-        }
-        .map_err(|e| {
+        let answer = match &authorized.answer {
+            Answer::FreeForm(text) => OperatorAnswer::Text(text.clone()),
+            Answer::Outcome(outcome) => OperatorAnswer::Outcome {
+                key: outcome.clone(),
+                comment: authorized.note.map(ToOwned::to_owned),
+            },
+        };
+        let validated = authorized.pending.build_answer(answer).map_err(|e| {
             ToolError::Failed(
                 anyhow::Error::new(e).context("build answer for an authorized resolution"),
             )
@@ -838,7 +825,7 @@ impl SurgeMcpServer {
                 }
             ),
         );
-        deliver_answer(&daemon, run_id, authorized.pending, response)
+        deliver_answer(&daemon, run_id, validated)
             .await
             .map_err(|e| ToolError::Rejected(e.to_string()))?;
         Ok(ToolOutput {
@@ -1011,26 +998,31 @@ fn pending_input_json(state: &PendingState) -> Value {
     match state {
         PendingState::Nothing => Value::Null,
         PendingState::BootstrapApproval => json!({ "kind": "bootstrap_approval" }),
-        PendingState::Input(pending) if pending.is_bootstrap_gate => json!({
-            "kind": "bootstrap_approval",
-            "node": pending.node.to_string(),
-            "prompt": pending.prompt.trim(),
-        }),
-        PendingState::Input(pending) if pending.is_tool_call => json!({
-            "kind": "tool_call",
-            "node": pending.node.to_string(),
-            "prompt": pending.prompt.trim(),
-        }),
-        PendingState::Input(pending) => json!({
-            "kind": "gate",
-            "node": pending.node.to_string(),
-            "prompt": pending.prompt.trim(),
-            "options": pending
-                .gate_options
-                .iter()
-                .map(|(outcome, label)| json!({ "outcome": outcome, "label": label }))
-                .collect::<Vec<_>>(),
-        }),
+        PendingState::Input(pending) => {
+            let node = pending.node.to_string();
+            let prompt = pending.prompt.trim();
+            match &pending.kind {
+                PendingKind::BootstrapGate => json!({
+                    "kind": "bootstrap_approval",
+                    "node": node,
+                    "prompt": prompt,
+                }),
+                PendingKind::ToolCall { .. } => json!({
+                    "kind": "tool_call",
+                    "node": node,
+                    "prompt": prompt,
+                }),
+                PendingKind::Gate { options, .. } => json!({
+                    "kind": "gate",
+                    "node": node,
+                    "prompt": prompt,
+                    "options": options
+                        .iter()
+                        .map(|o| json!({ "outcome": o.outcome, "label": o.label }))
+                        .collect::<Vec<_>>(),
+                }),
+            }
+        },
     }
 }
 
@@ -1101,11 +1093,11 @@ fn authorize_resolution<'a>(
             )));
         },
         PendingState::BootstrapApproval => return Err(human_only(None)),
-        PendingState::Input(pending) if pending.is_bootstrap_gate => {
-            return Err(human_only(Some(pending.node.as_ref())));
-        },
         PendingState::Input(pending) => pending,
     };
+    if matches!(pending.kind, PendingKind::BootstrapGate) {
+        return Err(human_only(Some(pending.node.as_ref())));
+    }
     if request.expected_node != pending.node.as_ref() as &str {
         return Err(ToolError::StaleGate {
             expected_node: request.expected_node.to_owned(),
@@ -1119,7 +1111,11 @@ fn authorize_resolution<'a>(
             "decision must not be blank".into(),
         ));
     }
-    if pending.is_tool_call {
+    let options = match &pending.kind {
+        PendingKind::Gate { options, .. } => options.as_slice(),
+        PendingKind::ToolCall { .. } | PendingKind::BootstrapGate => &[],
+    };
+    if matches!(pending.kind, PendingKind::ToolCall { .. }) {
         if request.note.is_some() {
             return Err(ToolError::InvalidArgument(
                 "`note` is only accepted for a gate decision; a tool_call answer is the \
@@ -1133,11 +1129,7 @@ fn authorize_resolution<'a>(
             note: None,
         });
     }
-    let valid_decisions: Vec<String> = pending
-        .gate_options
-        .iter()
-        .map(|(outcome, _)| outcome.clone())
-        .collect();
+    let valid_decisions: Vec<String> = options.iter().map(|o| o.outcome.clone()).collect();
     if valid_decisions.is_empty() {
         return Err(ToolError::InvalidDecision {
             message: format!(

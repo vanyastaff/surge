@@ -29,7 +29,10 @@ pub use error::{InvalidFilter, OperatorError, RunIdError};
 pub use inbox::{AttentionGroup, InboxEntry, classify, collect_entries};
 pub use journal::{fold_run_state, read_run_events};
 pub use memory::query_memory;
-pub use pending::{PendingInput, build_answer, deliver_answer, inspect_pending};
+pub use pending::{
+    GateOption, OperatorAnswer, PendingInput, PendingKind, ValidatedAnswer, deliver_answer,
+    inspect_pending,
+};
 pub use report::{compile_report, compile_trace};
 pub use run_id::resolve_run_id;
 pub use steer::queue_steer;

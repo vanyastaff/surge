@@ -28,7 +28,7 @@ use super::{
     Answer, AttentionGroup, PendingState, ResolveRequest, ServeOptions, SurgeMcpServer, TOOLS,
     ToolError, authorize_resolution, serve,
 };
-use surge_orchestrator::operator::PendingInput;
+use surge_orchestrator::operator::{GateOption, PendingInput, PendingKind};
 
 const ALL_TOOLS: [&str; 10] = [
     "surge_inbox",
@@ -701,16 +701,28 @@ fn tool_table_matches_the_registered_router() {
 }
 
 fn pending_input(is_tool_call: bool, is_bootstrap_gate: bool, options: &[&str]) -> PendingState {
+    let kind = if is_bootstrap_gate {
+        PendingKind::BootstrapGate
+    } else if is_tool_call {
+        PendingKind::ToolCall {
+            call_id: "call-1".into(),
+        }
+    } else {
+        PendingKind::Gate {
+            call_id: None,
+            options: options
+                .iter()
+                .map(|key| GateOption {
+                    outcome: (*key).to_owned(),
+                    label: key.to_uppercase(),
+                })
+                .collect(),
+        }
+    };
     PendingState::Input(PendingInput {
         node: NodeKey::try_from("plan_gate").unwrap(),
-        call_id: None,
         prompt: "Approve?".into(),
-        gate_options: options
-            .iter()
-            .map(|key| ((*key).to_owned(), key.to_uppercase()))
-            .collect(),
-        is_tool_call,
-        is_bootstrap_gate,
+        kind,
     })
 }
 

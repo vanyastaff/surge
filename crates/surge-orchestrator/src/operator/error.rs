@@ -133,9 +133,15 @@ pub enum OperatorError {
         /// What the run is actually doing.
         attention: Attention,
     },
-    /// The operator's raw JSON answer did not parse.
-    #[error("parse --json")]
-    ParseAnswerJson(#[source] serde_json::Error),
+    /// The pending request is a bootstrap approval, which only a human may give.
+    #[error(
+        "run is blocked at a bootstrap approval (@{node}); description, roadmap and flow \
+         approvals must be given by a human"
+    )]
+    HumanOnlyGate {
+        /// The bootstrap gate node.
+        node: String,
+    },
     /// A tool-driven request needs a `text` or `json` answer and got neither.
     #[error("this run awaits a free-form tool response; pass --text or --json")]
     MissingToolAnswer,
