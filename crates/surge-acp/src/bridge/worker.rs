@@ -488,7 +488,14 @@ async fn open_session_attempt(
         let offered = response.config_options.clone().unwrap_or_default();
         let applied = async {
             for selection in &config.config_selections {
-                let (config_id, value) = resolve_config_selection(&offered, selection)?;
+                let (config_id, value) = match resolve_config_selection(&offered, selection) {
+                    Ok(resolved) => resolved,
+                    Err(error) if selection.best_effort => {
+                        tracing::info!(%error, "skipping best-effort session option");
+                        continue;
+                    },
+                    Err(error) => return Err(error),
+                };
                 connection
                     .set_session_config_option(
                         agent_client_protocol::schema::v1::SetSessionConfigOptionRequest::new(
@@ -991,6 +998,7 @@ mod tests {
         let by_value = ConfigSelection {
             category: ConfigCategory::Model,
             value: "OPUS".into(),
+            best_effort: false,
         };
         let (id, value) = resolve_config_selection(&offered, &by_value).unwrap();
         assert_eq!(
@@ -1000,6 +1008,7 @@ mod tests {
         let by_name = ConfigSelection {
             category: ConfigCategory::Model,
             value: "Claude Sonnet".into(),
+            best_effort: false,
         };
         assert_eq!(
             resolve_config_selection(&offered, &by_name)
@@ -1011,6 +1020,7 @@ mod tests {
         let effort = ConfigSelection {
             category: ConfigCategory::ThoughtLevel,
             value: "high".into(),
+            best_effort: false,
         };
         let (id, _) = resolve_config_selection(&offered, &effort).unwrap();
         assert_eq!(id.to_string(), "effort");
@@ -1022,6 +1032,7 @@ mod tests {
         let wrong = ConfigSelection {
             category: ConfigCategory::Model,
             value: "gpt-9".into(),
+            best_effort: false,
         };
         let error = resolve_config_selection(&model_options(), &wrong).unwrap_err();
         let text = error.to_string();
@@ -1033,6 +1044,7 @@ mod tests {
         let cross = ConfigSelection {
             category: ConfigCategory::Model,
             value: "high".into(),
+            best_effort: false,
         };
         assert!(resolve_config_selection(&model_options(), &cross).is_err());
         let none = resolve_config_selection(&[], &wrong)

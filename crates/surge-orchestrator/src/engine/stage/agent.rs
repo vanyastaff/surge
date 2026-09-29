@@ -2527,24 +2527,29 @@ fn effective_effort<'a>(node_effort: Option<&'a str>, floor: Option<&'a str>) ->
 }
 
 /// Session options a node asks for (model, reasoning level). `min_effort` is
-/// the resolved profile's reasoning floor.
+/// the resolved profile's reasoning floor: a preference, so an agent that does
+/// not offer reasoning levels (Claude Code today) keeps its own default
+/// instead of failing the stage.
 fn node_config_selections(
     agent_config: &AgentConfig,
     min_effort: Option<&str>,
 ) -> Vec<surge_acp::bridge::session::ConfigSelection> {
     use surge_acp::bridge::session::{ConfigCategory, ConfigSelection};
+    let explicit_effort = agent_config.effort_override();
+    let effort = effective_effort(explicit_effort, min_effort);
+    // Only a value the operator never wrote is best-effort: the floor filling
+    // a gap, or raising an explicit choice that was lower than it.
+    let effort_is_floor = effort != explicit_effort;
     [
-        (ConfigCategory::Model, agent_config.model_override()),
-        (
-            ConfigCategory::ThoughtLevel,
-            effective_effort(agent_config.effort_override(), min_effort),
-        ),
+        (ConfigCategory::Model, agent_config.model_override(), false),
+        (ConfigCategory::ThoughtLevel, effort, effort_is_floor),
     ]
     .into_iter()
-    .filter_map(|(category, value)| {
+    .filter_map(|(category, value, best_effort)| {
         value.map(|value| ConfigSelection {
             category,
             value: value.to_string(),
+            best_effort,
         })
     })
     .collect()
@@ -2901,6 +2906,22 @@ mod effort_floor_tests {
     fn floor_raises_a_lower_node_effort_and_fills_a_missing_one() {
         assert_eq!(effective_effort(Some("low"), Some("high")), Some("high"));
         assert_eq!(effective_effort(None, Some("medium")), Some("medium"));
+    }
+
+    #[test]
+    fn a_floor_fill_is_best_effort_but_an_explicit_choice_is_not() {
+        use super::node_config_selections;
+        let mut cfg: surge_core::agent_config::AgentConfig =
+            toml::from_str(r#"profile = "implementer@1.0""#).unwrap();
+        let floor_only = node_config_selections(&cfg, Some("medium"));
+        assert_eq!(floor_only.len(), 1);
+        assert!(floor_only[0].best_effort);
+        cfg.custom_fields.insert(
+            "runtime".into(),
+            toml::from_str::<toml::Value>("effort = \"high\"").unwrap(),
+        );
+        let explicit = node_config_selections(&cfg, Some("medium"));
+        assert!(!explicit[0].best_effort);
     }
 
     #[test]

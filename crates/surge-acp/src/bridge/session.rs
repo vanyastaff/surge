@@ -217,6 +217,10 @@ pub struct ConfigSelection {
     pub category: ConfigCategory,
     /// Requested value id or display name.
     pub value: String,
+    /// A default the step would like but does not insist on (a profile's
+    /// reasoning floor): skipped when the agent does not offer it, where an
+    /// operator's explicit choice (`false`) fails the session.
+    pub best_effort: bool,
 }
 
 impl SessionConfig {
