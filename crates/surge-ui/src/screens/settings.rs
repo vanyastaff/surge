@@ -49,18 +49,18 @@ impl SettingsPage {
     fn subtitle(self) -> &'static str {
         match self {
             Self::Appearance => "Theme, mode, colors",
-            Self::Agents => "Discovery, default agent",
+            Self::Agents => "Default agent",
             Self::Keybindings => "Keyboard shortcuts",
             Self::EditorPaths => "IDE integration",
-            Self::General => "Updates, privacy, logs",
+            Self::General => "Logs, version",
             Self::Pipeline => "Gates, parallelism, QA",
-            Self::Routing => "Agent per phase",
+            Self::Routing => "How work is assigned",
             Self::Budgets => "Cost & token limits",
-            Self::GitWorktrees => "Merge, cleanup",
-            Self::Resilience => "Timeouts, retry",
+            Self::GitWorktrees => "Worktrees, clean-up",
+            Self::Resilience => "Timeouts, retries",
             Self::McpServers => "Context protocol",
             Self::ContextMemory => "Knowledge base",
-            Self::Integrations => "Linear, GitHub",
+            Self::Integrations => "Linear, GitHub, Telegram",
         }
     }
 
@@ -108,18 +108,18 @@ impl SettingsPage {
     fn content_subtitle(self) -> &'static str {
         match self {
             Self::Appearance => "Customize how Surge looks",
-            Self::Agents => "Manage AI agent discovery and defaults",
-            Self::Keybindings => "Customize keyboard shortcuts",
-            Self::EditorPaths => "Configure IDE integration and file paths",
-            Self::General => "Updates, privacy, telemetry, and logs",
+            Self::Agents => "Which agent new missions use",
+            Self::Keybindings => "Shortcuts available everywhere in the app",
+            Self::EditorPaths => "Editor and the files every mission starts from",
+            Self::General => "Logging and version",
             Self::Pipeline => "Gates, parallelism, and QA configuration",
-            Self::Routing => "Configure how tasks are routed to agents",
-            Self::Budgets => "Set cost and token spending limits",
-            Self::GitWorktrees => "Git branching, worktrees, and PR settings",
-            Self::Resilience => "Timeouts, retry policies, and circuit breakers",
+            Self::Routing => "How work is assigned to agents",
+            Self::Budgets => "Cost and token limits per mission",
+            Self::GitWorktrees => "Where missions work, and what is cleaned up",
+            Self::Resilience => "How long to wait, and what to do when agents fail",
             Self::McpServers => "Model Context Protocol server configuration",
             Self::ContextMemory => "Knowledge base and memory configuration",
-            Self::Integrations => "Connect to Linear, GitHub, Jira, and more",
+            Self::Integrations => "Trackers and chat configured in surge.toml",
         }
     }
 
@@ -141,7 +141,6 @@ impl SettingsPage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppearanceMode {
-    System,
     Light,
     Dark,
 }
@@ -149,7 +148,6 @@ pub enum AppearanceMode {
 impl AppearanceMode {
     fn label(self) -> &'static str {
         match self {
-            Self::System => "System",
             Self::Light => "Light",
             Self::Dark => "Dark",
         }
@@ -157,7 +155,6 @@ impl AppearanceMode {
 
     fn icon(self) -> IconName {
         match self {
-            Self::System => IconName::Settings,
             Self::Light => IconName::Sun,
             Self::Dark => IconName::Moon,
         }
@@ -189,7 +186,6 @@ impl AsKeybinding for Kb {
 pub struct SettingsScreen {
     state: Entity<AppState>,
     active_page: SettingsPage,
-    dirty: bool,
     // Appearance
     appearance_mode: AppearanceMode,
     selected_theme: theme::ThemeName,
@@ -221,6 +217,48 @@ pub struct SettingsScreen {
     prompt_timeout_secs: u64,
     prompt_retries: u32,
     circuit_breaker_threshold: u32,
+    budget_warn_threshold: u8,
+    sandbox_default: surge_core::sandbox::SandboxMode,
+    /// Values as last read from / written to surge.toml; saving writes only
+    /// what differs from these.
+    baseline: Option<Baseline>,
+    /// Why the last save failed — shown in the save bar, not just logged.
+    save_error: Option<String>,
+    /// "Saved" confirmation after a successful save.
+    saved: bool,
+}
+
+/// The editable values at load / last save.
+#[derive(Clone, PartialEq)]
+struct Baseline {
+    gate_after_spec: bool,
+    gate_after_plan: bool,
+    gate_after_each_subtask: bool,
+    gate_after_qa: bool,
+    max_parallel: usize,
+    max_qa_iterations: u32,
+    log_level: String,
+    log_max_size_mb: u64,
+    routing_strategy: surge_core::config::RoutingStrategy,
+    default_agent: String,
+    budget_usd: Option<f64>,
+    budget_tokens: Option<u64>,
+    budget_warn_threshold: u8,
+    connect_timeout_secs: u64,
+    prompt_timeout_secs: u64,
+    prompt_retries: u32,
+    circuit_breaker_threshold: u32,
+    remove_worktrees_on_complete: bool,
+    keep_branches_days: u32,
+    sandbox_default: surge_core::sandbox::SandboxMode,
+}
+
+/// Serialized form of an enum as surge.toml spells it.
+fn toml_str<T: serde::Serialize>(value: &T) -> String {
+    toml::Value::try_from(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 impl SettingsScreen {
@@ -239,10 +277,12 @@ impl SettingsScreen {
         Self {
             state,
             active_page: SettingsPage::Pipeline,
-            dirty: false,
-            appearance_mode: AppearanceMode::Dark,
-            selected_theme: theme::ThemeName::Default,
-            theme_mode: theme::ThemeMode::Dark,
+            appearance_mode: match theme::current().1 {
+                theme::ThemeMode::Dark => AppearanceMode::Dark,
+                theme::ThemeMode::Light => AppearanceMode::Light,
+            },
+            selected_theme: theme::current().0,
+            theme_mode: theme::current().1,
             // Pipeline — from config
             gate_after_spec: gates.is_none_or(|g| g.after_spec),
             gate_after_plan: gates.is_none_or(|g| g.after_plan),
@@ -256,7 +296,7 @@ impl SettingsScreen {
             // IDE
             editor: ide
                 .and_then(|i| i.editor.clone())
-                .unwrap_or_else(|| "VS Code".into()),
+                .unwrap_or_else(|| "Not set".into()),
             auto_open_worktree: ide.is_some_and(|i| i.auto_open_worktree),
             // Routing
             routing_strategy: cfg.map(|c| c.routing.strategy.clone()).unwrap_or_default(),
@@ -272,75 +312,205 @@ impl SettingsScreen {
             prompt_timeout_secs: resilience.map_or(600, |r| r.prompt_timeout_secs),
             prompt_retries: resilience.map_or(3, |r| r.prompt_retries),
             circuit_breaker_threshold: resilience.map_or(5, |r| r.circuit_breaker_threshold),
+            budget_warn_threshold: analytics.map_or(80, |a| a.budget_warn_threshold),
+            sandbox_default: cfg.map_or(surge_core::sandbox::SandboxMode::WorkspaceWrite, |c| {
+                c.init.sandbox_default
+            }),
+            baseline: None,
+            save_error: None,
+            saved: false,
+        }
+        .with_baseline()
+    }
+
+    fn snapshot(&self) -> Baseline {
+        Baseline {
+            gate_after_spec: self.gate_after_spec,
+            gate_after_plan: self.gate_after_plan,
+            gate_after_each_subtask: self.gate_after_each_subtask,
+            gate_after_qa: self.gate_after_qa,
+            max_parallel: self.max_parallel,
+            max_qa_iterations: self.max_qa_iterations,
+            log_level: self.log_level.clone(),
+            log_max_size_mb: self.log_max_size_mb,
+            routing_strategy: self.routing_strategy.clone(),
+            default_agent: self.default_agent.clone(),
+            budget_usd: self.budget_usd,
+            budget_tokens: self.budget_tokens,
+            budget_warn_threshold: self.budget_warn_threshold,
+            connect_timeout_secs: self.connect_timeout_secs,
+            prompt_timeout_secs: self.prompt_timeout_secs,
+            prompt_retries: self.prompt_retries,
+            circuit_breaker_threshold: self.circuit_breaker_threshold,
+            remove_worktrees_on_complete: self.remove_worktrees_on_complete,
+            keep_branches_days: self.keep_branches_days,
+            sandbox_default: self.sandbox_default,
         }
     }
 
-    /// Build a SurgeConfig from current UI state and save.
-    ///
-    /// On success, clears `dirty`. On failure, leaves `dirty=true` so
-    /// the user can retry — and emits a tracing::error so the desktop
-    /// build shows up in logs. If there is no `state.config` (no
-    /// project loaded), refuses with a clear error rather than the
-    /// previous silent no-op.
+    fn with_baseline(mut self) -> Self {
+        self.baseline = Some(self.snapshot());
+        self
+    }
+
+    /// Keys whose value differs from what surge.toml held.
+    fn changes(&self) -> crate::config_edit::Changes {
+        use crate::config_edit::Change;
+        let mut out = crate::config_edit::Changes::new();
+        let Some(base) = &self.baseline else { return out };
+        let now = self.snapshot();
+        let mut put = |key: &str, changed: bool, change: Change| {
+            if changed {
+                out.insert(key.to_string(), change);
+            }
+        };
+        put("pipeline.gates.after_spec", now.gate_after_spec != base.gate_after_spec, Change::Bool(now.gate_after_spec));
+        put("pipeline.gates.after_plan", now.gate_after_plan != base.gate_after_plan, Change::Bool(now.gate_after_plan));
+        put(
+            "pipeline.gates.after_each_subtask",
+            now.gate_after_each_subtask != base.gate_after_each_subtask,
+            Change::Bool(now.gate_after_each_subtask),
+        );
+        put("pipeline.gates.after_qa", now.gate_after_qa != base.gate_after_qa, Change::Bool(now.gate_after_qa));
+        put("pipeline.max_parallel", now.max_parallel != base.max_parallel, Change::Int(now.max_parallel as i64));
+        put(
+            "pipeline.max_qa_iterations",
+            now.max_qa_iterations != base.max_qa_iterations,
+            Change::Int(i64::from(now.max_qa_iterations)),
+        );
+        put("log.level", now.log_level != base.log_level, Change::Str(now.log_level.clone()));
+        put("log.max_size_mb", now.log_max_size_mb != base.log_max_size_mb, Change::Int(now.log_max_size_mb as i64));
+        put(
+            "routing.strategy",
+            now.routing_strategy != base.routing_strategy,
+            Change::Str(toml_str(&now.routing_strategy)),
+        );
+        put(
+            "default_agent",
+            now.default_agent != base.default_agent && !now.default_agent.is_empty(),
+            Change::Str(now.default_agent.clone()),
+        );
+        put(
+            "analytics.budget_usd",
+            now.budget_usd != base.budget_usd,
+            now.budget_usd.map_or(Change::Unset, Change::Float),
+        );
+        put(
+            "analytics.budget_tokens",
+            now.budget_tokens != base.budget_tokens,
+            now.budget_tokens.map_or(Change::Unset, |t| Change::Int(t as i64)),
+        );
+        put(
+            "analytics.budget_warn_threshold",
+            now.budget_warn_threshold != base.budget_warn_threshold,
+            Change::Int(i64::from(now.budget_warn_threshold)),
+        );
+        put(
+            "resilience.connect_timeout_secs",
+            now.connect_timeout_secs != base.connect_timeout_secs,
+            Change::Int(now.connect_timeout_secs as i64),
+        );
+        put(
+            "resilience.prompt_timeout_secs",
+            now.prompt_timeout_secs != base.prompt_timeout_secs,
+            Change::Int(now.prompt_timeout_secs as i64),
+        );
+        put(
+            "resilience.prompt_retries",
+            now.prompt_retries != base.prompt_retries,
+            Change::Int(i64::from(now.prompt_retries)),
+        );
+        put(
+            "resilience.circuit_breaker_threshold",
+            now.circuit_breaker_threshold != base.circuit_breaker_threshold,
+            Change::Int(i64::from(now.circuit_breaker_threshold)),
+        );
+        put(
+            "cleanup.remove_worktrees_on_complete",
+            now.remove_worktrees_on_complete != base.remove_worktrees_on_complete,
+            Change::Bool(now.remove_worktrees_on_complete),
+        );
+        put(
+            "cleanup.keep_branches_days",
+            now.keep_branches_days != base.keep_branches_days,
+            Change::Int(i64::from(now.keep_branches_days)),
+        );
+        put(
+            "init.sandbox_default",
+            now.sandbox_default != base.sandbox_default,
+            Change::Str(toml_str(&now.sandbox_default)),
+        );
+        out
+    }
+
+    fn is_dirty(&self) -> bool {
+        !self.changes().is_empty()
+    }
+
+    /// Write only the changed keys into surge.toml (comments and every
+    /// other key untouched), validated before writing. A failure is shown
+    /// in the save bar and the edits stay pending so the person can retry.
     fn save_config(&mut self, cx: &mut Context<Self>) {
+        let changes = self.changes();
+        if changes.is_empty() {
+            return;
+        }
         let result: Result<(), String> = self.state.update(cx, |state, _cx| {
-            if state.config.is_none() {
-                return Err("no project loaded; open a project before saving settings".into());
-            }
-            let Some(project_path) = state.project_path.clone() else {
-                return Err("project has no on-disk path; cannot save settings".into());
-            };
-            let config_path = project_path.join("surge.toml");
-
-            // Merge over the FRESHEST truth: reload surge.toml so a save
-            // from this screen cannot clobber edits made on disk (CLI,
-            // editor) since the session started. Fall back to the
-            // in-memory copy if the file is missing/unreadable.
-            let mut config = surge_core::SurgeConfig::load(&config_path)
-                .ok()
-                .or_else(|| state.config.clone())
-                .ok_or_else(|| "no configuration available to save".to_string())?;
-
-            // Apply ONLY the fields this screen actually edits. The
-            // read-only pages (budgets, resilience, cleanup, IDE) display
-            // values but have no controls — writing their session
-            // snapshots back would be a silent overwrite channel.
-            config.pipeline.gates.after_spec = self.gate_after_spec;
-            config.pipeline.gates.after_plan = self.gate_after_plan;
-            config.pipeline.gates.after_each_subtask = self.gate_after_each_subtask;
-            config.pipeline.gates.after_qa = self.gate_after_qa;
-            config.pipeline.max_parallel = self.max_parallel;
-            config.pipeline.max_qa_iterations = self.max_qa_iterations;
-            config.log.level = self.log_level.clone();
-            config.log.max_size_mb = self.log_max_size_mb;
-            config.routing.strategy = self.routing_strategy.clone();
-            if !self.default_agent.is_empty() {
-                config.default_agent = self.default_agent.clone();
-            }
-
-            config
-                .save(&config_path)
-                .map_err(|e| format!("failed to save settings: {e}"))?;
+            let project_path = state
+                .project_path
+                .clone()
+                .ok_or_else(|| "Open a project before saving settings.".to_string())?;
+            let config = crate::config_edit::apply(&project_path.join("surge.toml"), &changes)?;
             state.config = Some(config);
             Ok(())
         });
-
         match result {
             Ok(()) => {
-                self.dirty = false;
+                tracing::info!(keys = changes.len(), "settings saved to surge.toml");
+                self.baseline = Some(self.snapshot());
+                self.save_error = None;
+                self.saved = true;
             },
             Err(msg) => {
                 tracing::error!("{msg}");
-                // Leave self.dirty = true so retry surfaces the same
-                // error path; the user can fix the underlying issue
-                // (open a project, fix permissions, etc.) and retry.
+                self.save_error = Some(msg);
+                self.saved = false;
             },
         }
         cx.notify();
     }
 
+    /// Discard pending edits: back to what surge.toml holds.
+    fn revert(&mut self, cx: &mut Context<Self>) {
+        if let Some(base) = self.baseline.clone() {
+            self.gate_after_spec = base.gate_after_spec;
+            self.gate_after_plan = base.gate_after_plan;
+            self.gate_after_each_subtask = base.gate_after_each_subtask;
+            self.gate_after_qa = base.gate_after_qa;
+            self.max_parallel = base.max_parallel;
+            self.max_qa_iterations = base.max_qa_iterations;
+            self.log_level = base.log_level;
+            self.log_max_size_mb = base.log_max_size_mb;
+            self.routing_strategy = base.routing_strategy;
+            self.default_agent = base.default_agent;
+            self.budget_usd = base.budget_usd;
+            self.budget_tokens = base.budget_tokens;
+            self.budget_warn_threshold = base.budget_warn_threshold;
+            self.connect_timeout_secs = base.connect_timeout_secs;
+            self.prompt_timeout_secs = base.prompt_timeout_secs;
+            self.prompt_retries = base.prompt_retries;
+            self.circuit_breaker_threshold = base.circuit_breaker_threshold;
+            self.remove_worktrees_on_complete = base.remove_worktrees_on_complete;
+            self.keep_branches_days = base.keep_branches_days;
+            self.sandbox_default = base.sandbox_default;
+        }
+        self.save_error = None;
+        cx.notify();
+    }
+
     fn mark_dirty(&mut self, cx: &mut Context<Self>) {
-        self.dirty = true;
+        self.saved = false;
+        self.save_error = None;
         cx.notify();
     }
 
@@ -428,7 +598,7 @@ impl SettingsScreen {
         let project_path = state
             .project_path
             .as_ref()
-            .map(|p| format!("~/{}", p.file_name().unwrap_or_default().to_string_lossy()))
+            .map(|p| crate::ui::abbreviate_home(p))
             .unwrap_or_else(|| "(no project)".into());
 
         div()
@@ -592,8 +762,8 @@ impl SettingsScreen {
         div()
             .id("settings-content")
             .flex_1()
+            .min_h(px(0.0))
             .v_flex()
-            .h_full()
             .overflow_y_scroll()
             .p_6()
             .child(self.render_page_header(page))
@@ -603,19 +773,16 @@ impl SettingsScreen {
                 SettingsPage::Pipeline => self.render_pipeline(cx),
                 SettingsPage::GitWorktrees => self.render_git(cx),
                 SettingsPage::EditorPaths => self.render_editor_paths(cx),
-                SettingsPage::Budgets => self.render_budgets(),
+                SettingsPage::Budgets => self.render_budgets(cx),
                 SettingsPage::General => self.render_general(cx),
-                SettingsPage::Resilience => self.render_resilience(),
+                SettingsPage::Resilience => self.render_resilience(cx),
                 SettingsPage::Routing => self.render_routing(cx),
                 SettingsPage::Keybindings => self.render_keybindings(),
                 SettingsPage::McpServers => self.render_mcp_servers(cx),
                 SettingsPage::ContextMemory => self.render_context_memory(cx),
                 SettingsPage::Integrations => self.render_integrations(cx),
             })
-            // Save bar at bottom when dirty
-            .when(self.dirty, |el: Stateful<Div>| {
-                el.child(self.render_save_bar(cx))
-            })
+
     }
 
     fn render_page_header(&self, page: SettingsPage) -> Div {
@@ -672,43 +839,51 @@ impl SettingsScreen {
         header
     }
 
+    /// Pinned footer: pending edits, the save error if the last save
+    /// failed, or a quiet confirmation after a save.
     fn render_save_bar(&self, cx: &mut Context<Self>) -> Div {
+        let pending = self.changes().len();
+        let (dot, text): (Hsla, String) = match (&self.save_error, pending) {
+            (Some(err), _) => (theme::error(), err.clone()),
+            (None, 0) => (theme::success(), "Saved to surge.toml".into()),
+            (None, n) => (
+                theme::warning(),
+                format!("{n} unsaved change{} — only these keys are written; comments stay", if n == 1 { "" } else { "s" }),
+            ),
+        };
         div()
+            .flex_none()
             .h_flex()
-            .justify_end()
-            .gap_3()
-            .pt_6()
-            .mt_6()
+            .gap(px(12.0))
+            .items_center()
+            .px(px(24.0))
+            .py(px(12.0))
+            .bg(theme::panel())
             .border_t_1()
             .border_color(theme::hairline())
+            .child(crate::ui::status_dot(dot))
             .child(
                 div()
                     .flex_1()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .w(px(8.0))
-                            .h(px(8.0))
-                            .rounded_full()
-                            .bg(theme::warning()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme::warning())
-                            .child("Unsaved changes"),
-                    ),
+                    .min_w(px(0.0))
+                    .text_size(px(12.0))
+                    .text_color(if self.save_error.is_some() { theme::error() } else { theme::text_muted() })
+                    .child(text),
             )
-            .child(
-                Button::new("settings-save")
-                    .primary()
-                    .label("Save Settings")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.save_config(cx);
-                    })),
-            )
+            .when(pending > 0, |el| {
+                el.child(
+                    Button::new("settings-revert")
+                        .ghost()
+                        .label("Discard")
+                        .on_click(cx.listener(|this, _event, _window, cx| this.revert(cx))),
+                )
+                .child(
+                    Button::new("settings-save")
+                        .primary()
+                        .label(if self.save_error.is_some() { "Try again" } else { "Save" })
+                        .on_click(cx.listener(|this, _event, _window, cx| this.save_config(cx))),
+                )
+            })
     }
 
     // ── Appearance page ────────────────────────────────────────────
@@ -723,11 +898,7 @@ impl SettingsScreen {
     }
 
     fn render_appearance_mode(&self, cx: &mut Context<Self>) -> Div {
-        let modes = [
-            AppearanceMode::System,
-            AppearanceMode::Light,
-            AppearanceMode::Dark,
-        ];
+        let modes = [AppearanceMode::Dark, AppearanceMode::Light];
         let cards: Vec<Stateful<Div>> = modes
             .iter()
             .map(|&mode| {
@@ -762,10 +933,10 @@ impl SettingsScreen {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.appearance_mode = mode;
                         this.theme_mode = match mode {
-                            AppearanceMode::Dark | AppearanceMode::System => theme::ThemeMode::Dark,
+                            AppearanceMode::Dark => theme::ThemeMode::Dark,
                             AppearanceMode::Light => theme::ThemeMode::Light,
                         };
-                        theme::apply_theme(this.selected_theme, this.theme_mode);
+                        theme::apply_theme(this.selected_theme, this.theme_mode, cx);
                         cx.notify();
                     }))
                     .child(Icon::new(mode.icon()).size_6().text_color(if is_selected {
@@ -795,7 +966,7 @@ impl SettingsScreen {
                 div()
                     .text_size(px(12.0))
                     .text_color(theme::text_muted())
-                    .child("Choose light, dark, or system preference"),
+                    .child("Dark is the primary surface; light keeps the same vocabulary"),
             )
             .child(div().h_flex().gap_3().children(cards))
     }
@@ -823,7 +994,7 @@ impl SettingsScreen {
                     .hover(|s: StyleRefinement| s.border_color(theme::primary().opacity(0.3)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.selected_theme = tn;
-                        theme::apply_theme(tn, this.theme_mode);
+                        theme::apply_theme(tn, this.theme_mode, cx);
                         cx.notify();
                     }))
                     .h_flex()
@@ -879,6 +1050,10 @@ impl SettingsScreen {
                 current_row = div().h_flex().gap_3();
             }
         }
+        // The last, partial row (6 themes → 4 + 2) used to be dropped.
+        if !theme::ThemeName::all().len().is_multiple_of(4) {
+            grid = grid.child(current_row);
+        }
 
         div()
             .v_flex()
@@ -893,56 +1068,35 @@ impl SettingsScreen {
             .child(grid)
     }
 
+    /// The fixed color vocabulary every screen uses; only the accent
+    /// (agent) color follows the theme.
     fn render_accent_color(&self) -> Div {
-        let accent = theme::primary();
-        let rgba: gpui_kit::Rgba = accent.into();
-        let hex = format!(
-            "#{:02x}{:02x}{:02x}",
-            (rgba.r * 255.0) as u8,
-            (rgba.g * 255.0) as u8,
-            (rgba.b * 255.0) as u8,
-        );
+        use crate::theme::Semantic;
+        let roles = [
+            (Semantic::Agent, "an agent is working (follows your theme)"),
+            (Semantic::Plan, "written down: plans, specs, roadmaps"),
+            (Semantic::Verified, "proven by a check"),
+            (Semantic::You, "waiting on you"),
+            (Semantic::Failure, "failed or blocked"),
+            (Semantic::Loop, "repeats: loops and retries"),
+            (Semantic::External, "idle or outside Surge"),
+        ];
         div()
             .v_flex()
             .gap_3()
-            .child(self.section_title("Accent Color"))
+            .child(self.section_title("What the colors mean"))
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .text_color(theme::text_muted())
-                    .child("Current accent color from selected theme"),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(
+                    .v_flex()
+                    .gap(px(6.0))
+                    .children(roles.into_iter().map(|(role, meaning)| {
                         div()
-                            .w(px(36.0))
-                            .h(px(36.0))
-                            .rounded_lg()
-                            .bg(accent)
-                            .border_1()
-                            .border_color(theme::hairline_strong()),
-                    )
-                    .child(
-                        div()
-                            .px_3()
-                            .py(px(8.0))
-                            .rounded_lg()
-                            .bg(theme::panel_raised())
-                            .border_1()
-                            .border_color(theme::hairline_strong())
-                            .text_size(px(12.0))
-                            .text_color(theme::text_primary())
-                            .child(hex),
-                    )
-                    .child(
-                        Button::new("accent-reset")
-                            .ghost()
-                            .label("Reset to theme default"),
-                    ),
+                            .h_flex()
+                            .gap(px(10.0))
+                            .items_center()
+                            .child(div().w(px(110.0)).child(crate::ui::legend_chip(role, None)))
+                            .child(div().text_size(px(11.5)).text_color(theme::text_muted()).child(meaning))
+                    })),
             )
     }
 
@@ -1144,6 +1298,57 @@ impl SettingsScreen {
             .gap_8()
             .child(self.render_pipeline_gates(cx))
             .child(self.render_pipeline_execution(cx))
+            .child(self.render_sandbox_default(cx))
+    }
+
+    /// The permission mode new missions give their agents (init.sandbox_default).
+    fn render_sandbox_default(&self, cx: &mut Context<Self>) -> Div {
+        use surge_core::sandbox::SandboxMode;
+        let modes = [
+            (SandboxMode::ReadOnly, "Read only", "Reads files; changes nothing."),
+            (SandboxMode::WorkspaceWrite, "Edit the project", "Writes project files; no shell, no network."),
+            (SandboxMode::WorkspaceNetwork, "Edit + web", "Also fetches from the web."),
+            (SandboxMode::FullAccess, "Full access", "No restrictions — use with care."),
+        ];
+        let cards: Vec<Stateful<Div>> = modes
+            .into_iter()
+            .map(|(mode, name, note)| {
+                let active = self.sandbox_default == mode;
+                let color = if mode == SandboxMode::FullAccess { theme::error() } else { theme::accent() };
+                div()
+                    .id(SharedString::from(format!("sandbox-{name}")))
+                    .role(Role::Button)
+                    .aria_label(name)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .v_flex()
+                    .gap(px(4.0))
+                    .p(px(12.0))
+                    .rounded(px(crate::ui::R_CONTROL + 2.0))
+                    .border_1()
+                    .border_color(if active { theme::stroke(color) } else { theme::hairline() })
+                    .bg(if active { theme::tint(color) } else { theme::panel_raised() })
+                    .cursor_pointer()
+                    .hover(|st: StyleRefinement| st.border_color(theme::hairline_strong()))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.sandbox_default = mode;
+                        this.mark_dirty(cx);
+                    }))
+                    .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text_primary()).child(name))
+                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(note))
+            })
+            .collect();
+        div()
+            .v_flex()
+            .gap(px(10.0))
+            .child(self.section_title("What agents may touch"))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child("The default for new missions. Each agent's exact flags are on the Agents screen."),
+            )
+            .child(div().flex().gap(px(10.0)).children(cards))
     }
 
     fn render_pipeline_gates(&self, cx: &mut Context<Self>) -> Div {
@@ -1433,55 +1638,87 @@ impl SettingsScreen {
 
     // ── Git & Worktrees page ───────────────────────────────────────
 
-    fn render_git(&self, cx: &Context<Self>) -> Div {
-        let state = self.state.read(cx);
-        let current_branch = state.current_branch.clone();
-
-        let (worktree_location, worktree_root) = state
-            .config
-            .as_ref()
-            .map(|c| {
-                (
-                    format!("{:?}", c.init.worktree_location),
-                    c.init.worktree_root.display().to_string(),
-                )
-            })
-            .unwrap_or_else(|| ("—".into(), "—".into()));
-
+    fn render_git(&self, cx: &mut Context<Self>) -> Div {
+        let (current_branch, placement, worktree_root) = {
+            let state = self.state.read(cx);
+            let (placement, root) = state
+                .config
+                .as_ref()
+                .map(|c| {
+                    let placement = match c.init.worktree_location {
+                        surge_core::config::WorktreeLocationConfig::Sibling => "Next to the project (.surge-worktrees)",
+                        surge_core::config::WorktreeLocationConfig::Central => "In ~/.surge/runs",
+                        surge_core::config::WorktreeLocationConfig::Custom => "Custom folder",
+                    };
+                    (placement.to_string(), crate::ui::abbreviate_home(&c.init.worktree_root))
+                })
+                .unwrap_or_else(|| ("—".into(), "—".into()));
+            (state.current_branch.clone(), placement, root)
+        };
+        let remove = self.remove_worktrees_on_complete;
         div()
             .v_flex()
-            .gap_8()
+            .gap(px(24.0))
             .child(
                 div()
                     .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Git"))
-                    .child(self.setting_row("Current Branch", &current_branch)),
-            )
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Worktrees"))
+                    .gap(px(3.0))
+                    .child(self.section_title("Where missions work"))
                     .child(
                         div()
                             .text_size(px(12.0))
                             .text_color(theme::text_muted())
-                            .child("Every run executes in an isolated git worktree"),
+                            .child("Every mission builds in its own git worktree, so your checkout is never touched until you keep the changes."),
                     )
-                    .child(self.setting_row("Placement", &worktree_location))
-                    .child(self.setting_row("Worktree root", &worktree_root))
-                    .child(self.setting_row(
-                        "Remove on complete",
-                        if self.remove_worktrees_on_complete {
-                            "Yes"
+                    .child(self.setting_row("Current branch", &current_branch))
+                    .child(self.setting_row("Worktrees", &placement))
+                    .child(self.setting_row("Folder", &worktree_root)),
+            )
+            .child(
+                div()
+                    .v_flex()
+                    .child(self.section_title("Clean-up"))
+                    .child(
+                        div()
+                            .id("cleanup-remove")
+                            .role(Role::CheckBox)
+                            .aria_label("Remove worktrees when a mission completes")
+                            .h_flex()
+                            .justify_between()
+                            .items_center()
+                            .gap(px(16.0))
+                            .py(px(10.0))
+                            .border_b_1()
+                            .border_color(theme::hairline().opacity(0.6))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _e, _w, cx| {
+                                this.remove_worktrees_on_complete = !this.remove_worktrees_on_complete;
+                                this.mark_dirty(cx);
+                            }))
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap(px(2.0))
+                                    .child(div().text_size(px(12.5)).text_color(theme::text_primary()).child("Remove worktrees when a mission completes"))
+                                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child("The branch stays; only the working folder is deleted.")),
+                            )
+                            .child(self.toggle_switch(remove, theme::accent())),
+                    )
+                    .child(self.render_stepper(
+                        "keep-branches",
+                        "Keep mission branches for",
+                        "Branches older than this are deleted by clean-up.",
+                        if self.keep_branches_days == 0 {
+                            "forever".into()
                         } else {
-                            "No"
+                            format!("{} days", self.keep_branches_days)
                         },
-                    ))
-                    .child(self.setting_row(
-                        "Keep branches",
-                        &format!("{} days", self.keep_branches_days),
+                        self.keep_branches_days > 0,
+                        self.keep_branches_days < 90,
+                        |this, d| {
+                            this.keep_branches_days = (i64::from(this.keep_branches_days) + 7 * d).clamp(0, 90) as u32;
+                        },
+                        cx,
                     )),
             )
     }
@@ -1529,7 +1766,6 @@ impl SettingsScreen {
                     .gap_3()
                     .child(self.section_title("Paths"))
                     .child(self.setting_row("Project Path", &project_path))
-                    .child(self.setting_row("Surge Directory", ".surge"))
                     .child(self.setting_row("Project context", &project_context_path))
                     .child(self.setting_row(
                         "Seed context into runs",
@@ -1650,7 +1886,7 @@ impl SettingsScreen {
                 description: "Milestones and delivery line",
             },
             Kb {
-                action: "Runs",
+                action: "Missions",
                 keys: "Ctrl+3",
                 description: "Per-run cockpit",
             },
@@ -1706,14 +1942,14 @@ impl SettingsScreen {
                 description: "Open project switcher",
             },
             Kb {
-                action: "New Task",
+                action: "Plan a task",
                 keys: "Ctrl+N",
-                description: "Create a new task (lands in Backlog)",
+                description: "Describe new work (new app on the start page)",
             },
             Kb {
-                action: "Approve Gate",
-                keys: "Ctrl+Enter",
-                description: "Approve the current gate",
+                action: "Open project",
+                keys: "Ctrl+O",
+                description: "Pick a project folder",
             },
         ];
 
@@ -1757,6 +1993,7 @@ impl SettingsScreen {
             .iter()
             .map(|kb| {
                 let (action, keys, desc) = kb.as_kb();
+                let keys = crate::ui::shortcut_label(keys);
                 div()
                     .h_flex()
                     .justify_between()
@@ -1790,7 +2027,7 @@ impl SettingsScreen {
                             ),
                     )
                     // Right: key badges
-                    .child(self.render_key_combo(keys))
+                    .child(self.render_key_combo(&keys))
             })
             .collect();
 
@@ -1833,194 +2070,198 @@ impl SettingsScreen {
         div().h_flex().gap_1().items_center().children(badges)
     }
 
-    fn render_notification_previews(&self) -> Div {
-        use crate::notifications::{SurgeNotification, send_os_notification};
-        use gpui_kit::component::WindowExt as _;
 
-        div()
-            .v_flex()
-            .gap_2()
-            .child(self.preview_card(
-                "test-notif-success",
-                "Task Completed",
-                "build-api finished successfully",
-                theme::success(),
-                IconName::CircleCheck,
-                |_event, window, cx| {
-                    window.push_notification(SurgeNotification::task_completed("build-api"), cx);
-                    send_os_notification("Task Completed", "build-api finished successfully");
-                },
-            ))
-            .child(self.preview_card(
-                "test-notif-error",
-                "Task Failed",
-                "test-suite: 3 tests failed",
-                theme::error(),
-                IconName::CircleX,
-                |_event, window, cx| {
-                    window.push_notification(
-                        SurgeNotification::task_failed("test-suite", "3 tests failed"),
-                        cx,
-                    );
-                    send_os_notification("Task Failed", "test-suite: 3 tests failed");
-                },
-            ))
-            .child(self.preview_card(
-                "test-notif-review",
-                "Review Required",
-                "deploy-prod needs your review",
-                theme::warning(),
-                IconName::TriangleAlert,
-                |_event, window, cx| {
-                    window.push_notification(SurgeNotification::review_needed("deploy-prod"), cx);
-                    send_os_notification("Review Required", "deploy-prod needs your review");
-                },
-            ))
-            .child(self.preview_card(
-                "test-notif-agent",
-                "Agent Connected",
-                "claude-code is ready",
-                theme::primary(),
-                IconName::Info,
-                |_event, window, cx| {
-                    window.push_notification(SurgeNotification::agent_connected("claude-code"), cx);
-                    send_os_notification("Agent Connected", "claude-code is ready");
-                },
-            ))
-            .child(self.preview_card(
-                "test-notif-disconnect",
-                "Agent Disconnected",
-                "copilot connection lost",
-                theme::warning(),
-                IconName::TriangleAlert,
-                |_event, window, cx| {
-                    window.push_notification(SurgeNotification::agent_disconnected("copilot"), cx);
-                    send_os_notification("Agent Disconnected", "copilot connection lost");
-                },
-            ))
-            .child(self.preview_card(
-                "test-notif-ratelimit",
-                "Rate Limit",
-                "claude-code rate limited — resets in 30s",
-                theme::warning(),
-                IconName::TriangleAlert,
-                |_event, window, cx| {
-                    window.push_notification(
-                        SurgeNotification::rate_limit_warning("claude-code", 30),
-                        cx,
-                    );
-                    send_os_notification("Rate Limit", "claude-code rate limited — resets in 30s");
-                },
-            ))
-    }
-
-    fn preview_card(
+    /// A labelled −/+ control with a human-readable value; `apply` moves
+    /// the value by `delta` steps (negative = down).
+    #[allow(clippy::too_many_arguments)]
+    fn render_stepper(
         &self,
-        id: &str,
-        title: &str,
-        message: &str,
-        color: Hsla,
-        icon: IconName,
-        on_test: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        id: &'static str,
+        label: &str,
+        description: &str,
+        value: String,
+        can_dec: bool,
+        can_inc: bool,
+        apply: fn(&mut Self, i64),
+        cx: &mut Context<Self>,
     ) -> Div {
+        let button = |suffix: &'static str, icon: IconName, enabled: bool, delta: i64| {
+            div()
+                .id(SharedString::from(format!("{id}-{suffix}")))
+                .role(Role::Button)
+                .aria_label(format!("{label} {suffix}"))
+                .size(px(26.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(crate::ui::R_CONTROL))
+                .border_1()
+                .border_color(theme::hairline_strong())
+                .when(!enabled, |el| el.opacity(0.35))
+                .when(enabled, |el| {
+                    el.cursor_pointer()
+                        .hover(|s: StyleRefinement| s.bg(theme::surface()))
+                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                            apply(this, delta);
+                            this.mark_dirty(cx);
+                        }))
+                })
+                .child(Icon::new(icon).size_3p5().text_color(theme::text_muted()))
+        };
         div()
             .h_flex()
-            .gap_3()
-            .p_3()
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(theme::text_muted().opacity(0.08))
-            .child(Icon::new(icon).size_4().text_color(color))
+            .justify_between()
+            .items_center()
+            .gap(px(16.0))
+            .py(px(10.0))
+            .border_b_1()
+            .border_color(theme::hairline().opacity(0.6))
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.0))
                     .v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child(title.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(theme::text_muted())
-                            .child(message.to_string()),
-                    ),
+                    .gap(px(2.0))
+                    .child(div().text_size(px(12.5)).text_color(theme::text_primary()).child(label.to_string()))
+                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(description.to_string())),
             )
             .child(
-                Button::new(SharedString::from(id.to_string()))
-                    .ghost()
-                    .label("Test")
-                    .on_click(on_test),
+                div()
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .flex_none()
+                    .child(button("down", IconName::Minus, can_dec, -1))
+                    .child(
+                        div()
+                            .min_w(px(96.0))
+                            .text_center()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text_primary())
+                            .child(value),
+                    )
+                    .child(button("up", IconName::Plus, can_inc, 1)),
             )
     }
 
     // ── Budgets page ───────────────────────────────────────────────
 
-    fn render_budgets(&self) -> Div {
-        let usd = self
-            .budget_usd
-            .map(|v| format!("${:.2}", v))
-            .unwrap_or_else(|| "Unlimited".into());
-        let tokens = self
-            .budget_tokens
-            .map(|v| format!("{}", v))
-            .unwrap_or_else(|| "Unlimited".into());
-
+    fn render_budgets(&self, cx: &mut Context<Self>) -> Div {
+        let usd = self.budget_usd;
+        let tokens = self.budget_tokens;
         div()
             .v_flex()
-            .gap_8()
+            .gap(px(24.0))
             .child(
                 div()
                     .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Cost Limits"))
-                    .child(self.setting_row("Global Budget (USD)", &usd)),
-            )
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Token Limits"))
-                    .child(self.setting_row("Global Token Budget", &tokens)),
+                    .child(self.section_title("Spending limits"))
+                    .child(self.render_stepper(
+                        "budget-usd",
+                        "Cost per mission",
+                        "A mission stops once it has spent this much. Planning and building share one budget.",
+                        usd.map_or_else(|| "Unlimited".into(), |v| format!("${v:.0}")),
+                        usd.is_some(),
+                        true,
+                        |this, d| {
+                            let next = this.budget_usd.unwrap_or(0.0) + 5.0 * d as f64;
+                            this.budget_usd = (next >= 5.0).then_some(next);
+                        },
+                        cx,
+                    ))
+                    .child(self.render_stepper(
+                        "budget-tokens",
+                        "Tokens per mission",
+                        "Stop after this many tokens, for agents that report token usage.",
+                        tokens.map_or_else(|| "Unlimited".into(), |v| format!("{}k", v / 1000)),
+                        tokens.is_some(),
+                        true,
+                        |this, d| {
+                            let next = this.budget_tokens.unwrap_or(0) as i64 + 100_000 * d;
+                            this.budget_tokens = (next >= 100_000).then_some(next as u64);
+                        },
+                        cx,
+                    ))
+                    .child(self.render_stepper(
+                        "budget-warn",
+                        "Warn at",
+                        "Tell me when a mission has used this share of its budget.",
+                        format!("{}%", self.budget_warn_threshold),
+                        self.budget_warn_threshold > 50,
+                        self.budget_warn_threshold < 95,
+                        |this, d| {
+                            let next = i64::from(this.budget_warn_threshold) + 5 * d;
+                            this.budget_warn_threshold = next.clamp(50, 95) as u8;
+                        },
+                        cx,
+                    )),
             )
     }
 
     // ── Resilience page ────────────────────────────────────────────
 
-    fn render_resilience(&self) -> Div {
+    fn render_resilience(&self, cx: &mut Context<Self>) -> Div {
         div()
             .v_flex()
-            .gap_8()
+            .gap(px(24.0))
             .child(
                 div()
                     .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Timeouts"))
-                    .child(self.setting_row(
-                        "Connect Timeout",
-                        &format!("{} sec", self.connect_timeout_secs),
+                    .child(self.section_title("Waiting on agents"))
+                    .child(self.render_stepper(
+                        "connect-timeout",
+                        "Start-up time",
+                        "How long an agent may take to start before the step fails.",
+                        format!("{} s", self.connect_timeout_secs),
+                        self.connect_timeout_secs > 30,
+                        self.connect_timeout_secs < 600,
+                        |this, d| {
+                            this.connect_timeout_secs = (this.connect_timeout_secs as i64 + 30 * d).clamp(30, 600) as u64;
+                        },
+                        cx,
                     ))
-                    .child(self.setting_row(
-                        "Prompt Timeout",
-                        &format!("{} sec", self.prompt_timeout_secs),
+                    .child(self.render_stepper(
+                        "prompt-timeout",
+                        "Time per answer",
+                        "How long one agent turn may run before it is stopped.",
+                        format!("{} min", self.prompt_timeout_secs / 60),
+                        self.prompt_timeout_secs > 60,
+                        self.prompt_timeout_secs < 3600,
+                        |this, d| {
+                            this.prompt_timeout_secs = (this.prompt_timeout_secs as i64 + 60 * d).clamp(60, 3600) as u64;
+                        },
+                        cx,
                     )),
             )
             .child(
                 div()
                     .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Retry"))
-                    .child(
-                        self.setting_row("Max Prompt Retries", &format!("{}", self.prompt_retries)),
-                    )
-                    .child(self.setting_row(
-                        "Circuit Breaker Threshold",
-                        &format!("{} failures", self.circuit_breaker_threshold),
+                    .child(self.section_title("When something fails"))
+                    .child(self.render_stepper(
+                        "prompt-retries",
+                        "Retries",
+                        "How many times a failed agent turn is retried.",
+                        self.prompt_retries.to_string(),
+                        self.prompt_retries > 0,
+                        self.prompt_retries < 10,
+                        |this, d| {
+                            this.prompt_retries = (i64::from(this.prompt_retries) + d).clamp(0, 10) as u32;
+                        },
+                        cx,
+                    ))
+                    .child(self.render_stepper(
+                        "circuit-breaker",
+                        "Pause an agent after",
+                        "Consecutive failures before Surge stops sending work to that agent.",
+                        format!("{} failures", self.circuit_breaker_threshold),
+                        self.circuit_breaker_threshold > 1,
+                        self.circuit_breaker_threshold < 20,
+                        |this, d| {
+                            this.circuit_breaker_threshold =
+                                (i64::from(this.circuit_breaker_threshold) + d).clamp(1, 20) as u32;
+                        },
+                        cx,
                     )),
             )
     }
@@ -2122,9 +2363,7 @@ impl SettingsScreen {
                     .v_flex()
                     .gap_3()
                     .child(self.section_title("About"))
-                    .child(self.setting_row("Version", env!("CARGO_PKG_VERSION")))
-                    .child(self.setting_row("Framework", "GPUI + ACP"))
-                    .child(self.setting_row("Rust Edition", "2024")),
+                    .child(self.setting_row("Version", env!("CARGO_PKG_VERSION"))),
             )
     }
 
@@ -2367,13 +2606,73 @@ impl SettingsScreen {
             );
         }
 
-        div().v_flex().gap_8().child(
-            div()
-                .v_flex()
-                .gap_3()
-                .child(self.section_title("Task Sources"))
-                .child(list),
-        )
+        // Telegram: configured only as env-var references (never inline
+        // secrets); report whether those variables resolve here.
+        let telegram = state.config.as_ref().and_then(|c| c.telegram.clone());
+        let telegram_row: (String, String, Hsla) = match &telegram {
+            None => (
+                "Not set up".into(),
+                "Add a [telegram] section to surge.toml to approve plans and follow missions from your phone.".into(),
+                theme::text_muted(),
+            ),
+            Some(t) => {
+                let var_ok = |v: &Option<String>| v.as_ref().is_some_and(|name| std::env::var_os(name).is_some());
+                let token = t.bot_token_env.clone().unwrap_or_else(|| "(not set)".into());
+                let chat = t
+                    .chat_id
+                    .map(|id| id.to_string())
+                    .or_else(|| t.chat_id_env.clone().map(|v| format!("${v}")))
+                    .unwrap_or_else(|| "(not set)".into());
+                let ready = var_ok(&t.bot_token_env) && (t.chat_id.is_some() || var_ok(&t.chat_id_env));
+                (
+                    if ready { "Ready".into() } else { "Configured, but its variables are missing here".into() },
+                    format!("Bot token from ${token} · chat {chat}"),
+                    if ready { theme::success() } else { theme::warning() },
+                )
+            },
+        };
+
+        div()
+            .v_flex()
+            .gap_8()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.section_title("Task Sources"))
+                    .child(list),
+            )
+            .child(
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.section_title("Telegram"))
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_3()
+                            .items_center()
+                            .p_4()
+                            .rounded_lg()
+                            .bg(theme::panel_raised())
+                            .border_1()
+                            .border_color(theme::hairline())
+                            .child(crate::ui::status_dot(telegram_row.2))
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme::text_primary())
+                                            .child(telegram_row.0),
+                                    )
+                                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(telegram_row.1)),
+                            ),
+                    ),
+            )
     }
 
     // ── Shared helpers ─────────────────────────────────────────────
@@ -2426,6 +2725,78 @@ impl Render for SettingsScreen {
             .bg(theme::panel_deep())
             .overflow_hidden()
             .child(self.render_settings_sidebar(cx))
-            .child(self.render_content(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .v_flex()
+                    .child(self.render_content(cx))
+                    .when(self.is_dirty() || self.save_error.is_some() || self.saved, |el| {
+                        el.child(self.render_save_bar(cx))
+                    }),
+            )
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::SettingsScreen;
+    use crate::app_state::AppState;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    #[test]
+    fn saving_writes_only_the_touched_key_and_keeps_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surge.toml");
+        std::fs::write(&path, "# team defaults\nschema_version = 1\n\n[pipeline]\nmax_parallel = 2 # laptop\n").unwrap();
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        crate::theme::init();
+        let state = cx.new(|_| {
+            let mut s = AppState::new();
+            s.project_path = Some(dir.path().to_path_buf());
+            s.config = surge_core::SurgeConfig::load(&path).ok();
+            s
+        });
+        let screen = cx.new(|cx| SettingsScreen::new(state, cx));
+        screen.update(&mut cx, |screen, cx| {
+            assert!(screen.changes().is_empty(), "nothing is pending on open");
+            screen.max_parallel = 4;
+            assert_eq!(screen.changes().len(), 1);
+            screen.save_config(cx);
+            assert!(screen.save_error.is_none(), "{:?}", screen.save_error);
+            assert!(screen.changes().is_empty(), "saved edits are no longer pending");
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# team defaults"));
+        assert!(text.contains("max_parallel = 4 # laptop"));
+        assert!(!text.contains("max_qa_iterations"), "untouched defaults are not written out");
+    }
+
+    #[test]
+    fn a_failed_save_is_shown_and_keeps_the_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surge.toml");
+        std::fs::write(&path, "schema_version = 1\n").unwrap();
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        crate::theme::init();
+        let state = cx.new(|_| {
+            let mut s = AppState::new();
+            s.project_path = Some(dir.path().to_path_buf());
+            s.config = surge_core::SurgeConfig::load(&path).ok();
+            s
+        });
+        let screen = cx.new(|cx| SettingsScreen::new(state, cx));
+        // The file breaks on disk after the screen opened.
+        std::fs::write(&path, "[pipeline\n").unwrap();
+        screen.update(&mut cx, |screen, cx| {
+            screen.max_parallel = 5;
+            screen.save_config(cx);
+            assert!(screen.save_error.as_deref().is_some_and(|e| e.contains("syntax error")));
+            assert_eq!(screen.changes().len(), 1, "the edit is kept for a retry");
+        });
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[pipeline\n");
     }
 }

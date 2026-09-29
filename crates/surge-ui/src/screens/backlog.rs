@@ -1,601 +1,639 @@
-//! Backlog — the dispatch queue: Triage → Ready → In flight → Done.
+//! Backlog — every task of this project's missions, where it stands.
 //!
-//! Not a classic kanban (parallel agents move too fast for hand-drag
-//! stages — even kanban-first competitors concede the columns go
-//! stale). Columns here are *derived* from the real [`TaskState`] FSM,
-//! so a card can never disagree with the engine:
+//! Columns are derived from the task ledger (the index `surge ready` and
+//! `surge ledger` read), so a card never disagrees with the engine:
 //!
-//! - **Triage** — `Draft` (unscoped intake)
-//! - **Ready** — `Planning` / `Planned` (scoped, waiting for capacity)
-//! - **In flight** — `Executing`/`QaReview`/`QaFix`/`HumanReview`/`Merging`
-//! - **Done** — terminal states, labelled truthfully
-//!   (completed / failed / cancelled)
+//! - **To do** — pending; ready ones first, then the ones waiting on a
+//!   dependency ("blocked by …"), plus tasks found mid-run
+//! - **In progress** — running or being checked
+//! - **Needs you** — failed, failed its check, or paused
+//! - **Done** — completed (verified or not, shown apart) or skipped
 //!
-//! The capacity strip compares installed agents (lanes) against active
-//! daemon runs. "New task" opens the Spec wizard; created drafts land
-//! here in Triage. A labelled sample board renders when the project
-//! has no tasks yet.
+//! Work a finished mission left behind can be started again as a new
+//! mission from its card. An empty project shows an empty board — never
+//! sample cards.
 
-use gpui_kit::component::StyledExt;
+use std::collections::HashSet;
+
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use surge_core::TaskState;
-use surge_orchestrator::engine::handle::RunStatus;
+use surge_core::RunId;
+use surge_core::roadmap::RoadmapStatus;
 
 use crate::app_state::AppState;
-use crate::theme;
+use crate::backlog_source::{self, BacklogTask};
+use crate::theme::{self, Semantic};
 use crate::ui;
 
 /// What the board can ask the app shell to do.
 #[derive(Clone)]
 pub enum BacklogAction {
-    /// Open the task-detail overlay for a task id.
-    OpenTask(String),
-    /// Start the Spec wizard (New task).
+    /// Open the mission a task belongs to.
+    OpenMission(RunId),
+    /// Start describing a new mission.
     NewTask,
-    /// Dispatch a Ready task as a real bootstrap run (prompt = title +
-    /// description).
+    /// Start a task again as a new mission (prompt = the task).
     Dispatch { prompt: String },
 }
 
 impl EventEmitter<BacklogAction> for BacklogScreen {}
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Column {
-    Triage,
-    Ready,
-    InFlight,
+    Todo,
+    InProgress,
+    NeedsYou,
     Done,
 }
 
 impl Column {
+    const ALL: [Column; 4] = [Self::Todo, Self::InProgress, Self::NeedsYou, Self::Done];
+
     fn title(self) -> &'static str {
         match self {
-            Self::Triage => "Triage",
-            Self::Ready => "Ready",
-            Self::InFlight => "In flight",
+            Self::Todo => "To do",
+            Self::InProgress => "In progress",
+            Self::NeedsYou => "Needs you",
             Self::Done => "Done",
         }
     }
 
-    fn note(self) -> &'static str {
+    fn role(self) -> Semantic {
         match self {
-            Self::Triage => "unscoped",
-            Self::Ready => "scoped",
-            Self::InFlight => "→ Runs",
-            Self::Done => "terminal",
+            Self::Todo => Semantic::External,
+            Self::InProgress => Semantic::Agent,
+            Self::NeedsYou => Semantic::Failure,
+            Self::Done => Semantic::Verified,
         }
     }
 
-    fn dot(self) -> Hsla {
-        match self {
-            Self::Triage => theme::text_muted(),
-            Self::Ready | Self::InFlight => theme::accent(),
-            Self::Done => theme::success(),
-        }
-    }
-
-    fn for_state(state: &TaskState) -> Self {
-        match state {
-            TaskState::Draft => Self::Triage,
-            TaskState::Planning | TaskState::Planned { .. } => Self::Ready,
-            TaskState::Executing { .. }
-            | TaskState::QaReview { .. }
-            | TaskState::QaFix { .. }
-            | TaskState::HumanReview
-            | TaskState::Merging => Self::InFlight,
-            TaskState::Completed | TaskState::Failed { .. } | TaskState::Cancelled => Self::Done,
+    fn of(status: RoadmapStatus) -> Self {
+        match status {
+            RoadmapStatus::Pending => Self::Todo,
+            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => Self::InProgress,
+            RoadmapStatus::Failed | RoadmapStatus::FailedVerification | RoadmapStatus::Paused => {
+                Self::NeedsYou
+            },
+            RoadmapStatus::Completed | RoadmapStatus::Skipped => Self::Done,
         }
     }
 }
 
-/// Board card view-model (from a real task or the sample set).
-#[derive(Clone)]
-struct Card {
-    /// Real task id (None in sample mode).
-    task_id: Option<String>,
-    /// Dispatchable prompt (real Triage/Ready tasks only).
-    dispatch_prompt: Option<String>,
-    id_label: String,
-    title: String,
-    /// Status pill: label + color (state-specific truth).
-    pill: (String, Hsla),
-    /// Secondary meta line.
-    meta: String,
-    /// Executing progress, when the state carries it.
-    progress: Option<(usize, usize)>,
-    /// This card is blocked on the operator (review states).
-    needs_you: bool,
-    column: Column,
-}
-
-fn card_from_task(task: &crate::app_state::TaskEntry) -> Card {
-    let column = Column::for_state(&task.state);
-    let (pill, needs_you): ((String, Hsla), bool) = match &task.state {
-        TaskState::Draft => (("draft".into(), theme::text_muted()), false),
-        TaskState::Planning => (("planning".into(), theme::accent()), false),
-        TaskState::Planned { subtask_count } => (
-            (format!("{subtask_count} subtasks"), theme::accent()),
-            false,
-        ),
-        TaskState::Executing { completed, total } => {
-            ((format!("{completed}/{total}"), theme::accent()), false)
-        },
-        TaskState::QaReview { .. } => (("qa review".into(), theme::warning()), true),
-        TaskState::QaFix { iteration, .. } => {
-            ((format!("qa fix #{iteration}"), theme::warning()), false)
-        },
-        TaskState::HumanReview => (("needs you".into(), theme::accent()), true),
-        TaskState::Merging => (("merging".into(), theme::accent()), false),
-        TaskState::Completed => (("merged".into(), theme::success()), false),
-        TaskState::Failed { .. } => (("failed".into(), theme::error()), false),
-        TaskState::Cancelled => (("cancelled".into(), theme::text_muted()), false),
-    };
-
-    let progress = match &task.state {
-        TaskState::Executing { completed, total } if *total > 0 => Some((*completed, *total)),
-        _ => None,
-    };
-
-    let agent = task.agent.clone().unwrap_or_else(|| "unassigned".into());
-    let meta = match &task.state {
-        TaskState::Failed { reason } => reason.clone(),
-        _ => format!("{} · {}", agent, task.complexity),
-    };
-
-    let dispatch_prompt = (column == Column::Ready || column == Column::Triage).then(|| {
-        if task.description.is_empty() {
-            task.title.clone()
-        } else {
-            format!("{}\n\n{}", task.title, task.description)
-        }
-    });
-
-    Card {
-        task_id: Some(task.id.to_string()),
-        dispatch_prompt,
-        id_label: format!("t-{}", task.id.short().to_lowercase()),
-        title: task.title.clone(),
-        pill,
-        meta,
-        progress,
-        needs_you,
-        column,
+/// The prompt that starts a left-over task as its own mission.
+fn restart_prompt(task: &BacklogTask) -> String {
+    let mut prompt = task.title.clone();
+    if let Some(desc) = &task.description {
+        prompt.push_str("\n\n");
+        prompt.push_str(desc);
     }
+    if !task.acceptance.is_empty() {
+        prompt.push_str("\n\nDone when:\n");
+        for criterion in &task.acceptance {
+            prompt.push_str(&format!("- {criterion}\n"));
+        }
+    }
+    prompt.push_str(&format!("\n(Picked up from the backlog of: {})", task.mission));
+    prompt
 }
 
-/// Backlog screen — dispatch queue over the real task FSM.
+/// Backlog screen.
 pub struct BacklogScreen {
     state: Entity<AppState>,
+    tasks: Vec<BacklogTask>,
+    loading: bool,
+    loaded_for: Option<(Option<std::path::PathBuf>, Vec<String>)>,
+    /// Cards opened for detail: (run, task id).
+    open: HashSet<(RunId, String)>,
+    /// Show one mission's tasks only.
+    mission_filter: Option<RunId>,
 }
 
 impl BacklogScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
-        Self { state }
-    }
-
-    fn cards(&self, cx: &Context<Self>) -> (Vec<Card>, bool) {
-        let state = self.state.read(cx);
-        if state.tasks.is_empty() {
-            return (sample_cards(), false);
-        }
-        (state.tasks.iter().map(card_from_task).collect(), true)
-    }
-
-    fn render_header(&self, total: usize, live: bool, cx: &mut Context<Self>) -> Div {
-        div()
-            .h_flex()
-            .gap(px(12.0))
-            .items_center()
-            .px(px(20.0))
-            .pt(px(15.0))
-            .pb(px(12.0))
-            .child(
-                div()
-                    .text_size(px(15.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::text_primary())
-                    .child("Backlog"),
-            )
-            .child(ui::meta(format!("{total} tasks")))
-            .when(!live, |el| {
-                el.child(ui::pill(
-                    "sample · create a task to start",
-                    theme::text_muted(),
-                    theme::panel_raised(),
-                ))
-            })
-            .child(div().flex_1())
-            .child(
-                div()
-                    .id("backlog-new-task")
-                    .role(Role::Button)
-                    .aria_label("Plan a task")
-                    .h_flex()
-                    .gap(px(7.0))
-                    .items_center()
-                    .h(px(31.0))
-                    .px(px(14.0))
-                    .rounded_lg()
-                    .bg(theme::accent())
-                    .text_color(theme::on_accent())
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::BOLD)
-                    .cursor_pointer()
-                    .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
-                    .on_click(cx.listener(|_this, _e, _w, cx| {
-                        cx.emit(BacklogAction::NewTask);
-                    }))
-                    .child("+ New task"),
-            )
-    }
-
-    /// Fleet capacity strip: real agents (lanes) vs active daemon runs.
-    fn render_capacity(&self, cx: &Context<Self>) -> Div {
-        let state = self.state.read(cx);
-        let lanes = state.installed_agents.len();
-        let active = state
-            .runs
-            .iter()
-            .filter(|r| matches!(r.status, RunStatus::Active))
-            .count();
-
-        let text = if lanes == 0 {
-            "no agents detected — install one to open a lane".to_string()
-        } else {
-            format!("{active} of {lanes} lanes busy — idle lanes pull riskiest ready work first")
+        cx.observe(&state, |this: &mut Self, _state, cx| this.reload_if_changed(cx))
+            .detach();
+        let mut this = Self {
+            state,
+            tasks: Vec::new(),
+            loading: false,
+            loaded_for: None,
+            open: HashSet::new(),
+            mission_filter: None,
         };
-
-        let mut lane_dots = div().h_flex().gap(px(4.0));
-        for i in 0..lanes.min(8) {
-            let busy = i < active;
-            lane_dots = lane_dots.child(
-                div()
-                    .w(px(14.0))
-                    .h(px(6.0))
-                    .rounded_sm()
-                    .bg(if busy {
-                        theme::accent()
-                    } else {
-                        theme::panel_raised()
-                    })
-                    .border_1()
-                    .border_color(if busy {
-                        theme::accent().opacity(0.6)
-                    } else {
-                        theme::hairline_strong()
-                    }),
-            );
-        }
-
-        div()
-            .h_flex()
-            .gap(px(12.0))
-            .items_center()
-            .mx(px(20.0))
-            .mb(px(14.0))
-            .px(px(14.0))
-            .py(px(10.0))
-            .rounded_lg()
-            .bg(theme::accent().opacity(0.06))
-            .border_1()
-            .border_color(theme::accent().opacity(0.22))
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::accent())
-                    .child("Fleet capacity"),
-            )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(theme::text_muted())
-                    .child(text),
-            )
-            .child(lane_dots)
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme::text_muted())
-                    .child("riskiest-ready-first"),
-            )
+        this.reload_if_changed(cx);
+        this
     }
 
-    fn render_card(&self, card: &Card, cx: &mut Context<Self>) -> Stateful<Div> {
-        let task_id = card.task_id.clone();
-        let (pill_label, pill_color) = card.pill.clone();
-        let is_done = card.column == Column::Done;
+    fn reload_if_changed(&mut self, cx: &mut Context<Self>) {
+        let key = {
+            let state = self.state.read(cx);
+            (
+                state.project_path.clone(),
+                state
+                    .project_runs()
+                    .iter()
+                    .map(|r| format!("{}:{:?}:{:?}", r.run_id, r.status, r.last_event_seq))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        if self.loaded_for.as_ref() == Some(&key) {
+            return;
+        }
+        let root = key.0.clone();
+        self.loaded_for = Some(key);
+        let Some(root) = root else {
+            self.tasks.clear();
+            cx.notify();
+            return;
+        };
+        self.loading = true;
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let tasks = match surge_core::home::surge_home_dir() {
+                Some(home) => backlog_source::load(&root, &home).await,
+                None => Vec::new(),
+            };
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.tasks = tasks;
+                    screen.loading = false;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
 
-        let mut el = div()
-            .id(SharedString::from(format!("bl-card-{}", card.task_id.as_deref().unwrap_or(&card.id_label))))
+    fn render_card(&self, task: &BacklogTask, cx: &mut Context<Self>) -> Div {
+        let column = Column::of(task.status);
+        let key = (task.implementation_run, task.id.clone());
+        let open = self.open.contains(&key);
+        let toggle = key.clone();
+        let color = if column == Column::Done && !task.verified && task.status == RoadmapStatus::Completed {
+            theme::slate()
+        } else {
+            column.role().color()
+        };
+        let restartable = task.mission_ended && matches!(column, Column::Todo | Column::NeedsYou);
+        let status_label = match task.status {
+            RoadmapStatus::ReadyForVerification => Some("checking"),
+            RoadmapStatus::FailedVerification => Some("failed its check"),
+            RoadmapStatus::Failed => Some("failed"),
+            RoadmapStatus::Paused => Some("paused"),
+            RoadmapStatus::Skipped => Some("skipped"),
+            _ => None,
+        };
+        let run = task.implementation_run;
+        let prompt = restart_prompt(task);
+
+        let head = div()
+            .id(SharedString::from(format!("backlog-{}-{}", task.implementation_run, task.id)))
             .role(Role::Button)
-            .aria_label(card.title.clone())
+            .aria_label(task.title.clone())
+            .v_flex()
+            .gap(px(6.0))
+            .p(px(11.0))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _e, _w, cx| {
+                if !this.open.remove(&toggle) {
+                    this.open.insert(toggle.clone());
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_start()
+                    .child(div().pt(px(5.0)).child(if column == Column::InProgress {
+                        ui::live_dot(color)
+                    } else {
+                        ui::status_dot(color)
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(12.5))
+                            .line_height(px(17.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if column == Column::Done {
+                                theme::text_muted()
+                            } else {
+                                theme::text_primary()
+                            })
+                            .child(task.title.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .pl(px(15.0))
+                    .text_size(px(10.5))
+                    .text_color(theme::text_dim())
+                    .truncate()
+                    .child(match &task.milestone {
+                        Some(m) => format!("{m} · {}", task.mission),
+                        None => task.mission.clone(),
+                    }),
+            )
+            .child(
+                div()
+                    .pl(px(15.0))
+                    .h_flex()
+                    .flex_wrap()
+                    .gap(px(5.0))
+                    .when(task.verified, |el| {
+                        el.child(
+                            div()
+                                .h_flex()
+                                .gap(px(4.0))
+                                .items_center()
+                                .text_size(px(10.0))
+                                .text_color(theme::success())
+                                .child(Icon::new(Lucide::ShieldCheck).size(px(11.0)))
+                                .child("verified"),
+                        )
+                    })
+                    .when(task.status == RoadmapStatus::Completed && !task.verified, |el| {
+                        el.child(ui::role_badge("unverified", Semantic::External))
+                    })
+                    .when_some(status_label, |el, label| el.child(ui::pill(label, color, theme::tint(color))))
+                    .when(!task.blocked_by.is_empty(), |el| {
+                        el.child(ui::role_badge(
+                            format!("blocked by {}", task.blocked_by.join(", ")),
+                            Semantic::External,
+                        ))
+                    })
+                    .when_some(task.discovered_from.clone(), |el, from| {
+                        el.child(ui::role_badge(format!("found in {from}"), Semantic::Loop))
+                    })
+                    .when(restartable, |el| el.child(ui::role_badge("left over", Semantic::You))),
+            );
+
+        ui::panel()
+            .flex_none()
+            .rounded(px(ui::R_CONTROL + 2.0))
+            .overflow_hidden()
+            .border_color(if open { theme::hairline_strong() } else { theme::hairline() })
+            .child(head)
+            .when(open, |el| {
+                el.child(
+                    div()
+                        .v_flex()
+                        .gap(px(8.0))
+                        .px(px(11.0))
+                        .pb(px(11.0))
+                        .pt(px(4.0))
+                        .border_t_1()
+                        .border_color(theme::hairline())
+                        .children(task.description.clone().map(|d| {
+                            div()
+                                .pt(px(6.0))
+                                .text_size(px(11.5))
+                                .line_height(px(17.0))
+                                .text_color(theme::text_primary())
+                                .child(d)
+                        }))
+                        .when(!task.acceptance.is_empty(), |el| {
+                            el.child(
+                                div()
+                                    .v_flex()
+                                    .gap(px(3.0))
+                                    .child(ui::section_label("Done when"))
+                                    .children(task.acceptance.iter().map(|c| {
+                                        div()
+                                            .text_size(px(11.0))
+                                            .line_height(px(16.0))
+                                            .text_color(theme::text_muted())
+                                            .child(format!("· {c}"))
+                                    })),
+                            )
+                        })
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap(px(6.0))
+                                .pt(px(4.0))
+                                .child(
+                                    Button::new(SharedString::from(format!("backlog-open-{run}-{}", task.id)))
+                                        .ghost()
+                                        .small()
+                                        .icon(Lucide::Activity)
+                                        .label("Open mission")
+                                        .on_click(cx.listener(move |_this, _e, _w, cx| {
+                                            cx.emit(BacklogAction::OpenMission(run));
+                                        })),
+                                )
+                                .when(restartable, |el| {
+                                    el.child(
+                                        Button::new(SharedString::from(format!("backlog-start-{run}-{}", task.id)))
+                                            .primary()
+                                            .small()
+                                            .icon(IconName::Play)
+                                            .label("Start as a mission")
+                                            .tooltip("Plan and build just this task as a new mission")
+                                            .on_click(cx.listener(move |_this, _e, _w, cx| {
+                                                cx.emit(BacklogAction::Dispatch { prompt: prompt.clone() });
+                                            })),
+                                    )
+                                }),
+                        ),
+                )
+            })
+    }
+
+    fn render_column(&self, column: Column, tasks: &[&BacklogTask], cx: &mut Context<Self>) -> Div {
+        let color = column.role().color();
+        div()
+            .flex_1()
+            .min_w(px(220.0))
+            .h_full()
             .v_flex()
             .gap(px(8.0))
-            .p(px(12.0))
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(if card.needs_you {
-                theme::accent().opacity(0.45)
-            } else {
-                theme::hairline()
-            })
-            .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
-            .when(is_done, |el| el.opacity(0.85))
-            .on_click(cx.listener(move |_this, _e, _w, cx| {
-                if let Some(id) = &task_id {
-                    cx.emit(BacklogAction::OpenTask(id.clone()));
-                }
-            }))
-            // header row: id + pill
-            .child(
-                div()
-                    .h_flex()
-                    .gap(px(7.0))
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_muted())
-                            .child(card.id_label.clone()),
-                    )
-                    .child(div().flex_1())
-                    .child(ui::pill(pill_label, pill_color, pill_color.opacity(0.13))),
-            )
-            // title
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .line_height(px(17.0))
-                    .text_color(theme::text_primary())
-                    .child(card.title.clone()),
-            );
-
-        if let Some(prompt) = card.dispatch_prompt.clone() {
-            el = el.child(
-                div().h_flex().child(div().flex_1()).child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "bl-dispatch-{}",
-                            card.task_id.as_deref().unwrap_or(&card.id_label)
-                        )))
-                        .role(Role::Button)
-                        .aria_label(format!("Dispatch {}", card.title))
-                        .px(px(10.0))
-                        .py(px(3.0))
-                        .rounded_md()
-                        .bg(theme::accent())
-                        .text_color(theme::on_accent())
-                        .text_size(px(10.0))
-                        .font_weight(FontWeight::BOLD)
-                        .cursor_pointer()
-                        .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
-                        .on_click(cx.listener(move |_this, _e, _w, cx| {
-                            cx.emit(BacklogAction::Dispatch {
-                                prompt: prompt.clone(),
-                            });
-                            cx.stop_propagation();
-                        }))
-                        .child("Dispatch ▸"),
-                ),
-            );
-        }
-
-        if let Some((done, total)) = card.progress {
-            let pct = done as f32 / total as f32;
-            el = el.child(
-                div()
-                    .h(px(4.0))
-                    .rounded_full()
-                    .bg(theme::panel_deep())
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .h_full()
-                            .rounded_full()
-                            .bg(theme::accent())
-                            .w(relative(pct)),
-                    ),
-            );
-        }
-
-        el.child(
-            div()
-                .text_size(px(9.5))
-                .text_color(theme::text_muted())
-                .child(card.meta.clone()),
-        )
-    }
-
-    fn render_column(&self, column: Column, cards: &[Card], cx: &mut Context<Self>) -> Div {
-        let in_col: Vec<&Card> = cards.iter().filter(|c| c.column == column).collect();
-        let count = in_col.len();
-        let needs = in_col.iter().filter(|c| c.needs_you).count();
-
-        let mut list = div()
-            .flex_1()
-            .min_h_0()
-            .id(SharedString::from(format!("bl-col-{}", column.title())))
-            .overflow_y_scroll()
-            .v_flex()
-            .gap(px(9.0));
-
-        if in_col.is_empty() {
-            list = list.child(
-                div()
-                    .p(px(12.0))
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .text_size(px(10.5))
-                    .text_color(theme::text_muted().opacity(0.7))
-                    .child("empty"),
-            );
-        }
-        for card in &in_col {
-            list = list.child(self.render_card(card, cx));
-        }
-
-        div()
-            .flex_1()
-            .min_w_0()
-            .v_flex()
-            .gap(px(10.0))
             .child(
                 div()
                     .h_flex()
                     .gap(px(8.0))
                     .items_center()
                     .px(px(4.0))
-                    .child(ui::status_dot(column.dot()))
+                    .child(ui::status_dot(color))
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::text_primary())
                             .child(column.title()),
                     )
-                    .child(ui::pill(
-                        format!("{count}"),
-                        theme::text_muted(),
-                        theme::panel_raised(),
-                    ))
-                    .when(needs > 0, |el| {
-                        el.child(ui::pill(
-                            format!("{needs} need you"),
-                            theme::accent(),
-                            theme::accent().opacity(0.13),
-                        ))
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(9.0))
-                            .text_color(theme::text_muted().opacity(0.8))
-                            .child(column.note()),
-                    ),
+                    .child(ui::pill(tasks.len().to_string(), theme::text_muted(), theme::panel_deep())),
             )
-            .child(list)
+            .child(
+                div()
+                    .id(SharedString::from(format!("backlog-col-{}", column.title())))
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .v_flex()
+                    .gap(px(6.0))
+                    .p(px(6.0))
+                    .rounded(px(ui::R_PANEL))
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::hairline())
+                    .when(tasks.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .py(px(18.0))
+                                .text_center()
+                                .text_size(px(11.0))
+                                .text_color(theme::text_dim())
+                                .child("—"),
+                        )
+                    })
+                    .children(tasks.iter().map(|t| self.render_card(t, cx))),
+            )
+    }
+}
+
+impl BacklogScreen {
+    /// One chip per mission (newest first), plus "All".
+    fn render_mission_filter(&self, cx: &mut Context<Self>) -> Div {
+        let mut missions: Vec<(RunId, String, usize)> = Vec::new();
+        for task in &self.tasks {
+            match missions.iter_mut().find(|(run, _, _)| *run == task.implementation_run) {
+                Some((_, _, open)) => *open += usize::from(Column::of(task.status) != Column::Done),
+                None => missions.push((
+                    task.implementation_run,
+                    task.mission.clone(),
+                    usize::from(Column::of(task.status) != Column::Done),
+                )),
+            }
+        }
+        let chip = |id: SharedString, label: String, count: Option<usize>, active: bool| {
+            div()
+                .id(id)
+                .role(Role::Tab)
+                .h_flex()
+                .gap(px(6.0))
+                .items_center()
+                .max_w(px(280.0))
+                .px(px(10.0))
+                .py(px(5.0))
+                .rounded(px(999.0))
+                .border_1()
+                .border_color(if active { theme::stroke(theme::accent()) } else { theme::hairline() })
+                .bg(if active { theme::tint(theme::accent()) } else { theme::panel_raised() })
+                .text_size(px(11.0))
+                .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                .cursor_pointer()
+                .child(div().truncate().child(label))
+                .children(count.filter(|n| *n > 0).map(|n| {
+                    div().text_size(px(10.0)).text_color(theme::text_dim()).child(format!("{n} open"))
+                }))
+        };
+        let started: std::collections::HashMap<RunId, String> = self
+            .state
+            .read(cx)
+            .runs
+            .iter()
+            .map(|r| {
+                (
+                    r.run_id,
+                    r.started_at.with_timezone(&chrono::Local).format("%b %d %H:%M").to_string(),
+                )
+            })
+            .collect();
+        let mut row = div().h_flex().flex_wrap().gap(px(6.0)).child(
+            chip("backlog-mission-all".into(), "All missions".into(), None, self.mission_filter.is_none())
+                .on_click(cx.listener(|this, _e, _w, cx| {
+                    this.mission_filter = None;
+                    cx.notify();
+                })),
+        );
+        for (run, title, open) in missions {
+            row = row.child(
+                chip(
+                    SharedString::from(format!("backlog-mission-{run}")),
+                    match started.get(&run) {
+                        Some(when) => format!("{when} · {}", ui::headline(&title, 34)),
+                        None => ui::headline(&title, 42),
+                    },
+                    Some(open),
+                    self.mission_filter == Some(run),
+                )
+                .on_click(cx.listener(move |this, _e, _w, cx| {
+                    this.mission_filter = Some(run);
+                    cx.notify();
+                })),
+            );
+        }
+        row
     }
 }
 
 impl Render for BacklogScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (cards, live) = self.cards(cx);
+        let all_tasks = self.tasks.clone();
+        let tasks: Vec<BacklogTask> = all_tasks
+            .iter()
+            .filter(|t| self.mission_filter.is_none_or(|run| t.implementation_run == run))
+            .cloned()
+            .collect();
+        let mut by_column: Vec<(Column, Vec<&BacklogTask>)> =
+            Column::ALL.iter().map(|c| (*c, Vec::new())).collect();
+        for task in &tasks {
+            let column = Column::of(task.status);
+            if let Some((_, list)) = by_column.iter_mut().find(|(c, _)| *c == column) {
+                list.push(task);
+            }
+        }
+        // Ready before blocked; left-over work before work a live mission
+        // will still pick up.
+        for (column, list) in &mut by_column {
+            if *column == Column::Todo {
+                list.sort_by_key(|t| (!t.blocked_by.is_empty(), !t.mission_ended));
+            }
+        }
+        let open_count = tasks
+            .iter()
+            .filter(|t| !matches!(Column::of(t.status), Column::Done))
+            .count();
+        let subtitle = if all_tasks.is_empty() {
+            None
+        } else {
+            let scope = if self.mission_filter.is_some() {
+                "in this mission"
+            } else {
+                "across your missions"
+            };
+            Some(SharedString::from(format!(
+                "{} tasks {scope} · {open_count} not done yet",
+                tasks.len()
+            )))
+        };
+
+        let header = ui::page_header(
+            "Backlog",
+            subtitle,
+            Button::new("backlog-new")
+                .primary()
+                .small()
+                .icon(IconName::Plus)
+                .label("New mission")
+                .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(BacklogAction::NewTask))),
+        );
+
+        let body: AnyElement = if all_tasks.is_empty() && !self.loading {
+            ui::panel()
+                .child(ui::empty_state(
+                    "▦",
+                    "No tasks yet",
+                    "Tasks appear here once a mission's plan is approved — every milestone task, \
+                     plus anything the agents find along the way.",
+                ))
+                .into_any_element()
+        } else {
+            let columns: Vec<Div> = by_column
+                .iter()
+                .map(|(c, list)| self.render_column(*c, list, cx))
+                .collect();
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex()
+                .gap(px(12.0))
+                .children(columns)
+                .into_any_element()
+        };
 
         div()
             .size_full()
             .v_flex()
-            .bg(theme::panel_deep())
-            .child(self.render_header(cards.len(), live, cx))
-            .child(self.render_capacity(cx))
-            .child(
-                // Plain .flex() row — columns must stretch to full
-                // height, not center (h_flex sets items_center).
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .gap(px(14.0))
-                    .px(px(20.0))
-                    .pb(px(18.0))
-                    .child(self.render_column(Column::Triage, &cards, cx))
-                    .child(self.render_column(Column::Ready, &cards, cx))
-                    .child(self.render_column(Column::InFlight, &cards, cx))
-                    .child(self.render_column(Column::Done, &cards, cx)),
-            )
+            .gap(px(16.0))
+            .bg(theme::background())
+            .px(px(24.0))
+            .pt(px(22.0))
+            .pb(px(20.0))
+            .child(header)
+            .when(!all_tasks.is_empty(), |el| el.child(self.render_mission_filter(cx)))
+            .child(body)
     }
 }
 
-/// Clearly-labelled sample board (no tasks yet) — mirrors the concept
-/// so the four-lane idea reads before a project has real work.
-fn sample_cards() -> Vec<Card> {
-    let mk =
-        |id: &str, title: &str, pill: (&str, Hsla), meta: &str, needs_you: bool, column: Column| {
-            Card {
-                task_id: None,
-                dispatch_prompt: None,
-                id_label: id.to_string(),
-                title: title.to_string(),
-                pill: (pill.0.to_string(), pill.1),
-                meta: meta.to_string(),
-                progress: None,
-                needs_you,
-                column,
-            }
-        };
+#[cfg(test)]
+mod tests {
+    use super::{Column, restart_prompt};
+    use crate::backlog_source::BacklogTask;
+    use surge_core::RunId;
+    use surge_core::roadmap::RoadmapStatus;
 
-    vec![
-        mk(
-            "t-201",
-            "Webhook retry queue drains too slowly under load",
-            ("draft", theme::text_muted()),
-            "intake · unscoped",
-            false,
-            Column::Triage,
-        ),
-        mk(
-            "t-198",
-            "Add structured logging to payment worker",
-            ("draft", theme::text_muted()),
-            "intake · unscoped",
-            false,
-            Column::Triage,
-        ),
-        mk(
-            "t-195",
-            "Migrate sessions table to composite key",
-            ("6 subtasks", theme::accent()),
-            "planned · high risk",
-            false,
-            Column::Ready,
-        ),
-        mk(
-            "t-194",
-            "CSV import v2 — streaming parser",
-            ("4 subtasks", theme::accent()),
-            "planned · medium",
-            false,
-            Column::Ready,
-        ),
-        mk(
-            "t-142",
-            "Rate limiter middleware",
-            ("needs you", theme::accent()),
-            "claude-1 · review gate",
-            true,
-            Column::InFlight,
-        ),
-        mk(
-            "t-140",
-            "Retry logic patch",
-            ("3/6", theme::accent()),
-            "gpt-runner · executing",
-            false,
-            Column::InFlight,
-        ),
-        mk(
-            "t-133",
-            "Session cache",
-            ("merged", theme::success()),
-            "claude-1 · +214 −40",
-            false,
-            Column::Done,
-        ),
-        mk(
-            "t-129",
-            "Config loader refactor",
-            ("failed", theme::error()),
-            "qa suite 3/6 — needs re-triage",
-            false,
-            Column::Done,
-        ),
-    ]
+    #[test]
+    fn columns_follow_the_ledger_status() {
+        assert_eq!(Column::of(RoadmapStatus::Pending), Column::Todo);
+        assert_eq!(Column::of(RoadmapStatus::ReadyForVerification), Column::InProgress);
+        assert_eq!(Column::of(RoadmapStatus::FailedVerification), Column::NeedsYou);
+        assert_eq!(Column::of(RoadmapStatus::Skipped), Column::Done);
+    }
+
+    #[test]
+    fn board_renders_real_tasks_in_their_columns() {
+        use gpui_kit::{AppContext as _, TestAppContext};
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        crate::theme::init();
+        let run = RunId::new();
+        let task = |id: &str, status: RoadmapStatus, verified: bool| BacklogTask {
+            id: id.into(),
+            title: format!("Task {id}"),
+            description: None,
+            acceptance: Vec::new(),
+            milestone: Some("Core".into()),
+            mission: "Timer".into(),
+            implementation_run: run,
+            status,
+            verified,
+            discovered_from: None,
+            blocked_by: Vec::new(),
+            mission_ended: true,
+        };
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let state = cx.new(|_| crate::app_state::AppState::new());
+            let mut screen = super::BacklogScreen::new(state, cx);
+            screen.tasks = vec![
+                task("a", RoadmapStatus::Completed, true),
+                task("b", RoadmapStatus::Pending, false),
+                task("c", RoadmapStatus::FailedVerification, false),
+            ];
+            screen
+        });
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        view.update(window, |screen, _| {
+            let columns: Vec<Column> = screen.tasks.iter().map(|t| Column::of(t.status)).collect();
+            assert_eq!(columns, [Column::Done, Column::Todo, Column::NeedsYou]);
+        });
+    }
+
+    #[test]
+    fn restart_prompt_carries_the_task_and_its_origin() {
+        let task = BacklogTask {
+            id: "t1".into(),
+            title: "Add dark mode".into(),
+            description: Some("Follow the OS setting.".into()),
+            acceptance: vec!["Toggle persists".into()],
+            milestone: Some("UI".into()),
+            mission: "Pomodoro timer".into(),
+            implementation_run: RunId::new(),
+            status: RoadmapStatus::Pending,
+            verified: false,
+            discovered_from: None,
+            blocked_by: Vec::new(),
+            mission_ended: true,
+        };
+        let prompt = restart_prompt(&task);
+        assert!(prompt.starts_with("Add dark mode\n\nFollow the OS setting."));
+        assert!(prompt.contains("Done when:\n- Toggle persists"));
+        assert!(prompt.ends_with("(Picked up from the backlog of: Pomodoro timer)"));
+    }
 }

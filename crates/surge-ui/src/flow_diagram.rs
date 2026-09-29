@@ -35,7 +35,7 @@ const LANE_GAP: f32 = 10.0;
 
 /// Role lanes, top to bottom.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-enum Lane {
+pub(crate) enum Lane {
     Plan,
     Approve,
     Build,
@@ -826,7 +826,7 @@ fn bfs_depth(
     depth
 }
 
-fn lane_of(node: &Node) -> Lane {
+pub(crate) fn lane_of(node: &Node) -> Lane {
     match &node.config {
         NodeConfig::HumanGate(_) => Lane::Approve,
         NodeConfig::Terminal(_) | NodeConfig::Notify(_) => Lane::Result,

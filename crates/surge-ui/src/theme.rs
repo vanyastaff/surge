@@ -1,8 +1,20 @@
+//! Design tokens for the desktop app — "The Evidence Console".
+//!
+//! Adapted from Archify's design system (see `docs/design/desktop.md`): a
+//! midnight canvas, one mono voice, and a fixed semantic color vocabulary
+//! where every saturated color names *who is acting* — an agent, a plan,
+//! a verifier, you, or a failure. Color is never decoration.
+//!
+//! Screens read tokens through the free functions below; the palette lives
+//! in a thread-local so a theme switch re-colors every surface on the next
+//! frame. [`sync_component_theme`] pushes the same palette into
+//! gpui-component so its buttons, tabs and inputs speak the same language.
+
 use std::cell::RefCell;
+use std::path::PathBuf;
 
-use gpui_kit::Hsla;
-
-// ── Dynamic theme colors ───────────────────────────────────────────
+use gpui_kit::{App, Hsla};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SurgeThemeColors {
@@ -12,180 +24,473 @@ pub struct SurgeThemeColors {
     pub sidebar_bg: Hsla,
     pub text_primary: Hsla,
     pub text_muted: Hsla,
+    pub text_dim: Hsla,
     pub success: Hsla,
     pub warning: Hsla,
     pub error: Hsla,
-    // Fleet-ops surfaces — must flip with the mode alongside the text
-    // colors, or light mode renders near-black text on dark panels.
     pub panel: Hsla,
     pub panel_raised: Hsla,
     pub panel_deep: Hsla,
     pub hairline: Hsla,
     pub hairline_strong: Hsla,
     pub graph_line: Hsla,
+    pub grid: Hsla,
+    pub violet: Hsla,
+    pub orange: Hsla,
+    pub slate: Hsla,
+    pub on_accent: Hsla,
+    pub dark: bool,
 }
 
 impl SurgeThemeColors {
     fn dark(primary: Hsla) -> Self {
         Self {
             primary,
-            surface: hsla(240.0, 0.33, 0.14),
-            background: hsla(240.0, 0.33, 0.07),
-            sidebar_bg: hsla(240.0, 0.33, 0.10),
-            text_primary: hsla(0.0, 0.0, 0.93),
-            text_muted: hsla(0.0, 0.0, 0.55),
-            success: hsla(142.0, 0.71, 0.45),
-            warning: hsla(38.0, 0.92, 0.50),
-            error: hsla(0.0, 0.84, 0.60),
-            panel: hsla(235.0, 0.20, 0.065),
-            panel_raised: hsla(234.0, 0.17, 0.095),
-            panel_deep: hsla(240.0, 0.25, 0.05),
-            hairline: hsla(234.0, 0.14, 0.18),
-            hairline_strong: hsla(234.0, 0.14, 0.24),
-            graph_line: hsla(234.0, 0.14, 0.26),
+            // Canvas #020617 · mask #0F172A · border #1E293B (Tailwind slate).
+            background: rgb(0x020617),
+            panel_deep: rgb(0x01040F),
+            panel: rgb(0x060D1F),
+            sidebar_bg: rgb(0x040A1A),
+            surface: rgb(0x111A2E),
+            panel_raised: rgb(0x0B1427),
+            hairline: rgb(0x1E293B),
+            hairline_strong: rgb(0x334155),
+            graph_line: rgb(0x3B4A63),
+            grid: rgba(0x94A3B8, 0.055),
+            text_primary: rgb(0xF1F5F9),
+            text_muted: rgb(0x94A3B8),
+            text_dim: rgb(0x64748B),
+            success: rgb(0x34D399),
+            warning: rgb(0xFBBF24),
+            error: rgb(0xFB7185),
+            violet: rgb(0xA78BFA),
+            orange: rgb(0xFB923C),
+            slate: rgb(0x94A3B8),
+            on_accent: rgb(0x020617),
+            dark: true,
         }
     }
 
     fn light(primary: Hsla) -> Self {
         Self {
             primary,
-            surface: hsla(220.0, 0.15, 0.95),
-            background: hsla(0.0, 0.0, 1.0),
-            sidebar_bg: hsla(220.0, 0.15, 0.97),
-            text_primary: hsla(0.0, 0.0, 0.10),
-            text_muted: hsla(0.0, 0.0, 0.45),
-            success: hsla(142.0, 0.71, 0.35),
-            warning: hsla(38.0, 0.92, 0.45),
-            error: hsla(0.0, 0.84, 0.50),
-            panel: hsla(235.0, 0.20, 0.965),
-            panel_raised: hsla(234.0, 0.17, 0.925),
-            panel_deep: hsla(240.0, 0.25, 0.99),
-            hairline: hsla(234.0, 0.14, 0.86),
-            hairline_strong: hsla(234.0, 0.14, 0.79),
-            graph_line: hsla(234.0, 0.14, 0.76),
+            background: rgb(0xF8FAFC),
+            panel_deep: rgb(0xF1F5F9),
+            panel: rgb(0xF8FAFC),
+            sidebar_bg: rgb(0xF1F5F9),
+            surface: rgb(0xE2E8F0),
+            panel_raised: rgb(0xFFFFFF),
+            hairline: rgb(0xE2E8F0),
+            hairline_strong: rgb(0xCBD5E1),
+            graph_line: rgb(0x94A3B8),
+            grid: rgba(0x0F172A, 0.05),
+            text_primary: rgb(0x0F172A),
+            text_muted: rgb(0x475569),
+            text_dim: rgb(0x94A3B8),
+            success: rgb(0x059669),
+            warning: rgb(0xD97706),
+            error: rgb(0xE11D48),
+            violet: rgb(0x7C3AED),
+            orange: rgb(0xEA580C),
+            slate: rgb(0x64748B),
+            on_accent: rgb(0xFFFFFF),
+            dark: false,
         }
     }
 }
 
-const fn hsla(h_deg: f32, s: f32, l: f32) -> Hsla {
-    Hsla {
-        h: h_deg / 360.0,
-        s,
-        l,
-        a: 1.0,
-    }
+/// `0xRRGGBB` → [`Hsla`].
+fn rgb(hex: u32) -> Hsla {
+    gpui_kit::rgb(hex).into()
 }
 
-// ── Predefined themes ──────────────────────────────────────────────
+fn rgba(hex: u32, alpha: f32) -> Hsla {
+    let mut color = rgb(hex);
+    color.a = alpha;
+    color
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The accent a person picks in Settings. Only the accent changes; the
+/// semantic vocabulary (agent / plan / verified / you / failure) is fixed so
+/// meaning survives every theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeName {
-    Default,
-    Dusk,
-    Lime,
+    /// Verified Cyan — the Archify signal color.
+    #[serde(alias = "Default")]
+    Signal,
+    /// Proof Green.
+    #[serde(alias = "Verdant", alias = "Lime")]
+    Proof,
+    /// Repository Violet.
+    #[serde(alias = "Neo")]
+    Violet,
+    /// Cloud Amber — the original Surge accent.
+    #[serde(alias = "Dusk", alias = "Retro")]
+    Amber,
+    /// Ocean blue.
     Ocean,
-    Retro,
-    Neo,
-    Verdant,
+    /// No hue at all.
     Monochrome,
 }
 
 impl ThemeName {
-    pub fn accent(self) -> Hsla {
-        match self {
-            Self::Default => hsla(45.0, 0.85, 0.55),
-            Self::Dusk => hsla(25.0, 0.85, 0.55),
-            Self::Lime => hsla(90.0, 0.80, 0.50),
-            Self::Ocean => hsla(200.0, 0.80, 0.55),
-            Self::Retro => hsla(20.0, 0.85, 0.55),
-            Self::Neo => hsla(330.0, 0.85, 0.55),
-            Self::Verdant => hsla(155.0, 0.75, 0.45),
-            Self::Monochrome => hsla(0.0, 0.0, 0.65),
+    pub fn accent_for(self, dark: bool) -> Hsla {
+        match (self, dark) {
+            (Self::Signal, true) => rgb(0x22D3EE),
+            (Self::Signal, false) => rgb(0x0891B2),
+            (Self::Proof, true) => rgb(0x34D399),
+            (Self::Proof, false) => rgb(0x059669),
+            (Self::Violet, true) => rgb(0xA78BFA),
+            (Self::Violet, false) => rgb(0x7C3AED),
+            (Self::Amber, true) => rgb(0xFBBF24),
+            (Self::Amber, false) => rgb(0xD97706),
+            (Self::Ocean, true) => rgb(0x60A5FA),
+            (Self::Ocean, false) => rgb(0x2563EB),
+            (Self::Monochrome, true) => rgb(0xE2E8F0),
+            (Self::Monochrome, false) => rgb(0x0F172A),
         }
+    }
+
+    /// Swatch shown in Settings (the dark-mode accent).
+    pub fn accent(self) -> Hsla {
+        self.accent_for(true)
     }
 
     pub fn all() -> &'static [ThemeName] {
         &[
-            Self::Default,
-            Self::Dusk,
-            Self::Lime,
+            Self::Signal,
+            Self::Proof,
+            Self::Violet,
+            Self::Amber,
             Self::Ocean,
-            Self::Retro,
-            Self::Neo,
-            Self::Verdant,
             Self::Monochrome,
         ]
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Default => "Default",
-            Self::Dusk => "Dusk",
-            Self::Lime => "Lime",
+            Self::Signal => "Signal",
+            Self::Proof => "Proof",
+            Self::Violet => "Violet",
+            Self::Amber => "Amber",
             Self::Ocean => "Ocean",
-            Self::Retro => "Retro",
-            Self::Neo => "Neo",
-            Self::Verdant => "Verdant",
             Self::Monochrome => "Monochrome",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Default => "Oscura-inspired with pale yellow accents",
-            Self::Dusk => "Warmer variant with lighter dark mode",
-            Self::Lime => "Fresh, energetic lime with purple accents",
-            Self::Ocean => "Calm, professional blue tones",
-            Self::Retro => "Warm, nostalgic amber vibes",
-            Self::Neo => "Modern cyberpunk pink/magenta",
-            Self::Verdant => "Clean green, inspired by nature",
-            Self::Monochrome => "Pure black & white, no color",
+            Self::Signal => "Verified cyan on a midnight console",
+            Self::Proof => "Evidence green as the focus color",
+            Self::Violet => "Repository violet, calm and dense",
+            Self::Amber => "The original Surge amber",
+            Self::Ocean => "Plain, professional blue",
+            Self::Monochrome => "No accent hue — ink only",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeMode {
     Dark,
     Light,
 }
 
-// ── Thread-local storage ───────────────────────────────────────────
+/// Semantic roles. Every saturated color in the app maps to one of these.
+/// (Not `Role`: that name is gpui's accessibility role.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Semantic {
+    /// An agent is doing the work (implement, run, stream). The accent.
+    Agent,
+    /// Something written down: spec, roadmap, plan, artifact.
+    Plan,
+    /// Proof: a verifier passed, evidence exists, a run completed.
+    Verified,
+    /// A person is needed: approval gate, question, inbox.
+    You,
+    /// Failure, policy block, rejected.
+    Failure,
+    /// Repetition: loops, retries, iterations.
+    Loop,
+    /// Outside Surge or idle: terminal, external tools, unknown.
+    External,
+}
+
+impl Semantic {
+    pub fn color(self) -> Hsla {
+        match self {
+            Self::Agent => primary(),
+            Self::Plan => violet(),
+            Self::Verified => success(),
+            Self::You => warning(),
+            Self::Failure => error(),
+            Self::Loop => orange(),
+            Self::External => slate(),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Agent => "Agent",
+            Self::Plan => "Plan",
+            Self::Verified => "Verified",
+            Self::You => "You",
+            Self::Failure => "Failure",
+            Self::Loop => "Loop",
+            Self::External => "External",
+        }
+    }
+}
 
 thread_local! {
     static COLORS: RefCell<SurgeThemeColors> = RefCell::new(
-        SurgeThemeColors::dark(ThemeName::Default.accent())
+        SurgeThemeColors::dark(ThemeName::Signal.accent_for(true))
     );
+    static CURRENT: RefCell<(ThemeName, ThemeMode)> =
+        const { RefCell::new((ThemeName::Signal, ThemeMode::Dark)) };
 }
 
+/// Persisted appearance choice (`$SURGE_HOME/ui/appearance.json`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct Appearance {
+    theme: ThemeName,
+    mode: ThemeMode,
+}
+
+fn appearance_path() -> Option<PathBuf> {
+    surge_core::home::surge_home_dir().map(|home| home.join("ui").join("appearance.json"))
+}
+
+fn load_appearance() -> Option<Appearance> {
+    let text = std::fs::read_to_string(appearance_path()?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn save_appearance(appearance: Appearance) {
+    let Some(path) = appearance_path() else {
+        return;
+    };
+    let result = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            let text = serde_json::to_string_pretty(&appearance).map_err(std::io::Error::other)?;
+            std::fs::write(&path, text)
+        });
+    if let Err(error) = result {
+        tracing::warn!(%error, path = %path.display(), "could not persist appearance");
+    }
+}
+
+/// Load the persisted appearance (or the Signal/Dark default) into the
+/// token store. Call once at startup, before the first window renders.
 pub fn init() {
-    apply_theme(ThemeName::Default, ThemeMode::Dark);
+    let Appearance { theme, mode } = load_appearance().unwrap_or(Appearance {
+        theme: ThemeName::Signal,
+        mode: ThemeMode::Dark,
+    });
+    set_palette(theme, mode);
 }
 
-pub fn apply_theme(name: ThemeName, mode: ThemeMode) {
+/// The appearance currently applied.
+pub fn current() -> (ThemeName, ThemeMode) {
+    CURRENT.with(|c| *c.borrow())
+}
+
+fn set_palette(name: ThemeName, mode: ThemeMode) {
     let colors = match mode {
-        ThemeMode::Dark => SurgeThemeColors::dark(name.accent()),
-        ThemeMode::Light => SurgeThemeColors::light(name.accent()),
+        ThemeMode::Dark => SurgeThemeColors::dark(name.accent_for(true)),
+        ThemeMode::Light => SurgeThemeColors::light(name.accent_for(false)),
     };
     COLORS.with(|c| *c.borrow_mut() = colors);
+    CURRENT.with(|c| *c.borrow_mut() = (name, mode));
 }
 
-pub fn set_accent(accent: Hsla) {
-    COLORS.with(|c| c.borrow_mut().primary = accent);
+/// Switch theme: update tokens, gpui-component chrome, persist, and
+/// repaint every window.
+pub fn apply_theme(name: ThemeName, mode: ThemeMode, cx: &mut App) {
+    set_palette(name, mode);
+    save_appearance(Appearance { theme: name, mode });
+    sync_component_theme(cx);
+    cx.refresh_windows();
+}
+
+/// Push the Surge palette into gpui-component's global theme so stock
+/// widgets (Button, Tab, Input, Switch, lists, scrollbars) match.
+pub fn sync_component_theme(cx: &mut App) {
+    use gpui_kit::component::{Theme, ThemeMode as ComponentMode};
+
+    let c = COLORS.with(|c| *c.borrow());
+    let mode = if c.dark {
+        ComponentMode::Dark
+    } else {
+        ComponentMode::Light
+    };
+    Theme::change(mode, None, cx);
+    Theme::update(cx, |t| {
+        t.font_family = crate::ui::MONO.into();
+        t.mono_font_family = crate::ui::MONO.into();
+        t.font_size = gpui_kit::px(13.0);
+        t.mono_font_size = gpui_kit::px(12.0);
+        t.radius = gpui_kit::px(6.0);
+        t.radius_lg = gpui_kit::px(12.0);
+        t.shadow = false;
+
+        let colors = &mut t.colors;
+        colors.background = c.background;
+        colors.foreground = c.text_primary;
+        colors.border = c.hairline;
+        colors.input = c.hairline_strong;
+        colors.ring = c.primary;
+        colors.caret = c.primary;
+        colors.selection = c.primary.opacity(0.28);
+        colors.muted = c.surface;
+        colors.muted_foreground = c.text_muted;
+        colors.accent = c.surface;
+        colors.accent_foreground = c.text_primary;
+        colors.popover = c.panel_raised;
+        colors.popover_foreground = c.text_primary;
+        colors.overlay = gpui_kit::hsla(0.0, 0.0, 0.0, if c.dark { 0.6 } else { 0.3 });
+        colors.window_border = c.hairline;
+        colors.title_bar = c.sidebar_bg;
+        colors.title_bar_border = c.hairline;
+        colors.status_bar = c.sidebar_bg;
+        colors.status_bar_border = c.hairline;
+        colors.sidebar = c.sidebar_bg;
+        colors.sidebar_border = c.hairline;
+        colors.sidebar_foreground = c.text_muted;
+        colors.sidebar_accent = c.surface;
+        colors.sidebar_accent_foreground = c.text_primary;
+        colors.sidebar_primary = c.primary;
+        colors.sidebar_primary_foreground = c.on_accent;
+        colors.link = c.primary;
+        colors.link_hover = c.primary.opacity(0.85);
+        colors.link_active = c.primary;
+
+        colors.primary = c.primary;
+        colors.primary_hover = c.primary.opacity(0.88);
+        colors.primary_active = c.primary.opacity(0.76);
+        colors.primary_foreground = c.on_accent;
+        colors.secondary = c.panel_raised;
+        colors.secondary_hover = c.surface;
+        colors.secondary_active = c.hairline;
+        colors.secondary_foreground = c.text_primary;
+
+        colors.button = c.panel_raised;
+        colors.button_hover = c.surface;
+        colors.button_active = c.hairline;
+        colors.button_foreground = c.text_primary;
+        colors.button_primary = c.primary;
+        colors.button_primary_hover = c.primary.opacity(0.88);
+        colors.button_primary_active = c.primary.opacity(0.76);
+        colors.button_primary_foreground = c.on_accent;
+        colors.button_secondary = c.panel_raised;
+        colors.button_secondary_hover = c.surface;
+        colors.button_secondary_active = c.hairline;
+        colors.button_secondary_foreground = c.text_primary;
+        colors.button_danger = c.error;
+        colors.button_danger_hover = c.error.opacity(0.88);
+        colors.button_danger_active = c.error.opacity(0.76);
+        colors.button_danger_foreground = c.on_accent;
+        colors.button_success = c.success;
+        colors.button_success_hover = c.success.opacity(0.88);
+        colors.button_success_active = c.success.opacity(0.76);
+        colors.button_success_foreground = c.on_accent;
+        colors.button_warning = c.warning;
+        colors.button_warning_hover = c.warning.opacity(0.88);
+        colors.button_warning_active = c.warning.opacity(0.76);
+        colors.button_warning_foreground = c.on_accent;
+
+        colors.danger = c.error;
+        colors.danger_hover = c.error.opacity(0.88);
+        colors.danger_active = c.error.opacity(0.76);
+        colors.danger_foreground = c.on_accent;
+        colors.success = c.success;
+        colors.success_hover = c.success.opacity(0.88);
+        colors.success_active = c.success.opacity(0.76);
+        colors.success_foreground = c.on_accent;
+        colors.warning = c.warning;
+        colors.warning_hover = c.warning.opacity(0.88);
+        colors.warning_active = c.warning.opacity(0.76);
+        colors.warning_foreground = c.on_accent;
+        colors.info = c.primary;
+        colors.info_hover = c.primary.opacity(0.88);
+        colors.info_active = c.primary.opacity(0.76);
+        colors.info_foreground = c.on_accent;
+
+        colors.tab_bar = c.panel;
+        colors.tab_bar_segmented = c.panel_deep;
+        colors.tab = gpui_kit::transparent_black();
+        colors.tab_foreground = c.text_muted;
+        colors.tab_active = c.surface;
+        colors.tab_active_foreground = c.text_primary;
+
+        colors.list = c.background;
+        colors.list_even = c.panel;
+        colors.list_head = c.panel;
+        colors.list_hover = c.surface;
+        colors.list_active = c.primary.opacity(0.12);
+        colors.list_active_border = c.primary.opacity(0.5);
+        colors.table = c.background;
+        colors.table_even = c.panel;
+        colors.table_head = c.panel;
+        colors.table_head_foreground = c.text_muted;
+        colors.table_hover = c.surface;
+        colors.table_active = c.primary.opacity(0.12);
+        colors.table_active_border = c.primary.opacity(0.5);
+        colors.table_row_border = c.hairline;
+
+        colors.switch = c.hairline_strong;
+        colors.switch_thumb = c.text_primary;
+        colors.slider_bar = c.primary;
+        colors.slider_thumb = c.text_primary;
+        colors.progress_bar = c.primary;
+        colors.skeleton = c.surface;
+        colors.scrollbar = gpui_kit::transparent_black();
+        colors.scrollbar_thumb = c.hairline_strong;
+        colors.scrollbar_thumb_hover = c.graph_line;
+        colors.group_box = c.panel;
+        colors.group_box_foreground = c.text_primary;
+        colors.accordion = c.panel;
+        colors.description_list_label = c.panel;
+        colors.description_list_label_foreground = c.text_muted;
+        colors.drag_border = c.primary;
+        colors.drop_target = c.primary.opacity(0.12);
+
+        colors.chart_1 = c.primary;
+        colors.chart_2 = c.success;
+        colors.chart_3 = c.violet;
+        colors.chart_4 = c.warning;
+        colors.chart_5 = c.orange;
+        colors.chart_grid = c.hairline;
+        colors.chart_bullish = c.success;
+        colors.chart_bearish = c.error;
+
+        colors.red = c.error;
+        colors.green = c.success;
+        colors.yellow = c.warning;
+        colors.cyan = c.primary;
+        colors.magenta = c.violet;
+    });
 }
 
 fn get<F: FnOnce(&SurgeThemeColors) -> Hsla>(f: F) -> Hsla {
     COLORS.with(|c| f(&c.borrow()))
 }
 
-// ── Public accessors (drop-in replacement for old constants) ───────
+/// Whether the dark palette is active.
+pub fn is_dark() -> bool {
+    COLORS.with(|c| c.borrow().dark)
+}
 
 pub fn primary() -> Hsla {
     get(|c| c.primary)
 }
+/// Interactive hover / selected-row surface.
 pub fn surface() -> Hsla {
     get(|c| c.surface)
 }
+/// The canvas.
 pub fn background() -> Hsla {
     get(|c| c.background)
 }
@@ -198,6 +503,10 @@ pub fn text_primary() -> Hsla {
 pub fn text_muted() -> Hsla {
     get(|c| c.text_muted)
 }
+/// Annotation ink, one step quieter than muted.
+pub fn text_dim() -> Hsla {
+    get(|c| c.text_dim)
+}
 pub fn success() -> Hsla {
     get(|c| c.success)
 }
@@ -207,23 +516,25 @@ pub fn warning() -> Hsla {
 pub fn error() -> Hsla {
     get(|c| c.error)
 }
+pub fn violet() -> Hsla {
+    get(|c| c.violet)
+}
+pub fn orange() -> Hsla {
+    get(|c| c.orange)
+}
+pub fn slate() -> Hsla {
+    get(|c| c.slate)
+}
 
-// ── Fleet-ops surface tokens (concept: "Surge - Interactive") ──────
-// Fixed dark chrome surfaces for the rail / context bar / panels and
-// the constellation canvas. Neutral 234–240° hues so they read as one
-// family regardless of the active accent theme. Purely additive — the
-// accessors above are untouched, so existing screens are unaffected.
-
-/// Accent = the active theme's primary (amber by default). Alias so
-/// fleet-ops code can read intent ("accent") instead of "primary".
+/// Accent = the active theme's primary. Alias so code can read intent
+/// ("accent") instead of "primary".
 pub fn accent() -> Hsla {
     primary()
 }
 
-/// Ink drawn ON the accent (button labels, badges). One token so a
-/// future dark-accent theme flips every accent surface at once.
+/// Ink drawn ON the accent (button labels, badges).
 pub fn on_accent() -> Hsla {
-    hsla(0.0, 0.0, 0.08)
+    get(|c| c.on_accent)
 }
 
 /// Rail / context bar / panel background.
@@ -231,12 +542,12 @@ pub fn panel() -> Hsla {
     get(|c| c.panel)
 }
 
-/// Raised card surface (mission cards, inspectors).
+/// Raised card surface (cards, inspectors).
 pub fn panel_raised() -> Hsla {
     get(|c| c.panel_raised)
 }
 
-/// Deep canvas background (the constellation field).
+/// Deep canvas background (diagram fields).
 pub fn panel_deep() -> Hsla {
     get(|c| c.panel_deep)
 }
@@ -256,65 +567,18 @@ pub fn graph_line() -> Hsla {
     get(|c| c.graph_line)
 }
 
-// ── Backwards compat aliases (will be removed) ────────────────────
-// These keep old code compiling during migration. Values are kept in
-// sync with `SurgeThemeColors::dark(ThemeName::Default.accent())` so
-// screens that still read these consts render the same colours as
-// screens that have already migrated to the dynamic accessors —
-// nobody sees a half-yellow / half-purple frame mid-migration.
+/// Canvas grid line.
+pub fn grid() -> Hsla {
+    get(|c| c.grid)
+}
 
-pub const PRIMARY: Hsla = Hsla {
-    // ThemeName::Default.accent() = hsla(45°, 0.85, 0.55).
-    h: 45.0 / 360.0,
-    s: 0.85,
-    l: 0.55,
-    a: 1.0,
-};
-pub const SURFACE: Hsla = Hsla {
-    h: 240.0 / 360.0,
-    s: 0.33,
-    l: 0.14,
-    a: 1.0,
-};
-pub const BACKGROUND: Hsla = Hsla {
-    h: 240.0 / 360.0,
-    s: 0.33,
-    l: 0.07,
-    a: 1.0,
-};
-pub const SIDEBAR_BG: Hsla = Hsla {
-    h: 240.0 / 360.0,
-    s: 0.33,
-    l: 0.10,
-    a: 1.0,
-};
-pub const TEXT_PRIMARY: Hsla = Hsla {
-    h: 0.0,
-    s: 0.0,
-    l: 0.93,
-    a: 1.0,
-};
-pub const TEXT_MUTED: Hsla = Hsla {
-    h: 0.0,
-    s: 0.0,
-    l: 0.55,
-    a: 1.0,
-};
-pub const SUCCESS: Hsla = Hsla {
-    h: 142.0 / 360.0,
-    s: 0.71,
-    l: 0.45,
-    a: 1.0,
-};
-pub const WARNING: Hsla = Hsla {
-    h: 38.0 / 360.0,
-    s: 0.92,
-    l: 0.50,
-    a: 1.0,
-};
-pub const ERROR: Hsla = Hsla {
-    h: 0.0 / 360.0,
-    s: 0.84,
-    l: 0.60,
-    a: 1.0,
-};
+/// Tinted fill for a semantic node: the role color at low alpha, so a
+/// node reads as "belongs to" its role without shouting.
+pub fn tint(color: Hsla) -> Hsla {
+    color.opacity(if is_dark() { 0.10 } else { 0.08 })
+}
+
+/// Border for a semantic node.
+pub fn stroke(color: Hsla) -> Hsla {
+    color.opacity(if is_dark() { 0.62 } else { 0.75 })
+}

@@ -72,6 +72,8 @@ struct InboxItem {
     badge: &'static str,
     badge_color: Hsla,
     title: String,
+    /// The mission this belongs to (the request, as a headline).
+    mission: Option<String>,
     meta: String,
     age: String,
     /// Evidence lines shown in the focus pane: (label, body).
@@ -103,6 +105,10 @@ pub struct InboxScreen {
     /// only on that item, so "resolved · …" never lands on the next gate.
     note_owner: Option<String>,
     documents: std::collections::HashMap<std::path::PathBuf, String>,
+    /// Decisions already made in this project, newest first.
+    history: Vec<crate::decisions::Decision>,
+    /// Project runs (id + status) the history was read for.
+    history_for: Option<Vec<String>>,
 }
 
 impl InboxScreen {
@@ -152,7 +158,44 @@ impl InboxScreen {
             note_owner: None,
             plans: std::collections::HashMap::new(),
             documents: std::collections::HashMap::new(),
+            history: Vec::new(),
+            history_for: None,
         }
+    }
+
+    /// Re-read decision history when a project run appears or changes
+    /// status (a decision always moves its run forward).
+    fn reload_history_if_changed(&mut self, cx: &mut Context<Self>) {
+        let (key, runs): (Vec<String>, Vec<RunId>) = {
+            let state = self.state.read(cx);
+            let runs = state.project_runs();
+            let mut ids: Vec<RunId> = runs.iter().map(|r| r.run_id).collect();
+            // A mission's approvals live in its planning run, which is not
+            // always listed as a project run once the build has started.
+            for op in state.bootstrap_operations.values() {
+                if ids.contains(&op.implementation_run) && !ids.contains(&op.planning_run) {
+                    ids.push(op.planning_run);
+                }
+            }
+            (
+                runs.iter().map(|r| format!("{}:{:?}", r.run_id, r.status)).collect(),
+                ids,
+            )
+        };
+        if self.history_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.history_for = Some(key);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let history = crate::decisions::recent(runs, 12).await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.history = history;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     /// Assemble the queue from actual decisions, reviews, and failed runs.
@@ -167,16 +210,16 @@ impl InboxScreen {
             {
                 DecisionKind::Escalation { reason } => (
                     theme::error(),
-                    "Engine escalation — automated path exhausted".to_string(),
-                    vec![("REASON".to_string(), reason.clone())],
+                    "Surge could not continue on its own".to_string(),
+                    vec![("What happened".to_string(), reason.clone())],
                 ),
                 DecisionKind::Elevation { capability } => (
                     theme::warning(),
-                    format!("Sandbox elevation: {capability}"),
+                    format!("An agent asks for more access: {capability}"),
                     vec![(
-                        "NOTE".to_string(),
-                        "No in-UI resolve seam yet — decide via the configured \
-                             approval channel (Telegram / desktop). Timeout applies."
+                        "How to answer".to_string(),
+                        "Answer on the approval channel set up for this project (Telegram or \
+                         the desktop prompt). If nobody answers in time, the request is declined."
                             .to_string(),
                     )],
                 ),
@@ -195,17 +238,17 @@ impl InboxScreen {
                         ev.push((label.to_owned(), content));
                     }
                     let _ = call_id;
-                    (theme::accent(), prompt.clone(), ev)
+                    (theme::warning(), prompt.clone(), ev)
                 },
                 DecisionKind::RoadmapPatch { patch_id } => (
-                    theme::accent(),
-                    format!("Roadmap patch {patch_id} awaits approval"),
+                    theme::violet(),
+                    "A change to the roadmap waits for approval".to_string(),
                     vec![(
-                        "NOTE".to_string(),
-                        "Roadmap patches resolve through the amendment flow \
-                             (`surge feature` → submit_roadmap_amendment) — no in-UI \
-                             seam yet."
-                            .to_string(),
+                        "How to answer".to_string(),
+                        format!(
+                            "Roadmap changes are approved from the terminal for now: \
+                             `surge feature show {patch_id}`."
+                        ),
                     )],
                 ),
             };
@@ -213,12 +256,23 @@ impl InboxScreen {
                 DecisionKind::HumanInput { call_id, .. } => call_id.clone(),
                 _ => None,
             };
+            let badge = match &p.kind {
+                DecisionKind::HumanInput { schema, .. } => match review_artifact(schema.as_ref()) {
+                    Some(_) => "approve plan",
+                    None if p.kind.badge() == "human input" => "question",
+                    None => "approval",
+                },
+                DecisionKind::Elevation { .. } => "permission",
+                DecisionKind::RoadmapPatch { .. } => "roadmap change",
+                DecisionKind::Escalation { .. } => "needs help",
+            };
             items.push(InboxItem {
                 rank: p.kind.rank(),
-                badge: p.kind.badge(),
+                badge,
                 badge_color,
                 title,
-                meta: format!("run r-{} · {}", run_id.short().to_lowercase(), p.node),
+                mission: state.run_prompt(&run_id).map(|p| ui::headline(p, 80)),
+                meta: format!("{} · r-{}", p.node.replace('_', " "), run_id.short().to_lowercase()),
                 age: p.time.clone(),
                 evidence,
                 source: Source::Live {
@@ -235,24 +289,25 @@ impl InboxScreen {
         for task in &state.tasks {
             let (badge, rank, evidence): (&'static str, u8, Vec<(String, String)>) =
                 match &task.state {
-                    TaskState::HumanReview => ("review gate", 5, Vec::new()),
+                    TaskState::HumanReview => ("review", 5, Vec::new()),
                     TaskState::QaReview { verdict, reasoning } => {
                         let mut ev = Vec::new();
                         if let Some(v) = verdict {
-                            ev.push(("QA VERDICT".to_string(), v.clone()));
+                            ev.push(("QA verdict".to_string(), v.clone()));
                         }
                         if let Some(r) = reasoning {
-                            ev.push(("QA REASONING".to_string(), r.clone()));
+                            ev.push(("Why".to_string(), r.clone()));
                         }
-                        ("qa gate", 6, ev)
+                        ("QA review", 6, ev)
                     },
                     _ => continue,
                 };
             items.push(InboxItem {
                 rank,
                 badge,
-                badge_color: theme::accent(),
+                badge_color: theme::warning(),
                 title: task.title.clone(),
+                mission: None,
                 meta: format!(
                     "task t-{} · {}",
                     task.id.short().to_lowercase(),
@@ -276,29 +331,45 @@ impl InboxScreen {
             } else {
                 "aborted"
             };
-            // Attach the tail of the live log as evidence if we have it.
+            // The run's own last word, when its stream is loaded.
             let mut evidence = Vec::new();
+            let mut reason: Option<String> = None;
             if let Some(stream) = state.run_streams.get(&run.run_id) {
+                reason = stream
+                    .log
+                    .iter()
+                    .rev()
+                    .find(|r| r.kind == "END")
+                    .map(|r| r.text.clone());
                 let tail: Vec<String> = stream
                     .log
                     .iter()
                     .rev()
-                    .take(4)
-                    .map(|r| format!("{} {} {}", r.time, r.kind, r.text))
+                    .take(6)
+                    .map(|r| format!("{}  {}  {}", r.time, r.kind, r.text))
                     .collect();
+                if let Some(reason) = &reason {
+                    evidence.push(("What happened".to_string(), reason.clone()));
+                }
                 if !tail.is_empty() {
-                    evidence.push(("LAST EVENTS".to_string(), tail.join("\n")));
+                    evidence.push(("Last events".to_string(), format!("```text\n{}\n```", tail.join("\n"))));
                 }
             }
+            let headline = reason
+                .as_deref()
+                .map_or(if label == "failed" { "Stopped with an error" } else { "Stopped by request" }, |r| {
+                    crate::mission::failure_headline(r)
+                });
             items.push(InboxItem {
                 rank: 7,
-                badge: "failure triage",
+                badge: label,
                 badge_color: theme::error(),
-                title: format!("Run ended {label}"),
+                title: headline.to_string(),
+                mission: state.run_prompt(&run.run_id).map(|p| ui::headline(p, 80)),
                 meta: format!(
-                    "run r-{} · started {}",
-                    run.run_id.short().to_lowercase(),
-                    run.started_at.with_timezone(&chrono::Local).format("%H:%M")
+                    "started {} · r-{}",
+                    run.started_at.with_timezone(&chrono::Local).format("%H:%M"),
+                    run.run_id.short().to_lowercase()
                 ),
                 age: String::new(),
                 evidence,
@@ -453,164 +524,68 @@ impl InboxScreen {
             .id("inbox-queue")
             .overflow_y_scroll()
             .v_flex()
-            .gap(px(5.0))
-            .p(px(10.0));
-
-        if items.is_empty() {
-            list = list.child(
-                div()
-                    .v_flex()
-                    .gap(px(10.0))
-                    .items_center()
-                    .py(px(60.0))
-                    .px(px(20.0))
-                    .child(
-                        div()
-                            .w(px(34.0))
-                            .h(px(34.0))
-                            .rounded_lg()
-                            .bg(theme::success().opacity(0.14))
-                            .border_1()
-                            .border_color(theme::success().opacity(0.3))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(theme::success())
-                            .child("✓"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child(if live { "Inbox zero" } else { "Inbox offline" }),
-                    )
-                    .child(
-                        div()
-                            .id("decision-status")
-                            .role(Role::Label)
-                            .aria_label(if live {
-                                "Nothing blocked on you"
-                            } else {
-                                "Reconnect to check decisions"
-                            })
-                            .text_size(px(10.5))
-                            .line_height(px(16.0))
-                            .text_color(theme::text_muted())
-                            .text_center()
-                            .child(if live {
-                                "No pending decisions. New requests will appear here."
-                            } else {
-                                "Reconnect the daemon to check for new decisions."
-                            }),
-                    ),
-            );
-        }
+            .gap(px(4.0))
+            .p(px(8.0));
 
         for (i, item) in items.iter().enumerate() {
             let is_sel = i == self.selected.min(items.len().saturating_sub(1));
             let row = div()
-                .id(SharedString::from(format!(
-                    "inbox-item-{}",
-                    item.identity()
-                )))
+                .id(SharedString::from(format!("inbox-item-{}", item.identity())))
                 .role(Role::Button)
                 .aria_label(item.title.clone())
                 .h_flex()
+                .items_stretch()
                 .gap(px(10.0))
-                .p(px(11.0))
-                .rounded_lg()
+                .rounded(px(ui::R_CONTROL + 2.0))
                 .border_1()
-                .border_color(if is_sel {
-                    theme::accent().opacity(0.5)
-                } else {
-                    theme::hairline()
-                })
-                .bg(if is_sel {
-                    theme::panel_raised()
-                } else {
-                    theme::panel_raised().opacity(0.55)
-                })
+                .border_color(if is_sel { theme::hairline_strong() } else { theme::hairline() })
+                .bg(if is_sel { theme::surface() } else { theme::panel_raised() })
+                .overflow_hidden()
                 .cursor_pointer()
                 .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
                 .on_click(cx.listener(move |this, _e, window, cx| {
-                    if this.selected != i {
-                        // A half-typed comment belongs to the item it was
-                        // written for — never carry it to the next one.
-                        if let Some(input) = this.response_input.clone() {
-                            input.update(cx, |s, cx| s.set_value("", window, cx));
-                        }
-                    }
-                    this.selected = i;
-                    this.action_note = None;
-                    cx.notify();
+                    this.select(i, window, cx);
                 }))
-                .child(
-                    div()
-                        .v_flex()
-                        .gap(px(3.0))
-                        .items_center()
-                        .w(px(30.0))
-                        .flex_shrink_0()
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(if item.rank <= 2 {
-                                    theme::error()
-                                } else if item.rank <= 4 {
-                                    theme::accent()
-                                } else {
-                                    theme::text_muted()
-                                })
-                                .child(format!("P{}", item.rank.min(3))),
-                        ),
-                )
+                // Urgency is the color of the edge, not a "P0" code.
+                .child(div().w(px(3.0)).flex_none().bg(item.badge_color))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .v_flex()
-                        .gap(px(5.0))
+                        .gap(px(4.0))
+                        .py(px(10.0))
+                        .pr(px(12.0))
                         .child(
                             div()
                                 .h_flex()
                                 .gap(px(7.0))
                                 .items_center()
-                                .child(ui::pill(
-                                    item.badge,
-                                    item.badge_color,
-                                    item.badge_color.opacity(0.13),
-                                ))
+                                .child(ui::pill(item.badge, item.badge_color, theme::tint(item.badge_color)))
                                 .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .text_size(px(9.0))
-                                        .text_color(theme::text_muted().opacity(0.8))
-                                        .child(item.age.clone()),
-                                ),
+                                .child(div().text_size(px(10.0)).text_color(theme::text_dim()).child(item.age.clone())),
                         )
                         .child(
                             div()
-                                .text_size(px(12.0))
+                                .text_size(px(12.5))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .line_height(px(17.0))
-                                .overflow_hidden()
                                 .text_color(theme::text_primary())
                                 .child(item.title.clone()),
                         )
-                        .child(
+                        .children(item.mission.clone().map(|m| {
                             div()
-                                .text_size(px(9.5))
+                                .text_size(px(11.0))
                                 .text_color(theme::text_muted())
-                                .child(item.meta.clone()),
-                        ),
+                                .truncate()
+                                .child(m)
+                        })),
                 );
             list = list.child(row);
         }
 
         div()
-            .w(px(390.0))
+            .w(px(380.0))
             .flex_shrink_0()
             .v_flex()
             .bg(theme::panel())
@@ -620,30 +595,100 @@ impl InboxScreen {
                 div()
                     .h_flex()
                     .gap(px(10.0))
-                    .items_baseline()
+                    .items_center()
                     .px(px(16.0))
-                    .pt(px(15.0))
-                    .pb(px(11.0))
-                    .border_b_1()
-                    .border_color(theme::hairline())
+                    .pt(px(16.0))
+                    .pb(px(10.0))
                     .child(
                         div()
-                            .text_size(px(15.0))
+                            .text_size(px(16.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::text_primary())
                             .child("Inbox"),
                     )
-                    .child(ui::meta(format!("{} blocked on you", items.len())))
+                    .child(ui::role_badge(format!("{} waiting", items.len()), theme::Semantic::You))
                     .child(div().flex_1())
-                    .when(!live, |el| {
-                        el.child(ui::pill(
-                            "Disconnected",
-                            theme::text_muted(),
-                            theme::panel_raised(),
-                        ))
-                    }),
+                    .when(!live, |el| el.child(ui::role_badge("offline", theme::Semantic::External)))
+                    .child(div().h_flex().gap(px(4.0)).child(ui::kbd("↑↓"))),
             )
             .child(list)
+            .child(self.render_history(true, cx))
+    }
+
+    /// "Recently decided": your last answers, newest first.
+    fn render_history(&self, compact: bool, cx: &Context<Self>) -> Div {
+        if self.history.is_empty() {
+            return div();
+        }
+        let state = self.state.read(cx);
+        let state_rows: Vec<Div> = self
+            .history
+            .iter()
+            .take(if compact { 5 } else { 12 })
+            .map(|d| {
+                let when = chrono::DateTime::from_timestamp_millis(d.at_ms)
+                    .map(|t| t.with_timezone(&chrono::Local).format("%b %d %H:%M").to_string())
+                    .unwrap_or_default();
+                let color = d.role.color();
+                div()
+                    .h_flex()
+                    .gap(px(10.0))
+                    .items_start()
+                    .py(px(5.0))
+                    .child(div().pt(px(5.0)).child(ui::status_dot(color)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .v_flex()
+                            .gap(px(1.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(theme::text_primary())
+                                    .child(d.what.clone()),
+                            )
+                            .children(state.run_prompt(&d.run).map(|p| {
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(theme::text_dim())
+                                    .truncate()
+                                    .child(ui::headline(p, 70))
+                            }))
+                            .children(d.comment.clone().map(|c| {
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(theme::text_muted())
+                                    .truncate()
+                                    .child(format!("“{c}”"))
+                            })),
+                    )
+                    .child(div().flex_none().text_size(px(10.0)).text_color(theme::text_dim()).child(when))
+            })
+            .collect();
+        div()
+            .flex_none()
+            .v_flex()
+            .gap(px(2.0))
+            .px(px(16.0))
+            .py(px(12.0))
+            .border_t_1()
+            .border_color(theme::hairline())
+            .child(div().pb(px(4.0)).child(ui::section_label("Recently decided")))
+            .children(state_rows)
+    }
+
+    /// Select queue item `i`, dropping a half-typed comment meant for
+    /// another item.
+    fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected != i
+            && let Some(input) = self.response_input.clone()
+        {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        self.selected = i;
+        self.action_note = None;
+        cx.notify();
     }
 
     fn render_focus(
@@ -763,6 +808,14 @@ impl InboxScreen {
                             .child(n)
                     })),
             )
+            .children(item.mission.clone().map(|m| {
+                div()
+                    .pt(px(12.0))
+                    .h_flex()
+                    .gap(px(8.0))
+                    .child(ui::section_label("Mission"))
+                    .child(div().text_size(px(12.0)).text_color(theme::text_muted()).child(m))
+            }))
             // title
             .child(
                 div()
@@ -1094,21 +1147,46 @@ impl InboxScreen {
             .child(footer.child(actions))
     }
 
-    fn render_all_clear(&self, live: bool) -> Div {
+    /// Nothing waits on you: one calm page, with what you decided last.
+    fn render_all_clear(&self, live: bool, cx: &Context<Self>) -> Stateful<Div> {
         div()
-            .flex_1()
+            .id("inbox-clear")
+            .size_full()
+            .overflow_y_scroll()
+            .bg(theme::background())
             .flex()
-            .items_center()
             .justify_center()
-            .bg(theme::panel_deep())
+            .px(px(28.0))
+            .pt(px(48.0))
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .text_color(theme::text_muted())
-                    .child(if live {
-                        "No pending decisions — describe new work in Fleet."
-                    } else {
-                        "Daemon disconnected — reconnect to check pending decisions."
+                    .v_flex()
+                    .gap(px(18.0))
+                    .w_full()
+                    .max_w(px(640.0))
+                    .child(
+                        ui::panel().child(
+                            div()
+                                .id("decision-status")
+                                .role(Role::Label)
+                                .aria_label(if live {
+                                    "Nothing blocked on you"
+                                } else {
+                                    "Reconnect to check decisions"
+                                })
+                                .child(ui::empty_state(
+                                    "✓",
+                                    if live { "Nothing waits on you" } else { "Inbox offline" },
+                                    if live {
+                                        "Plans to approve, questions from agents and failed missions land here, most urgent first."
+                                    } else {
+                                        "Start the engine from the sidebar to see what waits on you."
+                                    },
+                                )),
+                        ),
+                    )
+                    .when(!self.history.is_empty(), |el| {
+                        el.child(ui::panel().overflow_hidden().child(self.render_history(false, cx)))
                     }),
             )
     }
@@ -1183,21 +1261,35 @@ fn read_review_document(path: &std::path::Path) -> String {
 impl Render for InboxScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.load_review_documents(cx);
+        self.reload_history_if_changed(cx);
         let (items, live) = self.items(cx);
+        if items.is_empty() {
+            return div().size_full().child(self.render_all_clear(live, cx));
+        }
         let selected = items
             .get(self.selected.min(items.len().saturating_sub(1)))
             .cloned();
-
         let focus: AnyElement = match &selected {
             Some(item) => self.render_focus(item, window, cx).into_any_element(),
-            None => self.render_all_clear(live).into_any_element(),
+            None => div().into_any_element(),
         };
+        let count = items.len();
 
         // Plain .flex() row so both panes stretch to full height
         // (h_flex would vertically center them).
         div()
             .size_full()
             .flex()
+            .bg(theme::background())
+            // ↑/↓ walk the queue (the comment field ignores them).
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let current = this.selected.min(count.saturating_sub(1));
+                match event.keystroke.key.as_str() {
+                    "down" if current + 1 < count => this.select(current + 1, window, cx),
+                    "up" if current > 0 => this.select(current - 1, window, cx),
+                    _ => {},
+                }
+            }))
             .child(self.render_queue(&items, live, cx))
             .child(focus)
     }

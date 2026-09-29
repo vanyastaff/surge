@@ -139,7 +139,7 @@ impl WorktreesScreen {
                                 div()
                                     .text_xs()
                                     .text_color(theme::text_muted().opacity(0.7))
-                                    .font_family("monospace")
+                                    .font_family(crate::ui::MONO)
                                     .overflow_hidden()
                                     .child(wt.path.clone()),
                             ),

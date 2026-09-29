@@ -7,17 +7,26 @@
 #![allow(clippy::ptr_arg)]
 
 mod actions;
+mod agent_usage;
 mod app;
+mod assets;
 mod app_state;
+mod backlog_source;
 mod command_palette;
+mod config_edit;
 mod daemon_link;
+mod decisions;
 mod dismissed;
 mod flow_diagram;
+mod flow_levels;
 mod flow_review;
 mod markdown;
+mod memory_vault;
+mod mission;
 mod notifications;
 mod project;
 mod project_init;
+mod roadmap_source;
 mod router;
 mod run_stream;
 mod screens;
@@ -53,14 +62,15 @@ fn main() {
         .expect("failed to build tokio runtime");
     let _guard = tokio_rt.enter();
 
-    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    let app = gpui_kit::application().with_assets(assets::AppAssets);
 
     app.run(move |cx| {
         gpui_kit::init(cx);
+        // The persisted appearance, pushed into gpui-component too so its
+        // chrome (TitleBar, buttons, inputs) matches instead of following
+        // the OS appearance.
         theme::init();
-        // Force gpui-component's chrome (TitleBar, controls) to dark so it
-        // matches the fleet-ops shell instead of following the OS appearance.
-        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+        theme::sync_component_theme(cx);
         SurgeApp::bind_actions(cx);
 
             let options = WindowOptions {

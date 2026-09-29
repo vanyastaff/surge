@@ -1,967 +1,946 @@
-//! Memory — the project-memory knowledge graph.
+//! Memory — the project's notebook, read and written like a vault.
 //!
-//! Adapted from the "Surge - Interactive" concept, grounded in Surge's
-//! **real** memory model (`surge_persistence::memory`): four categories
-//! — Discovery, Pattern, Gotcha, FileContext — carrying tags and run /
-//! spec provenance, indexed by FTS5.
-//!
-//! LIVE DATA: on open, the screen browses the real `MemoryStore`
-//! (`~/.surge/memory.db`, SQLite + FTS5) via `list_recent` — the most
-//! recent memories across all four categories, newest first, no query
-//! required. The search bar then re-queries the same store via
-//! `search_all`. Both paths feed the same `SearchResults` ->
-//! `MemNode` conversion (`nodes_from_results`), so a search result and
-//! a browsed one render identically. Only when the store is
-//! unavailable or genuinely has nothing in it does the screen fall
-//! back to a clearly-labelled **preview** dataset in the real category
-//! vocabulary — the same convention `fleet.rs`/`runs.rs` use for their
-//! own sample fallbacks. Relations are derived from shared tags (a
-//! real signal), not faked wiki-links.
+//! Two real sources, nothing invented:
+//! - **Notes** — `.surge/memory/*.md` in the project. Every run starts with
+//!   them; agents add to them and each note carries the run and step that
+//!   wrote it. Read, edit, link (`[[note]]`), tag (`#tag`), follow
+//!   backlinks, see the vault as a graph — like an Obsidian vault.
+//! - **Learned** — claims Surge recorded from past runs
+//!   (`~/.surge/memory.db`), each with its source and whether anything has
+//!   verified it. A claim worth keeping becomes a project note in one click.
 
-use std::collections::BTreeMap;
-use std::f32::consts::{PI, TAU};
-
-use gpui_kit::component::StyledExt;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_persistence::memory::MemoryStore;
 
-use crate::theme;
+use crate::app_state::AppState;
+use crate::memory_vault::{self, EdgeKind, Note};
+use crate::theme::{self, Semantic};
 use crate::ui;
 
-const STAGE_W: f32 = 820.0;
-const STAGE_H: f32 = 560.0;
+const GRAPH_W: f32 = 900.0;
+const GRAPH_H: f32 = 560.0;
+
+/// What the Memory screen asks the app to do.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MemoryAction {
+    /// Open the mission a note was written by.
+    OpenRun(surge_core::RunId),
+}
+
+impl EventEmitter<MemoryAction> for MemoryScreen {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum MemKind {
-    Discovery,
-    Pattern,
-    Gotcha,
-    FileContext,
+enum Mode {
+    Notes,
+    Graph,
+    Learned,
 }
 
-impl MemKind {
-    fn color(self) -> Hsla {
-        match self {
-            Self::Discovery => theme::accent(),
-            Self::Pattern => hsla(210.0 / 360.0, 0.85, 0.62, 1.0),
-            Self::Gotcha => theme::error(),
-            Self::FileContext => hsla(175.0 / 360.0, 0.55, 0.55, 1.0),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Discovery => "discovery",
-            Self::Pattern => "pattern",
-            Self::Gotcha => "gotcha",
-            Self::FileContext => "file context",
-        }
-    }
-
-    fn group(self) -> &'static str {
-        match self {
-            Self::Discovery => "DISCOVERIES",
-            Self::Pattern => "PATTERNS",
-            Self::Gotcha => "GOTCHAS",
-            Self::FileContext => "FILE CONTEXT",
-        }
-    }
-}
-
+/// A learned claim, ready to show.
 #[derive(Clone)]
-struct MemNode {
-    id: String,
-    kind: MemKind,
-    title: String,
-    desc: String,
-    tags: Vec<String>,
-    /// Provenance — which run / spec seeded or wrote this.
-    seeded: Vec<String>,
+struct Claim {
+    text: String,
+    source: String,
+    verified: bool,
+    confidence: String,
 }
 
-/// A painted relation edge between two memory nodes (shared tag).
-#[derive(Clone, Copy)]
-struct EdgeSeg {
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    strong: bool,
-}
-
-/// Memory screen — project knowledge list · graph · inspector.
 pub struct MemoryScreen {
-    nodes: Vec<MemNode>,
-    selected: usize,
-    /// Real FTS5 store at `~/.surge/memory.db` (None if unopenable).
-    store: Option<MemoryStore>,
-    search_input: Option<Entity<InputState>>,
-    /// Current nodes come from a live store query (vs preview set).
-    live: bool,
+    state: Entity<AppState>,
+    mode: Mode,
+    notes: Vec<Note>,
+    selected: Option<String>,
+    /// Graph positions, recomputed only when the vault changes.
+    graph: Vec<(f32, f32)>,
+    edges: Vec<(usize, usize, EdgeKind)>,
+    search: Option<Entity<InputState>>,
     query: String,
-    /// Last FTS error, shown in the source pill — a bad query must not
-    /// silently freeze the results.
-    search_error: Option<String>,
+    /// Open editor: (slug being edited — None for a new note, title field, body editor).
+    editing: Option<(Option<String>, Entity<InputState>, Entity<EditorState>)>,
+    confirm_delete: bool,
+    claims: Option<Result<Vec<Claim>, String>>,
+    note: Option<String>,
+    loaded_root: Option<std::path::PathBuf>,
 }
 
 impl MemoryScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        let store = MemoryStore::default_path()
-            .and_then(|p| MemoryStore::open(&p))
-            .map_err(|e| tracing::info!("memory store unavailable: {e}"))
-            .ok();
-
-        // Browse the real store for its most recent memories — no query
-        // needed. Fall back to the labelled preview set only when the store
-        // is unavailable or genuinely holds nothing yet, same as fleet.rs /
-        // runs.rs fall back to their own sample data.
-        let (nodes, live) = match &store {
-            Some(store) => match store.list_recent(Some(6)) {
-                Ok(results) if !results.is_empty() => (nodes_from_results(results), true),
-                Ok(_empty) => (sample_nodes(), false),
-                Err(e) => {
-                    tracing::warn!("memory browse failed: {e}");
-                    (sample_nodes(), false)
-                },
-            },
-            None => (sample_nodes(), false),
-        };
-
-        Self {
-            nodes,
-            selected: 0,
-            store,
-            search_input: None,
-            live,
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&state, |this: &mut Self, _state, cx| {
+            let root = this.state.read(cx).project_path.clone();
+            if root != this.loaded_root {
+                this.reload(cx);
+            }
+        })
+        .detach();
+        let mut this = Self {
+            state,
+            mode: Mode::Notes,
+            notes: Vec::new(),
+            selected: None,
+            graph: Vec::new(),
+            edges: Vec::new(),
+            search: None,
             query: String::new(),
-            search_error: None,
-        }
+            editing: None,
+            confirm_delete: false,
+            claims: None,
+            note: None,
+            loaded_root: None,
+        };
+        this.reload(cx);
+        this
     }
 
-    /// Run the FTS query against the real store; empty query restores
-    /// the labelled preview set.
-    fn run_search(&mut self, cx: &mut Context<Self>) {
-        let query = self
-            .search_input
-            .as_ref()
-            .map(|i| i.read(cx).value().trim().to_string())
-            .unwrap_or_default();
-        self.query = query.clone();
-        self.selected = 0;
+    fn root(&self, cx: &Context<Self>) -> Option<std::path::PathBuf> {
+        self.state.read(cx).project_path.clone()
+    }
 
-        self.search_error = None;
-        let Some(store) = &self.store else {
-            self.nodes = sample_nodes();
-            self.live = false;
-            cx.notify();
-            return;
-        };
-        if query.is_empty() {
-            self.nodes = sample_nodes();
-            self.live = false;
-            cx.notify();
-            return;
-        }
-
-        match store.search_all(&query, Some(6)) {
-            Ok(results) => {
-                self.nodes = nodes_from_results(results);
-                self.live = true;
-            },
-            Err(e) => {
-                tracing::warn!("memory search failed: {e}");
-                // Keep the previous results but SAY so — FTS5 chokes on
-                // unbalanced quotes / trailing operators while typing.
-                self.search_error = Some("query not valid FTS5 yet — results unchanged".into());
-            },
+    /// Re-read the vault (after opening a project or writing a note).
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let root = self.root(cx);
+        self.loaded_root = root.clone();
+        self.notes = root.as_deref().map(memory_vault::load).unwrap_or_default();
+        self.edges = memory_vault::edges(&self.notes);
+        self.graph = memory_vault::layout(self.notes.len(), &self.edges, GRAPH_W, GRAPH_H);
+        if self.selected.as_ref().is_none_or(|s| !self.notes.iter().any(|n| &n.slug == s)) {
+            self.selected = self.notes.iter().find(|n| !n.is_index).or(self.notes.first()).map(|n| n.slug.clone());
         }
         cx.notify();
     }
 
-    /// Search bar + honest source pill, above the three panes.
-    fn render_search_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        if self.search_input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Search project memory — FTS5 over ~/.surge/memory.db…")
-            });
-            cx.subscribe_in(
-                &input,
-                window,
-                |this: &mut Self, _input, event: &InputEvent, _window, cx| {
-                    if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
-                        this.run_search(cx);
-                    }
-                },
-            )
-            .detach();
-            self.search_input = Some(input);
+    fn load_claims(&mut self) {
+        if self.claims.is_some() {
+            return;
         }
-
-        let pill = if let Some(err) = &self.search_error {
-            ui::pill(
-                err.clone(),
-                theme::warning(),
-                theme::warning().opacity(0.12),
-            )
-        } else if self.store.is_none() {
-            ui::pill(
-                "no memory.db yet — runs write it",
-                theme::text_muted(),
-                theme::panel_raised(),
-            )
-        } else if self.live {
-            ui::pill(
-                format!("memory.db · {} matches", self.nodes.len()),
-                theme::success(),
-                theme::success().opacity(0.12),
-            )
-        } else {
-            ui::pill(
-                "preview · type to search the real store",
-                theme::text_muted(),
-                theme::panel_raised(),
-            )
-        };
-
-        div()
-            .h_flex()
-            .gap(px(12.0))
-            .items_center()
-            .px(px(14.0))
-            .py(px(9.0))
-            .bg(theme::panel())
-            .border_b_1()
-            .border_color(theme::hairline())
-            .child(
-                div()
-                    .flex_1()
-                    .h_flex()
-                    .gap(px(10.0))
-                    .items_center()
-                    .h(px(32.0))
-                    .px(px(11.0))
-                    .rounded_lg()
-                    .bg(theme::panel_deep())
-                    .border_1()
-                    .border_color(theme::hairline_strong())
-                    .child(
-                        div().flex_1().child(
-                            Input::new(self.search_input.as_ref().unwrap())
-                                .accessibility_id("search-memory")
-                                .aria_label("Search memory")
-                                .appearance(false),
-                        ),
-                    ),
-            )
-            .child(pill)
-    }
-
-    /// Circular layout — node centers in stage coords.
-    fn positions(&self) -> Vec<(f32, f32)> {
-        let n = self.nodes.len().max(1);
-        let cx0 = STAGE_W / 2.0;
-        let cy0 = STAGE_H / 2.0;
-        let r = 198.0;
-        (0..self.nodes.len())
-            .map(|i| {
-                let a = -PI / 2.0 + i as f32 * TAU / n as f32;
-                (cx0 + a.cos() * r, cy0 + a.sin() * r)
+        let result = MemoryStore::default_path()
+            .and_then(|p| MemoryStore::open(&p))
+            .and_then(|store| store.list_claims())
+            .map(|claims| {
+                claims
+                    .into_iter()
+                    .rev()
+                    .map(|c| Claim {
+                        text: c.text().to_string(),
+                        source: c.provenance().source.clone(),
+                        verified: c.provenance().is_verified(),
+                        confidence: c.confidence().as_str().replace('_', " "),
+                    })
+                    .collect()
             })
-            .collect()
+            .map_err(|e| e.to_string());
+        self.claims = Some(result);
     }
 
-    fn shares_tag(a: &MemNode, b: &MemNode) -> bool {
-        a.tags.iter().any(|t| b.tags.contains(t))
+    fn selected_note(&self) -> Option<&Note> {
+        let slug = self.selected.as_ref()?;
+        self.notes.iter().find(|n| &n.slug == slug)
     }
 
-    fn relation_count(&self) -> usize {
-        let mut c = 0;
-        for i in 0..self.nodes.len() {
-            for j in (i + 1)..self.nodes.len() {
-                if Self::shares_tag(&self.nodes[i], &self.nodes[j]) {
-                    c += 1;
-                }
-            }
+    fn open_note(&mut self, slug: String, cx: &mut Context<Self>) {
+        self.selected = Some(slug);
+        self.mode = Mode::Notes;
+        self.editing = None;
+        self.confirm_delete = false;
+        self.note = None;
+        cx.notify();
+    }
+
+    fn start_edit(&mut self, slug: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let (title, body) = match slug.as_ref().and_then(|s| self.notes.iter().find(|n| &n.slug == s)) {
+            Some(n) => (n.title.clone(), n.body.clone()),
+            None => (String::new(), String::new()),
+        };
+        let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("Title"));
+        title_input.update(cx, |s, cx| s.set_value(title, window, cx));
+        let editor = cx.new(|cx| EditorState::new(window, cx).language("markdown"));
+        editor.update(cx, |e, cx| e.set_value(&body, window, cx));
+        self.editing = Some((slug, title_input, editor));
+        self.confirm_delete = false;
+        cx.notify();
+    }
+
+    fn save_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.root(cx) else { return };
+        let Some((slug, title_input, editor)) = self.editing.clone() else { return };
+        let title = title_input.read(cx).value().trim().to_string();
+        let body = editor.read(cx).value().to_string();
+        if title.is_empty() {
+            self.note = Some("Give the note a title first.".into());
+            cx.notify();
+            return;
         }
-        c
+        let existing = slug.as_ref().and_then(|s| self.notes.iter().find(|n| &n.slug == s)).cloned();
+        let file = existing
+            .as_ref()
+            .map_or_else(|| memory_vault::free_file_name(&root, &title), |n| n.file.clone());
+        let dir = memory_vault::vault_dir(&root);
+        let content = memory_vault::compose(&title, &body, existing.as_ref().and_then(|n| n.stamp.as_ref()));
+        let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(&file), content));
+        match result {
+            Ok(()) => {
+                tracing::info!(file = %file, "memory note saved from the UI");
+                self.editing = None;
+                self.selected = Some(memory_vault::parse_note(&file, "").slug);
+                self.note = None;
+                self.reload(cx);
+            },
+            Err(error) => {
+                self.note = Some(format!("Could not save {file}: {error}"));
+                cx.notify();
+            },
+        }
     }
 
-    // ── left list ───────────────────────────────────────────────────
-
-    fn render_list(&self, cx: &mut Context<Self>) -> Div {
-        // group node indices by kind, preserving kind order
-        let order = [
-            MemKind::Discovery,
-            MemKind::Pattern,
-            MemKind::Gotcha,
-            MemKind::FileContext,
-        ];
-        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for (ki, k) in order.iter().enumerate() {
-            for (i, n) in self.nodes.iter().enumerate() {
-                if n.kind == *k {
-                    groups.entry(ki).or_default().push(i);
-                }
-            }
+    fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        let (Some(root), Some(note)) = (self.root(cx), self.selected_note().cloned()) else { return };
+        let path = memory_vault::vault_dir(&root).join(&note.file);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::info!(file = %note.file, "memory note deleted from the UI");
+                self.selected = None;
+                self.confirm_delete = false;
+                self.reload(cx);
+            },
+            Err(error) => {
+                self.note = Some(format!("Could not delete {}: {error}", note.file));
+                cx.notify();
+            },
         }
+    }
 
-        let mut sections: Vec<Div> = Vec::new();
-        for (ki, idxs) in &groups {
-            let kind = order[*ki];
-            let items: Vec<Stateful<Div>> = idxs
-                .iter()
-                .map(|&i| {
-                    let selected = i == self.selected;
-                    let color = self.nodes[i].kind.color();
-                    let title = self.nodes[i].title.clone();
-                    div()
-                        .id(SharedString::from(format!("mem-row-{}", self.nodes[i].id)))
-                        .role(Role::Button)
-                        .aria_label(title.clone())
-                        .h_flex()
-                        .gap(px(8.0))
-                        .items_center()
-                        .px(px(9.0))
-                        .py(px(6.0))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .when(selected, |el| el.bg(theme::accent().opacity(0.1)))
-                        .hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
-                        .on_click(cx.listener(move |this, _e, _w, cx| {
-                            this.selected = i;
-                            cx.notify();
-                        }))
-                        .child(ui::status_dot(color))
-                        .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_size(px(11.0))
-                                .text_color(if selected {
-                                    theme::text_primary()
-                                } else {
-                                    theme::text_muted()
-                                })
-                                .child(title),
-                        )
-                })
-                .collect();
+    /// Turn a learned claim into a project note (unverified, with its source).
+    fn keep_claim(&mut self, claim: &Claim, cx: &mut Context<Self>) {
+        let Some(root) = self.root(cx) else { return };
+        let title: String = crate::ui::headline(&claim.text, 60);
+        let file = memory_vault::free_file_name(&root, &title);
+        let body = format!(
+            "{}\n\nSource: `{}` · {}. Unverified until a check confirms it.\n\n#learned",
+            claim.text, claim.source, claim.confidence
+        );
+        let dir = memory_vault::vault_dir(&root);
+        let result = std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::write(dir.join(&file), memory_vault::compose(&title, &body, None)));
+        match result {
+            Ok(()) => {
+                self.selected = Some(memory_vault::parse_note(&file, "").slug);
+                self.reload(cx);
+                self.mode = Mode::Notes;
+            },
+            Err(error) => self.note = Some(format!("Could not save the note: {error}")),
+        }
+        cx.notify();
+    }
 
-            sections.push(
+    // ── panes ───────────────────────────────────────────────────────
+
+    fn render_modes(&self, cx: &mut Context<Self>) -> Div {
+        let mut row = div()
+            .h_flex()
+            .p(px(2.0))
+            .gap(px(2.0))
+            .rounded(px(ui::R_CONTROL + 1.0))
+            .border_1()
+            .border_color(theme::hairline())
+            .bg(theme::panel_deep());
+        for (mode, label, icon) in [
+            (Mode::Notes, "Notes", Lucide::ScrollText),
+            (Mode::Graph, "Graph", Lucide::Waypoints),
+            (Mode::Learned, "Learned", Lucide::Brain),
+        ] {
+            let active = self.mode == mode;
+            row = row.child(
                 div()
-                    .v_flex()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .px(px(8.0))
-                            .py(px(4.0))
-                            .text_size(px(9.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_muted().opacity(0.7))
-                            .child(kind.group()),
-                    )
-                    .children(items),
+                    .id(SharedString::from(format!("memory-mode-{label}")))
+                    .role(Role::Tab)
+                    .h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .px(px(10.0))
+                    .py(px(4.0))
+                    .rounded(px(ui::R_CONTROL))
+                    .text_size(px(11.5))
+                    .cursor_pointer()
+                    .when(active, |el| el.bg(theme::surface()).text_color(theme::text_primary()))
+                    .when(!active, |el| {
+                        el.text_color(theme::text_muted())
+                            .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
+                    })
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.mode = mode;
+                        if mode == Mode::Learned {
+                            this.load_claims();
+                        }
+                        cx.notify();
+                    }))
+                    .child(Icon::new(icon).size(px(12.0)))
+                    .child(label),
             );
         }
+        row
+    }
 
-        div()
-            .w(px(236.0))
-            .flex_shrink_0()
-            .v_flex()
-            .bg(theme::panel())
-            .border_r_1()
-            .border_color(theme::hairline())
-            .child(
+    fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.search.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search notes…"));
+            cx.subscribe(&input, |this: &mut Self, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.query = input.read(cx).value().to_lowercase();
+                    cx.notify();
+                }
+            })
+            .detach();
+            self.search = Some(input);
+        }
+        let q = self.query.clone();
+        let rows: Vec<Stateful<Div>> = self
+            .notes
+            .iter()
+            .filter(|n| {
+                q.is_empty()
+                    || n.title.to_lowercase().contains(&q)
+                    || n.body.to_lowercase().contains(&q)
+                    || n.tags.iter().any(|t| t.contains(q.trim_start_matches('#')))
+            })
+            .map(|n| {
+                let slug = n.slug.clone();
+                let active = self.selected.as_deref() == Some(n.slug.as_str());
                 div()
-                    .v_flex()
-                    .gap(px(3.0))
-                    .p(px(14.0))
+                    .id(SharedString::from(format!("note-{}", n.slug)))
+                    .role(Role::Button)
+                    .aria_label(n.title.clone())
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .px(px(10.0))
+                    .py(px(6.0))
+                    .rounded(px(ui::R_CONTROL))
+                    .cursor_pointer()
+                    .when(active, |el| el.bg(theme::surface()))
+                    .hover(|s: StyleRefinement| s.bg(theme::surface()))
+                    .on_click(cx.listener(move |this, _e, _w, cx| this.open_note(slug.clone(), cx)))
+                    .child(
+                        Icon::new(if n.is_index { Lucide::Kanban } else { Lucide::FileText })
+                            .size(px(12.0))
+                            .text_color(if n.stamp.is_some() { theme::accent() } else { theme::text_dim() }),
+                    )
                     .child(
                         div()
-                            .text_size(px(13.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_primary())
-                            .child("Project memory"),
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(12.0))
+                            .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                            .truncate()
+                            .child(n.title.clone()),
                     )
-                    .child(ui::meta(format!(
-                        "{} memories · {} relations · reseeds run context",
-                        self.nodes.len(),
-                        self.relation_count()
-                    ))),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .v_flex()
-                    .gap(px(10.0))
-                    .px(px(8.0))
-                    .pb(px(10.0))
-                    .children(sections),
-            )
+            })
+            .collect();
+        ui::panel()
+            .w(px(260.0))
+            .flex_none()
+            .h_full()
+            .v_flex()
+            .overflow_hidden()
             .child(
                 div()
                     .h_flex()
                     .gap(px(8.0))
                     .items_center()
-                    .px(px(14.0))
-                    .py(px(11.0))
-                    .border_t_1()
+                    .px(px(10.0))
+                    .h(px(40.0))
+                    .border_b_1()
                     .border_color(theme::hairline())
-                    .child(ui::meta("Search memory graph…")),
+                    .child(Icon::new(IconName::Search).size(px(12.0)).text_color(theme::text_dim()))
+                    .child(
+                        div().flex_1().child(
+                            Input::new(self.search.as_ref().unwrap())
+                                .appearance(false)
+                                .accessibility_id("memory-search")
+                                .aria_label("Search notes"),
+                        ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("memory-notes")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .v_flex()
+                    .gap(px(1.0))
+                    .p(px(6.0))
+                    .children(rows),
+            )
+            .child(
+                div().p(px(8.0)).border_t_1().border_color(theme::hairline()).child(
+                    Button::new("memory-new-note")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .icon(IconName::Plus)
+                        .label("New note")
+                        .on_click(cx.listener(|this, _e, window, cx| this.start_edit(None, window, cx))),
+                ),
             )
     }
 
-    // ── center graph ────────────────────────────────────────────────
+    fn render_reader(&self, note: &Note, cx: &mut Context<Self>) -> Div {
+        let stamp_run = note.stamp.as_ref().and_then(|s| s.run.parse::<surge_core::RunId>().ok());
+        let mission = stamp_run.and_then(|run| self.state.read(cx).run_prompt(&run).map(|p| ui::headline(p, 60)));
+        let slug = note.slug.clone();
+        div()
+            .v_flex()
+            .gap(px(14.0))
+            .child(
+                div()
+                    .h_flex()
+                    .gap(px(10.0))
+                    .items_start()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .v_flex()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(20.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::text_primary())
+                                    .child(note.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .flex_wrap()
+                                    .gap(px(6.0))
+                                    .items_center()
+                                    .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child(format!(".surge/memory/{}", note.file)))
+                                    .when_some(note.stamp.clone(), |el, stamp| {
+                                        let label = match &mission {
+                                            Some(m) => format!("written by “{m}” · {}", stamp.node.replace('_', " ")),
+                                            None => format!("written by a run · {}", stamp.node.replace('_', " ")),
+                                        };
+                                        el.child(
+                                            div()
+                                                .id("note-provenance")
+                                                .role(Role::Button)
+                                                .when_some(stamp_run, |el, run| {
+                                                    el.cursor_pointer().on_click(cx.listener(move |_this, _e, _w, cx| {
+                                                        cx.emit(MemoryAction::OpenRun(run));
+                                                    }))
+                                                })
+                                                .child(ui::role_badge(label, Semantic::Agent)),
+                                        )
+                                    })
+                                    .when(note.stamp.is_none() && !note.is_index, |el| {
+                                        el.child(ui::role_badge("written by you", Semantic::You))
+                                    })
+                                    .when(note.is_index, |el| el.child(ui::role_badge("index · not sent to runs", Semantic::External))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(6.0))
+                            .flex_none()
+                            .child(
+                                Button::new("note-edit")
+                                    .outline()
+                                    .small()
+                                    .icon(Lucide::ScrollText)
+                                    .label("Edit")
+                                    .on_click(cx.listener(move |this, _e, window, cx| {
+                                        this.start_edit(Some(slug.clone()), window, cx)
+                                    })),
+                            )
+                            .child(if self.confirm_delete {
+                                Button::new("note-delete-confirm")
+                                    .danger()
+                                    .small()
+                                    .label("Delete for good")
+                                    .on_click(cx.listener(|this, _e, _w, cx| this.delete_selected(cx)))
+                            } else {
+                                Button::new("note-delete")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Delete)
+                                    .tooltip("Delete this note")
+                                    .on_click(cx.listener(|this, _e, _w, cx| {
+                                        this.confirm_delete = true;
+                                        cx.notify();
+                                    }))
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .line_height(px(20.0))
+                    .text_color(theme::text_primary())
+                    .child(crate::markdown::render_markdown(&memory_vault::wikilinks_to_markdown(&note.body))),
+            )
+    }
 
-    fn render_canvas_layer(&self, segs: Vec<EdgeSeg>) -> impl IntoElement {
-        let dot_color = theme::graph_line().opacity(0.45);
-        canvas(
-            |_b, _w, _c| {},
-            move |bounds, _p, window, _c| {
-                let ox = bounds.origin.x;
-                let oy = bounds.origin.y;
-                let w = f32::from(bounds.size.width);
-                let h = f32::from(bounds.size.height);
+    fn render_editor(&self, cx: &mut Context<Self>) -> Div {
+        let Some((slug, title, editor)) = &self.editing else { return div() };
+        let is_new = slug.is_none();
+        div()
+            .v_flex()
+            .gap(px(10.0))
+            .h_full()
+            .child(
+                div()
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(36.0))
+                            .px(px(10.0))
+                            .rounded(px(ui::R_CONTROL))
+                            .border_1()
+                            .border_color(theme::hairline_strong())
+                            .bg(theme::panel_deep())
+                            .flex()
+                            .items_center()
+                            .child(Input::new(title).appearance(false).accessibility_id("note-title").aria_label("Note title")),
+                    )
+                    .child(
+                        Button::new("note-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _e, _w, cx| {
+                                this.editing = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("note-save")
+                            .primary()
+                            .small()
+                            .icon(IconName::Check)
+                            .label(if is_new { "Create note" } else { "Save" })
+                            .on_click(cx.listener(|this, _e, _w, cx| this.save_edit(cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme::text_dim())
+                    .child("Markdown. Link notes with [[note name]], tag with #tag. Every new run reads these notes."),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(320.0))
+                    .rounded(px(ui::R_CONTROL + 2.0))
+                    .border_1()
+                    .border_color(theme::hairline())
+                    .overflow_hidden()
+                    .child(Editor::new(editor).aria_label("Note body").h(relative(1.0))),
+            )
+    }
 
-                // dot grid
-                let step = 26.0_f32;
-                let mut gy = 8.0_f32;
-                while gy < h {
-                    let mut gx = 8.0_f32;
-                    while gx < w {
-                        let d =
-                            Bounds::new(point(ox + px(gx), oy + px(gy)), size(px(1.4), px(1.4)));
-                        window.paint_quad(fill(d, dot_color));
-                        gx += step;
-                    }
-                    gy += step;
-                }
+    fn link_row(&self, id: String, title: String, slug: String, kind: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id(SharedString::from(id))
+            .role(Role::Button)
+            .h_flex()
+            .gap(px(8.0))
+            .items_center()
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(ui::R_CONTROL))
+            .cursor_pointer()
+            .hover(|s: StyleRefinement| s.bg(theme::surface()))
+            .on_click(cx.listener(move |this, _e, _w, cx| this.open_note(slug.clone(), cx)))
+            .child(Icon::new(IconName::FileText).size(px(11.0)).text_color(theme::text_dim()))
+            .child(div().flex_1().min_w(px(0.0)).truncate().text_size(px(11.5)).text_color(theme::text_primary()).child(title))
+            .child(div().text_size(px(10.0)).text_color(theme::text_dim()).child(kind))
+    }
 
-                // relation edges (straight lines); highlighted ones on top
-                for pass in [false, true] {
-                    for e in segs.iter().filter(|e| e.strong == pass) {
-                        let color = if e.strong {
-                            theme::accent().opacity(0.55)
-                        } else {
-                            theme::graph_line().opacity(0.8)
-                        };
-                        let mut line = PathBuilder::stroke(px(if e.strong { 1.6 } else { 1.0 }));
-                        line.move_to(point(ox + px(e.x1), oy + px(e.y1)));
-                        line.line_to(point(ox + px(e.x2), oy + px(e.y2)));
-                        if let Ok(p) = line.build() {
-                            window.paint_path(p, color);
-                        }
+    fn render_links(&self, note: &Note, cx: &mut Context<Self>) -> Div {
+        let outgoing: Vec<(String, Option<String>)> = note
+            .links
+            .iter()
+            .map(|l| match memory_vault::resolve(&self.notes, l) {
+                Some(i) => (self.notes[i].slug.clone(), Some(self.notes[i].title.clone())),
+                None => (l.clone(), None),
+            })
+            .collect();
+        let back: Vec<(String, String)> = memory_vault::backlinks(&self.notes, &note.slug)
+            .into_iter()
+            .map(|n| (n.slug.clone(), n.title.clone()))
+            .collect();
+        let related: Vec<(String, String)> = self
+            .notes
+            .iter()
+            .filter(|n| {
+                let linked = self.edges.iter().any(|&(a, b, kind)| {
+                    kind == EdgeKind::Link
+                        && ((self.notes[a].slug == note.slug && self.notes[b].slug == n.slug)
+                            || (self.notes[b].slug == note.slug && self.notes[a].slug == n.slug))
+                });
+                n.slug != note.slug && !linked
+            })
+            .filter(|n| n.tags.iter().any(|t| note.tags.contains(t)))
+            .map(|n| (n.slug.clone(), n.title.clone()))
+            .collect();
+
+        let mut panel = div().v_flex().gap(px(14.0));
+        let mut out = div().v_flex().gap(px(1.0)).child(ui::section_label(format!("Links · {}", outgoing.len())));
+        if outgoing.is_empty() {
+            out = out.child(div().px(px(8.0)).text_size(px(11.0)).text_color(theme::text_dim()).child("No links. Use [[note name]]."));
+        }
+        for (i, (slug, title)) in outgoing.into_iter().enumerate() {
+            match title {
+                Some(t) => out = out.child(self.link_row(format!("out-{i}"), t, slug, "", cx)),
+                None => {
+                    out = out.child(
+                        div()
+                            .h_flex()
+                            .gap(px(8.0))
+                            .px(px(8.0))
+                            .py(px(5.0))
+                            .child(Icon::new(IconName::FileText).size(px(11.0)).text_color(theme::text_dim()))
+                            .child(div().text_size(px(11.5)).text_color(theme::text_dim()).child(slug))
+                            .child(div().text_size(px(10.0)).text_color(theme::warning()).child("not written yet")),
+                    )
+                },
+            }
+        }
+        panel = panel.child(out);
+        let mut backs = div().v_flex().gap(px(1.0)).child(ui::section_label(format!("Backlinks · {}", back.len())));
+        if back.is_empty() {
+            backs = backs.child(div().px(px(8.0)).text_size(px(11.0)).text_color(theme::text_dim()).child("Nothing links here yet."));
+        }
+        for (i, (slug, title)) in back.into_iter().enumerate() {
+            backs = backs.child(self.link_row(format!("back-{i}"), title, slug, "", cx));
+        }
+        panel = panel.child(backs);
+        if !note.tags.is_empty() {
+            panel = panel.child(
+                div()
+                    .v_flex()
+                    .gap(px(6.0))
+                    .child(ui::section_label("Tags"))
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_wrap()
+                            .gap(px(5.0))
+                            .children(note.tags.iter().map(|t| ui::role_badge(format!("#{t}"), Semantic::Plan))),
+                    ),
+            );
+        }
+        if !related.is_empty() {
+            let mut rel = div().v_flex().gap(px(1.0)).child(ui::section_label("Same tags"));
+            for (i, (slug, title)) in related.into_iter().enumerate() {
+                rel = rel.child(self.link_row(format!("rel-{i}"), title, slug, "", cx));
+            }
+            panel = panel.child(rel);
+        }
+        panel
+    }
+
+    fn render_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let list = self.render_list(window, cx);
+        let center: AnyElement = if self.editing.is_some() {
+            self.render_editor(cx).into_any_element()
+        } else if let Some(note) = self.selected_note().cloned() {
+            div()
+                .flex()
+                .gap(px(18.0))
+                .items_start()
+                .child(div().flex_1().min_w(px(0.0)).child(self.render_reader(&note, cx)))
+                .child(
+                    ui::panel()
+                        .w(px(260.0))
+                        .flex_none()
+                        .p(px(12.0))
+                        .child(self.render_links(&note, cx)),
+                )
+                .into_any_element()
+        } else {
+            ui::panel()
+                .child(
+                    ui::empty_state(
+                        "✎",
+                        "No project notes yet",
+                        "Notes in .surge/memory are read by every mission — invariants, gotchas, decisions that must not regress. Agents add to them as they learn; you can too.",
+                    )
+                    .child(
+                        Button::new("memory-empty-new")
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("Write the first note")
+                            .on_click(cx.listener(|this, _e, window, cx| this.start_edit(None, window, cx))),
+                    ),
+                )
+                .into_any_element()
+        };
+        div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .gap(px(18.0))
+            .child(list)
+            .child(
+                div()
+                    .id("memory-center")
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .overflow_y_scroll()
+                    .children(self.note.clone().map(|n| {
+                        div().pb(px(10.0)).text_size(px(11.5)).text_color(theme::error()).child(n)
+                    }))
+                    .child(center),
+            )
+    }
+
+    fn render_graph(&self, cx: &mut Context<Self>) -> Div {
+        if self.notes.is_empty() {
+            return ui::panel().child(ui::empty_state(
+                "◌",
+                "The graph appears with your notes",
+                "Each note is a dot; links and shared tags connect them.",
+            ));
+        }
+        let mut degree = vec![0usize; self.notes.len()];
+        for &(a, b, _) in &self.edges {
+            degree[a] += 1;
+            degree[b] += 1;
+        }
+        let pos = self.graph.clone();
+        let edges = self.edges.clone();
+        let link = theme::stroke(theme::accent());
+        let tag = theme::graph_line();
+        let wires = canvas(
+            |_b, _w, _cx| {},
+            move |bounds, _p, window, _cx| {
+                for &(a, b, kind) in &edges {
+                    let (Some(&(x1, y1)), Some(&(x2, y2))) = (pos.get(a), pos.get(b)) else { continue };
+                    let mut path = PathBuilder::stroke(px(if kind == EdgeKind::Link { 1.4 } else { 1.0 }));
+                    path.move_to(point(bounds.origin.x + px(x1), bounds.origin.y + px(y1)));
+                    path.line_to(point(bounds.origin.x + px(x2), bounds.origin.y + px(y2)));
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, if kind == EdgeKind::Link { link } else { tag });
                     }
                 }
             },
         )
         .absolute()
-        .left(px(0.0))
-        .top(px(0.0))
-        .w(px(STAGE_W))
-        .h(px(STAGE_H))
-    }
+        .top_0()
+        .left_0()
+        .size_full();
 
-    fn render_node_chip(
-        &self,
-        i: usize,
-        pos: (f32, f32),
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let node = &self.nodes[i];
-        let selected = i == self.selected;
-        let color = node.kind.color();
-        let title = node.title.clone();
-        div()
-            .id(SharedString::from(format!("mem-node-{}", node.id)))
-            .role(Role::Button)
-            .aria_label(title.clone())
-            .absolute()
-            .left(px(pos.0 - 82.0))
-            .top(px(pos.1 - 15.0))
-            .w(px(164.0))
-            .h_flex()
-            .gap(px(7.0))
-            .items_center()
-            .px(px(9.0))
-            .py(px(6.0))
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(if selected {
-                theme::accent().opacity(0.7)
-            } else {
-                theme::hairline_strong()
-            })
-            .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
-            .on_click(cx.listener(move |this, _e, _w, cx| {
-                this.selected = i;
-                cx.notify();
-            }))
-            .child(ui::status_dot(color))
-            .child(
+        let selected = self.selected.clone();
+        let dots: Vec<Stateful<Div>> = self
+            .notes
+            .iter()
+            .enumerate()
+            .map(|(i, note)| {
+                let (x, y) = self.graph[i];
+                let r = 5.0 + (degree[i] as f32).min(6.0) * 1.5;
+                let active = selected.as_deref() == Some(note.slug.as_str());
+                let color = if note.stamp.is_some() { theme::accent() } else { theme::violet() };
+                let slug = note.slug.clone();
                 div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme::text_primary())
-                    .child(title),
-            )
-    }
-
-    fn render_graph(&self, cx: &mut Context<Self>) -> Div {
-        let positions = self.positions();
-
-        // relation edges
-        let mut segs: Vec<EdgeSeg> = Vec::new();
-        for i in 0..self.nodes.len() {
-            for j in (i + 1)..self.nodes.len() {
-                if Self::shares_tag(&self.nodes[i], &self.nodes[j]) {
-                    let (x1, y1) = positions[i];
-                    let (x2, y2) = positions[j];
-                    segs.push(EdgeSeg {
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        strong: i == self.selected || j == self.selected,
-                    });
-                }
-            }
-        }
-
-        let mut stage_children: Vec<AnyElement> =
-            vec![self.render_canvas_layer(segs).into_any_element()];
-        for (i, &pos) in positions.iter().enumerate() {
-            stage_children.push(self.render_node_chip(i, pos, cx).into_any_element());
-        }
-
-        div()
-            .flex_1()
-            .min_w_0()
-            .v_flex()
-            // header
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .h_flex()
-                    .gap(px(12.0))
+                    .id(SharedString::from(format!("graph-note-{}", note.slug)))
+                    .role(Role::Button)
+                    .aria_label(note.title.clone())
+                    .absolute()
+                    .left(px(x - 70.0))
+                    .top(px(y - r))
+                    .w(px(140.0))
+                    .v_flex()
                     .items_center()
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .border_b_1()
-                    .border_color(theme::hairline())
+                    .gap(px(4.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _e, _w, cx| this.open_note(slug.clone(), cx)))
                     .child(
                         div()
-                            .h_flex()
-                            .p(px(2.0))
-                            .rounded_lg()
-                            .bg(theme::panel_raised())
+                            .size(px(r * 2.0))
+                            .rounded_full()
+                            .bg(theme::tint(color))
                             .border_1()
-                            .border_color(theme::hairline())
-                            .child(
-                                div()
-                                    .px(px(12.0))
-                                    .py(px(4.0))
-                                    .rounded_md()
-                                    .bg(theme::panel())
-                                    .text_size(px(11.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text_primary())
-                                    .child("Graph"),
-                            )
-                            .child(
-                                div()
-                                    .px(px(12.0))
-                                    .py(px(4.0))
-                                    .text_size(px(11.0))
-                                    .text_color(theme::text_muted())
-                                    .child("List"),
-                            ),
+                            .border_color(if active { theme::text_primary() } else { theme::stroke(color) })
+                            .child(div().size_full().rounded_full().bg(color.opacity(0.55))),
                     )
-                    .child(ui::meta(
-                        "how the fleet remembers this repo — patterns, decisions, gotchas",
-                    ))
-                    .child(div().flex_1())
                     .child(
-                        ui::pill(
-                            "preview · live FTS/RAG memory is a phased build",
-                            theme::text_muted(),
-                            theme::panel_raised(),
-                        )
-                        .border_1()
-                        .border_color(theme::hairline()),
-                    ),
-            )
-            // canvas
+                        div()
+                            .max_w(px(140.0))
+                            .truncate()
+                            .text_size(px(10.5))
+                            .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                            .child(note.title.clone()),
+                    )
+            })
+            .collect();
+        ui::panel()
+            .v_flex()
+            .overflow_hidden()
             .child(
                 div()
-                    .flex_1()
-                    .overflow_hidden()
+                    .h_flex()
+                    .gap(px(14.0))
+                    .px(px(14.0))
+                    .py(px(10.0))
+                    .border_b_1()
+                    .border_color(theme::hairline())
+                    .child(ui::section_label(format!("{} notes · {} connections", self.notes.len(), self.edges.len())))
+                    .child(div().flex_1())
+                    .child(div().h_flex().gap(px(6.0)).items_center().child(div().w(px(16.0)).h(px(2.0)).bg(link)).child(ui::meta("link")))
+                    .child(div().h_flex().gap(px(6.0)).items_center().child(div().w(px(16.0)).h(px(1.0)).bg(tag)).child(ui::meta("same tag")))
+                    .child(div().h_flex().gap(px(6.0)).items_center().child(ui::status_dot(theme::accent())).child(ui::meta("written by a run")))
+                    .child(div().h_flex().gap(px(6.0)).items_center().child(ui::status_dot(theme::violet())).child(ui::meta("written by you"))),
+            )
+            .child(
+                div()
+                    .id("memory-graph")
+                    .overflow_scroll()
                     .flex()
-                    .items_center()
                     .justify_center()
-                    .bg(theme::panel_deep())
                     .child(
                         div()
                             .relative()
-                            .w(px(STAGE_W))
-                            .h(px(STAGE_H))
-                            .flex_shrink_0()
-                            .children(stage_children),
+                            .w(px(GRAPH_W))
+                            .h(px(GRAPH_H))
+                            .child(ui::grid_backdrop(24.0))
+                            .child(wires)
+                            .children(dots),
                     ),
             )
     }
 
-    // ── right inspector ─────────────────────────────────────────────
-
-    fn render_inspector(&self) -> Div {
-        let node = &self.nodes[self.selected];
-        let color = node.kind.color();
-
-        // related (shared-tag) neighbours
-        let related: Vec<&MemNode> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(i, n)| *i != self.selected && Self::shares_tag(node, n))
-            .map(|(_, n)| n)
-            .collect();
-
-        let related_rows: Vec<Div> = related
-            .iter()
-            .map(|r| {
+    fn render_learned(&self, cx: &mut Context<Self>) -> Div {
+        let body: AnyElement = match &self.claims {
+            None => ui::meta("Reading…").into_any_element(),
+            Some(Err(e)) => ui::panel().child(ui::empty_state("◌", "Learned memory is unavailable", e.clone())).into_any_element(),
+            Some(Ok(claims)) if claims.is_empty() => ui::panel()
+                .child(ui::empty_state(
+                    "◌",
+                    "Nothing learned yet",
+                    "When a run fails in a way worth remembering, Surge records it here with its source.",
+                ))
+                .into_any_element(),
+            Some(Ok(claims)) => {
+                let has_project = self.state.read(cx).project_path.is_some();
                 div()
-                    .h_flex()
+                    .v_flex()
                     .gap(px(8.0))
-                    .items_center()
-                    .h(px(30.0))
-                    .px(px(10.0))
-                    .rounded_md()
-                    .bg(theme::panel_raised())
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .child(ui::status_dot(r.kind.color()))
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_size(px(10.5))
-                            .text_color(theme::text_primary())
-                            .child(r.title.clone()),
-                    )
-            })
-            .collect();
-
-        let tag_chips: Vec<Div> = node
-            .tags
-            .iter()
-            .map(|t| ui::pill(t.clone(), theme::text_muted(), theme::panel_raised()))
-            .collect();
-
-        let seeded_chips: Vec<Div> = node
-            .seeded
-            .iter()
-            .map(|s| {
-                div()
-                    .h_flex()
-                    .gap(px(6.0))
-                    .items_center()
-                    .px(px(9.0))
-                    .py(px(3.0))
-                    .rounded_md()
-                    .bg(theme::panel_raised())
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text_muted())
-                    .child(ui::status_dot(theme::accent()))
-                    .child(s.clone())
-            })
-            .collect();
-
-        div()
-            .w(px(320.0))
-            .flex_shrink_0()
-            .v_flex()
-            .bg(theme::panel())
-            .border_l_1()
-            .border_color(theme::hairline())
-            .child(
-                div()
-                    .v_flex()
-                    .gap(px(11.0))
-                    .p(px(16.0))
-                    .border_b_1()
-                    .border_color(theme::hairline())
-                    .child(ui::pill(node.kind.label(), color, color.opacity(0.14)))
-                    .child(
-                        div()
-                            .text_size(px(16.0))
-                            .font_weight(FontWeight::BOLD)
-                            .line_height(px(21.0))
-                            .text_color(theme::text_primary())
-                            .child(node.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap(px(12.0))
-                            .child(ui::meta(format!("{} relations", related.len())))
-                            .child(ui::meta(format!("{} tags", node.tags.len()))),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.5))
-                            .line_height(px(18.0))
-                            .text_color(theme::text_muted())
-                            .child(node.desc.clone()),
-                    ),
-            )
-            .child(
-                div()
-                    .v_flex()
-                    .gap(px(16.0))
-                    .p(px(16.0))
-                    .child(
-                        div()
+                    .children(claims.iter().enumerate().map(|(i, c)| {
+                        let claim = c.clone();
+                        ui::panel()
                             .v_flex()
-                            .gap(px(7.0))
-                            .child(section_head(format!("RELATED · {}", related.len())))
-                            .when(related_rows.is_empty(), |el| {
-                                el.child(ui::meta("no shared-tag relations"))
-                            })
-                            .children(related_rows),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap(px(7.0))
-                            .child(section_head("TAGS".to_string()))
-                            .child(div().h_flex().gap(px(6.0)).flex_wrap().children(tag_chips)),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap(px(7.0))
-                            .child(section_head("SEEDED INTO".to_string()))
+                            .gap(px(6.0))
+                            .p(px(12.0))
                             .child(
                                 div()
                                     .h_flex()
-                                    .gap(px(6.0))
-                                    .flex_wrap()
-                                    .children(seeded_chips),
-                            ),
-                    ),
+                                    .gap(px(8.0))
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .text_size(px(12.0))
+                                            .line_height(px(18.0))
+                                            .text_color(theme::text_primary())
+                                            .child(c.text.clone()),
+                                    )
+                                    .child(if c.verified {
+                                        ui::role_badge("verified", Semantic::Verified)
+                                    } else {
+                                        ui::role_badge("unverified", Semantic::External)
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap(px(8.0))
+                                    .items_center()
+                                    .child(div().flex_1().min_w(px(0.0)).truncate().text_size(px(10.5)).text_color(theme::text_dim()).child(format!("{} · {}", c.confidence, c.source)))
+                                    .when(has_project, |el| {
+                                        el.child(
+                                            Button::new(SharedString::from(format!("claim-keep-{i}")))
+                                                .ghost()
+                                                .small()
+                                                .icon(IconName::Plus)
+                                                .label("Keep as project note")
+                                                .on_click(cx.listener(move |this, _e, _w, cx| this.keep_claim(&claim, cx))),
+                                        )
+                                    }),
+                            )
+                    }))
+                    .into_any_element()
+            },
+        };
+        div()
+            .v_flex()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme::text_muted())
+                    .child("What Surge recorded from past runs, across projects. Unverified until a check confirms it; keep what matters as a project note."),
             )
+            .child(body)
     }
-}
-
-fn section_head(text: String) -> Div {
-    div()
-        .text_size(px(9.0))
-        .font_weight(FontWeight::BOLD)
-        .text_color(theme::text_muted())
-        .child(text)
 }
 
 impl Render for MemoryScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let search_bar = self.render_search_bar(window, cx);
-
-        let body: AnyElement = if self.nodes.is_empty() {
-            // Live query with zero matches — honest empty state.
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme::panel_deep())
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(theme::text_muted())
-                        .child(format!("No memories match “{}”.", self.query)),
-                )
-                .into_any_element()
+        let notes = self.notes.iter().filter(|n| !n.is_index).count();
+        let written_by_runs = self.notes.iter().filter(|n| n.stamp.is_some()).count();
+        let subtitle = Some(SharedString::from(if notes == 0 {
+            "What every mission knows about this project before it starts.".to_string()
         } else {
-            // Plain .flex() row so the three panes stretch to full
-            // height (h_flex would center them vertically).
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .child(self.render_list(cx))
-                .child(self.render_graph(cx))
-                .child(self.render_inspector())
-                .into_any_element()
+            format!("{notes} notes · {written_by_runs} written by missions · read by every new mission")
+        }));
+        let body: AnyElement = match self.mode {
+            Mode::Notes => self.render_notes(window, cx).into_any_element(),
+            Mode::Graph => div().id("memory-graph-scroll").flex_1().overflow_y_scroll().child(self.render_graph(cx)).into_any_element(),
+            Mode::Learned => div().id("memory-learned").flex_1().overflow_y_scroll().child(self.render_learned(cx)).into_any_element(),
         };
-
-        div().size_full().v_flex().child(search_bar).child(body)
+        div()
+            .size_full()
+            .v_flex()
+            .gap(px(16.0))
+            .bg(theme::background())
+            .px(px(24.0))
+            .pt(px(22.0))
+            .pb(px(20.0))
+            .child(ui::page_header(
+                "Memory",
+                subtitle,
+                div()
+                    .h_flex()
+                    .gap(px(8.0))
+                    .child(self.render_modes(cx))
+                    .child(
+                        Button::new("memory-reload")
+                            .ghost()
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .tooltip("Re-read the notes from disk")
+                            .on_click(cx.listener(|this, _e, _w, cx| {
+                                this.claims = None;
+                                if this.mode == Mode::Learned {
+                                    this.load_claims();
+                                }
+                                this.reload(cx);
+                            })),
+                    ),
+            ))
+            .child(body)
     }
-}
-
-/// Provenance chips for a memory's originating task/spec, shared by every
-/// `nodes_from_results` conversion below.
-fn provenance_chips(
-    task: &Option<surge_core::TaskId>,
-    spec: &Option<surge_core::SpecId>,
-) -> Vec<String> {
-    let mut chips = Vec::new();
-    if let Some(t) = task {
-        chips.push(format!("task {}", t.short().to_lowercase()));
-    }
-    if let Some(s) = spec {
-        chips.push(format!("spec {}", s.short().to_lowercase()));
-    }
-    chips
-}
-
-/// Convert a store's [`SearchResults`](surge_persistence::memory::SearchResults)
-/// — from either a live FTS5 search (`search_all`) or a plain browse
-/// (`list_recent`) — into display nodes. Both callers in [`MemoryScreen`]
-/// (`new`'s initial browse, `run_search`'s query) share this single
-/// conversion so a browsed memory and a searched-for one render identically.
-fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<MemNode> {
-    let mut nodes = Vec::new();
-    for d in results.discoveries {
-        nodes.push(MemNode {
-            id: format!("discovery-{}", d.id),
-            kind: MemKind::Discovery,
-            title: d.title,
-            desc: d.content,
-            tags: d.tags,
-            seeded: provenance_chips(&d.task_id, &d.spec_id),
-        });
-    }
-    for p in results.patterns {
-        nodes.push(MemNode {
-            id: format!("pattern-{}", p.id),
-            kind: MemKind::Pattern,
-            title: p.name,
-            desc: p.description,
-            tags: p.tags,
-            seeded: provenance_chips(&p.task_id, &p.spec_id),
-        });
-    }
-    for g in results.gotchas {
-        let desc = match &g.symptom {
-            Some(sym) => format!("{sym} → {}", g.solution),
-            None => format!("{} → {}", g.description, g.solution),
-        };
-        nodes.push(MemNode {
-            id: format!("gotcha-{}", g.id),
-            kind: MemKind::Gotcha,
-            title: g.title,
-            desc,
-            tags: g.tags,
-            seeded: provenance_chips(&g.task_id, &g.spec_id),
-        });
-    }
-    for f in results.file_contexts {
-        nodes.push(MemNode {
-            id: format!("filecontext-{}", f.id),
-            kind: MemKind::FileContext,
-            title: f.file_path,
-            desc: f.summary,
-            // FileContext carries key APIs, not tags — real signal.
-            tags: f.key_apis.into_iter().take(4).collect(),
-            seeded: provenance_chips(&f.task_id, &f.spec_id),
-        });
-    }
-    nodes
-}
-
-/// Clearly-labelled preview memories using the real category vocabulary
-/// (Discovery / Pattern / Gotcha / FileContext) + tags + provenance.
-fn sample_nodes() -> Vec<MemNode> {
-    vec![
-        MemNode {
-            id: "sample-1".into(),
-            kind: MemKind::Discovery,
-            title: "ACP-only agent transport".into(),
-            desc: "All agents connect over ACP; no per-CLI stdout parsers. See ADR-0006.".into(),
-            tags: vec!["architecture".into(), "acp".into()],
-            seeded: vec!["spec · transport".into(), "r-4f2a".into()],
-        },
-        MemNode {
-            id: "sample-2".into(),
-            kind: MemKind::Discovery,
-            title: "Event-log is source of truth".into(),
-            desc: "Crash recovery scans the per-run SQLite event log; no other state is authoritative.".into(),
-            tags: vec!["persistence".into(), "recovery".into()],
-            seeded: vec!["r-01aa".into()],
-        },
-        MemNode {
-            id: "sample-3".into(),
-            kind: MemKind::Discovery,
-            title: "Per-run MCP, sandbox-delegated".into(),
-            desc: "MCP servers are per-run scoped and supervised; sandbox is delegated to the runtime.".into(),
-            tags: vec!["architecture".into(), "mcp".into()],
-            seeded: vec!["spec · mcp".into()],
-        },
-        MemNode {
-            id: "sample-4".into(),
-            kind: MemKind::Pattern,
-            title: "thiserror for libs, anyhow for CLI".into(),
-            desc: "Library crates use thiserror; the CLI uses anyhow. No unwrap in library code.".into(),
-            tags: vec!["rust".into(), "errors".into()],
-            seeded: vec!["r-4f2a".into(), "r-9c1e".into()],
-        },
-        MemNode {
-            id: "sample-5".into(),
-            kind: MemKind::Pattern,
-            title: "ULID for all ids".into(),
-            desc: "SpecId / TaskId / RunId use ULID (ulid crate) for sortable unique ids.".into(),
-            tags: vec!["rust".into(), "ids".into()],
-            seeded: vec!["spec · core".into()],
-        },
-        MemNode {
-            id: "sample-6".into(),
-            kind: MemKind::Gotcha,
-            title: "Mutex across await deadlocks".into(),
-            desc: "Holding a std Mutex guard across an await point deadlocks; use tokio::sync::Mutex.".into(),
-            tags: vec!["concurrency".into(), "tokio".into()],
-            seeded: vec!["r-b2e8".into()],
-        },
-        MemNode {
-            id: "sample-7".into(),
-            kind: MemKind::Gotcha,
-            title: "Worktree lost → mark failed".into(),
-            desc: "If a run's git worktree is gone at recovery, the policy marks it failed, not resumed.".into(),
-            tags: vec!["recovery".into(), "git".into()],
-            seeded: vec!["r-77b0".into()],
-        },
-        MemNode {
-            id: "sample-8".into(),
-            kind: MemKind::FileContext,
-            title: "surge-core/src/node.rs".into(),
-            desc: "Closed NodeKind enum (Agent/HumanGate/Branch/Terminal/Notify/Loop/Subgraph) + configs.".into(),
-            tags: vec!["core".into(), "flow".into()],
-            seeded: vec!["spec · flow".into()],
-        },
-        MemNode {
-            id: "sample-9".into(),
-            kind: MemKind::FileContext,
-            title: "surge-acp/src/client.rs".into(),
-            desc: "ACP client trait implementation; AgentPool + AgentConnection wiring.".into(),
-            tags: vec!["acp".into(), "transport".into()],
-            seeded: vec!["r-4f2a".into()],
-        },
-        MemNode {
-            id: "sample-10".into(),
-            kind: MemKind::FileContext,
-            title: "surge-persistence/memory/store.rs".into(),
-            desc: "SQLite + FTS5 memory store: discoveries, patterns, gotchas, file contexts.".into(),
-            tags: vec!["persistence".into(), "memory".into()],
-            seeded: vec!["spec · memory".into()],
-        },
-    ]
 }

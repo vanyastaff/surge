@@ -21,5 +21,6 @@ actions!(
         SwitchProject,
         // Tasks
         NewTask,
+        OpenProjectDialog,
     ]
 );

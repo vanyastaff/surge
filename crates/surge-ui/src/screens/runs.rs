@@ -1,4 +1,7 @@
-//! Runs — the per-run cockpit (rail · stage pipeline · event log · steer).
+//! Missions — one idea, planned and built (rail · overview · preview ·
+//! changes · checks · log · steer). A mission is a planning run plus the
+//! implementation run it launched; the engine-level runs stay visible in
+//! Log and in the run IDs.
 //!
 //! Adapted from the "Surge - Interactive" concept. Everything rendered
 //! from live data is real: the run rail and KPI strip come from
@@ -15,13 +18,16 @@
 mod run_changes;
 #[path = "run_checks.rs"]
 mod run_checks;
+#[path = "run_mission.rs"]
+mod run_mission;
 #[path = "run_preview.rs"]
 mod run_preview;
 
 use std::time::Duration;
 
-use gpui_kit::component::StyledExt;
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -40,6 +46,9 @@ enum StageState {
     Running,
     Failed,
     Queued,
+    /// Entered, but the run ended without an exit event for it — shown as
+    /// such, never as still running.
+    Unfinished,
 }
 
 impl StageState {
@@ -48,7 +57,7 @@ impl StageState {
             Self::Done => theme::success(),
             Self::Running => theme::accent(),
             Self::Failed => theme::error(),
-            Self::Queued => theme::text_muted(),
+            Self::Queued | Self::Unfinished => theme::slate(),
         }
     }
 }
@@ -67,6 +76,41 @@ struct EventRow {
     kind: &'static str,
     color: Hsla,
     text: String,
+    problem: bool,
+}
+
+/// Event log filter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LogFilter {
+    All,
+    Flow,
+    Agent,
+    You,
+    Problems,
+}
+
+impl LogFilter {
+    const ALL: [LogFilter; 5] = [Self::All, Self::Flow, Self::Agent, Self::You, Self::Problems];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Flow => "Steps",
+            Self::Agent => "Agent",
+            Self::You => "You",
+            Self::Problems => "Problems",
+        }
+    }
+
+    fn keeps(self, row: &EventRow) -> bool {
+        match self {
+            Self::All => true,
+            Self::Flow => matches!(row.kind, "STAGE" | "EDGE" | "OUTCOME" | "END"),
+            Self::Agent => matches!(row.kind, "AGENT" | "TOOL" | "ARTIFACT"),
+            Self::You => matches!(row.kind, "GATE" | "STEER"),
+            Self::Problems => row.problem,
+        }
+    }
 }
 
 /// Map a folded live stage (from the per-run stream) to a pipeline chip.
@@ -111,11 +155,11 @@ struct RunRow {
 fn status_parts(status: RunStatus) -> (&'static str, Hsla, bool, u8) {
     match status {
         RunStatus::Active => ("active", theme::accent(), true, 1),
-        RunStatus::Awaiting => ("queued", theme::text_muted(), false, 2),
+        RunStatus::Awaiting => ("queued", theme::slate(), false, 2),
         RunStatus::Completed => ("completed", theme::success(), false, 3),
         RunStatus::Failed => ("failed", theme::error(), false, 0),
         RunStatus::Aborted => ("aborted", theme::error(), false, 0),
-        _ => ("unknown", theme::text_muted(), false, 2),
+        _ => ("unknown", theme::slate(), false, 2),
     }
 }
 
@@ -200,7 +244,7 @@ fn lifecycle_stages(run: &UiRun) -> Vec<Stage> {
 }
 
 impl RunRow {
-    fn from_run(run: &UiRun) -> Self {
+    fn from_run(run: &UiRun, prompt: Option<&str>) -> Self {
         let (status_label, color, active, rank) = status_parts(run.status);
         let events = run
             .last_event_seq
@@ -209,7 +253,10 @@ impl RunRow {
         Self {
             run_id: Some(run.run_id),
             id_label: format!("r-{}", run.run_id.short().to_lowercase()),
-            title: format!("started {}", local_hm(run.started_at)),
+            title: prompt.map_or_else(
+                || format!("Mission started {}", local_hm(run.started_at)),
+                |p| crate::ui::headline(p, 90),
+            ),
             age: humanize_age(run.started_at),
             status_label,
             color,
@@ -240,7 +287,7 @@ impl RunRow {
     fn attach_stream(&mut self, stream: &crate::run_stream::RunStreamState) {
         self.live_stream = stream.live;
         if let Some(prompt) = &stream.prompt {
-            self.title = crate::ui::headline(prompt, 30);
+            self.title = crate::ui::headline(prompt, 90);
         }
         if !stream.stages.is_empty() {
             self.stages = stream.stages.iter().map(stage_from_stream).collect();
@@ -255,6 +302,10 @@ impl RunRow {
                     kind: r.kind,
                     color: r.tone.color(),
                     text: r.text.clone(),
+                    problem: matches!(
+                        r.tone,
+                        crate::run_stream::Tone::Err | crate::run_stream::Tone::Warn
+                    ),
                 })
                 .collect();
         }
@@ -297,10 +348,13 @@ fn validate_result_folder(path: std::path::PathBuf) -> Result<std::path::PathBuf
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RunTab {
+    /// The mission level by level (default).
+    Overview,
     Preview,
-    Activity,
     Changes,
     Checks,
+    /// Raw steps and events, for developers.
+    Log,
 }
 
 /// Runs screen — daemon-run cockpit.
@@ -315,6 +369,70 @@ pub struct RunsScreen {
     preview: Option<(RunId, Entity<run_preview::PreviewView>)>,
     checks: Option<(RunId, Entity<run_checks::ChecksView>)>,
     changes: Option<(RunId, Entity<run_changes::ChangesView>)>,
+    mission: Option<Entity<run_mission::MissionPanel>>,
+    log_filter: LogFilter,
+    steps_scroll: ScrollHandle,
+    /// (run, step count) last scrolled to, so a new step scrolls once.
+    steps_seen: (Option<RunId>, usize),
+}
+
+/// What the Runs screen asks the app to do.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunsEvent {
+    /// Empty state: go describe an app.
+    DescribeApp,
+}
+
+impl EventEmitter<RunsEvent> for RunsScreen {}
+
+/// Plain-language bootstrap phase.
+fn phase_label(phase: surge_core::bootstrap_operation::BootstrapPhase) -> &'static str {
+    use surge_core::bootstrap_operation::BootstrapPhase as P;
+    match phase {
+        P::QueuedPlanning => "waiting to plan",
+        P::PreparingPlanning => "preparing the plan",
+        P::Planning => "planning",
+        P::QueuedImplementation => "waiting to build",
+        P::PreparingImplementation => "preparing the build",
+        P::Implementing => "building",
+    }
+}
+
+/// Why a build stopped for you, and what fixes it.
+fn attention_reason(
+    reason: surge_core::bootstrap_operation::BootstrapAttentionReason,
+) -> (&'static str, &'static str) {
+    use surge_core::bootstrap_operation::BootstrapAttentionReason as R;
+    match reason {
+        R::ConfigurationChanged => (
+            "Settings changed since this build started",
+            "Restore the agent settings it started with, then retry.",
+        ),
+        R::MissingCredential => (
+            "A required credential is missing",
+            "Add the API key or sign in for the agent in Settings → Agents, then retry.",
+        ),
+        R::PartialStartup => (
+            "The build did not fully start",
+            "Retry — Surge will re-check what already started.",
+        ),
+        R::WorktreeConflict => (
+            "Its working copy could not be confirmed",
+            "Check the run's worktree in Worktrees, then retry.",
+        ),
+        R::InvalidMaterialization => (
+            "The plan could not be validated",
+            "Open Flow to inspect the plan, then retry.",
+        ),
+        R::BudgetUnconfirmed => (
+            "The remaining budget could not be confirmed",
+            "Check the agent's quota or budget, then retry.",
+        ),
+        R::StorageUnconfirmed => (
+            "The result could not be recorded",
+            "Check free disk space in the Surge home folder, then retry.",
+        ),
+    }
 }
 
 impl RunsScreen {
@@ -348,10 +466,14 @@ impl RunsScreen {
             selected: None,
             steer_input: None,
             action_note: None,
-            tab: RunTab::Activity,
+            tab: RunTab::Overview,
             preview: None,
             checks: None,
             changes: None,
+            mission: None,
+            log_filter: LogFilter::All,
+            steps_scroll: ScrollHandle::new(),
+            steps_seen: (None, 0),
         }
     }
 
@@ -364,7 +486,7 @@ impl RunsScreen {
     pub fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.clear_preview(cx);
         if self.tab == RunTab::Preview {
-            self.tab = RunTab::Activity;
+            self.tab = RunTab::Overview;
         }
         cx.notify();
     }
@@ -383,7 +505,7 @@ impl RunsScreen {
             .project_runs()
             .into_iter()
             .map(|run| {
-                let mut row = RunRow::from_run(run);
+                let mut row = RunRow::from_run(run, state.run_prompt(&run.run_id));
                 // An acknowledged failure is history, not "needs you".
                 if row.rank == 0 && state.dismissed_runs.contains(&run.run_id) {
                     row.rank = 3;
@@ -391,9 +513,27 @@ impl RunsScreen {
                 if let Some(stream) = state.run_streams.get(&run.run_id) {
                     row.attach_stream(stream);
                 }
+                if run.is_terminal() {
+                    for stage in &mut row.stages {
+                        if stage.state == StageState::Running {
+                            stage.state = StageState::Unfinished;
+                            stage.sub = "no exit recorded".into();
+                        }
+                    }
+                }
                 row
             })
             .collect();
+        // One idea is one entry: a planning run whose build run is listed is
+        // shown through that build run (Overview shows both).
+        let listed: std::collections::HashSet<RunId> = rows.iter().filter_map(|r| r.run_id).collect();
+        rows.retain(|r| {
+            let Some(id) = r.run_id else { return true };
+            !state
+                .bootstrap_operations
+                .values()
+                .any(|op| op.planning_run == id && op.implementation_run != id && listed.contains(&op.implementation_run))
+        });
         rows.sort_by_key(|r| r.rank);
         let sel = self
             .selected
@@ -541,7 +681,7 @@ impl RunsScreen {
             .id("runs-rail")
             .overflow_y_scroll()
             .v_flex()
-            .gap(px(3.0))
+            .gap(px(2.0))
             .px(px(8.0))
             .pb(px(8.0));
 
@@ -557,18 +697,19 @@ impl RunsScreen {
                 .role(Role::Button)
                 .aria_label(format!("{}, {}", row.title, row.status_label))
                 .v_flex()
+                .gap(px(4.0))
                 .px(px(10.0))
-                .py(px(7.0))
-                .rounded_md()
+                .py(px(8.0))
+                .rounded(px(ui::R_CONTROL))
+                .border_1()
+                .border_color(if is_sel {
+                    theme::hairline_strong()
+                } else {
+                    transparent_black()
+                })
                 .cursor_pointer()
-                .when(is_sel, |el| {
-                    el.bg(theme::panel_raised())
-                        .border_1()
-                        .border_color(theme::hairline_strong())
-                })
-                .when(!is_sel, |el| {
-                    el.hover(|s: StyleRefinement| s.bg(theme::panel_raised().opacity(0.6)))
-                })
+                .when(is_sel, |el| el.bg(theme::surface()))
+                .when(!is_sel, |el| el.hover(|s: StyleRefinement| s.bg(theme::surface().opacity(0.6))))
                 .on_click(cx.listener(move |this, _e, _w, cx| {
                     this.clear_preview(cx);
                     this.selected = run_id;
@@ -579,22 +720,22 @@ impl RunsScreen {
                     div()
                         .h_flex()
                         .gap(px(8.0))
-                        .items_center()
-                        .child(ui::status_dot(row.color))
+                        .items_start()
+                        .child(div().pt(px(4.0)).child(if row.active {
+                            ui::live_dot(row.color)
+                        } else {
+                            ui::status_dot(row.color)
+                        }))
                         .child(
                             div()
-                                .text_size(px(11.0))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme::text_primary())
-                                .child(row.id_label.clone()),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .text_size(px(9.0))
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(row.color)
-                                .child(row.status_label),
+                                .text_color(theme::text_primary())
+                                .line_clamp(2)
+                                .child(row.title.clone()),
                         ),
                 )
                 .child(
@@ -602,27 +743,17 @@ impl RunsScreen {
                         .h_flex()
                         .gap(px(8.0))
                         .pl(px(15.0))
-                        .pt(px(3.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_size(px(10.0))
-                                .text_color(theme::text_muted())
-                                .child(row.title.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(9.5))
-                                .text_color(theme::text_muted().opacity(0.8))
-                                .child(row.age.clone()),
-                        ),
+                        .text_size(px(10.0))
+                        .child(div().text_color(row.color).child(row.status_label))
+                        .child(div().text_color(theme::text_dim()).child(row.id_label.clone()))
+                        .child(div().flex_1())
+                        .child(div().text_color(theme::text_dim()).child(format!("{} ago", row.age))),
                 );
             list = list.child(item);
         }
 
         div()
-            .w(px(264.0))
+            .w(px(280.0))
             .flex_shrink_0()
             .v_flex()
             .bg(theme::panel())
@@ -633,137 +764,95 @@ impl RunsScreen {
                     .h_flex()
                     .gap(px(8.0))
                     .items_center()
-                    .px(px(14.0))
+                    .px(px(16.0))
                     .pt(px(14.0))
                     .pb(px(10.0))
-                    .child(ui::section_label(format!("RUNS · {}", rows.len())).flex_1())
+                    .child(ui::section_label(format!("Missions · {}", rows.len())).flex_1())
                     .when(needs > 0, |el| {
-                        el.child(ui::pill(
-                            format!("{needs} need you"),
-                            theme::accent(),
-                            theme::accent().opacity(0.14),
-                        ))
+                        el.child(ui::role_badge(format!("{needs} need you"), theme::Semantic::You))
                     })
-                    .when(!live, |el| {
-                        el.child(ui::pill(
-                            "Disconnected",
-                            theme::text_muted(),
-                            theme::panel_raised(),
-                        ))
-                    }),
+                    .when(!live, |el| el.child(ui::role_badge("offline", theme::Semantic::External))),
             )
             .child(list)
     }
 
-    fn render_header(&self, row: &RunRow, live: bool, cx: &mut Context<Self>) -> Div {
-        let mut header = div()
-            .h_flex()
-            .gap(px(12.0))
-            .items_center()
-            .px(px(20.0))
-            .py(px(14.0))
-            .border_b_1()
-            .border_color(theme::hairline())
-            .child(ui::status_dot(row.color))
-            .child(
-                div()
-                    .text_size(px(18.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::text_primary())
-                    .child(row.id_label.clone()),
-            )
-            .child(ui::pill(
-                row.status_label,
-                row.color,
-                row.color.opacity(0.13),
-            ))
-            .child(
-                div()
-                    .text_size(px(11.5))
-                    .text_color(theme::text_muted())
-                    .child(row.title.clone()),
-            )
-            .child(div().flex_1());
+    fn selected_bootstrap(
+        &self,
+        row: &RunRow,
+        cx: &Context<Self>,
+    ) -> Option<(RunId, surge_core::bootstrap_operation::BootstrapOperationStatus)> {
+        let id = row.run_id?;
+        self.state
+            .read(cx)
+            .bootstrap_operations
+            .iter()
+            .find_map(|(operation_id, status)| {
+                (status.planning_run == id || status.implementation_run == id)
+                    .then_some((*operation_id, status.clone()))
+            })
+    }
 
-        if let Some(operation) =
-            self.state
-                .read(cx)
-                .bootstrap_operations
-                .iter()
-                .find_map(|(id, status)| {
-                    (status.planning_run == row.run_id?
-                        || status.implementation_run == row.run_id?)
-                        .then_some((*id, status.clone()))
-                })
-        {
-            let (operation_id, status) = operation;
-            let (label, detail) = match &status.state {
-                surge_core::bootstrap_operation::BootstrapState::Pending { phase } => {
-                    ("in progress", format!("{phase:?}"))
-                },
-                surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
-                    phase,
-                    reason,
-                    ..
-                } => ("needs attention", format!("{phase:?} · {reason:?}")),
-                surge_core::bootstrap_operation::BootstrapState::Cancelling { phase } => {
-                    ("cancelling", format!("{phase:?}"))
-                },
-                surge_core::bootstrap_operation::BootstrapState::Completed => {
-                    ("completed", "implementation run settled".into())
-                },
-                surge_core::bootstrap_operation::BootstrapState::Failed => {
-                    ("failed", "operation settled with failure".into())
-                },
-                surge_core::bootstrap_operation::BootstrapState::Cancelled => {
-                    ("cancelled", "operation stopped".into())
-                },
-            };
-            header = header.child(ui::pill(
-                label,
-                theme::accent(),
-                theme::accent().opacity(0.13),
-            ));
-            header = header.child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(theme::text_muted())
-                    .child(detail),
-            );
-            if !matches!(
-                status.state,
-                surge_core::bootstrap_operation::BootstrapState::Completed
-                    | surge_core::bootstrap_operation::BootstrapState::Failed
-                    | surge_core::bootstrap_operation::BootstrapState::Cancelled
-            ) {
-                header = header.child(
-                    div()
-                        .id("cancel-bootstrap")
-                        .role(Role::Button)
-                        .aria_label("Cancel application workflow")
-                        .h_flex()
-                        .items_center()
-                        .h(px(30.0))
-                        .px(px(13.0))
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme::error().opacity(0.35))
-                        .text_color(theme::error())
-                        .text_size(px(11.0))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _e, _w, cx| {
-                            this.cancel_bootstrap(operation_id, cx)
-                        }))
-                        .child("■ Cancel build"),
-                );
-            }
+    /// The planning + implementation runs this row stands for.
+    fn mission_runs(&self, row: &RunRow, cx: &Context<Self>) -> Option<run_mission::MissionRuns> {
+        let run = row.run_id?;
+        Some(match self.selected_bootstrap(row, cx) {
+            Some((_, status)) => run_mission::MissionRuns {
+                planning: Some(status.planning_run),
+                implementation: status.implementation_run,
+            },
+            None => run_mission::MissionRuns {
+                planning: None,
+                implementation: run,
+            },
+        })
+    }
+
+    /// Title, one status, one line of facts, and the actions — nothing
+    /// said twice.
+    fn render_header(&self, row: &RunRow, live: bool, cx: &mut Context<Self>) -> Div {
+        use surge_core::bootstrap_operation::BootstrapState as B;
+        let bootstrap = self.selected_bootstrap(row, cx);
+
+        // One status: the build's when this run belongs to one, else the run's.
+        let (status_text, status_color) = match bootstrap.as_ref().map(|(_, s)| &s.state) {
+            Some(B::Pending { phase }) => (phase_label(*phase).to_string(), theme::accent()),
+            Some(B::NeedsAttention { .. }) => ("needs you".to_string(), theme::warning()),
+            Some(B::Cancelling { .. }) => ("cancelling".to_string(), theme::warning()),
+            _ => (row.status_label.to_string(), row.color),
+        };
+        let cancellable = bootstrap
+            .as_ref()
+            .is_some_and(|(_, s)| s.state.phase().is_some() && !s.cancel_requested);
+
+        let mut facts: Vec<String> = vec![
+            row.id_label.clone(),
+            format!("started {}", row.started),
+            format!("{} elapsed", row.elapsed),
+            format!("{} events", row.events),
+        ];
+        if let Some((tokens_in, tokens_out, cost)) = row.usage {
+            facts.push(format!("{} in · {} out tokens", fmt_tokens(tokens_in), fmt_tokens(tokens_out)));
+            facts.push(format!("${cost:.2}"));
         }
 
+        let mut actions = div().h_flex().gap(px(6.0)).items_center().flex_none();
+        if let Some(note) = &self.action_note {
+            actions = actions.child(
+                div()
+                    .max_w(px(260.0))
+                    .truncate()
+                    .text_size(px(10.5))
+                    .text_color(theme::text_muted())
+                    .child(note.clone()),
+            );
+        }
         if let Some(run_id) = row.run_id {
-            header = header.child(
+            actions = actions.child(
                 Button::new("open-result-folder")
                     .ghost()
-                    .label("Open result folder")
+                    .small()
+                    .icon(IconName::FolderOpen)
+                    .tooltip("Open the result folder")
                     .accessibility_id("open-result-folder")
                     .debug_selector(|| "open-result-folder".into())
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -771,49 +860,123 @@ impl RunsScreen {
                     })),
             );
         }
-
-        if let Some(note) = &self.action_note {
-            header = header.child(
-                div()
-                    .max_w(px(240.0))
-                    .truncate()
-                    .text_size(px(10.5))
-                    .text_color(theme::accent())
-                    .child(note.clone()),
+        if let Some((operation_id, _)) = bootstrap.as_ref().filter(|_| cancellable) {
+            let operation_id = *operation_id;
+            actions = actions.child(
+                Button::new("cancel-bootstrap")
+                    .outline()
+                    .small()
+                    .danger()
+                    .label("Cancel build")
+                    .accessibility_id("cancel-bootstrap")
+                    .on_click(cx.listener(move |this, _e, _w, cx| this.cancel_bootstrap(operation_id, cx))),
             );
-        }
-
-        // Stop run — a real facade call; only offered for live active runs.
-        if live
+        } else if live
             && row.active
             && let Some(run_id) = row.run_id
         {
-            header = header.child(
-                div()
-                    .id("stop-run")
-                    .role(Role::Button)
-                    .aria_label("Stop run")
-                    .h_flex()
-                    .gap(px(7.0))
-                    .items_center()
-                    .h(px(30.0))
-                    .px(px(13.0))
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::error().opacity(0.35))
-                    .text_color(theme::error().opacity(0.95))
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .hover(|s: StyleRefinement| s.border_color(theme::error().opacity(0.7)))
-                    .on_click(cx.listener(move |this, _e, _w, cx| {
-                        this.stop_run(run_id, cx);
-                    }))
-                    .child("■ Stop run"),
+            actions = actions.child(
+                Button::new("stop-run")
+                    .outline()
+                    .small()
+                    .danger()
+                    .label("Stop run")
+                    .accessibility_id("stop-run")
+                    .on_click(cx.listener(move |this, _e, _w, cx| this.stop_run(run_id, cx))),
             );
         }
 
-        header
+        div()
+            .h_flex()
+            .gap(px(16.0))
+            .items_start()
+            .px(px(20.0))
+            .pt(px(16.0))
+            .pb(px(12.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .v_flex()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .h_flex()
+                            .gap(px(10.0))
+                            .items_center()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .min_w(px(0.0))
+                                    .flex_shrink(1.0)
+                                    .text_size(px(16.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::text_primary())
+                                    .truncate()
+                                    .child(row.title.clone()),
+                            )
+                            .child(ui::pill(status_text, status_color, theme::tint(status_color))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme::text_dim())
+                            .child(facts.join("  ·  ")),
+                    ),
+            )
+            .child(actions)
+    }
+
+    /// Only when the build is blocked on you: why, and the one button that
+    /// moves it.
+    fn render_attention(&self, row: &RunRow, cx: &mut Context<Self>) -> Option<Div> {
+        use surge_core::bootstrap_operation::BootstrapState as B;
+        let (operation_id, status) = self.selected_bootstrap(row, cx)?;
+        let B::NeedsAttention { phase, reason, .. } = status.state else {
+            return None;
+        };
+        let (what, fix) = attention_reason(reason);
+        let revision = status.revision;
+        Some(
+            ui::node_card(theme::warning())
+                .mx(px(20.0))
+                .mb(px(10.0))
+                .h_flex()
+                .gap(px(12.0))
+                .items_center()
+                .px(px(14.0))
+                .py(px(10.0))
+                .child(Icon::new(IconName::TriangleAlert).size(px(15.0)).text_color(theme::warning()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .v_flex()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::text_primary())
+                                .child(format!("Stopped while {} — {what}", phase_label(phase))),
+                        )
+                        .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(fix)),
+                )
+                .when(!status.cancel_requested, |el| {
+                    el.child(
+                        Button::new("retry-bootstrap")
+                            .primary()
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .label("Retry")
+                            .accessibility_id("retry-bootstrap")
+                            .on_click(cx.listener(move |this, _e, _w, cx| {
+                                this.retry_bootstrap(operation_id, revision, cx)
+                            })),
+                    )
+                }),
+        )
     }
 
     fn cancel_bootstrap(&mut self, operation_id: RunId, cx: &mut Context<Self>) {
@@ -885,105 +1048,53 @@ impl RunsScreen {
         .detach();
     }
 
-    fn render_kpis(&self, row: &RunRow) -> Div {
-        let cell = |label: &'static str, value: String, color: Hsla| {
-            div()
-                .v_flex()
-                .gap(px(3.0))
-                .justify_center()
-                .pr(px(26.0))
-                .child(ui::section_label(label))
-                .child(
-                    div()
-                        .text_size(px(13.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color)
-                        .child(value),
-                )
-        };
-        let sep = || div().w(px(1.0)).my(px(14.0)).bg(theme::hairline());
-
-        let mut strip = div()
-            .h(px(60.0))
-            .flex_shrink_0()
+    fn render_tabs(&self, cx: &mut Context<Self>) -> Div {
+        let mut tabs = div()
             .h_flex()
-            .px(px(20.0))
-            .gap(px(0.0))
+            .gap(px(4.0))
+            .px(px(16.0))
             .border_b_1()
-            .border_color(theme::hairline())
-            .bg(theme::panel())
-            .child(cell("STARTED", row.started.clone(), theme::text_primary()))
-            .child(sep())
-            .child(
+            .border_color(theme::hairline());
+        for (tab, label, icon) in [
+            (RunTab::Overview, "Overview", Lucide::Workflow),
+            (RunTab::Preview, "Preview", Lucide::AppWindow),
+            (RunTab::Changes, "Changes", Lucide::GitCompare),
+            (RunTab::Checks, "Checks", Lucide::ShieldCheck),
+            (RunTab::Log, "Log", Lucide::ScrollText),
+        ] {
+            let active = self.tab == tab;
+            tabs = tabs.child(
                 div()
-                    .pl(px(26.0))
-                    .child(cell("ELAPSED", row.elapsed.clone(), theme::accent())),
-            )
-            .child(sep())
-            .child(div().pl(px(26.0)).child(cell(
-                "EVENTS",
-                row.events.clone(),
-                theme::text_primary(),
-            )))
-            .child(sep())
-            .child(div().pl(px(26.0)).child(cell(
-                "STATUS",
-                row.status_label.to_uppercase(),
-                row.color,
-            )));
-
-        // Token/cost counters — only when the live stream reported them.
-        if let Some((tokens_in, tokens_out, cost)) = row.usage {
-            strip = strip
-                .child(sep())
-                .child(div().pl(px(26.0)).child(cell(
-                    "TOKENS",
-                    format!(
-                        "{} in · {} out",
-                        fmt_tokens(tokens_in),
-                        fmt_tokens(tokens_out)
-                    ),
-                    theme::text_primary(),
-                )))
-                .child(sep())
-                .child(div().pl(px(26.0)).child(cell(
-                    "COST",
-                    format!("${cost:.2}"),
-                    theme::success(),
-                )));
+                    .id(SharedString::from(format!("run-tab-{label}")))
+                    .role(Role::Tab)
+                    .aria_label(label)
+                    .h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .px(px(10.0))
+                    .h(px(36.0))
+                    .border_b_2()
+                    .border_color(if active { theme::accent() } else { transparent_black() })
+                    .text_size(px(12.0))
+                    .text_color(if active {
+                        theme::text_primary()
+                    } else {
+                        theme::text_muted()
+                    })
+                    .cursor_pointer()
+                    .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
+                    .on_click(cx.listener(move |screen, _, _, cx| {
+                        if screen.tab != tab {
+                            screen.clear_preview(cx);
+                        }
+                        screen.tab = tab;
+                        cx.notify();
+                    }))
+                    .child(Icon::new(icon).size(px(13.0)))
+                    .child(label),
+            );
         }
-        strip
-    }
-
-    /// Dot-grid backdrop for the pipeline zone (bounds-driven, so it
-    /// fills whatever size flexbox gives the pane).
-    fn render_dot_grid(&self) -> impl IntoElement {
-        let dot_color = theme::graph_line().opacity(0.5);
-        canvas(
-            |_bounds, _window, _cx| {},
-            move |bounds, _prepaint, window, _cx| {
-                let ox = bounds.origin.x;
-                let oy = bounds.origin.y;
-                let w = f32::from(bounds.size.width);
-                let h = f32::from(bounds.size.height);
-                let step = 26.0_f32;
-                let mut gy = 8.0_f32;
-                while gy < h {
-                    let mut gx = 8.0_f32;
-                    while gx < w {
-                        let dot =
-                            Bounds::new(point(ox + px(gx), oy + px(gy)), size(px(1.5), px(1.5)));
-                        window.paint_quad(fill(dot, dot_color));
-                        gx += step;
-                    }
-                    gy += step;
-                }
-            },
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
+        tabs
     }
 
     fn render_stage_chip(&self, stage: &Stage, last: bool) -> Div {
@@ -991,68 +1102,66 @@ impl RunsScreen {
         let is_hot = matches!(stage.state, StageState::Running);
 
         let dot: AnyElement = if is_hot {
-            ui::status_dot(color)
+            ui::live_dot(color)
                 .with_animation(
                     SharedString::from(format!("stage-pulse-{}", stage.label)),
                     Animation::new(Duration::from_millis(1400)).repeat(),
-                    |el, delta| el.opacity(0.4 + 0.6 * (delta * std::f32::consts::PI).sin()),
+                    |el, delta| el.opacity(0.45 + 0.55 * (delta * std::f32::consts::PI).sin()),
                 )
                 .into_any_element()
         } else {
             ui::status_dot(color).into_any_element()
         };
 
-        let chip = div()
-            .h_flex()
-            .gap(px(9.0))
-            .items_center()
-            .px(px(14.0))
-            .py(px(10.0))
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(match stage.state {
-                StageState::Running => color.opacity(0.5),
-                StageState::Failed => color.opacity(0.4),
-                _ => theme::hairline(),
-            })
-            .child(dot)
-            .child(
-                div()
-                    .v_flex()
-                    .child(
-                        div()
-                            .text_size(px(11.5))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(if stage.state == StageState::Queued {
-                                theme::text_muted()
-                            } else {
-                                theme::text_primary()
-                            })
-                            .child(stage.label.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(9.5))
-                            .text_color(color.opacity(0.9))
-                            .child(stage.sub.clone()),
-                    ),
-            );
+        let chip = match stage.state {
+            StageState::Queued | StageState::Unfinished => ui::panel().rounded(px(ui::R_CONTROL + 2.0)),
+            _ => ui::node_card(color),
+        }
+        .h_flex()
+        .flex_none()
+        .gap(px(9.0))
+        .items_center()
+        .px(px(12.0))
+        .py(px(8.0))
+        .child(dot)
+        .child(
+            div()
+                .v_flex()
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if matches!(stage.state, StageState::Queued | StageState::Unfinished) {
+                            theme::text_muted()
+                        } else {
+                            theme::text_primary()
+                        })
+                        .whitespace_nowrap()
+                        .child(stage.label.replace('_', " ")),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .text_color(color)
+                        .whitespace_nowrap()
+                        .child(ui::headline(&stage.sub, 28)),
+                ),
+        );
 
-        let mut cell = div().h_flex().items_center().child(chip);
+        let mut cell = div().h_flex().flex_none().items_center().child(chip);
         if !last {
-            cell = cell.child(div().w(px(34.0)).h(px(2.0)).bg(
-                if stage.state == StageState::Done {
-                    theme::success().opacity(0.55)
-                } else {
-                    theme::graph_line()
-                },
-            ));
+            cell = cell.child(div().w(px(22.0)).h(px(1.0)).bg(if stage.state == StageState::Done {
+                theme::stroke(theme::success())
+            } else {
+                theme::graph_line()
+            }));
         }
         cell
     }
 
-    fn render_pipeline(&self, row: &RunRow, live: bool) -> Div {
+    /// Steps as a horizontal, scrollable strip on the grid — left to right
+    /// in execution order, the latest kept in view.
+    fn render_pipeline(&self, row: &RunRow) -> Div {
         let n = row.stages.len();
         let chips: Vec<Div> = row
             .stages
@@ -1060,99 +1169,71 @@ impl RunsScreen {
             .enumerate()
             .map(|(i, s)| self.render_stage_chip(s, i + 1 == n))
             .collect();
-
-        let legend_item = |color: Hsla, label: &'static str| {
-            div()
-                .h_flex()
-                .gap(px(6.0))
-                .items_center()
-                .child(ui::status_dot(color))
-                .child(
-                    div()
-                        .text_size(px(9.5))
-                        .text_color(theme::text_muted())
-                        .child(label),
-                )
-        };
+        let done = row.stages.iter().filter(|s| s.state == StageState::Done).count();
 
         div()
             .relative()
-            .flex_1()
-            .min_h(px(160.0))
+            .flex_none()
+            .h(px(116.0))
             .overflow_hidden()
             .bg(theme::panel_deep())
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(self.render_dot_grid())
-            .child(div().relative().h_flex().items_center().children(chips))
-            // legend (bottom-left)
+            .border_b_1()
+            .border_color(theme::hairline())
+            .child(ui::grid_backdrop(24.0))
             .child(
                 div()
                     .absolute()
+                    .top(px(10.0))
                     .left(px(20.0))
-                    .bottom(px(12.0))
                     .h_flex()
-                    .gap(px(14.0))
-                    .items_center()
-                    .px(px(13.0))
-                    .py(px(7.0))
-                    .rounded_full()
-                    .bg(theme::panel().opacity(0.85))
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .child(legend_item(theme::success(), "done"))
-                    .child(legend_item(theme::accent(), "running"))
-                    .child(legend_item(theme::error(), "failed"))
-                    .child(legend_item(theme::text_muted(), "queued")),
+                    .gap(px(8.0))
+                    .child(ui::section_label(format!("Steps · {done}/{n} done"))),
             )
-            // honesty note (bottom-right)
             .child(
                 div()
+                    .id("run-steps")
                     .absolute()
-                    .right(px(20.0))
-                    .bottom(px(16.0))
-                    .text_size(px(9.5))
-                    .text_color(theme::text_muted().opacity(0.8))
-                    .child(if row.live_stream {
-                        "live stage telemetry · since cockpit attach"
-                    } else if live {
-                        "run lifecycle · select while active for live stage telemetry"
-                    } else {
-                        "last known run lifecycle · daemon disconnected"
-                    }),
+                    .top(px(34.0))
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.steps_scroll)
+                    .child(div().h_flex().items_center().h_full().px(px(20.0)).children(chips)),
             )
     }
 
-    fn render_event_log(&self, row: &RunRow, live: bool) -> Div {
+    fn render_event_log(&self, row: &RunRow, cx: &mut Context<Self>) -> Div {
+        let filter = self.log_filter;
+        let rows: Vec<&EventRow> = row.event_rows.iter().filter(|e| filter.keeps(e)).collect();
         let mut body = div()
             .flex_1()
             .id("runs-event-log")
             .overflow_y_scroll()
             .v_flex()
-            .gap(px(1.0))
             .px(px(20.0))
             .pb(px(12.0));
 
         if row.event_rows.is_empty() {
-            let text = if row.live_stream {
-                "Stream attached — events will appear as the run emits them \
-                 (no history replay before attach)."
-            } else if live {
-                "No live stream for this run — it either finished before the \
-                 cockpit attached, or is queued."
-            } else {
-                "No events — queued behind fleet capacity."
-            };
+            body = body.child(ui::empty_state(
+                "≡",
+                if row.live_stream { "Waiting for the first event" } else { "No events recorded" },
+                if row.live_stream {
+                    "Events appear here as the run emits them."
+                } else {
+                    "This run has no recorded step events yet."
+                },
+            ));
+        } else if rows.is_empty() {
             body = body.child(
                 div()
                     .py(px(16.0))
-                    .text_size(px(11.0))
+                    .text_size(px(11.5))
                     .text_color(theme::text_muted())
-                    .child(text),
+                    .child(format!("No {} events.", filter.label().to_lowercase())),
             );
         } else {
-            for (index, e) in row.event_rows.iter().enumerate() {
+            for (index, e) in rows.into_iter().enumerate() {
                 body = body.child(
                     div()
                         .id(("run-event", index))
@@ -1160,21 +1241,22 @@ impl RunsScreen {
                         .aria_label(format!("{} {} {}", e.t, e.kind, e.text))
                         .h_flex()
                         .gap(px(12.0))
-                        .items_center()
-                        .py(px(4.0))
+                        .items_start()
+                        .py(px(5.0))
+                        .border_b_1()
+                        .border_color(theme::hairline().opacity(0.5))
                         .child(
                             div()
-                                .w(px(54.0))
+                                .w(px(58.0))
                                 .flex_shrink_0()
                                 .whitespace_nowrap()
-                                .text_size(px(10.0))
-                                .text_color(theme::text_muted().opacity(0.8))
+                                .text_size(px(10.5))
+                                .text_color(theme::text_dim())
                                 .child(e.t.clone()),
                         )
-                        .child(ui::status_dot(e.color))
                         .child(
                             div()
-                                .w(px(60.0))
+                                .w(px(64.0))
                                 .flex_shrink_0()
                                 .whitespace_nowrap()
                                 .text_size(px(9.5))
@@ -1185,75 +1267,60 @@ impl RunsScreen {
                         .child(
                             div()
                                 .flex_1()
-                                .overflow_hidden()
+                                .min_w(px(0.0))
                                 .text_size(px(11.5))
-                                .text_color(theme::text_primary().opacity(0.9))
+                                .line_height(px(16.0))
+                                .text_color(theme::text_primary())
                                 .child(e.text.clone()),
                         ),
                 );
             }
         }
 
+        let mut filters = div().h_flex().gap(px(2.0));
+        for f in LogFilter::ALL {
+            let count = row.event_rows.iter().filter(|e| f.keeps(e)).count();
+            let active = f == filter;
+            filters = filters.child(
+                div()
+                    .id(SharedString::from(format!("log-filter-{}", f.label())))
+                    .role(Role::Button)
+                    .px(px(8.0))
+                    .py(px(3.0))
+                    .rounded(px(ui::R_CONTROL))
+                    .text_size(px(10.5))
+                    .cursor_pointer()
+                    .when(active, |el| el.bg(theme::surface()).text_color(theme::text_primary()))
+                    .when(!active, |el| {
+                        el.text_color(theme::text_muted())
+                            .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
+                    })
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.log_filter = f;
+                        cx.notify();
+                    }))
+                    .child(format!("{} {count}", f.label())),
+            );
+        }
+
         div()
-            .h(px(190.0))
-            .flex_shrink_0()
+            .flex_1()
+            .min_h(px(0.0))
             .v_flex()
-            .bg(theme::panel())
-            .border_t_1()
-            .border_color(theme::hairline())
             .child(
                 div()
                     .h_flex()
                     .gap(px(12.0))
                     .items_center()
                     .px(px(20.0))
-                    .pt(px(11.0))
-                    .pb(px(9.0))
-                    .child(ui::section_label("EVENT LOG"))
-                    .child(ui::meta("event-sourced · replayable"))
-                    .child(div().flex_1())
+                    .pt(px(10.0))
+                    .pb(px(6.0))
+                    .child(ui::section_label("Events"))
                     .when(row.live_stream, |el| {
-                        el.child(
-                            div()
-                                .h_flex()
-                                .gap(px(5.0))
-                                .items_center()
-                                .px(px(10.0))
-                                .py(px(3.0))
-                                .rounded_md()
-                                .bg(theme::accent().opacity(0.1))
-                                .border_1()
-                                .border_color(theme::accent().opacity(0.28))
-                                .child(
-                                    ui::status_dot(theme::accent())
-                                        .with_animation(
-                                            "live-tail-pulse",
-                                            Animation::new(Duration::from_millis(1400)).repeat(),
-                                            |el, delta| {
-                                                el.opacity(
-                                                    0.35 + 0.65
-                                                        * (delta * std::f32::consts::PI).sin(),
-                                                )
-                                            },
-                                        )
-                                        .into_any_element(),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(9.5))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme::accent())
-                                        .child("LIVE TAIL"),
-                                ),
-                        )
+                        el.child(ui::role_badge("live", theme::Semantic::Agent))
                     })
-                    .when(live && !row.live_stream, |el| {
-                        el.child(ui::pill(
-                            "LIFECYCLE FEED",
-                            theme::text_muted(),
-                            theme::panel_raised(),
-                        ))
-                    }),
+                    .child(div().flex_1())
+                    .child(filters),
             )
             .child(body)
     }
@@ -1262,7 +1329,7 @@ impl RunsScreen {
         if self.steer_input.is_none() {
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Steer this run — delivered at the next stage boundary…")
+                    .placeholder("Tell the agent something — it reads it before the next step…")
             });
             cx.subscribe_in(
                 &input,
@@ -1295,15 +1362,11 @@ impl RunsScreen {
                     .items_center()
                     .h(px(36.0))
                     .px(px(12.0))
-                    .rounded_lg()
+                    .rounded(px(ui::R_CONTROL + 2.0))
                     .bg(theme::panel_deep())
                     .border_1()
                     .border_color(theme::hairline_strong())
-                    .child(ui::pill(
-                        "steer",
-                        theme::accent(),
-                        theme::accent().opacity(0.12),
-                    ))
+                    .child(ui::role_badge("steer", theme::Semantic::You))
                     .child(
                         div().flex_1().child(
                             Input::new(self.steer_input.as_ref().unwrap())
@@ -1321,185 +1384,105 @@ impl Render for RunsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (rows, sel, live) = self.rows(cx);
         let selected = rows.get(sel).cloned();
-        let selected_bootstrap =
-            selected.as_ref().and_then(|row| {
-                let id = row.run_id?;
-                self.state.read(cx).bootstrap_operations.iter().find_map(
-                    |(operation_id, status)| {
-                        (status.planning_run == id || status.implementation_run == id)
-                            .then_some((*operation_id, status.clone()))
-                    },
-                )
-            });
+
+        // Keep the newest step in view as a live run advances.
+        if let Some(row) = &selected {
+            let n = row.stages.len();
+            if self.steps_seen != (row.run_id, n) {
+                self.steps_seen = (row.run_id, n);
+                if n > 0 {
+                    self.steps_scroll.scroll_to_item(n - 1);
+                }
+            }
+        }
 
         let mut main = div().flex_1().min_w_0().v_flex();
+        let mut steerable = false;
         if let Some(row) = &selected {
+            steerable = live && row.active;
             main = main
                 .child(self.render_header(row, live, cx))
-                .child(self.render_kpis(row))
-                .when_some(selected_bootstrap.as_ref(), |el, (operation_id, status)| {
-                    let operation_id = *operation_id;
-                    let phase = match &status.state {
-                        surge_core::bootstrap_operation::BootstrapState::Pending { phase } => {
-                            format!("In progress · {phase:?}")
-                        },
-                        surge_core::bootstrap_operation::BootstrapState::NeedsAttention {
-                            phase,
-                            reason,
-                            ..
-                        } => format!("Needs attention · {phase:?} · {reason:?}"),
-                        surge_core::bootstrap_operation::BootstrapState::Cancelling { phase } => {
-                            format!("Cancelling · {phase:?}")
-                        },
-                        surge_core::bootstrap_operation::BootstrapState::Completed => {
-                            "Completed · implementation verified by durable engine outcome".into()
-                        },
-                        surge_core::bootstrap_operation::BootstrapState::Failed => {
-                            "Failed · inspect checks and run evidence".into()
-                        },
-                        surge_core::bootstrap_operation::BootstrapState::Cancelled => {
-                            "Cancelled · no further run will launch".into()
-                        },
-                    };
-                    let active = status.state.phase().is_some();
-                    let retry_revision = status.revision;
-                    el.child(
-                        div()
-                            .id("bootstrap-operation")
-                            .v_flex()
-                            .gap(px(8.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .border_b_1()
-                            .border_color(theme::hairline())
-                            .bg(theme::panel_deep())
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text_primary())
-                                    .child("Application workflow"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme::text_muted())
-                                    .child(phase),
-                            )
-                            .when(
-                                matches!(status.state, surge_core::bootstrap_operation::BootstrapState::NeedsAttention { .. })
-                                    && !status.cancel_requested,
-                                |panel| panel.child(
-                                    div()
-                                        .id("retry-bootstrap")
-                                        .role(Role::Button)
-                                        .aria_label("Retry application workflow")
-                                        .h_flex().items_center().h(px(30.0)).px(px(13.0)).rounded_lg()
-                                        .border_1().border_color(theme::accent().opacity(0.35)).text_color(theme::accent())
-                                        .text_size(px(11.0)).cursor_pointer()
-                                        .on_click(cx.listener(move |this, _e, _w, cx| {
-                                            this.retry_bootstrap(operation_id, retry_revision, cx)
-                                        }))
-                                        .child("↻ Retry after repair"),
-                                ),
-                            )
-                            .when(active, |panel| {
-                                panel.child(
-                                    div()
-                                        .id("cancel-bootstrap")
-                                        .role(Role::Button)
-                                        .aria_label("Cancel application workflow")
-                                        .h_flex()
-                                        .items_center()
-                                        .h(px(30.0))
-                                        .px(px(13.0))
-                                        .rounded_lg()
-                                        .border_1()
-                                        .border_color(theme::error().opacity(0.35))
-                                        .text_color(theme::error())
-                                        .text_size(px(11.0))
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(move |this, _e, _w, cx| {
-                                            this.cancel_bootstrap(operation_id, cx)
-                                        }))
-                                        .child("■ Cancel build"),
-                                )
-                            }),
-                    )
-                })
-                ;
-            let mut tabs = div().h_flex().gap(px(8.0)).px(px(20.0)).py(px(6.0));
-            for (tab, label) in [
-                (RunTab::Preview, "Preview"),
-                (RunTab::Activity, "Activity"),
-                (RunTab::Changes, "Changes"),
-                (RunTab::Checks, "Checks"),
-            ] {
-                tabs = tabs.child(
-                    Button::new(SharedString::from(format!("run-tab-{label}")))
-                        .ghost()
-                        .label(label)
-                        .when(self.tab == tab, |button| button.primary())
-                        .on_click(cx.listener(move |screen, _, _, cx| {
-                            if screen.tab != tab {
-                                screen.clear_preview(cx);
-                            }
-                            screen.tab = tab;
-                            cx.notify();
-                        })),
-                );
-            }
-            main = main.child(tabs);
-            if self.tab == RunTab::Preview {
-                if let Some(run_id) = row.run_id {
-                    if self.preview.as_ref().is_none_or(|(id, _)| *id != run_id) {
-                        self.clear_preview(cx);
-                        self.preview = Some((
-                            run_id,
-                            cx.new(|cx| run_preview::PreviewView::new(run_id, window, cx)),
-                        ));
+                .children(self.render_attention(row, cx))
+                .child(self.render_tabs(cx));
+            match self.tab {
+                RunTab::Preview => {
+                    if let Some(run_id) = row.run_id {
+                        if self.preview.as_ref().is_none_or(|(id, _)| *id != run_id) {
+                            self.clear_preview(cx);
+                            self.preview = Some((
+                                run_id,
+                                cx.new(|cx| run_preview::PreviewView::new(run_id, window, cx)),
+                            ));
+                        }
+                        if let Some((_, preview)) = &self.preview {
+                            main = main.child(preview.clone());
+                        }
                     }
-                    if let Some((_, preview)) = &self.preview {
-                        main = main.child(preview.clone());
+                },
+                RunTab::Checks => {
+                    if let Some(run_id) = row.run_id {
+                        if self.checks.as_ref().is_none_or(|(id, _)| *id != run_id) {
+                            self.checks = Some((
+                                run_id,
+                                cx.new(|cx| run_checks::ChecksView::new(run_id, window, cx)),
+                            ));
+                        }
+                        if let Some((_, checks)) = &self.checks {
+                            main = main.child(checks.clone());
+                        }
                     }
-                }
-            } else if self.tab == RunTab::Checks {
-                if let Some(run_id) = row.run_id {
-                    if self.checks.as_ref().is_none_or(|(id, _)| *id != run_id) {
-                        self.checks = Some((
-                            run_id,
-                            cx.new(|cx| run_checks::ChecksView::new(run_id, window, cx)),
-                        ));
+                },
+                RunTab::Changes => {
+                    if let Some(run_id) = row.run_id {
+                        if self.changes.as_ref().is_none_or(|(id, _)| *id != run_id) {
+                            self.changes = Some((
+                                run_id,
+                                cx.new(|cx| run_changes::ChangesView::new(run_id, window, cx)),
+                            ));
+                        }
+                        if let Some((_, changes)) = &self.changes {
+                            main = main.child(changes.clone());
+                        }
                     }
-                    if let Some((_, checks)) = &self.checks {
-                        main = main.child(checks.clone());
+                },
+                RunTab::Log => {
+                    main = main
+                        .child(self.render_pipeline(row))
+                        .child(self.render_event_log(row, cx));
+                },
+                RunTab::Overview => {
+                    if let Some(runs) = self.mission_runs(row, cx) {
+                        let stale = self
+                            .mission
+                            .as_ref()
+                            .is_none_or(|panel| panel.read(cx).runs() != runs);
+                        if stale {
+                            self.mission = Some(cx.new(|cx| run_mission::MissionPanel::new(runs, cx)));
+                        }
+                        if let Some(panel) = &self.mission {
+                            let seq = row.events.clone();
+                            panel.update(cx, |panel, cx| panel.sync(&seq, cx));
+                            main = main.child(panel.clone());
+                        }
                     }
-                }
-            } else if self.tab == RunTab::Changes {
-                if let Some(run_id) = row.run_id {
-                    if self.changes.as_ref().is_none_or(|(id, _)| *id != run_id) {
-                        self.changes = Some((
-                            run_id,
-                            cx.new(|cx| run_changes::ChangesView::new(run_id, window, cx)),
-                        ));
-                    }
-                    if let Some((_, changes)) = &self.changes {
-                        main = main.child(changes.clone());
-                    }
-                }
-            } else {
-                main = main
-                    .child(self.render_pipeline(row, live))
-                    .child(self.render_event_log(row, live));
+                },
             }
         } else {
             self.clear_preview(cx);
             main = main.child(
                 div().flex_1().flex().items_center().justify_center().child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(theme::text_muted())
-                        .child("No runs yet — describe an application in Fleet to begin."),
+                    ui::empty_state(
+                        "▷",
+                        "No missions yet",
+                        "Every build shows up here with its steps, live events, changed files and checks.",
+                    )
+                    .child(
+                        Button::new("runs-describe-app")
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("Describe an app")
+                            .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(RunsEvent::DescribeApp))),
+                    ),
                 ),
             );
         }
@@ -1507,6 +1490,7 @@ impl Render for RunsScreen {
         div()
             .size_full()
             .v_flex()
+            .bg(theme::background())
             .child(
                 // Plain .flex() row — gpui-component's h_flex() would
                 // items_center the panes instead of stretching them to
@@ -1515,10 +1499,10 @@ impl Render for RunsScreen {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.render_rail(&rows, sel, live, cx))
+                    .when(!rows.is_empty(), |el| el.child(self.render_rail(&rows, sel, live, cx)))
                     .child(main),
             )
-            .child(self.render_steer_bar(window, cx))
+            .when(steerable, |el| el.child(self.render_steer_bar(window, cx)))
     }
 }
 

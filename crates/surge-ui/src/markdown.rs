@@ -48,6 +48,7 @@ struct InlineSpan {
     italic: bool,
     strikethrough: bool,
     code: bool,
+    link: bool,
 }
 
 #[derive(Clone)]
@@ -102,6 +103,10 @@ impl MarkdownRenderer {
             .any(|f| matches!(f, FormatTag::Italic))
     }
 
+    fn is_link(&self) -> bool {
+        self.format_stack.iter().any(|f| matches!(f, FormatTag::Link(_)))
+    }
+
     fn is_strikethrough(&self) -> bool {
         self.format_stack
             .iter()
@@ -127,6 +132,7 @@ impl MarkdownRenderer {
             italic: self.is_italic(),
             strikethrough: self.is_strikethrough(),
             code: false,
+            link: self.is_link(),
         });
     }
 
@@ -136,32 +142,54 @@ impl MarkdownRenderer {
         }
 
         let spans: Vec<_> = std::mem::take(&mut self.inline_buf);
-        let mut line = div().w_full().min_w_0().flex().flex_wrap().gap(px(0.0));
-
+        // One text run per paragraph, styled by range, so a paragraph wraps
+        // as a whole. (Separate boxes per span wrapped each span on its own
+        // and pushed the next span — inline code, bold — onto a new line.)
+        let mut text = String::new();
+        let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
         for span in spans {
-            let mut el = div().min_w_0().max_w_full().child(span.text);
-
+            let start = text.len();
+            text.push_str(&span.text);
+            let range = start..text.len();
+            let mut style = HighlightStyle::default();
+            let mut styled = false;
             if span.bold {
-                el = el.font_weight(FontWeight::BOLD);
+                style.font_weight = Some(FontWeight::BOLD);
+                styled = true;
             }
             if span.italic {
-                // italic not directly supported in gpui Div, skip
+                style.font_style = Some(FontStyle::Italic);
+                styled = true;
             }
             if span.strikethrough {
-                // strikethrough not directly supported in gpui Div, skip
+                style.strikethrough = Some(StrikethroughStyle {
+                    thickness: px(1.0),
+                    color: None,
+                });
+                styled = true;
+            }
+            if span.link {
+                style.color = Some(theme::accent());
+                style.underline = Some(UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(theme::accent().opacity(0.5)),
+                    wavy: false,
+                });
+                styled = true;
             }
             if span.code {
-                el = el
-                    .font_family("Consolas")
-                    .bg(theme::sidebar_bg())
-                    .rounded(px(3.0))
-                    .px(px(4.0))
-                    .py(px(1.0))
-                    .text_color(theme::warning());
+                style.color = Some(theme::warning());
+                style.background_color = Some(theme::sidebar_bg());
+                styled = true;
             }
-
-            line = line.child(el);
+            if styled && !range.is_empty() {
+                highlights.push((range, style));
+            }
         }
+        let line = div()
+            .w_full()
+            .min_w_0()
+            .child(StyledText::new(text).with_highlights(highlights));
 
         Some(if let Some(marker) = self.list_marker.take() {
             div()
@@ -214,6 +242,7 @@ impl MarkdownRenderer {
                     italic: false,
                     strikethrough: false,
                     code: true,
+                    link: false,
                 });
             },
             Event::SoftBreak => self.push_text(" "),
@@ -399,7 +428,7 @@ impl MarkdownRenderer {
                         div()
                             .px(px(12.0))
                             .py(px(8.0))
-                            .font_family("Consolas")
+                            .font_family(crate::ui::MONO)
                             .text_sm()
                             .text_color(hsla(0.0, 0.0, 0.85, 1.0))
                             .child(content),

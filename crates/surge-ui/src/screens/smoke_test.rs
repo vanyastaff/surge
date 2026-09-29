@@ -36,9 +36,9 @@ use super::worktrees::WorktreesScreen;
 fn init_components(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+        crate::theme::init();
+        crate::theme::sync_component_theme(cx);
     });
-    crate::theme::init();
 }
 
 /// The first-run state: no project loaded, every collection empty.
@@ -296,7 +296,8 @@ fn flow_screen_renders() {
 fn memory_screen_renders() {
     let mut cx = TestAppContext::single();
     init_components(&mut cx);
-    render_screen(&mut cx, |_, cx| MemoryScreen::new(cx));
+    let state = cx.new(|_| empty_app_state());
+    render_screen(&mut cx, |_, cx| MemoryScreen::new(state, cx));
 }
 
 #[test]

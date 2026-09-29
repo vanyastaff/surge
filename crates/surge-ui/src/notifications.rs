@@ -45,6 +45,14 @@ impl SurgeNotification {
         .autohide(false)
     }
 
+    pub fn project_missing(path: &str) -> Notification {
+        Notification::error(SharedString::from(format!(
+            "{path} no longer exists. Remove it from recent projects or restore the folder."
+        )))
+        .title("Project folder not found")
+        .autohide(false)
+    }
+
     pub fn review_needed(task_name: &str) -> Notification {
         Notification::warning(SharedString::from(format!("{task_name} needs your review")))
             .title("Review Required")

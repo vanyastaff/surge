@@ -1,30 +1,29 @@
-//! Agents — the crew: who can fly, what they may touch, how they're
-//! doing.
+//! Agents — the coding agents Surge can hand work to.
 //!
-//! Everything here is real: crew cards come from PATH detection
-//! ([`AppState::installed_agents`]), status pills from the
-//! [`surge_acp::HealthTracker`], config from the registry entry, and —
-//! the piece no competitor surfaces — the **sandbox delegation
-//! matrix** ([`surge_core::sandbox_matrix::default_matrix`]) rendered
-//! per runtime, so the operator can see exactly which sandbox modes
-//! are verified for this agent and with what launch flags. Permissions
-//! made legible, not buried in docs.
-//!
-//! "Add agent" opens the Agent Hub catalog (registry with install
-//! instructions). When nothing is installed the screen says so — agent
-//! detection always runs, so there is no sample mode here.
+//! For each installed agent: can it work right now (its API key / login
+//! resolves, no usage limit on record — the engine's own pre-launch check),
+//! what it did for this project (sessions, tokens, reported cost, models —
+//! folded from the run logs by [`crate::agent_usage`]), what it is allowed
+//! to touch (the sandbox delegation matrix per mode), and how it is set up.
+//! "Make default" writes `surge.toml`; "Add agent" opens the catalog.
 
-use gpui_kit::component::StyledExt;
+use std::collections::HashMap;
+
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use surge_acp::{DetectedAgent, HealthStatus};
+use surge_acp::DetectedAgent;
+use surge_core::sandbox::SandboxMode;
 use surge_core::sandbox_matrix::{RuntimeSandboxMatrix, default_matrix};
 
+use crate::agent_usage::{Readiness, Usage};
 use crate::app_state::AppState;
-use crate::theme;
+use crate::theme::{self, Semantic};
 use crate::ui;
 
-/// What the crew screen can ask the app shell to do.
+/// What the screen can ask the app shell to do.
 #[derive(Clone)]
 pub enum AgentsAction {
     /// Open the Agent Hub catalog (install more agents).
@@ -34,24 +33,6 @@ pub enum AgentsAction {
 }
 
 impl EventEmitter<AgentsAction> for AgentsScreen {}
-
-/// Agents screen — crew cards + per-agent health, config and
-/// sandbox-delegation detail.
-pub struct AgentsScreen {
-    state: Entity<AppState>,
-    /// Selected agent id; defaults to the first detected.
-    selected: Option<String>,
-    /// The static runtime × mode delegation table (surge-core).
-    matrix: RuntimeSandboxMatrix,
-}
-
-fn status_parts(status: HealthStatus) -> (&'static str, Hsla) {
-    match status {
-        HealthStatus::Healthy => ("online", theme::success()),
-        HealthStatus::Degraded => ("degraded", theme::warning()),
-        HealthStatus::Offline => ("offline", theme::error()),
-    }
-}
 
 /// Two-letter avatar from a display name ("Claude Code" → "CC").
 fn avatar_initials(name: &str) -> String {
@@ -64,401 +45,404 @@ fn avatar_initials(name: &str) -> String {
     .to_uppercase()
 }
 
+fn readiness_look(r: Option<&Readiness>) -> (&'static str, Semantic) {
+    match r {
+        Some(Readiness::Ready) => ("ready", Semantic::Verified),
+        Some(Readiness::NotConfigured(_)) => ("needs setup", Semantic::You),
+        Some(Readiness::LimitReached(_)) => ("limit reached", Semantic::Failure),
+        None => ("checking…", Semantic::External),
+    }
+}
+
+fn mode_label(mode: SandboxMode) -> (&'static str, &'static str) {
+    match mode {
+        SandboxMode::ReadOnly => ("Read only", "Reads files; cannot change anything or go online."),
+        SandboxMode::WorkspaceWrite => ("Edit the project", "Reads and writes files in the project; no shell, no network."),
+        SandboxMode::WorkspaceNetwork => ("Edit + web", "Writes project files and may fetch from the web."),
+        SandboxMode::FullAccess => ("Full access", "No restrictions — the agent's own runtime decides."),
+        _ => ("Other", ""),
+    }
+}
+
+/// Operator environment variables the agent needs and this process lacks
+/// (required `from` injections with no default).
+fn missing_env(agent: &DetectedAgent) -> Vec<String> {
+    use surge_core::config::AgentEnvValue;
+    let mut missing: Vec<String> = agent
+        .entry
+        .env
+        .values()
+        .filter_map(|value| match value {
+            AgentEnvValue::Inject { from, default: None, required: true } if std::env::var_os(from).is_none() => {
+                Some(from.clone())
+            },
+            _ => None,
+        })
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
+fn fmt_tokens(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => format!("{:.1}k", n as f64 / 1_000.0),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
+    }
+}
+
+/// Agents screen.
+pub struct AgentsScreen {
+    state: Entity<AppState>,
+    selected: Option<String>,
+    matrix: RuntimeSandboxMatrix,
+    usage: HashMap<String, Usage>,
+    readiness: HashMap<String, Readiness>,
+    loaded_for: Option<Vec<String>>,
+    note: Option<String>,
+}
+
 impl AgentsScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
-        Self {
+        cx.observe(&state, |this: &mut Self, _state, cx| {
+            this.reload_if_changed(cx);
+            cx.notify();
+        })
+        .detach();
+        let mut this = Self {
             state,
             selected: None,
             matrix: default_matrix(),
-        }
-    }
-
-    fn selected_agent<'a>(&self, agents: &'a [DetectedAgent]) -> Option<&'a DetectedAgent> {
-        match &self.selected {
-            Some(id) => agents
-                .iter()
-                .find(|a| &a.entry.id == id)
-                .or_else(|| agents.first()),
-            None => agents.first(),
-        }
-    }
-
-    // ── crew cards ──────────────────────────────────────────────────
-
-    fn render_crew_card(
-        &self,
-        agent: &DetectedAgent,
-        is_selected: bool,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let state = self.state.read(cx);
-        let health = state.agent_health(&agent.entry.id);
-        let (status_label, status_color) = health
-            .as_ref()
-            .map(|h| status_parts(h.status()))
-            .unwrap_or(("unknown", theme::text_muted()));
-        let requests = health.as_ref().map(|h| h.total_requests).unwrap_or(0);
-        let err_rate = health.as_ref().map(|h| h.error_rate()).unwrap_or(0.0);
-
-        let id = agent.entry.id.clone();
-        let version = agent
-            .detected_version
-            .clone()
-            .unwrap_or_else(|| agent.entry.version.clone());
-
-        let traffic = if requests == 0 {
-            "no traffic this session".to_string()
-        } else {
-            format!("{requests} requests · {err_rate:.0}% errors")
+            usage: HashMap::new(),
+            readiness: HashMap::new(),
+            loaded_for: None,
+            note: None,
         };
+        this.reload_if_changed(cx);
+        this
+    }
 
+    fn reload_if_changed(&mut self, cx: &mut Context<Self>) {
+        let (key, runs, agents) = {
+            let state = self.state.read(cx);
+            let runs = state.project_runs();
+            let mut ids: Vec<surge_core::RunId> = runs.iter().map(|r| r.run_id).collect();
+            for op in state.bootstrap_operations.values() {
+                if ids.contains(&op.implementation_run) && !ids.contains(&op.planning_run) {
+                    ids.push(op.planning_run);
+                }
+            }
+            let mut key: Vec<String> = runs.iter().map(|r| format!("{}:{:?}", r.run_id, r.status)).collect();
+            key.extend(state.installed_agents.iter().map(|a| a.entry.id.clone()));
+            let agents: Vec<_> = state
+                .installed_agents
+                .iter()
+                .map(|a| (a.entry.id.clone(), a.entry.env.clone()))
+                .collect();
+            (key, ids, agents)
+        };
+        if self.loaded_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.loaded_for = Some(key);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (usage, readiness) = crate::agent_usage::load(runs, agents).await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.usage = usage;
+                    screen.readiness = readiness;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn default_agent(&self, cx: &Context<Self>) -> Option<String> {
+        self.state.read(cx).config.as_ref().map(|c| c.default_agent.clone())
+    }
+
+    fn make_default(&mut self, agent: &DetectedAgent, cx: &mut Context<Self>) {
+        let entry = agent.entry.clone();
+        let result = self.state.update(cx, |state, cx| {
+            let mut config = state.config.clone().unwrap_or_default();
+            config.default_agent = entry.id.clone();
+            config
+                .agents
+                .entry(entry.id.clone())
+                .or_insert_with(|| entry.to_agent_config());
+            let result = state.update_config(config);
+            cx.notify();
+            result
+        });
+        self.note = Some(match result {
+            Ok(()) => format!("{} is now the default for new missions.", entry.display_name),
+            Err(error) => format!("Could not save surge.toml: {error}"),
+        });
+        tracing::info!(agent = %entry.id, ok = self.note.as_deref().is_some_and(|n| !n.starts_with("Could")), "default agent changed from the UI");
+        cx.notify();
+    }
+
+    fn render_row(&self, agent: &DetectedAgent, selected: bool, is_default: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let id = agent.entry.id.clone();
+        let (label, role) = readiness_look(self.readiness.get(&agent.entry.id));
+        let color = role.color();
+        let usage = self.usage.get(&agent.entry.id);
+        let summary = match usage {
+            Some(u) if u.sessions > 0 => match u.cost_usd {
+                Some(cost) => format!("{} sessions · ${cost:.2}", u.sessions),
+                None => format!("{} sessions", u.sessions),
+            },
+            _ => "not used in this project yet".into(),
+        };
         div()
             .id(SharedString::from(format!("crew-{}", agent.entry.id)))
             .role(Role::Button)
             .aria_label(format!("Select agent {}", agent.entry.id))
-            .flex_1()
-            .min_w(px(220.0))
-            .max_w(px(320.0))
-            .v_flex()
-            .gap(px(9.0))
-            .p(px(13.0))
-            .rounded_lg()
-            .bg(theme::panel_raised())
+            .h_flex()
+            .gap(px(10.0))
+            .items_center()
+            .px(px(10.0))
+            .py(px(9.0))
+            .rounded(px(ui::R_CONTROL + 2.0))
             .border_1()
-            .border_color(if is_selected {
-                theme::accent().opacity(0.5)
-            } else {
-                theme::hairline()
-            })
+            .border_color(if selected { theme::hairline_strong() } else { transparent_black() })
+            .when(selected, |el| el.bg(theme::surface()))
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.4)))
+            .hover(|s: StyleRefinement| s.bg(theme::surface()))
             .on_click(cx.listener(move |this, _e, _w, cx| {
                 this.selected = Some(id.clone());
+                this.note = None;
                 cx.notify();
             }))
             .child(
                 div()
-                    .h_flex()
-                    .gap(px(10.0))
-                    .items_center()
-                    .child(
-                        div()
-                            .w(px(30.0))
-                            .h(px(30.0))
-                            .rounded_md()
-                            .bg(theme::accent().opacity(0.14))
-                            .border_1()
-                            .border_color(theme::accent().opacity(0.35))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::accent())
-                            .child(avatar_initials(&agent.entry.display_name)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .v_flex()
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::text_primary())
-                                    .child(agent.entry.display_name.clone()),
-                            )
-                            .child(ui::meta(version)),
-                    )
-                    .child(ui::pill(
-                        status_label,
-                        status_color,
-                        status_color.opacity(0.13),
-                    )),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme::text_muted())
-                    .overflow_hidden()
-                    .child(traffic),
-            )
-    }
-
-    // ── detail: left column ─────────────────────────────────────────
-
-    fn render_detail_header(&self, agent: &DetectedAgent, cx: &mut Context<Self>) -> Div {
-        let state = self.state.read(cx);
-        let (status_label, status_color) = state
-            .agent_health(&agent.entry.id)
-            .map(|h| status_parts(h.status()))
-            .unwrap_or(("unknown", theme::text_muted()));
-
-        let id_for_chat = agent.entry.id.clone();
-
-        div()
-            .h_flex()
-            .gap(px(13.0))
-            .items_center()
-            .child(
-                div()
-                    .w(px(40.0))
-                    .h(px(40.0))
-                    .rounded_lg()
-                    .bg(theme::accent().opacity(0.14))
+                    .size(px(30.0))
+                    .flex_none()
+                    .rounded(px(ui::R_CONTROL + 2.0))
+                    .bg(theme::tint(theme::accent()))
                     .border_1()
-                    .border_color(theme::accent().opacity(0.35))
+                    .border_color(theme::stroke(theme::accent()).opacity(0.6))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(14.0))
+                    .text_size(px(11.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::accent())
                     .child(avatar_initials(&agent.entry.display_name)),
             )
             .child(
                 div()
+                    .flex_1()
+                    .min_w(px(0.0))
                     .v_flex()
                     .gap(px(2.0))
                     .child(
                         div()
                             .h_flex()
-                            .gap(px(9.0))
+                            .gap(px(6.0))
                             .items_center()
                             .child(
                                 div()
-                                    .text_size(px(18.0))
-                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::text_primary())
+                                    .truncate()
                                     .child(agent.entry.display_name.clone()),
                             )
-                            .child(ui::pill(
-                                status_label,
-                                status_color,
-                                status_color.opacity(0.13),
-                            )),
+                            .when(is_default, |el| el.child(ui::role_badge("default", Semantic::Agent))),
                     )
-                    .child(ui::meta(agent.entry.description.clone())),
+                    .child(div().text_size(px(10.5)).text_color(theme::text_dim()).truncate().child(summary)),
             )
-            .child(div().flex_1())
             .child(
                 div()
-                    .id("agent-open-terminal")
-                    .role(Role::Button)
-                    .aria_label("Open agent terminal")
+                    .flex_none()
                     .h_flex()
-                    .gap(px(7.0))
+                    .gap(px(5.0))
                     .items_center()
-                    .h(px(31.0))
-                    .px(px(13.0))
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::hairline_strong())
-                    .text_color(theme::text_primary().opacity(0.85))
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
-                    .on_click(cx.listener(move |_this, _e, _w, cx| {
-                        cx.emit(AgentsAction::OpenTerminal(id_for_chat.clone()));
-                    }))
-                    .child("Open terminal"),
+                    .text_size(px(10.5))
+                    .text_color(color)
+                    .child(ui::status_dot(color))
+                    .child(label),
             )
     }
 
-    fn render_capabilities(&self, agent: &DetectedAgent) -> Div {
-        let mut row = div().h_flex().gap(px(7.0)).flex_wrap();
-        for cap in &agent.entry.capabilities {
-            row = row.child(
-                div()
-                    .px(px(9.0))
-                    .py(px(3.0))
-                    .rounded_md()
-                    .bg(theme::panel_raised())
-                    .border_1()
-                    .border_color(theme::hairline_strong())
-                    .text_size(px(9.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text_primary().opacity(0.8))
-                    .child(format!("{cap}")),
-            );
-        }
-        for tag in agent.entry.tags.iter().take(4) {
-            row = row.child(
-                div()
-                    .px(px(9.0))
-                    .py(px(3.0))
-                    .rounded_md()
-                    .text_size(px(9.5))
-                    .text_color(theme::text_muted())
-                    .child(format!("#{tag}")),
-            );
-        }
-
-        ui::panel()
-            .v_flex()
-            .gap(px(10.0))
-            .p(px(14.0))
-            .child(ui::section_label("CAPABILITIES"))
-            .child(row)
+    fn render_readiness(&self, agent: &DetectedAgent) -> Option<Div> {
+        let (headline, detail, fix, role) = match self.readiness.get(&agent.entry.id)? {
+            Readiness::Ready => return None,
+            Readiness::NotConfigured(why) => {
+                let missing = missing_env(agent);
+                let fix = if missing.is_empty() {
+                    "Sign in with the agent's own CLI, then come back.".to_string()
+                } else {
+                    format!(
+                        "Set {} in your environment, then restart Surge.",
+                        missing.join(", ")
+                    )
+                };
+                ("Needs setup before it can work", why.clone(), fix, Semantic::You)
+            },
+            Readiness::LimitReached(why) => (
+                "Usage limit reached",
+                why.clone(),
+                "Missions that need this agent wait until the limit resets, or pick another agent for those steps in Flow."
+                    .to_string(),
+                Semantic::Failure,
+            ),
+        };
+        let color = role.color();
+        Some(
+            ui::node_card(color)
+                .h_flex()
+                .gap(px(12.0))
+                .items_start()
+                .px(px(14.0))
+                .py(px(11.0))
+                .child(Icon::new(IconName::TriangleAlert).size(px(15.0)).text_color(color))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .v_flex()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::text_primary())
+                                .child(headline),
+                        )
+                        .child(div().text_size(px(11.5)).text_color(theme::text_primary()).child(fix))
+                        .child(div().text_size(px(10.5)).text_color(theme::text_muted()).child(detail)),
+                ),
+        )
     }
 
-    fn render_metrics(&self, agent: &DetectedAgent, cx: &Context<Self>) -> Div {
-        let state = self.state.read(cx);
-        let health = state.agent_health(&agent.entry.id);
-
-        let (requests, failures, err_rate, p50, p99, uptime, rate_limited) = health
-            .map(|h| {
-                (
-                    h.total_requests,
-                    h.total_failures,
-                    h.error_rate(),
-                    h.latency_p50_ms(),
-                    h.latency_p99_ms(),
-                    h.uptime().as_secs(),
-                    h.rate_limited,
-                )
-            })
-            .unwrap_or((0, 0, 0.0, 0, 0, 0, false));
-
-        let uptime_str = if uptime < 3600 {
-            format!("{}m", uptime / 60)
-        } else {
-            format!("{}h {}m", uptime / 3600, (uptime % 3600) / 60)
-        };
-
-        let stat = |label: &'static str, value: String, sub: String, color: Hsla| {
+    fn render_usage(&self, agent: &DetectedAgent) -> Div {
+        let usage = self.usage.get(&agent.entry.id).cloned().unwrap_or_default();
+        let tile = |label: &'static str, value: String, note: String| {
             ui::panel()
                 .flex_1()
+                .min_w(px(0.0))
                 .v_flex()
-                .gap(px(5.0))
-                .p(px(13.0))
+                .gap(px(4.0))
+                .px(px(14.0))
+                .py(px(11.0))
                 .child(ui::section_label(label))
                 .child(
                     div()
-                        .text_size(px(15.0))
+                        .text_size(px(18.0))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(color)
+                        .text_color(theme::text_primary())
                         .child(value),
                 )
-                .child(
-                    div()
-                        .text_size(px(9.0))
-                        .text_color(theme::text_muted())
-                        .child(sub),
-                )
+                .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child(note))
         };
-
+        let last = usage
+            .last_used_ms
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map(|t| t.with_timezone(&chrono::Local).format("last %b %d %H:%M").to_string())
+            .unwrap_or_else(|| "never".into());
         div()
-            .h_flex()
-            .gap(px(10.0))
-            .child(stat(
-                "REQUESTS",
-                requests.to_string(),
-                format!("{failures} failed"),
-                theme::text_primary(),
-            ))
-            .child(stat(
-                "ERROR RATE",
-                format!("{err_rate:.0}%"),
-                if rate_limited {
-                    "rate-limited".to_string()
-                } else {
-                    "healthy threshold <50%".to_string()
-                },
-                if err_rate >= 50.0 || rate_limited {
-                    theme::error()
-                } else {
-                    theme::success()
-                },
-            ))
-            .child(stat(
-                "LATENCY",
-                if p50 == 0 {
-                    "—".to_string()
-                } else {
-                    format!("{p50}ms")
-                },
-                format!("p99 {p99}ms"),
-                theme::text_primary(),
-            ))
-            .child(stat(
-                "TRACKED",
-                uptime_str,
-                "since registration".to_string(),
-                theme::text_primary(),
-            ))
+            .v_flex()
+            .gap(px(8.0))
+            .child(ui::section_label("In this project"))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_stretch()
+                    .gap(px(10.0))
+                    .child(tile("Sessions", usage.sessions.to_string(), last))
+                    .child(if usage.tokens_in + usage.tokens_out == 0 {
+                        tile(
+                            "Tokens",
+                            "—".into(),
+                            if usage.sessions > 0 {
+                                "not reported by this agent".into()
+                            } else {
+                                "no sessions yet".into()
+                            },
+                        )
+                    } else {
+                        tile(
+                            "Tokens",
+                            fmt_tokens(usage.tokens_in + usage.tokens_out),
+                            format!("{} in · {} out", fmt_tokens(usage.tokens_in), fmt_tokens(usage.tokens_out)),
+                        )
+                    })
+                    .child(tile(
+                        "Cost",
+                        usage.cost_usd.map_or_else(|| "—".into(), |c| format!("${c:.2}")),
+                        if usage.cost_usd.is_some() {
+                            "as reported by the agent".into()
+                        } else if usage.sessions > 0 {
+                            "not reported by this agent".into()
+                        } else {
+                            "no sessions yet".into()
+                        },
+                    )),
+            )
+            .when(!usage.models.is_empty(), |el| {
+                el.child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child("Models used"))
+                        .children(usage.models.iter().map(|m| ui::pill(m.clone(), theme::text_muted(), theme::panel_deep()))),
+                )
+            })
     }
 
-    /// The differentiator pane: this runtime's rows from the sandbox
-    /// delegation matrix — which modes are verified, with what flags.
-    fn render_sandbox_matrix(&self, agent: &DetectedAgent) -> Div {
-        let mut body = div().v_flex().gap(px(6.0));
-
+    fn render_permissions(&self, agent: &DetectedAgent, cx: &Context<Self>) -> Div {
+        let project_mode = self.state.read(cx).config.as_ref().map(|c| c.init.sandbox_default);
+        let mut body = div().v_flex();
         match agent.entry.runtime {
             Some(runtime) => {
-                let rows: Vec<_> = self
-                    .matrix
-                    .rows()
-                    .iter()
-                    .filter(|r| r.runtime == runtime)
-                    .collect();
+                let rows: Vec<_> = self.matrix.rows().iter().filter(|r| r.runtime == runtime).collect();
                 if rows.is_empty() {
-                    body = body.child(ui::meta("no delegation rows declared for this runtime yet"));
+                    body = body.child(ui::meta("No permission modes are declared for this agent yet."));
                 }
                 for row in rows {
-                    let mode = format!("{:?}", row.mode);
-                    let flags = if row.flags.is_empty() {
-                        "—".to_string()
-                    } else {
-                        row.flags.join(" ")
-                    };
-                    let (badge, badge_color) = if row.verified {
-                        ("verified", theme::success())
-                    } else {
-                        ("unverified", theme::warning())
-                    };
-
+                    let (name, plain) = mode_label(row.mode);
+                    let is_project = project_mode == Some(row.mode);
                     body = body.child(
                         div()
                             .v_flex()
-                            .gap(px(3.0))
-                            .py(px(7.0))
+                            .gap(px(4.0))
+                            .py(px(9.0))
                             .border_b_1()
                             .border_color(theme::hairline().opacity(0.6))
                             .child(
                                 div()
                                     .h_flex()
-                                    .gap(px(9.0))
+                                    .gap(px(8.0))
                                     .items_center()
                                     .child(
                                         div()
-                                            .w(px(130.0))
-                                            .flex_shrink_0()
-                                            .text_size(px(11.0))
+                                            .text_size(px(12.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
-                                            .child(mode),
+                                            .child(name),
                                     )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .overflow_hidden()
-                                            .text_size(px(10.5))
-                                            .text_color(theme::text_muted())
-                                            .child(flags),
-                                    )
-                                    .child(ui::pill(badge, badge_color, badge_color.opacity(0.13))),
+                                    .when(is_project, |el| el.child(ui::role_badge("this project", Semantic::Agent)))
+                                    .child(div().flex_1())
+                                    .child(if row.verified {
+                                        ui::role_badge("verified", Semantic::Verified)
+                                    } else {
+                                        ui::role_badge("unverified", Semantic::You)
+                                    }),
                             )
-                            .when(!row.note.is_empty(), |el| {
+                            .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(plain))
+                            .when(!row.flags.is_empty(), |el| {
                                 el.child(
                                     div()
-                                        .text_size(px(9.5))
-                                        .text_color(theme::text_muted().opacity(0.8))
-                                        .child(row.note.clone()),
+                                        .text_size(px(10.0))
+                                        .text_color(theme::text_dim())
+                                        .child(row.flags.join(" ")),
                                 )
                             }),
                     );
@@ -466,265 +450,244 @@ impl AgentsScreen {
             },
             None => {
                 body = body.child(ui::meta(
-                    "runtime unmapped — no sandbox delegation declared (see docs/sandbox-matrix.md)",
+                    "Surge does not know how to restrict this agent — it runs with the agent's own settings.",
                 ));
             },
         }
-
         ui::panel()
             .v_flex()
-            .gap(px(10.0))
+            .gap(px(4.0))
             .p(px(14.0))
-            .child(
-                div()
-                    .h_flex()
-                    .gap(px(8.0))
-                    .items_center()
-                    .child(ui::section_label("SANDBOX DELEGATION"))
-                    .child(ui::meta("what surge hands this runtime, per mode"))
-                    .child(div().flex_1())
-                    .child(ui::meta("surge doctor matrix")),
-            )
+            .child(ui::section_label("What it may touch"))
             .child(body)
     }
 
-    // ── detail: right rail ──────────────────────────────────────────
-
-    fn render_config(&self, agent: &DetectedAgent) -> Div {
+    fn render_setup(&self, agent: &DetectedAgent) -> Div {
         let entry = &agent.entry;
-        let transport = format!("{:?}", entry.transport);
-        let command = agent
-            .command_path
-            .clone()
-            .unwrap_or_else(|| entry.command.clone());
-        let args = if entry.default_args.is_empty() {
-            "—".to_string()
-        } else {
-            entry.default_args.join(" ")
-        };
-        let runtime = entry
-            .runtime
-            .map(|r| format!("{r:?}"))
-            .unwrap_or_else(|| "unmapped".to_string());
-
+        let command = agent.command_path.clone().unwrap_or_else(|| entry.command.clone());
         let kv = |k: &'static str, v: String| {
             div()
                 .h_flex()
                 .gap(px(10.0))
-                .items_center()
-                .pb(px(8.0))
-                .border_b_1()
-                .border_color(theme::hairline().opacity(0.6))
-                .child(
-                    div()
-                        .w(px(80.0))
-                        .flex_shrink_0()
-                        .text_size(px(10.0))
-                        .text_color(theme::text_muted())
-                        .child(k),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_size(px(10.5))
-                        .text_color(theme::text_primary().opacity(0.88))
-                        .child(v),
-                )
+                .items_start()
+                .py(px(5.0))
+                .child(div().w(px(80.0)).flex_shrink_0().text_size(px(10.5)).text_color(theme::text_dim()).child(k))
+                .child(div().flex_1().min_w_0().text_size(px(11.0)).text_color(theme::text_primary()).child(v))
         };
-
         ui::panel()
             .v_flex()
-            .gap(px(9.0))
             .p(px(14.0))
-            .child(ui::section_label("CONFIG"))
+            .child(ui::section_label("Setup"))
             .child(kv("id", entry.id.clone()))
             .child(kv("command", command))
-            .child(kv("args", args))
-            .child(kv("transport", transport))
-            .child(kv("runtime", runtime))
+            .when(!entry.default_args.is_empty(), |el| el.child(kv("args", entry.default_args.join(" "))))
+            .child(kv("transport", format!("{:?}", entry.transport)))
+            .when(!entry.env.is_empty(), |el| {
+                el.child(kv("needs", entry.env.keys().cloned().collect::<Vec<_>>().join(", ")))
+            })
+            .when(!entry.models.is_empty(), |el| el.child(kv("models", entry.models.join(", "))))
             .child(kv("license", entry.license.clone()))
-            .when(!entry.models.is_empty(), |el| {
-                el.child(kv("models", entry.models.join(", ")))
-            })
-            .when(entry.website.is_some(), |el| {
-                el.child(kv("website", entry.website.clone().unwrap_or_default()))
-            })
+            .when_some(entry.website.clone(), |el, w| el.child(kv("website", w)))
     }
 
-    fn render_about(&self, agent: &DetectedAgent) -> Div {
-        let text = if agent.entry.long_description.is_empty() {
-            agent.entry.description.clone()
-        } else {
-            agent.entry.long_description.clone()
-        };
-        ui::panel()
+    fn render_detail(&self, agent: &DetectedAgent, is_default: bool, cx: &mut Context<Self>) -> Div {
+        let (label, role) = readiness_look(self.readiness.get(&agent.entry.id));
+        let color = role.color();
+        let id_for_chat = agent.entry.id.clone();
+        let agent_for_default = agent.clone();
+        let version = agent.detected_version.clone().unwrap_or_else(|| agent.entry.version.clone());
+        div()
+            .flex_1()
+            .min_w(px(0.0))
             .v_flex()
-            .gap(px(9.0))
-            .p(px(14.0))
-            .child(ui::section_label("ABOUT"))
+            .gap(px(16.0))
             .child(
                 div()
-                    .text_size(px(11.0))
-                    .line_height(px(17.0))
-                    .text_color(theme::text_muted())
-                    .child(text),
+                    .h_flex()
+                    .gap(px(14.0))
+                    .items_start()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .v_flex()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap(px(8.0))
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_size(px(18.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme::text_primary())
+                                            .child(agent.entry.display_name.clone()),
+                                    )
+                                    .child(ui::pill(label, color, theme::tint(color)))
+                                    .when(is_default, |el| el.child(ui::role_badge("default", Semantic::Agent))),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(theme::text_muted())
+                                    .child(format!("{} · {version}", agent.entry.description)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(6.0))
+                            .flex_none()
+                            .when(!is_default, |el| {
+                                el.child(
+                                    Button::new("agent-make-default")
+                                        .outline()
+                                        .small()
+                                        .icon(IconName::Check)
+                                        .label("Make default")
+                                        .tooltip("New missions use this agent unless a step says otherwise")
+                                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                                            this.make_default(&agent_for_default, cx)
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("agent-open-terminal")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::SquareTerminal)
+                                    .label("Chat")
+                                    .on_click(cx.listener(move |_this, _e, _w, cx| {
+                                        cx.emit(AgentsAction::OpenTerminal(id_for_chat.clone()));
+                                    })),
+                            ),
+                    ),
             )
-    }
-
-    fn render_empty(&self, cx: &mut Context<Self>) -> Div {
-        div().flex_1().flex().items_center().justify_center().child(
-            div()
-                .v_flex()
-                .gap(px(12.0))
-                .items_center()
-                .max_w(px(420.0))
-                .child(
-                    div()
-                        .text_size(px(14.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme::text_primary())
-                        .child("No agents detected on PATH"),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .line_height(px(18.0))
-                        .text_color(theme::text_muted())
-                        .text_center()
-                        .child(
-                            "Surge orchestrates any ACP-speaking coding agent. \
-                                 Install one (Claude Code, Codex CLI, Gemini CLI, …) \
-                                 and it appears here as crew.",
-                        ),
-                )
-                .child(
-                    div()
-                        .id("agents-open-catalog")
-                        .role(Role::Button)
-                        .aria_label("Open agent catalog")
-                        .h(px(34.0))
-                        .px(px(16.0))
-                        .rounded_lg()
-                        .bg(theme::accent())
-                        .flex()
-                        .items_center()
-                        .text_color(theme::on_accent())
-                        .text_size(px(12.0))
-                        .font_weight(FontWeight::BOLD)
-                        .cursor_pointer()
-                        .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
-                        .on_click(cx.listener(|_this, _e, _w, cx| {
-                            cx.emit(AgentsAction::OpenCatalog);
-                        }))
-                        .child("Browse the catalog"),
-                ),
-        )
+            .children(self.note.clone().map(|n| {
+                div().text_size(px(11.5)).text_color(theme::text_muted()).child(n)
+            }))
+            .children(self.render_readiness(agent))
+            .child(self.render_usage(agent))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(14.0))
+                    .items_start()
+                    .child(div().flex_1().min_w(px(0.0)).child(self.render_permissions(agent, cx)))
+                    .child(div().w(px(320.0)).flex_none().child(self.render_setup(agent))),
+            )
     }
 }
 
 impl Render for AgentsScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agents: Vec<DetectedAgent> = self.state.read(cx).installed_agents.clone();
-        let catalog_size = self.state.read(cx).registry.len();
-
-        if agents.is_empty() {
-            return div()
-                .size_full()
-                .v_flex()
-                .bg(theme::panel_deep())
-                .child(self.render_empty(cx))
-                .into_any_element();
-        }
-
-        let selected = self.selected_agent(&agents).cloned();
-        let selected_id = selected.as_ref().map(|a| a.entry.id.clone());
-
-        let crew: Vec<Stateful<Div>> = agents
+        let default = self.default_agent(cx);
+        let ready = agents
             .iter()
-            .map(|a| self.render_crew_card(a, selected_id.as_deref() == Some(&a.entry.id), cx))
-            .collect();
-
-        let header = div()
-            .h_flex()
-            .gap(px(12.0))
-            .items_center()
-            .child(
-                div()
-                    .text_size(px(15.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::text_primary())
-                    .child("Agents"),
-            )
-            .child(ui::meta(format!(
-                "{} in crew · {} in catalog",
+            .filter(|a| matches!(self.readiness.get(&a.entry.id), Some(Readiness::Ready)))
+            .count();
+        let subtitle = (!agents.is_empty()).then(|| {
+            SharedString::from(format!(
+                "{} installed · {ready} ready to work{}",
                 agents.len(),
-                catalog_size
-            )))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .id("agents-add")
-                    .role(Role::Button)
-                    .aria_label("Add agent")
-                    .h_flex()
-                    .gap(px(7.0))
-                    .items_center()
-                    .h(px(31.0))
-                    .px(px(14.0))
-                    .rounded_lg()
-                    .bg(theme::accent())
-                    .text_color(theme::on_accent())
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::BOLD)
-                    .cursor_pointer()
-                    .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
-                    .on_click(cx.listener(|_this, _e, _w, cx| {
-                        cx.emit(AgentsAction::OpenCatalog);
-                    }))
-                    .child("+ Add agent"),
-            );
+                default
+                    .as_ref()
+                    .and_then(|d| agents.iter().find(|a| &a.entry.id == d))
+                    .map(|a| format!(" · default: {}", a.entry.display_name))
+                    .unwrap_or_default()
+            ))
+        });
+        let header = ui::page_header(
+            "Agents",
+            subtitle,
+            Button::new("agents-open-catalog")
+                .outline()
+                .small()
+                .icon(IconName::Plus)
+                .label("Add agent")
+                .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(AgentsAction::OpenCatalog))),
+        );
 
-        // Plain .flex() row so both detail panes stretch to full height.
-        let mut detail = div().flex_1().min_h_0().flex().gap(px(14.0));
-        if let Some(agent) = &selected {
-            detail = detail
+        let body: AnyElement = if agents.is_empty() {
+            ui::panel()
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .id("agents-detail-left")
-                        .overflow_y_scroll()
-                        .v_flex()
-                        .gap(px(14.0))
-                        .child(self.render_detail_header(agent, cx))
-                        .child(self.render_metrics(agent, cx))
-                        .child(self.render_sandbox_matrix(agent))
-                        .child(self.render_capabilities(agent)),
+                    ui::empty_state(
+                        "◍",
+                        "No coding agents found",
+                        "Surge hands work to coding agents that speak ACP — Claude Code, Codex, Gemini and others. Install one and it appears here.",
+                    )
+                    .child(
+                        Button::new("agents-empty-catalog")
+                            .primary()
+                            .icon(Lucide::Bot)
+                            .label("Browse the catalog")
+                            .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(AgentsAction::OpenCatalog))),
+                    ),
                 )
-                .child(
-                    div()
-                        .w(px(330.0))
-                        .flex_shrink_0()
-                        .id("agents-detail-right")
-                        .overflow_y_scroll()
-                        .v_flex()
-                        .gap(px(14.0))
-                        .child(self.render_config(agent))
-                        .child(self.render_about(agent)),
-                );
-        }
+                .into_any_element()
+        } else {
+            let selected = self
+                .selected
+                .as_ref()
+                .and_then(|id| agents.iter().find(|a| &a.entry.id == id))
+                .or_else(|| default.as_ref().and_then(|d| agents.iter().find(|a| &a.entry.id == d)))
+                .or_else(|| agents.first())
+                .cloned();
+            let selected_id = selected.as_ref().map(|a| a.entry.id.clone());
+            let rows: Vec<Stateful<Div>> = agents
+                .iter()
+                .map(|a| {
+                    self.render_row(
+                        a,
+                        selected_id.as_deref() == Some(a.entry.id.as_str()),
+                        default.as_deref() == Some(a.entry.id.as_str()),
+                        cx,
+                    )
+                })
+                .collect();
+            div()
+                .flex()
+                .gap(px(20.0))
+                .items_start()
+                .child(ui::panel().w(px(320.0)).flex_none().v_flex().gap(px(2.0)).p(px(6.0)).children(rows))
+                .children(selected.map(|a| {
+                    let is_default = default.as_deref() == Some(a.entry.id.as_str());
+                    self.render_detail(&a, is_default, cx)
+                }))
+                .into_any_element()
+        };
 
         div()
+            .id("agents-scroll")
             .size_full()
-            .v_flex()
-            .gap(px(16.0))
-            .p(px(20.0))
-            .bg(theme::panel_deep())
-            .child(header)
-            .child(div().h_flex().gap(px(12.0)).children(crew))
-            .child(detail)
-            .into_any_element()
+            .overflow_y_scroll()
+            .bg(theme::background())
+            .px(px(28.0))
+            .pt(px(22.0))
+            .pb(px(32.0))
+            .child(div().v_flex().gap(px(18.0)).child(header).child(body))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_tokens, readiness_look};
+    use crate::agent_usage::Readiness;
+    use crate::theme::Semantic;
+
+    #[test]
+    fn readiness_is_never_optimistic_before_it_is_known() {
+        assert_eq!(readiness_look(None), ("checking…", Semantic::External));
+        assert_eq!(readiness_look(Some(&Readiness::NotConfigured("x".into()))).0, "needs setup");
+        assert_eq!(readiness_look(Some(&Readiness::Ready)).0, "ready");
+    }
+
+    #[test]
+    fn token_counts_stay_readable() {
+        assert_eq!(fmt_tokens(950), "950");
+        assert_eq!(fmt_tokens(12_300), "12.3k");
+        assert_eq!(fmt_tokens(4_200_000), "4.2M");
     }
 }

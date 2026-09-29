@@ -68,25 +68,38 @@ impl RecentProjects {
         Ok(())
     }
 
-    /// Add or update a project in the list. Moves it to the top.
-    pub fn touch(&mut self, name: &str, path: &Path) {
-        // Remove if already exists.
-        self.projects.retain(|p| p.path != path);
+    /// How many unpinned projects are remembered; pinned ones never age out.
+    pub const MAX_UNPINNED: usize = 12;
 
-        let now = chrono_now();
+    /// Add or update a project in the list. Moves it to the top, keeps its
+    /// pin, and forgets the oldest unpinned entries past [`Self::MAX_UNPINNED`].
+    pub fn touch(&mut self, name: &str, path: &Path) {
+        let previous = self.projects.iter().position(|p| p.path == path);
+        let pinned = previous.is_some_and(|i| self.projects[i].pinned);
+        let active_tasks = previous.map_or(0, |i| self.projects[i].active_tasks);
+        if let Some(i) = previous {
+            self.projects.remove(i);
+        }
+
         self.projects.insert(
             0,
             RecentProject {
                 name: name.to_string(),
                 path: path.to_path_buf(),
-                last_opened: now,
-                pinned: false,
-                active_tasks: 0,
+                last_opened: chrono_now(),
+                pinned,
+                active_tasks,
             },
         );
 
-        // Keep max 20.
-        self.projects.truncate(20);
+        let mut unpinned = 0;
+        self.projects.retain(|p| {
+            if p.pinned {
+                return true;
+            }
+            unpinned += 1;
+            unpinned <= Self::MAX_UNPINNED
+        });
     }
 
     /// Toggle pin for a project.
@@ -180,6 +193,26 @@ impl ProjectScope {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn touch_keeps_pin_and_caps_only_unpinned() {
+        let mut recent = RecentProjects::default();
+        recent.touch("keep", Path::new("/p/keep"));
+        recent.toggle_pin(Path::new("/p/keep"));
+        for i in 0..(RecentProjects::MAX_UNPINNED + 5) {
+            recent.touch(&format!("p{i}"), Path::new(&format!("/p/{i}")));
+        }
+        recent.touch("keep", Path::new("/p/keep"));
+
+        let keep = recent.projects.iter().find(|p| p.path == Path::new("/p/keep"));
+        assert!(keep.is_some_and(|p| p.pinned), "re-opening must not unpin");
+        let unpinned = recent.projects.iter().filter(|p| !p.pinned).count();
+        assert_eq!(unpinned, RecentProjects::MAX_UNPINNED);
+        // The newest unpinned entries survive; the oldest aged out.
+        let last = RecentProjects::MAX_UNPINNED + 4;
+        assert!(recent.projects.iter().any(|p| p.path == Path::new(&format!("/p/{last}"))));
+        assert!(!recent.projects.iter().any(|p| p.path == Path::new("/p/0")));
+    }
     use super::*;
 
     /// Reproduces the reported defect: before this fix, [`RecentProjects`]

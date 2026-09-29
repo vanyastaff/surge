@@ -1,8 +1,8 @@
 use gpui_kit::component::Icon;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::StyledExt;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use surge_orchestrator::engine::handle::RunStatus;
 
 use crate::app_state::AppState;
 use crate::daemon_link::ConnectionState;
@@ -94,16 +94,19 @@ impl AppSidebar {
             .px(px(10.0))
             .py(px(6.0))
             .mx(px(6.0))
-            .rounded_md()
+            .rounded(px(ui::R_CONTROL))
             .cursor_pointer()
             .when(collapsed, |el| el.justify_center())
+            .when_some(screen.shortcut(), |el, sc| {
+                let text = format!("{label}  {}", ui::shortcut_label(sc));
+                el.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+            })
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(NavigateTo(screen));
             }));
 
         let base = if is_active {
-            base.bg(theme::accent().opacity(0.12))
-                .text_color(theme::accent())
+            base.bg(theme::surface()).text_color(theme::text_primary())
         } else {
             base.text_color(theme::text_muted())
                 .hover(|s: StyleRefinement| {
@@ -137,7 +140,7 @@ impl AppSidebar {
                     div()
                         .px(px(6.0))
                         .rounded_full()
-                        .bg(theme::accent())
+                        .bg(theme::warning())
                         .text_size(px(9.5))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme::on_accent())
@@ -145,134 +148,73 @@ impl AppSidebar {
                 );
             }
 
-            if let Some(sc) = screen.shortcut() {
-                // Show just the trailing digit (Ctrl+N → N) as a quiet key hint.
-                let key = sc.rsplit('+').next().unwrap_or(sc);
-                row = row.child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(theme::text_muted().opacity(0.6))
-                        .child(key.to_string()),
-                );
-            }
         }
 
         row
     }
 
-    /// Live daemon status footer — color + text derived from the real
-    /// connection state; run counts from the real run list.
-    fn render_footer(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// Footer: whether the engine is reachable (click to start it when it
+    /// is not) and the collapse toggle — one row, nothing else competes.
+    fn render_footer(&self, cx: &mut Context<Self>) -> Div {
         let state = self.state.read(cx);
         let offline = matches!(
             &state.daemon_state,
             ConnectionState::Failed(_) | ConnectionState::Disconnected
         );
         let (dot, label): (Hsla, &str) = match &state.daemon_state {
-            ConnectionState::Connected(_) => (theme::success(), "DAEMON · LIVE"),
-            ConnectionState::Connecting => (theme::warning(), "DAEMON · SYNC"),
+            ConnectionState::Connected(_) => (theme::success(), "Live"),
+            ConnectionState::Connecting => (theme::warning(), "Connecting…"),
             ConnectionState::Failed(_) | ConnectionState::Disconnected => {
-                (theme::text_muted(), "DAEMON · OFFLINE — START")
+                (theme::error(), "Offline · Start")
             },
         };
+        let collapsed = self.collapsed;
 
-        let runs = state.project_runs();
-        let total = runs.len();
-        let active = runs
-            .iter()
-            .filter(|r| matches!(r.status, RunStatus::Active))
-            .count();
-        let stats = format!("{total} runs · {active} active");
-
-        if self.collapsed {
-            return div()
-                .id("daemon-footer")
-                .role(if offline { Role::Button } else { Role::Label })
-                .aria_label(format!("{label}, {stats}"))
-                .py(px(12.0))
-                .flex()
-                .justify_center()
-                .border_t_1()
-                .border_color(theme::hairline())
-                .when(offline, |el| {
-                    el.cursor_pointer()
-                        .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(StartDaemon)))
-                })
-                .child(ui::status_dot(dot));
-        }
-
-        div()
+        let status = div()
             .id("daemon-footer")
             .role(if offline { Role::Button } else { Role::Label })
-            .aria_label(format!("{label}, {stats}"))
-            .v_flex()
+            .aria_label(format!("Engine: {label}"))
+            .h_flex()
             .gap(px(8.0))
-            .px(px(14.0))
-            .py(px(12.0))
-            .border_t_1()
-            .border_color(theme::hairline())
+            .items_center()
+            .h(px(28.0))
+            .px(px(8.0))
+            .rounded(px(ui::R_CONTROL))
+            .when(!collapsed, |el| el.flex_1())
             .when(offline, |el| {
                 el.cursor_pointer()
-                    .hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
+                    .hover(|s: StyleRefinement| s.bg(theme::surface()))
                     .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(StartDaemon)))
             })
-            .child(
-                div()
-                    .h_flex()
-                    .gap(px(8.0))
-                    .items_center()
-                    .child(ui::status_dot(dot))
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_muted())
-                            .child(label.to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme::text_muted().opacity(0.8))
-                    .child(stats),
-            )
-    }
-
-    fn render_logo(&self) -> Div {
-        let mark = div()
-            .w(px(20.0))
-            .h(px(20.0))
-            .rounded_md()
-            .bg(theme::accent())
-            .flex()
-            .items_center()
-            .justify_center()
-            .flex_shrink_0()
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(hsla(0.0, 0.0, 0.1, 1.0))
-                    .child("⚡"),
-            );
-
-        div()
-            .h_flex()
-            .gap(px(9.0))
-            .items_center()
-            .px(px(14.0))
-            .pt(px(15.0))
-            .pb(px(13.0))
-            .when(self.collapsed, |el| el.justify_center().px(px(0.0)))
-            .child(mark)
-            .when(!self.collapsed, |el| {
+            .child(if matches!(state.daemon_state, ConnectionState::Connected(_)) {
+                ui::live_dot(dot)
+            } else {
+                ui::status_dot(dot)
+            })
+            .when(!collapsed, |el| {
                 el.child(
                     div()
-                        .text_size(px(13.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme::text_primary())
-                        .child("SURGE"),
+                        .text_size(px(11.0))
+                        .text_color(if offline {
+                            theme::text_primary()
+                        } else {
+                            theme::text_muted()
+                        })
+                        .child(label),
                 )
-            })
+            });
+
+        div()
+            .flex()
+            .when(collapsed, |el| el.flex_col())
+            .items_center()
+            .gap(px(4.0))
+            .px(px(6.0))
+            .py(px(8.0))
+            .border_t_1()
+            .border_color(theme::hairline())
+            .child(status)
+            .child(self.render_toggle_button(cx))
     }
 
     fn render_toggle_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -290,11 +232,14 @@ impl AppSidebar {
             } else {
                 "Collapse sidebar"
             })
-            .h_flex()
+            .size(px(28.0))
+            .flex_none()
+            .flex()
+            .items_center()
             .justify_center()
-            .py(px(8.0))
+            .rounded(px(ui::R_CONTROL))
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
+            .hover(|s: StyleRefinement| s.bg(theme::surface()))
             .on_click(cx.listener(|_this, _event, _window, cx| {
                 cx.emit(ToggleSidebar);
             }))
@@ -308,7 +253,7 @@ impl AppSidebar {
 
 impl Render for AppSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = if self.collapsed { px(56.0) } else { px(210.0) };
+        let width = if self.collapsed { px(52.0) } else { px(200.0) };
 
         let items: Vec<Stateful<Div>> = Screen::sidebar_items()
             .iter()
@@ -323,15 +268,11 @@ impl Render for AppSidebar {
             .bg(theme::panel())
             .border_r_1()
             .border_color(theme::hairline())
-            // Logo
-            .child(self.render_logo())
             // Nav items
-            .child(div().v_flex().gap(px(2.0)).py(px(4.0)).children(items))
+            .child(div().v_flex().gap(px(2.0)).pt(px(10.0)).children(items))
             // Spacer
             .child(div().flex_1())
-            // Live daemon footer
+            // Engine status + collapse toggle
             .child(self.render_footer(cx))
-            // Collapse toggle
-            .child(self.render_toggle_button(cx))
     }
 }

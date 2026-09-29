@@ -1,109 +1,120 @@
-//! Flow — the DAG editor.
+//! Flow — how the work is done, level by level.
 //!
-//! Adapted from the "Surge - Interactive" concept's flow editor, but
-//! wired to the **real** engine model: it loads an actual bundled flow
-//! (`surge_core::BundledFlows`) and renders its true nodes, positions,
-//! `NodeKind`s and outcome-keyed edges. The concept's thesis — "the
-//! engine is dumb: routing is graph data, edges keyed by outcome" — is
-//! literally what Surge does, so nothing here is faked.
+//! Surge's work nests (see `docs/workflow.md`): the whole project's steps,
+//! a loop over milestones whose body is the milestone's own flow, and a loop
+//! over tasks whose body is the task's own flow. This screen shows the open
+//! project's plan split into those levels ([`crate::flow_levels`]), why the
+//! planner chose that shape, and the library of flow shapes Surge ships.
 //!
-//! Three panes: node-kind palette · DAG canvas (nodes positioned from
-//! their real `position`, edges painted as curved Béziers) · inspector
-//! (kind, profile, outcomes→edges, a compact flow listing).
+//! The plan comes from the newest planning run of this project: live from
+//! its stream while it waits for your approval (steps are editable then),
+//! otherwise from its stored `flow` artifact — never a sample template
+//! presented as the project's plan.
 
 use std::collections::HashMap;
 
-use gpui_kit::component::StyledExt;
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{Icon, IconName, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use surge_core::{BundledFlow, BundledFlows, EdgeKind, Node, NodeConfig, NodeKind};
+use surge_core::graph::Graph;
+use surge_core::{BundledFlow, BundledFlows, NodeKind};
 
-use crate::theme;
+use crate::flow_diagram::PreparedPlan;
+use crate::flow_levels::{FlowLevel, levels};
+use crate::theme::{self, Semantic};
 use crate::ui;
 
-/// Default bundled flow shown by the editor.
-const DEFAULT_FLOW: &str = "linear-with-review";
-
-const STAGE_W: f32 = 1000.0;
-const STAGE_H: f32 = 520.0;
-const PAD: f32 = 52.0;
-const NODE_W: f32 = 150.0;
-const NODE_H: f32 = 48.0;
-
-/// The 7 real node kinds (closed enum in `surge_core::NodeKind`).
-const KINDS: [NodeKind; 7] = [
-    NodeKind::Agent,
-    NodeKind::HumanGate,
-    NodeKind::Branch,
-    NodeKind::Terminal,
-    NodeKind::Notify,
-    NodeKind::Loop,
-    NodeKind::Subgraph,
-];
-
-fn kind_label(k: NodeKind) -> &'static str {
-    match k {
-        NodeKind::Agent => "agent",
-        NodeKind::HumanGate => "human gate",
-        NodeKind::Branch => "branch",
-        NodeKind::Terminal => "terminal",
-        NodeKind::Notify => "notify",
-        NodeKind::Loop => "loop",
-        NodeKind::Subgraph => "subgraph",
-        _ => "node",
-    }
-}
-
+/// Node-kind color in the app's semantic vocabulary.
 pub(crate) fn kind_color(k: NodeKind) -> Hsla {
     match k {
-        NodeKind::Agent => theme::accent(),
-        NodeKind::HumanGate => hsla(210.0 / 360.0, 0.85, 0.62, 1.0),
-        NodeKind::Branch => hsla(270.0 / 360.0, 0.6, 0.66, 1.0),
-        NodeKind::Terminal => theme::success(),
-        NodeKind::Notify => theme::text_muted(),
-        NodeKind::Loop => theme::warning(),
-        NodeKind::Subgraph => hsla(175.0 / 360.0, 0.55, 0.55, 1.0),
-        _ => theme::text_muted(),
+        NodeKind::Agent => Semantic::Agent.color(),
+        NodeKind::HumanGate => Semantic::You.color(),
+        NodeKind::Branch | NodeKind::Subgraph => Semantic::Plan.color(),
+        NodeKind::Terminal => Semantic::Verified.color(),
+        NodeKind::Loop => Semantic::Loop.color(),
+        _ => Semantic::External.color(),
     }
 }
 
-fn kind_desc(k: NodeKind) -> &'static str {
-    match k {
-        NodeKind::Agent => {
-            "Runs an agent profile in a sealed worktree; routes on its declared outcomes."
-        },
-        NodeKind::HumanGate => "Pauses for an operator decision before routing on.",
-        NodeKind::Branch => "Deterministic fork — chooses an edge from graph data.",
-        NodeKind::Terminal => "End state. The run stops here.",
-        NodeKind::Notify => "Emits a notification; does no work of its own.",
-        NodeKind::Loop => "Iterates a subflow until its condition is met.",
-        NodeKind::Subgraph => "Embeds another flow as a single node.",
-        _ => "A graph node.",
+/// When to reach for a bundled shape (from `docs/archetypes.md`).
+fn archetype_blurb(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "single-task" => ("Size", "A tiny, obvious change — one agent, then a check."),
+        "linear-3" => ("Size", "One coherent change: spec → build → check."),
+        "linear-with-review" => ("Size", "One milestone of work, with a review before it ends."),
+        "multi-milestone" => ("Size", "Several milestones: a loop over milestones, each looping over its tasks."),
+        "feature" => ("Kind", "New behaviour: acceptance criteria first, then build and check."),
+        "bug-fix" => ("Kind", "A reproducible failure: reproduce it first, then fix and prove it."),
+        "refactor" => ("Kind", "No behaviour change: pin current behaviour, then refactor under review."),
+        "migration" => ("Kind", "Schema, data or API change: plan and rollback before the change."),
+        "performance" => ("Kind", "A number to beat: baseline first, then compare against it."),
+        "security" => ("Kind", "Vulnerabilities or secrets: audit, then fix each finding with a test."),
+        "docs" => ("Kind", "Documentation only: outline, write, check against the code."),
+        "spike" => ("Kind", "Unknown feasibility: a bounded experiment that answers a question."),
+        "bootstrap" => ("Planning", "Turns your idea into a description, a roadmap and a flow — each approved by you."),
+        _ => ("Other", "A bundled flow."),
     }
 }
 
-/// A resolved edge segment in stage coords, for canvas painting.
-#[derive(Clone, Copy)]
-struct EdgeSeg {
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    color: Hsla,
+/// A plan split into levels, parsed and laid out once.
+#[derive(Clone)]
+struct LevelPlans {
+    levels: Vec<(FlowLevel, PreparedPlan)>,
+    archetype: Option<String>,
+    rationale: Option<String>,
 }
 
-/// Flow editor screen.
+impl LevelPlans {
+    fn new(graph: &Graph) -> Self {
+        Self {
+            levels: levels(graph)
+                .into_iter()
+                .map(|level| {
+                    let prepared = PreparedPlan::new(&level.graph);
+                    (level, prepared)
+                })
+                .collect(),
+            archetype: graph.metadata.archetype.as_ref().map(|a| a.name.as_str().to_string()),
+            // The shape is shown as a badge; this is the planner's reason.
+            rationale: graph
+                .metadata
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .map(str::to_string),
+        }
+    }
+}
+
+/// The project's plan.
+#[derive(Clone)]
+struct ProjectPlan {
+    run: surge_core::RunId,
+    headline: String,
+    plans: Result<LevelPlans, String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Project,
+    Library,
+}
+
+/// Flow screen.
 pub struct FlowScreen {
     /// Shared state; `None` only in isolated render tests.
     state: Option<Entity<crate::app_state::AppState>>,
-    /// Last plan read from disk, parsed and laid out once:
-    /// (artifact path, prepared diagram or parse error).
-    plan_cache: Option<(
-        std::path::PathBuf,
-        Result<crate::flow_diagram::PreparedPlan, String>,
-    )>,
-    /// Step selected in the plan diagram (inspector subject).
+    mode: Mode,
+    /// Live plan (from a stream) keyed by its artifact path.
+    live: Option<(std::path::PathBuf, ProjectPlan)>,
+    /// Stored plan from the project's newest planning run.
+    stored: Option<ProjectPlan>,
+    stored_for: Option<(Option<std::path::PathBuf>, usize)>,
+    level: usize,
+    /// Step selected in the diagram (inspector subject).
     plan_selected: Option<String>,
     /// Run whose plan is shown (the planning run while its gate waits).
     plan_run: Option<surge_core::RunId>,
@@ -116,19 +127,34 @@ pub struct FlowScreen {
     model_input_for: Option<String>,
     /// Profile registry for the inspector's Agent section (loaded once).
     profiles: Option<std::rc::Rc<surge_orchestrator::profile_loader::ProfileRegistry>>,
-    flow: Option<BundledFlow>,
-    /// Selected node id (defaults to the graph's start node).
-    selected: Option<String>,
+    library: Vec<BundledFlow>,
+    library_selected: usize,
+    library_cache: HashMap<usize, LevelPlans>,
 }
 
 impl FlowScreen {
     pub fn new(_cx: &mut Context<Self>) -> Self {
-        let flow = BundledFlows::by_name_latest(DEFAULT_FLOW)
-            .or_else(|| BundledFlows::all().into_iter().next());
-        let selected = flow.as_ref().map(|f| f.graph.start.as_str().to_string());
+        let mut library = BundledFlows::all();
+        // Size shapes in order of scale, then kinds, then planning.
+        const SIZE_ORDER: [&str; 4] = ["single-task", "linear-3", "linear-with-review", "multi-milestone"];
+        library.sort_by_key(|f| {
+            let (group, _) = archetype_blurb(&f.name);
+            let rank = match group {
+                "Size" => 0,
+                "Kind" => 1,
+                "Planning" => 2,
+                _ => 3,
+            };
+            let scale = SIZE_ORDER.iter().position(|n| *n == f.name).unwrap_or(0);
+            (rank, scale, f.name.clone())
+        });
         Self {
             state: None,
-            plan_cache: None,
+            mode: Mode::Project,
+            live: None,
+            stored: None,
+            stored_for: None,
+            level: 0,
             plan_selected: None,
             plan_run: None,
             provider_notes: None,
@@ -136,32 +162,31 @@ impl FlowScreen {
             model_input: None,
             model_input_for: None,
             profiles: None,
-            flow,
-            selected,
+            library,
+            library_selected: 0,
+            library_cache: HashMap::new(),
         }
     }
 
     /// Flow screen bound to the open project: shows its current plan.
     pub fn with_state(state: Entity<crate::app_state::AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
-        Self {
+        cx.observe(&state, |this: &mut Self, _state, cx| {
+            this.reload_stored_if_changed(cx);
+            cx.notify();
+        })
+        .detach();
+        let mut this = Self {
             state: Some(state),
             ..Self::new(cx)
-        }
+        };
+        this.reload_stored_if_changed(cx);
+        this
     }
 
-    /// The newest run of the open project that produced a plan (`flow`
-    /// artifact), with the run's request as a headline.
-    fn current_plan(
-        &mut self,
-        cx: &Context<Self>,
-    ) -> Option<(
-        surge_core::RunId,
-        String,
-        Result<crate::flow_diagram::PreparedPlan, String>,
-    )> {
+    /// The plan a live planning stream is showing (while its gate waits).
+    fn live_plan(&mut self, cx: &Context<Self>) -> Option<ProjectPlan> {
         let state = self.state.as_ref()?.read(cx);
-        let (plan_run, headline, path) = state.project_runs().into_iter().find_map(|run| {
+        let (run, headline, path) = state.project_runs().into_iter().find_map(|run| {
             let stream = state.run_streams.get(&run.run_id)?;
             let recorded = stream.artifacts.get("flow")?;
             // Seeded artifacts (an implementation run inherits the approved
@@ -174,25 +199,76 @@ impl FlowScreen {
             if !path.is_file() {
                 return None;
             }
-            let headline = state.run_prompt(&run.run_id).map_or_else(
-                || format!("run r-{}", run.run_id.short().to_lowercase()),
-                |p| ui::headline(p, 80),
-            );
+            let headline = state
+                .run_prompt(&run.run_id)
+                .map_or_else(|| format!("run r-{}", run.run_id.short().to_lowercase()), |p| ui::headline(p, 90));
             Some((run.run_id, headline, path))
         })?;
-        if self
-            .plan_cache
-            .as_ref()
-            .is_none_or(|(cached, _)| cached != &path)
-        {
+        if self.live.as_ref().is_none_or(|(cached, _)| cached != &path) {
             let source = std::fs::read_to_string(&path).ok()?;
-            let prepared = toml::from_str::<surge_core::graph::Graph>(&source)
-                .map(|graph| crate::flow_diagram::PreparedPlan::new(&graph))
+            let plans = toml::from_str::<Graph>(&source)
+                .map(|graph| LevelPlans::new(&graph))
                 .map_err(|error| error.to_string());
-            self.plan_cache = Some((path, prepared));
+            self.live = Some((path, ProjectPlan { run, headline, plans }));
         }
-        let prepared = self.plan_cache.as_ref()?.1.clone();
-        Some((plan_run, headline, prepared))
+        self.live.as_ref().map(|(_, plan)| plan.clone())
+    }
+
+    /// Reload the stored plan when the project or its operations changed.
+    fn reload_stored_if_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let (root, ops) = {
+            let state = state.read(cx);
+            (state.project_path.clone(), state.bootstrap_operations.len())
+        };
+        let key = (root.clone(), ops);
+        if self.stored_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.stored_for = Some(key);
+        let Some(root) = root else {
+            self.stored = None;
+            return;
+        };
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let found = if tokio::runtime::Handle::try_current().is_ok() {
+                match surge_core::home::surge_home_dir() {
+                    Some(home) => {
+                        let mut found = None;
+                        for op in crate::roadmap_source::operations(&root, &home).await {
+                            let Some(bytes) =
+                                crate::roadmap_source::read_run_artifact(&home, op.planning_run, "flow")
+                            else {
+                                continue;
+                            };
+                            let plans = String::from_utf8(bytes)
+                                .map_err(|e| e.to_string())
+                                .and_then(|text| toml::from_str::<Graph>(&text).map_err(|e| e.to_string()))
+                                .map(|graph| LevelPlans::new(&graph));
+                            found = Some(ProjectPlan {
+                                run: op.planning_run,
+                                headline: ui::headline(&op.prompt, 90),
+                                plans,
+                            });
+                            break;
+                        }
+                        found
+                    },
+                    None => None,
+                }
+            } else {
+                None
+            };
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.stored = found;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     /// Node → Agent → Session panel for the selected plan step.
@@ -684,699 +760,314 @@ impl FlowScreen {
         .detach();
     }
 
-    fn render_plan(
-        &mut self,
-        headline: String,
-        prepared: &Result<crate::flow_diagram::PreparedPlan, String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let why = prepared
-            .as_ref()
-            .ok()
-            .and_then(|plan| plan.rationale.clone());
-        let this = cx.entity().downgrade();
-        let on_select: crate::flow_diagram::OnSelect = std::rc::Rc::new(move |key, _w, cx| {
-            let _ = this.update(cx, |screen, cx| {
-                screen.plan_selected = Some(key);
-                cx.notify();
-            });
-        });
-        let inspector = match prepared {
-            Ok(plan) => self
-                .plan_selected
-                .as_ref()
-                .and_then(|key| plan.nodes.get(key).map(|d| (key.clone(), d.clone())))
-                .map(|(key, details)| self.render_node_inspector(&key, &details, window, cx)),
-            Err(_) => None,
-        };
-        let body: AnyElement = match prepared {
-            Ok(plan) => div()
-                .flex()
-                .gap(px(14.0))
-                .items_start()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(crate::flow_diagram::render_interactive(
-                            plan,
-                            "plan-diagram",
-                            self.plan_selected.as_deref(),
-                            Some(on_select),
-                        )),
-                )
-                .children(inspector)
-                .into_any_element(),
-            Err(error) => {
-                ui::meta(format!("This plan could not be parsed: {error}")).into_any_element()
-            },
-        };
-        div()
-            .size_full()
-            .v_flex()
-            .min_h_0()
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .v_flex()
-                    .gap(px(4.0))
-                    .px(px(22.0))
-                    .py(px(14.0))
-                    .border_b_1()
-                    .border_color(theme::hairline())
-                    .child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_primary())
-                            .child("Plan"),
-                    )
-                    .child(ui::meta(headline))
-                    .children(why.map(|why| {
-                        div()
-                            .pt(px(4.0))
-                            .text_size(px(12.0))
-                            .text_color(theme::text_primary().opacity(0.85))
-                            .child(format!("Why this plan: {why}"))
-                    })),
-            )
-            .child(
-                div()
-                    .id("plan-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p(px(18.0))
-                    .child(body),
-            )
-    }
-
-    /// Map a node's engine-space position to stage coords (top-left).
-    fn layout(&self) -> HashMap<String, (f32, f32)> {
-        let mut out = HashMap::new();
-        let Some(flow) = &self.flow else {
-            return out;
-        };
-        let g = &flow.graph;
-        let (mut minx, mut maxx, mut miny, mut maxy) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
-        for n in g.nodes.values() {
-            minx = minx.min(n.position.x);
-            maxx = maxx.max(n.position.x);
-            miny = miny.min(n.position.y);
-            maxy = maxy.max(n.position.y);
-        }
-        let spanx = (maxx - minx).max(1.0);
-        let spany = (maxy - miny).max(1.0);
-        let avail_w = STAGE_W - 2.0 * PAD - NODE_W;
-        let avail_h = STAGE_H - 2.0 * PAD - NODE_H;
-        for n in g.nodes.values() {
-            let sx = PAD + (n.position.x - minx) / spanx * avail_w;
-            let sy = PAD + (n.position.y - miny) / spany * avail_h;
-            out.insert(n.id.as_str().to_string(), (sx, sy));
-        }
-        out
-    }
-
-    fn edge_color(outcome: &str, to: &str, kind: EdgeKind) -> Hsla {
-        let negative = matches!(
-            outcome,
-            "fail" | "failed" | "changes_requested" | "rejected" | "reject" | "blocked" | "error"
-        ) || to.contains("fail")
-            || kind == EdgeKind::Escalate;
-        if negative {
-            theme::error()
-        } else if kind == EdgeKind::Backtrack {
-            theme::warning()
-        } else if to.contains("success") || to == "end" || to.contains("done") {
-            theme::success()
-        } else {
-            theme::accent()
-        }
-    }
-
-    // ── palette ─────────────────────────────────────────────────────
-
-    fn render_palette(&self) -> Div {
-        let counts: HashMap<&str, usize> = self
-            .flow
-            .as_ref()
-            .map(|f| {
-                let mut m: HashMap<&str, usize> = HashMap::new();
-                for n in f.graph.nodes.values() {
-                    *m.entry(kind_label(n.kind())).or_default() += 1;
-                }
-                m
-            })
-            .unwrap_or_default();
-
-        let items: Vec<Div> = KINDS
-            .iter()
-            .map(|&k| {
-                let label = kind_label(k);
-                let n = counts.get(label).copied().unwrap_or(0);
-                div()
-                    .h_flex()
-                    .gap(px(8.0))
-                    .items_center()
-                    .px(px(9.0))
-                    .py(px(7.0))
-                    .rounded_lg()
-                    .bg(theme::panel_raised())
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .child(
-                        div()
-                            .w(px(8.0))
-                            .h(px(8.0))
-                            .rounded_sm()
-                            .bg(kind_color(k))
-                            .flex_shrink_0(),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child(label),
-                    )
-                    .child(ui::meta(format!("{n}")))
-            })
-            .collect();
-
-        div()
-            .w(px(190.0))
-            .flex_shrink_0()
-            .v_flex()
-            .gap(px(10.0))
-            .p(px(13.0))
-            .bg(theme::panel())
-            .border_r_1()
-            .border_color(theme::hairline())
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::text_muted())
-                    .child("NODE KINDS"),
-            )
-            .child(
-                div()
-                    .text_size(px(9.5))
-                    .line_height(px(15.0))
-                    .text_color(theme::text_muted().opacity(0.8))
-                    .child("Closed enum — extend via profiles, not new kinds."),
-            )
-            .child(div().v_flex().gap(px(6.0)).children(items))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .v_flex()
-                    .gap(px(5.0))
-                    .p(px(11.0))
-                    .rounded_lg()
-                    .bg(theme::accent().opacity(0.06))
-                    .border_1()
-                    .border_color(theme::accent().opacity(0.22))
-                    .child(
-                        div()
-                            .text_size(px(9.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::accent())
-                            .child("ENGINE IS DUMB"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(9.0))
-                            .line_height(px(14.0))
-                            .text_color(theme::text_muted())
-                            .child("Routing is graph data — edges keyed by outcome. The LLM only does the work."),
-                    ),
-            )
-    }
-
-    // ── canvas ──────────────────────────────────────────────────────
-
-    fn render_canvas_layer(&self, segs: Vec<EdgeSeg>) -> impl IntoElement {
-        let dot_color = theme::graph_line().opacity(0.5);
-        canvas(
-            |_b, _w, _c| {},
-            move |bounds, _p, window, _c| {
-                let ox = bounds.origin.x;
-                let oy = bounds.origin.y;
-                let w = f32::from(bounds.size.width);
-                let h = f32::from(bounds.size.height);
-
-                // dot grid
-                let step = 24.0_f32;
-                let mut gy = 8.0_f32;
-                while gy < h {
-                    let mut gx = 8.0_f32;
-                    while gx < w {
-                        let d =
-                            Bounds::new(point(ox + px(gx), oy + px(gy)), size(px(1.4), px(1.4)));
-                        window.paint_quad(fill(d, dot_color));
-                        gx += step;
-                    }
-                    gy += step;
-                }
-
-                // edges: cubic Bézier, glow + bright
-                for e in &segs {
-                    let dx = (e.x2 - e.x1) * 0.45;
-                    let start = point(ox + px(e.x1), oy + px(e.y1));
-                    let end = point(ox + px(e.x2), oy + px(e.y2));
-                    let c1 = point(ox + px(e.x1 + dx), oy + px(e.y1));
-                    let c2 = point(ox + px(e.x2 - dx), oy + px(e.y2));
-
-                    let mut glow = PathBuilder::stroke(px(4.0));
-                    glow.move_to(start);
-                    glow.cubic_bezier_to(end, c1, c2);
-                    if let Ok(p) = glow.build() {
-                        window.paint_path(p, e.color.opacity(0.13));
-                    }
-                    let mut line = PathBuilder::stroke(px(1.5));
-                    line.move_to(start);
-                    line.cubic_bezier_to(end, c1, c2);
-                    if let Ok(p) = line.build() {
-                        window.paint_path(p, e.color.opacity(0.7));
-                    }
-                }
-            },
-        )
-        .absolute()
-        .left(px(0.0))
-        .top(px(0.0))
-        .w(px(STAGE_W))
-        .h(px(STAGE_H))
-    }
-
-    fn render_node_box(
-        &self,
-        node: &Node,
-        pos: (f32, f32),
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let kind = node.kind();
-        let color = kind_color(kind);
-        let id = node.id.as_str().to_string();
-        let selected = self.selected.as_deref() == Some(id.as_str());
-        let id_click = id.clone();
-
-        div()
-            .id(SharedString::from(format!("flow-node-{id}")))
-            .role(Role::Button)
-            .aria_label(format!("Select flow node {id}"))
-            .absolute()
-            .left(px(pos.0))
-            .top(px(pos.1))
-            .w(px(NODE_W))
-            .h(px(NODE_H))
+    fn render_mode_switch(&self, cx: &mut Context<Self>) -> Div {
+        let mut row = div()
             .h_flex()
-            .gap(px(9.0))
-            .items_center()
-            .px(px(11.0))
-            .rounded_lg()
-            .bg(theme::panel_raised())
+            .p(px(2.0))
+            .gap(px(2.0))
+            .rounded(px(ui::R_CONTROL + 1.0))
             .border_1()
-            .border_color(if selected {
-                theme::accent().opacity(0.7)
-            } else {
-                theme::hairline_strong()
-            })
-            .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.55)))
-            .on_click(cx.listener(move |this, _e, _w, cx| {
-                this.selected = Some(id_click.clone());
-                cx.notify();
-            }))
-            .child(
+            .border_color(theme::hairline())
+            .bg(theme::panel_deep());
+        for (mode, label) in [(Mode::Project, "This project"), (Mode::Library, "Library")] {
+            let active = self.mode == mode;
+            row = row.child(
                 div()
-                    .w(px(9.0))
-                    .h(px(9.0))
-                    .rounded_sm()
-                    .bg(color)
-                    .flex_shrink_0(),
-            )
-            .child(
-                div()
-                    .v_flex()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .overflow_hidden()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_primary())
-                            .child(id),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(8.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_muted())
-                            .child(kind_label(kind)),
-                    ),
-            )
+                    .id(SharedString::from(format!("flow-mode-{label}")))
+                    .role(Role::Tab)
+                    .px(px(10.0))
+                    .py(px(4.0))
+                    .rounded(px(ui::R_CONTROL))
+                    .text_size(px(11.5))
+                    .cursor_pointer()
+                    .when(active, |el| el.bg(theme::surface()).text_color(theme::text_primary()))
+                    .when(!active, |el| {
+                        el.text_color(theme::text_muted())
+                            .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
+                    })
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.mode = mode;
+                        this.level = 0;
+                        this.plan_selected = None;
+                        cx.notify();
+                    }))
+                    .child(label),
+            );
+        }
+        row
     }
 
-    fn render_canvas(&self, cx: &mut Context<Self>) -> Div {
-        let (name, node_count, edge_count) = self
-            .flow
-            .as_ref()
-            .map(|f| (f.name.clone(), f.graph.nodes.len(), f.graph.edges.len()))
-            .unwrap_or_else(|| ("—".to_string(), 0, 0));
-
-        let positions = self.layout();
-
-        // resolved edge segments for the canvas
-        let mut segs: Vec<EdgeSeg> = Vec::new();
-        if let Some(flow) = &self.flow {
-            for e in &flow.graph.edges {
-                let from = e.from.node.as_str();
-                let to = e.to.as_str();
-                if let (Some(&(fx, fy)), Some(&(tx, ty))) = (positions.get(from), positions.get(to))
-                {
-                    segs.push(EdgeSeg {
-                        x1: fx + NODE_W,
-                        y1: fy + NODE_H / 2.0,
-                        x2: tx,
-                        y2: ty + NODE_H / 2.0,
-                        color: Self::edge_color(e.from.outcome.as_str(), to, e.kind),
-                    });
-                }
-            }
-        }
-
-        // stage children: canvas (back) → node boxes
-        let mut stage_children: Vec<AnyElement> =
-            vec![self.render_canvas_layer(segs).into_any_element()];
-        if let Some(flow) = &self.flow {
-            for n in flow.graph.nodes.values() {
-                if let Some(&pos) = positions.get(n.id.as_str()) {
-                    stage_children.push(self.render_node_box(n, pos, cx).into_any_element());
-                }
-            }
-        }
-
-        div()
-            .flex_1()
-            .min_w_0()
-            .v_flex()
-            // header
-            .child(
+    /// Level tabs: one per level of the flow, with what happens there.
+    fn render_levels_bar(&self, plans: &LevelPlans, cx: &mut Context<Self>) -> Div {
+        let mut row = div().h_flex().gap(px(8.0)).flex_wrap();
+        for (i, (level, _)) in plans.levels.iter().enumerate() {
+            let active = i == self.level;
+            let color = match level.depth {
+                0 => Semantic::Plan.color(),
+                1 => Semantic::Loop.color(),
+                _ => Semantic::Agent.color(),
+            };
+            let note = if level.approvals > 0 {
+                format!("{} steps · {} by you", level.work_steps, level.approvals)
+            } else {
+                format!("{} steps", level.work_steps)
+            };
+            row = row.child(
                 div()
-                    .flex_shrink_0()
-                    .h_flex()
-                    .gap(px(12.0))
-                    .items_center()
-                    .px(px(20.0))
-                    .py(px(13.0))
-                    .border_b_1()
-                    .border_color(theme::hairline())
-                    .child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_primary())
-                            .child("Flow editor"),
-                    )
-                    .child(ui::meta(format!(
-                        "{name}.toml · {node_count} nodes · {edge_count} edges"
-                    )))
-                    .child(div().flex_1())
+                    .id(("flow-level", i))
+                    .role(Role::Tab)
+                    .aria_label(level.title.clone())
+                    .v_flex()
+                    .gap(px(2.0))
+                    .min_w(px(150.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(ui::R_CONTROL + 2.0))
+                    .border_1()
+                    .border_color(if active { theme::stroke(color) } else { theme::hairline() })
+                    .bg(if active { theme::tint(color) } else { theme::panel_raised() })
+                    .cursor_pointer()
+                    .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.level = i;
+                        this.plan_selected = None;
+                        cx.notify();
+                    }))
                     .child(
                         div()
                             .h_flex()
                             .gap(px(6.0))
                             .items_center()
-                            .text_size(px(10.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::success())
-                            .child(ui::status_dot(theme::success()))
-                            .child("valid · reaches a terminal"),
+                            .when(level.depth > 0, |el| {
+                                el.child(Icon::new(Lucide::Repeat).size(px(11.0)).text_color(color))
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::text_primary())
+                                    .child(level.title.clone()),
+                            ),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .h(px(30.0))
-                            .px(px(13.0))
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(theme::hairline_strong())
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_muted())
-                            .child("Validate"),
-                    ),
-            )
-            // canvas
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme::panel_deep())
-                    .child(
-                        div()
-                            .relative()
-                            .w(px(STAGE_W))
-                            .h(px(STAGE_H))
-                            .flex_shrink_0()
-                            .children(stage_children),
-                    ),
-            )
+                    .child(div().text_size(px(10.5)).text_color(theme::text_muted()).child(note)),
+            );
+            if i + 1 < plans.levels.len() {
+                row = row.child(
+                    Icon::new(IconName::ChevronRight)
+                        .size(px(12.0))
+                        .text_color(theme::text_dim()),
+                );
+            }
+        }
+        row
     }
 
-    // ── inspector ───────────────────────────────────────────────────
-
-    fn render_inspector(&self) -> Div {
-        let panel = div()
-            .w(px(330.0))
-            .flex_shrink_0()
-            .v_flex()
-            .bg(theme::panel())
-            .border_l_1()
-            .border_color(theme::hairline());
-
-        let Some(flow) = &self.flow else {
-            return panel.child(ui::meta("no flow loaded").p(px(16.0)));
+    /// Diagram of the selected level + the step inspector.
+    fn render_level_diagram(
+        &mut self,
+        plans: &LevelPlans,
+        interactive: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let index = self.level.min(plans.levels.len().saturating_sub(1));
+        let Some((level, prepared)) = plans.levels.get(index) else {
+            return div();
         };
-        let g = &flow.graph;
-        let node = self
-            .selected
-            .as_ref()
-            .and_then(|sel| g.nodes.values().find(|n| n.id.as_str() == sel));
-        let Some(node) = node else {
-            return panel.child(ui::meta("select a node").p(px(16.0)));
-        };
-
-        let kind = node.kind();
-        let color = kind_color(kind);
-        let id = node.id.as_str().to_string();
-
-        // outcomes → edges (real routing)
-        let outcome_rows: Vec<Div> = node
-            .declared_outcomes
-            .iter()
-            .map(|oc| {
-                let outcome = oc.id.as_str();
-                let target = g
-                    .edges
-                    .iter()
-                    .find(|e| e.from.node.as_str() == id && e.from.outcome.as_str() == outcome)
-                    .map(|e| e.to.as_str().to_string())
-                    .unwrap_or_else(|| "—".to_string());
-                let neg = oc.is_terminal
-                    || matches!(
-                        outcome,
-                        "fail" | "changes_requested" | "rejected" | "blocked"
-                    );
-                let tag_color = if neg {
-                    theme::error()
-                } else {
-                    theme::success()
-                };
-                div()
-                    .h_flex()
-                    .gap(px(8.0))
-                    .items_center()
-                    .h(px(28.0))
-                    .px(px(10.0))
-                    .rounded_md()
-                    .bg(theme::panel_raised())
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .child(ui::pill(
-                        outcome.to_string(),
-                        tag_color,
-                        tag_color.opacity(0.14),
-                    ))
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(theme::text_muted())
-                            .child("→"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child(target),
-                    )
-            })
-            .collect();
-
-        // profile field for agent nodes
-        let profile = if let NodeConfig::Agent(cfg) = &node.config {
-            Some(cfg.profile.as_str().to_string())
+        let inspector = if interactive {
+            self.plan_selected
+                .as_ref()
+                .and_then(|key| prepared.nodes.get(key).map(|d| (key.clone(), d.clone())))
+                .map(|(key, details)| self.render_node_inspector(&key, &details, window, cx))
         } else {
             None
         };
-
-        panel
+        let this = cx.entity().downgrade();
+        // Clicking a loop opens the level it repeats; any other step opens
+        // the inspector.
+        let openers: Vec<(String, usize)> = plans
+            .levels
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (l, _))| l.opened_by.clone().map(|k| (k, i)))
+            .collect();
+        let on_select: crate::flow_diagram::OnSelect = std::rc::Rc::new(move |key, _w, cx| {
+            let _ = this.update(cx, |screen, cx| {
+                if let Some((_, level)) = openers.iter().find(|(k, _)| *k == key) {
+                    screen.level = *level;
+                    screen.plan_selected = None;
+                } else if interactive {
+                    screen.plan_selected = Some(key);
+                }
+                cx.notify();
+            });
+        });
+        div()
+            .v_flex()
+            .gap(px(10.0))
             .child(
                 div()
+                    .text_size(px(11.5))
+                    .text_color(theme::text_muted())
+                    .child(match level.depth {
+                        0 if plans.levels.len() > 1 => {
+                            "Runs once for the whole request. Click a repeating step to open its level.".to_string()
+                        },
+                        0 => "Runs once for the whole request.".to_string(),
+                        _ => format!("Runs for {} — its own flow.", level.title.to_lowercase()),
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(14.0))
+                    .items_start()
+                    .child(div().flex_1().min_w_0().child(crate::flow_diagram::render_interactive(
+                        prepared,
+                        SharedString::from(format!("flow-level-diagram-{index}")),
+                        self.plan_selected.as_deref(),
+                        Some(on_select),
+                    )))
+                    .children(inspector),
+            )
+    }
+
+    fn render_why(&self, plans: &LevelPlans) -> Option<Div> {
+        let why = plans.rationale.clone()?;
+        Some(
+            ui::node_card(Semantic::Plan.color())
+                .v_flex()
+                .gap(px(4.0))
+                .px(px(14.0))
+                .py(px(10.0))
+                .child(ui::section_label("Why this shape"))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .line_height(px(18.0))
+                        .text_color(theme::text_primary())
+                        .child(why),
+                ),
+        )
+    }
+
+    fn render_project(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let plan = self.live_plan(cx).or_else(|| self.stored.clone());
+        let Some(plan) = plan else {
+            return ui::panel()
+                .child(ui::empty_state(
+                    "◇",
+                    "No plan for this project yet",
+                    "When you describe an app, Surge drafts a flow for it — milestones and tasks each get their own steps — and asks you to approve it. Browse the shapes it can choose from in Library.",
+                ))
+                .into_any_element();
+        };
+        self.plan_run = Some(plan.run);
+        match &plan.plans {
+            Err(error) => ui::panel()
+                .child(ui::empty_state("◌", "This plan could not be read", error.clone()))
+                .into_any_element(),
+            Ok(plans) => {
+                let plans = plans.clone();
+                div()
                     .v_flex()
-                    .gap(px(11.0))
-                    .p(px(16.0))
-                    .border_b_1()
-                    .border_color(theme::hairline())
+                    .gap(px(14.0))
                     .child(
                         div()
                             .h_flex()
                             .gap(px(8.0))
                             .items_center()
-                            .child(ui::status_dot(color))
+                            .child(ui::section_label("Planned for"))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(12.0))
                                     .text_color(theme::text_primary())
-                                    .child(id.clone()),
+                                    .truncate()
+                                    .child(plan.headline.clone()),
                             )
-                            .child(ui::pill(kind_label(kind), color, color.opacity(0.14))),
+                            .when_some(plans.archetype.clone(), |el, a| {
+                                el.child(ui::role_badge(a.replace('-', " "), Semantic::Plan))
+                            }),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .line_height(px(17.0))
-                            .text_color(theme::text_muted())
-                            .child(kind_desc(kind)),
-                    )
-                    .when_some(profile, |el, p| {
-                        el.child(
-                            div()
-                                .h_flex()
-                                .justify_between()
-                                .items_center()
-                                .child(ui::meta("profile"))
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme::accent())
-                                        .child(p),
-                                ),
-                        )
-                    })
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap(px(6.0))
-                            .child(
-                                div()
-                                    .text_size(px(9.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::text_muted())
-                                    .child("OUTCOMES → EDGES"),
-                            )
-                            .when(outcome_rows.is_empty(), |el| {
-                                el.child(ui::meta("terminal · no outgoing edges"))
-                            })
-                            .children(outcome_rows),
-                    ),
-            )
-            .child(self.render_toml(g))
+                    .children(self.render_why(&plans))
+                    .child(self.render_levels_bar(&plans, cx))
+                    .child(self.render_level_diagram(&plans, true, window, cx))
+                    .into_any_element()
+            },
+        }
     }
 
-    fn render_toml(&self, g: &surge_core::Graph) -> Div {
-        let mut lines: Vec<Div> = Vec::new();
-        let mut push = |text: String, color: Hsla, indent: f32| {
-            lines.push(
-                div()
-                    .pl(px(indent))
-                    .text_size(px(10.0))
-                    .line_height(px(16.0))
-                    .text_color(color)
-                    .child(text),
-            );
-        };
-        push(
-            format!("start = \"{}\"", g.start.as_str()),
-            theme::accent(),
-            0.0,
-        );
-        for n in g.nodes.values() {
-            push(
-                format!("[{}]  {}", n.id.as_str(), kind_label(n.kind())),
-                theme::text_primary(),
-                0.0,
-            );
-            for oc in &n.declared_outcomes {
-                let target = g
-                    .edges
-                    .iter()
-                    .find(|e| {
-                        e.from.node.as_str() == n.id.as_str()
-                            && e.from.outcome.as_str() == oc.id.as_str()
-                    })
-                    .map(|e| e.to.as_str().to_string())
-                    .unwrap_or_else(|| "—".to_string());
-                push(
-                    format!("{} → {}", oc.id.as_str(), target),
-                    theme::text_muted(),
-                    12.0,
-                );
+    fn render_library(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.library_selected.min(self.library.len().saturating_sub(1));
+        let mut list = div().v_flex().gap(px(2.0)).w(px(300.0)).flex_none();
+        let mut last_group = "";
+        for (i, flow) in self.library.iter().enumerate() {
+            let (group, blurb) = archetype_blurb(&flow.name);
+            if group != last_group {
+                last_group = group;
+                list = list.child(div().pt(px(if i == 0 { 0.0 } else { 10.0 })).pb(px(4.0)).child(ui::section_label(group)));
             }
-        }
-
-        div()
-            .flex_1()
-            .v_flex()
-            .gap(px(9.0))
-            .p(px(16.0))
-            .min_h_0()
-            .child(
+            let active = i == selected;
+            list = list.child(
                 div()
-                    .text_size(px(9.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::text_muted())
-                    .child("FLOW.TOML"),
-            )
-            .child(
-                div()
+                    .id(("flow-library", i))
+                    .role(Role::Button)
+                    .aria_label(flow.name.clone())
                     .v_flex()
-                    .gap(px(1.0))
-                    .p(px(12.0))
-                    .rounded_lg()
-                    .bg(theme::panel_deep())
-                    .border_1()
-                    .border_color(theme::hairline())
-                    .overflow_hidden()
-                    .children(lines),
+                    .gap(px(2.0))
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(ui::R_CONTROL))
+                    .cursor_pointer()
+                    .when(active, |el| el.bg(theme::surface()))
+                    .hover(|s: StyleRefinement| s.bg(theme::surface()))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.library_selected = i;
+                        this.level = 0;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                            .child(flow.name.replace('-', " ")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .line_height(px(15.0))
+                            .text_color(theme::text_dim())
+                            .child(blurb),
+                    ),
+            );
+        }
+        let plans = match self.library.get(selected) {
+            Some(flow) => self
+                .library_cache
+                .entry(selected)
+                .or_insert_with(|| LevelPlans::new(&flow.graph))
+                .clone(),
+            None => return list.into_any_element(),
+        };
+        div()
+            .flex()
+            .gap(px(18.0))
+            .items_start()
+            .child(list)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .v_flex()
+                    .gap(px(14.0))
+                    .child(self.render_levels_bar(&plans, cx))
+                    .child(self.render_level_diagram(&plans, false, window, cx)),
             )
+            .into_any_element()
     }
 }
 
-/// Change one field of a step's unapproved plan edit; drop the edit when
-/// it no longer changes anything.
 fn edit_step(
     state: &mut crate::app_state::AppState,
     plan_run: surge_core::RunId,
@@ -1393,19 +1084,28 @@ fn edit_step(
 
 impl Render for FlowScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The open project's actual plan wins over the example template.
-        if let Some((plan_run, headline, prepared)) = self.current_plan(cx) {
-            self.plan_run = Some(plan_run);
-            return self.render_plan(headline, &prepared, window, cx);
-        }
-        // Plain .flex() row so the three panes stretch to full height
-        // (h_flex would vertically center them in tall windows).
+        let body = match self.mode {
+            Mode::Project => self.render_project(window, cx),
+            Mode::Library => self.render_library(window, cx),
+        };
         div()
+            .id("flow-scroll")
             .size_full()
-            .flex()
-            .min_h_0()
-            .child(self.render_palette())
-            .child(self.render_canvas(cx))
-            .child(self.render_inspector())
+            .overflow_y_scroll()
+            .bg(theme::background())
+            .px(px(28.0))
+            .pt(px(22.0))
+            .pb(px(32.0))
+            .child(
+                div()
+                    .v_flex()
+                    .gap(px(18.0))
+                    .child(ui::page_header(
+                        "Flow",
+                        Some("How the work is done — each level of the plan runs its own steps.".into()),
+                        self.render_mode_switch(cx),
+                    ))
+                    .child(body),
+            )
     }
 }

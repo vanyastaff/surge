@@ -537,7 +537,7 @@ impl AgentTerminalScreen {
                         .bg(theme::sidebar_bg())
                         .text_xs()
                         .text_color(theme::warning())
-                        .font_family("Consolas")
+                        .font_family(crate::ui::MONO)
                         .child(label)
                 }))
                 .child(Icon::new(chevron).size_3().text_color(theme::text_muted())),
@@ -618,7 +618,7 @@ impl AgentTerminalScreen {
                     .pl(px(18.0))
                     .text_xs()
                     .text_color(theme::text_muted().opacity(0.7))
-                    .font_family("Consolas")
+                    .font_family(crate::ui::MONO)
                     .child(block.text.clone()),
             );
         }
@@ -1004,7 +1004,7 @@ fn render_json_block(label: &str, json: &str) -> Div {
             div()
                 .px(px(8.0))
                 .py(px(4.0))
-                .font_family("Consolas")
+                .font_family(crate::ui::MONO)
                 .text_xs()
                 .text_color(hsla(0.0, 0.0, 0.75, 1.0))
                 .child(display),
@@ -1047,7 +1047,7 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme::text_primary())
-                    .font_family("Consolas")
+                    .font_family(crate::ui::MONO)
                     .child(filename),
             ),
     );
@@ -1063,7 +1063,7 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
                     .px(px(10.0))
                     .py(px(1.0))
                     .bg(hsla(0.0, 0.4, 0.15, 1.0))
-                    .font_family("Consolas")
+                    .font_family(crate::ui::MONO)
                     .text_xs()
                     .text_color(hsla(0.0, 0.7, 0.7, 1.0))
                     .child(format!("- {line}")),
@@ -1081,7 +1081,7 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
                     .px(px(10.0))
                     .py(px(1.0))
                     .bg(hsla(0.33, 0.4, 0.15, 1.0))
-                    .font_family("Consolas")
+                    .font_family(crate::ui::MONO)
                     .text_xs()
                     .text_color(hsla(0.33, 0.7, 0.7, 1.0))
                     .child(format!("+ {line}")),

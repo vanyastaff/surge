@@ -1,4 +1,4 @@
-use gpui_kit::component::IconName;
+use gpui_kit::assets::IconName;
 
 /// All screens available in Surge UI.
 ///
@@ -38,7 +38,7 @@ impl Screen {
         match self {
             Self::Fleet => "Fleet",
             Self::Roadmap => "Roadmap",
-            Self::Runs => "Runs",
+            Self::Runs => "Missions",
             Self::Flow => "Flow",
             Self::Inbox => "Inbox",
             Self::Backlog => "Backlog",
@@ -53,17 +53,18 @@ impl Screen {
         }
     }
 
-    /// Lucide icon for this screen (from gpui-component IconName).
+    /// Lucide icon for this screen. Non-default icons must be listed in
+    /// [`crate::assets`].
     pub fn icon(self) -> IconName {
         match self {
-            Self::Fleet => IconName::GalleryVerticalEnd,
+            Self::Fleet => IconName::LayoutDashboard,
             Self::Roadmap => IconName::Map,
-            Self::Runs => IconName::LoaderCircle,
-            Self::Flow => IconName::Inspector,
+            Self::Runs => IconName::Activity,
+            Self::Flow => IconName::Workflow,
             Self::Inbox => IconName::Inbox,
-            Self::Backlog => IconName::Frame, // kanban columns
+            Self::Backlog => IconName::Kanban,
             Self::Agents => IconName::Bot,
-            Self::ContextMemory => IconName::BookOpen,
+            Self::ContextMemory => IconName::Brain,
             Self::Settings => IconName::Settings,
             Self::SpecExplorer => IconName::Search,
             Self::SpecWizard => IconName::Plus,

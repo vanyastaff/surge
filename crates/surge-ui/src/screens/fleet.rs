@@ -97,6 +97,8 @@ fn card_title(prompt: &str) -> String {
 /// Fleet screen — reads runs from shared state, renders the constellation.
 pub struct FleetScreen {
     state: Entity<AppState>,
+    /// Branch the runs fork from, read once from the repository.
+    branch: Option<String>,
     /// Command-bar input (created lazily; needs a Window).
     command_input: Option<Entity<InputState>>,
 }
@@ -105,8 +107,14 @@ impl FleetScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         // Re-render when the run list / daemon link changes.
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
+        let branch = state
+            .read(cx)
+            .project_path
+            .as_deref()
+            .and_then(ui::current_branch);
         Self {
             state,
+            branch,
             command_input: None,
         }
     }
@@ -143,10 +151,7 @@ impl FleetScreen {
                 };
                 let short = r.run_id.short().to_lowercase();
                 let started = r.started_at.with_timezone(&chrono::Local).format("%H:%M");
-                let seq = r.last_event_seq.map_or_else(
-                    || format!("started {started}"),
-                    |s| format!("started {started} · seq {s}"),
-                );
+                let started = format!("started {started}");
                 FleetNode {
                     id: format!("r-{short}"),
                     run_id: Some(r.run_id),
@@ -159,7 +164,7 @@ impl FleetScreen {
                         },
                         card_title,
                     ),
-                    meta: seq,
+                    meta: started,
                     kind,
                 }
             })
@@ -173,32 +178,15 @@ impl FleetScreen {
         NODE_X0 + (i as f32) * NODE_STEP
     }
 
-    /// Low-level paint layer: subtle dot-grid + curved, glowing branch
+    /// Low-level paint layer: curved, glowing branch
     /// edges. Sits behind the trunk / dots / cards. Painted in stage
     /// coordinates offset by the canvas's window-space origin.
     fn render_stage_canvas(&self, edges: Vec<EdgeSpec>) -> impl IntoElement {
-        let dot_color = theme::graph_line().opacity(0.5);
         canvas(
             |_bounds, _window, _cx| {},
             move |bounds, _prepaint, window, _cx| {
                 let ox = bounds.origin.x;
                 let oy = bounds.origin.y;
-                let stage_w = f32::from(bounds.size.width);
-                let stage_h = f32::from(bounds.size.height);
-
-                // dot grid
-                let step = 26.0_f32;
-                let mut gy = 8.0_f32;
-                while gy < stage_h {
-                    let mut gx = 8.0_f32;
-                    while gx < stage_w {
-                        let dot =
-                            Bounds::new(point(ox + px(gx), oy + px(gy)), size(px(1.5), px(1.5)));
-                        window.paint_quad(fill(dot, dot_color));
-                        gx += step;
-                    }
-                    gy += step;
-                }
 
                 // curved branch edges: a wide faint glow pass + a bright
                 // thin pass, both following the same cubic Bézier.
@@ -245,7 +233,7 @@ impl FleetScreen {
                 .rounded_full()
                 .bg(theme::graph_line())
                 .into_any_element(),
-            // "main" label
+            // branch label — the repository's, or "HEAD" when unknown
             div()
                 .absolute()
                 .left(px(16.0))
@@ -253,7 +241,7 @@ impl FleetScreen {
                 .text_size(px(10.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme::text_muted())
-                .child("main")
+                .child(self.branch.clone().unwrap_or_else(|| "HEAD".to_string()))
                 .into_any_element(),
             // HEAD chip
             div()
@@ -318,18 +306,18 @@ impl FleetScreen {
             .top(px(card_top))
             .w(px(CARD_W))
             .v_flex()
-            .gap(px(6.0))
-            .p(px(11.0))
-            .rounded_lg()
+            .gap(px(8.0))
+            .p(px(12.0))
+            .rounded(px(ui::R_CONTROL + 2.0))
             .bg(theme::panel_raised())
             .border_1()
             .border_color(if is_failed {
-                theme::error().opacity(0.4)
+                theme::stroke(color)
             } else {
                 theme::hairline()
             })
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.6)))
+            .hover(|s: StyleRefinement| s.border_color(theme::stroke(theme::accent())))
             .on_click(cx.listener(move |_this, _e, _w, cx| {
                 if is_failed {
                     cx.emit(FleetAction::OpenGate(id_for_click.clone()));
@@ -337,46 +325,50 @@ impl FleetScreen {
                     cx.emit(FleetAction::OpenRun(run_id_for_click));
                 }
             }))
-            // header
-            .child(
-                div()
-                    .h_flex()
-                    .gap(px(7.0))
-                    .items_center()
-                    .child(ui::status_dot(color))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_primary())
-                            .child(node.id.clone()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(9.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(color)
-                            .child(node.kind.status_label()),
-                    ),
-            )
-            // title
+            // What was asked — the part a person recognises.
             .child(
                 div()
                     .overflow_hidden()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme::text_primary().opacity(0.9))
+                    .text_size(px(12.5))
+                    .line_height(px(17.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::text_primary())
                     .child(node.title.clone()),
             )
-            // meta footer
-            .child(ui::meta(node.meta.clone()))
+            // Status, then when and which run — the part a developer greps.
+            .child(
+                div()
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(ui::pill(node.kind.status_label(), color, theme::tint(color)))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme::text_dim())
+                            .child(node.meta.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme::text_dim())
+                    .child(node.id.clone()),
+            )
             .into_any_element();
 
         vec![dot, card]
     }
 
-    fn render_chips(&self, active: usize, needs: usize, completed: usize, live: bool) -> Div {
+    fn render_chips(
+        &self,
+        active: usize,
+        needs: usize,
+        completed: usize,
+        failed: usize,
+        live: bool,
+    ) -> Div {
         let chip = |dot: Hsla, text: String, fg: Hsla| {
             div()
                 .h_flex()
@@ -401,17 +393,24 @@ impl FleetScreen {
             .child(chip(
                 theme::warning(),
                 format!("{needs} needs you"),
-                theme::accent(),
+                if needs > 0 {
+                    theme::warning()
+                } else {
+                    theme::text_muted()
+                },
             ))
             .child(chip(
                 theme::success(),
                 format!("{completed} completed"),
                 theme::text_muted(),
             ))
+            .when(failed > 0, |el| {
+                el.child(chip(theme::error(), format!("{failed} failed"), theme::text_muted()))
+            })
             .when(!live, |el| {
                 el.child(
                     ui::pill(
-                        "Daemon disconnected · showing last known runs",
+                        "Offline · last known runs",
                         theme::text_muted(),
                         theme::panel_raised(),
                     )
@@ -468,7 +467,7 @@ impl FleetScreen {
                             .text_size(px(10.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(node.kind.color())
-                            .child("NEEDS ATTENTION"),
+                            .child("NEEDS YOU"),
                     )
                     .child(div().flex_1())
                     .child(ui::meta(node.id.clone())),
@@ -480,26 +479,18 @@ impl FleetScreen {
                     .text_color(theme::text_primary())
                     .child(node.title.clone()),
             )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .line_height(px(17.0))
-                    .text_color(theme::text_muted())
-                    .child("This run needs attention. Open Inbox to inspect what happened."),
-            )
             .child(primary)
     }
 
     fn render_command_bar(
         &mut self,
-        agents: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         if self.command_input.is_none() {
             let input = cx.new(|cx| {
                 InputState::new(window, cx).placeholder(
-                    "Describe new work — bootstrap plans it; gates land in your Inbox…",
+                    "Describe what to build next…",
                 )
             });
             cx.subscribe_in(
@@ -533,15 +524,11 @@ impl FleetScreen {
                     .items_center()
                     .h(px(38.0))
                     .px(px(12.0))
-                    .rounded_lg()
+                    .rounded(px(ui::R_CONTROL + 2.0))
                     .bg(theme::panel_deep())
                     .border_1()
                     .border_color(theme::hairline_strong())
-                    .child(ui::pill(
-                        "bootstrap",
-                        theme::accent(),
-                        theme::accent().opacity(0.12),
-                    ))
+                    .child(ui::role_badge("new run", theme::Semantic::Agent))
                     .child(
                         div().flex_1().child(
                             Input::new(self.command_input.as_ref().unwrap())
@@ -552,17 +539,15 @@ impl FleetScreen {
                     )
                     .child(ui::kbd("↵")),
             )
-            .child(ui::meta(format!("{agents} agents installed")))
     }
 }
 
 impl Render for FleetScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (nodes, live) = self.nodes(cx);
-        let agents = self.state.read(cx).installed_agents.len();
 
         // Counts cover every project run, not just the cards that fit.
-        let (active, needs, completed) = {
+        let (active, needs, completed, failed) = {
             let state = self.state.read(cx);
             let runs = state.project_runs();
             (
@@ -572,6 +557,9 @@ impl Render for FleetScreen {
                 state.needs_you_count(),
                 runs.iter()
                     .filter(|r| r.status == RunStatus::Completed)
+                    .count(),
+                runs.iter()
+                    .filter(|r| matches!(r.status, RunStatus::Failed | RunStatus::Aborted))
                     .count(),
             )
         };
@@ -634,6 +622,7 @@ impl Render for FleetScreen {
                     .items_center()
                     .justify_center()
                     .bg(theme::panel_deep())
+                    .child(ui::grid_backdrop(24.0))
                     .when(nodes.is_empty(), |el| {
                         el.child(
                             div()
@@ -653,10 +642,10 @@ impl Render for FleetScreen {
                         )
                     })
                     .when(!nodes.is_empty(), |el| el.child(stage))
-                    .child(self.render_chips(active, needs, completed, live))
+                    .child(self.render_chips(active, needs, completed, failed, live))
                     .children(attention.map(|n| self.render_inspector(n, cx))),
             )
-            .child(self.render_command_bar(agents, window, cx))
+            .child(self.render_command_bar(window, cx))
     }
 }
 

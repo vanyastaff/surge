@@ -1,8 +1,9 @@
 //! Saved verifier reports from immutable, hash-checked run artifacts.
 
-use gpui_kit::component::StyledExt;
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::artifact_contract::{ArtifactKind, validate_artifact_text};
 use surge_core::{
@@ -11,7 +12,8 @@ use surge_core::{
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::ReadEvent;
 
-use crate::theme;
+use crate::theme::{self, Semantic};
+use crate::ui;
 
 const MAX_REPORT_BYTES: usize = 1024 * 1024;
 
@@ -71,56 +73,56 @@ fn parse_report(bytes: &[u8]) -> Result<VerificationReportArtifact, String> {
     toml::from_str(text).map_err(|error| format!("Cannot parse saved report: {error}"))
 }
 
-fn report_text(report: &VerificationReportArtifact) -> String {
-    let outcome = match report.outcome {
-        VerificationReportOutcome::Passed => "passed",
-        VerificationReportOutcome::Failed => "failed",
-    };
-    let mut text = format!(
-        "Reported outcome: {outcome}\nTask: {}\n\n{}\n\nSaved report snapshot. Current worktree files may have changed.\nRecorded commands are not rerun by this UI.\nCommand execution and exit codes are not independently confirmed by this report.\n",
-        report.task_id, report.summary
-    );
-    if report.outcome == VerificationReportOutcome::Passed
-        && report
-            .checks
-            .iter()
-            .any(|check| check.result.trim().eq_ignore_ascii_case("failed"))
-    {
-        text.push_str(
-            "\nContradiction: the reported outcome is passed, but a check is reported failed.\n",
-        );
-    }
-    if report.checks.is_empty() {
-        text.push_str("\nNo commands recorded; checks remain unverified.\n");
-    }
-    for (index, check) in report.checks.iter().enumerate() {
-        text.push_str(&format!(
-            "\nCheck {}\nCommand: {}\nResult reported: {}\n",
-            index + 1,
-            check.command,
-            check.result
-        ));
-        if let Some(note) = &check.note {
-            text.push_str(&format!("Note: {note}\n"));
-        }
-    }
-    if !report.evidence.is_empty() {
-        text.push_str(
-            "\nEvidence references reported by producer (not opened or independently validated):\n",
-        );
-        for evidence in &report.evidence {
-            text.push_str(&format!("- {evidence}\n"));
-        }
-    }
-    text
+/// How a single reported check reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    Passed,
+    Failed,
+    /// Anything else the producer wrote — kept, never rounded up to a pass.
+    Unverified,
 }
 
-fn report_identity(run_id: RunId, source: &ReportSource, events: &[ReadEvent]) -> String {
-    let timestamp = chrono::DateTime::from_timestamp_millis(source.timestamp_ms).map_or_else(
+fn verdict(result: &str) -> Verdict {
+    match result.trim().to_ascii_lowercase().as_str() {
+        "passed" | "pass" | "ok" => Verdict::Passed,
+        "failed" | "fail" => Verdict::Failed,
+        _ => Verdict::Unverified,
+    }
+}
+
+/// The report says "passed" while one of its own checks says "failed".
+fn contradiction(report: &VerificationReportArtifact) -> bool {
+    report.outcome == VerificationReportOutcome::Passed
+        && report.checks.iter().any(|check| verdict(&check.result) == Verdict::Failed)
+}
+
+/// Where a saved report came from.
+#[derive(Clone, Debug)]
+struct Provenance {
+    node: String,
+    seq: u64,
+    recorded: String,
+    hash: ContentHash,
+    /// (profile, runtime) of the session that produced the report.
+    producer: Option<(String, Option<String>)>,
+}
+
+#[derive(Clone, Debug)]
+struct SavedChecks {
+    report: VerificationReportArtifact,
+    provenance: Provenance,
+}
+
+fn provenance(source: &ReportSource, events: &[ReadEvent]) -> Provenance {
+    let recorded = chrono::DateTime::from_timestamp_millis(source.timestamp_ms).map_or_else(
         || format!("{} ms", source.timestamp_ms),
-        |time| time.to_rfc3339(),
+        |time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        },
     );
-    let session = events
+    let producer = events
         .iter()
         .filter_map(|event| {
             if event.seq.0 >= source.seq {
@@ -137,43 +139,38 @@ fn report_identity(run_id: RunId, source: &ReportSource, events: &[ReadEvent]) -
             };
             (node.as_str() == source.node).then_some((event.seq.0, agent, agent_id))
         })
-        .max_by_key(|(seq, _, _)| *seq);
-    let actor = session.map_or_else(
-        || "Producer session identity not recorded".into(),
-        |(_, profile, runtime)| {
-            format!(
-                "Producer profile: {profile}\nProducer runtime: {}",
-                runtime.as_deref().unwrap_or("not recorded")
-            )
-        },
-    );
-    format!(
-        "Source run: {run_id}\nNode: {}\nEvent: {}\nRecorded: {timestamp}\nContent hash: {}\n{actor}",
-        source.node, source.seq, source.hash
-    )
+        .max_by_key(|(seq, _, _)| *seq)
+        .map(|(_, profile, runtime)| (profile.to_string(), runtime.clone()));
+    Provenance {
+        node: source.node.clone(),
+        seq: source.seq,
+        recorded,
+        hash: source.hash,
+        producer,
+    }
 }
 
 async fn load_saved_report(
     root: std::path::PathBuf,
     run_id: RunId,
     events: Vec<ReadEvent>,
-) -> Result<String, String> {
+) -> Result<SavedChecks, String> {
     let source =
         latest_report(&events).ok_or("No saved verification report; checks are unverified")?;
-    let identity = report_identity(run_id, &source, &events);
+    let provenance = provenance(&source, &events);
     let bytes = ArtifactStore::new(root)
         .open_bounded(run_id, source.hash, MAX_REPORT_BYTES)
         .await
-        .map_err(|error| format!("Saved report unavailable or corrupt: {error}\n\n{identity}"))?;
+        .map_err(|error| format!("Saved report unavailable or corrupt: {error}"))?;
     tokio::task::spawn_blocking(move || {
-        let report = parse_report(&bytes).map_err(|error| format!("{error}\n\n{identity}"))?;
-        Ok(format!("{}\n\n{identity}\n", report_text(&report)))
+        let report = parse_report(&bytes)?;
+        Ok(SavedChecks { report, provenance })
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
-async fn load_checks(run_id: RunId) -> Result<String, String> {
+async fn load_checks(run_id: RunId) -> Result<SavedChecks, String> {
     let home = surge_core::home::surge_home_dir().ok_or("Surge home unavailable")?;
     let root = home.join("runs");
     let events =
@@ -183,42 +180,46 @@ async fn load_checks(run_id: RunId) -> Result<String, String> {
     load_saved_report(root, run_id, events).await
 }
 
+enum Loaded {
+    Loading,
+    Ready(Box<SavedChecks>),
+    Unavailable(String),
+}
+
 pub(super) struct ChecksView {
     run_id: RunId,
     generation: u64,
-    text: String,
-    dirty: bool,
-    editor: Entity<EditorState>,
+    loaded: Loaded,
+    show_provenance: bool,
 }
 
 impl ChecksView {
-    pub(super) fn new(run_id: RunId, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let editor = cx.new(|cx| EditorState::new(window, cx).language("plaintext"));
+    pub(super) fn new(run_id: RunId, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             run_id,
             generation: 0,
-            text: String::new(),
-            dirty: true,
-            editor,
+            loaded: Loaded::Loading,
+            show_provenance: false,
         };
         view.refresh(cx);
         view
     }
 
-    fn accept_result(&mut self, generation: u64, result: Result<String, String>) {
+    fn accept_result(&mut self, generation: u64, result: Result<SavedChecks, String>) {
         if generation != self.generation {
             return;
         }
-        self.text = result.unwrap_or_else(|error| format!("Checks unverified\n\n{error}"));
-        self.dirty = true;
+        self.loaded = match result {
+            Ok(saved) => Loaded::Ready(Box::new(saved)),
+            Err(error) => Loaded::Unavailable(error),
+        };
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
         let run_id = self.run_id;
-        self.text = "Loading saved verification report…".into();
-        self.dirty = true;
+        self.loaded = Loaded::Loading;
         cx.notify();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = load_checks(run_id).await;
@@ -231,50 +232,244 @@ impl ChecksView {
         })
         .detach();
     }
-}
 
-impl Render for ChecksView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.dirty {
-            self.editor
-                .update(cx, |editor, cx| editor.set_value(&self.text, window, cx));
-            self.dirty = false;
-        }
-        div()
-            .flex_1()
-            .min_h_0()
-            .v_flex()
-            .gap(px(8.0))
-            .p(px(12.0))
+    fn render_report(&self, saved: &SavedChecks, cx: &mut Context<Self>) -> Div {
+        let report = &saved.report;
+        let passed = report.outcome == VerificationReportOutcome::Passed;
+        let (label, role) = if passed {
+            ("Verifier reported: passed", Semantic::Verified)
+        } else {
+            ("Verifier reported: failed", Semantic::Failure)
+        };
+        let color = role.color();
+        let counts = |v: Verdict| report.checks.iter().filter(|c| verdict(&c.result) == v).count();
+
+        let banner = ui::node_card(color)
+            .h_flex()
+            .gap(px(12.0))
+            .items_center()
+            .px(px(14.0))
+            .py(px(12.0))
             .child(
-                div()
-                    .h_flex()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(12.0))
-                            .text_color(theme::text_primary())
-                            .child("Saved verification report"),
-                    )
-                    .child(
-                        Button::new("refresh-checks")
-                            .ghost()
-                            .label("Refresh checks")
-                            .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
-                    ),
+                Icon::new(if passed { Lucide::ShieldCheck } else { Lucide::ShieldAlert })
+                    .size(px(18.0))
+                    .text_color(color),
             )
             .child(
                 div()
                     .flex_1()
-                    .min_h_0()
-                    .debug_selector(|| "saved-checks-editor".into())
+                    .min_w(px(0.0))
+                    .v_flex()
+                    .gap(px(3.0))
                     .child(
-                        Editor::new(&self.editor)
-                            .readonly(true)
-                            .aria_label("Saved verification report and reported commands")
-                            .h(relative(1.0)),
+                        div()
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme::text_primary())
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme::text_muted())
+                            .child(format!(
+                                "{} checks · {} passed · {} failed · {} unverified — saved report; commands are not re-run here",
+                                report.checks.len(),
+                                counts(Verdict::Passed),
+                                counts(Verdict::Failed),
+                                counts(Verdict::Unverified)
+                            )),
+                    ),
+            );
+
+        let mut body = div()
+            .v_flex()
+            .gap(px(12.0))
+            .child(banner)
+            .when(contradiction(report), |el| {
+                el.child(
+                    ui::node_card(theme::warning())
+                        .px(px(14.0))
+                        .py(px(10.0))
+                        .text_size(px(11.5))
+                        .text_color(theme::text_primary())
+                        .child(
+                            "Contradiction: the report says passed, but one of its own checks failed. \
+                             Treat this run as unverified.",
+                        ),
+                )
+            })
+            .when(!report.summary.trim().is_empty(), |el| {
+                el.child(
+                    div()
+                        .text_size(px(12.5))
+                        .line_height(px(19.0))
+                        .text_color(theme::text_primary())
+                        .child(report.summary.clone()),
+                )
+            });
+
+        if report.checks.is_empty() {
+            body = body.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme::text_muted())
+                    .child("No commands recorded — the checks remain unverified."),
+            );
+        }
+        for (index, check) in report.checks.iter().enumerate() {
+            let v = verdict(&check.result);
+            let (icon, tone) = match v {
+                Verdict::Passed => (IconName::CircleCheck, theme::success()),
+                Verdict::Failed => (IconName::CircleX, theme::error()),
+                Verdict::Unverified => (IconName::CircleAlert, theme::warning()),
+            };
+            body = body.child(
+                ui::panel()
+                    .v_flex()
+                    .gap(px(8.0))
+                    .p(px(12.0))
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(10.0))
+                            .items_center()
+                            .child(Icon::new(icon).size(px(14.0)).text_color(tone))
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(theme::text_dim())
+                                    .child(format!("Check {}", index + 1)),
+                            )
+                            .child(div().flex_1())
+                            .child(ui::pill(check.result.trim().to_string(), tone, theme::tint(tone))),
+                    )
+                    .child(
+                        div()
+                            .px(px(10.0))
+                            .py(px(7.0))
+                            .rounded(px(ui::R_CONTROL))
+                            .bg(theme::panel_deep())
+                            .border_1()
+                            .border_color(theme::hairline())
+                            .text_size(px(11.5))
+                            .text_color(theme::text_primary())
+                            .child(check.command.clone()),
+                    )
+                    .children(check.note.clone().map(|note| {
+                        div()
+                            .text_size(px(11.5))
+                            .line_height(px(17.0))
+                            .text_color(theme::text_muted())
+                            .child(note)
+                    })),
+            );
+        }
+
+        if !report.evidence.is_empty() {
+            body = body.child(
+                div()
+                    .v_flex()
+                    .gap(px(4.0))
+                    .child(ui::section_label("Evidence the verifier points to (not opened here)"))
+                    .children(report.evidence.iter().map(|e| {
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme::text_muted())
+                            .child(format!("· {e}"))
+                    })),
+            );
+        }
+
+        let p = &saved.provenance;
+        let open = self.show_provenance;
+        body.child(
+            div()
+                .v_flex()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .id("checks-provenance")
+                        .role(Role::Button)
+                        .h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .cursor_pointer()
+                        .text_size(px(10.5))
+                        .text_color(theme::text_dim())
+                        .hover(|s: StyleRefinement| s.text_color(theme::text_muted()))
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.show_provenance = !view.show_provenance;
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
+                                .size(px(11.0)),
+                        )
+                        .child("Where this report came from"),
+                )
+                .when(open, |el| {
+                    let producer = p.producer.as_ref().map_or_else(
+                        || "producer session not recorded".to_string(),
+                        |(profile, runtime)| {
+                            format!("{profile} on {}", runtime.as_deref().unwrap_or("unrecorded runtime"))
+                        },
+                    );
+                    el.child(
+                        div()
+                            .v_flex()
+                            .gap(px(3.0))
+                            .pl(px(17.0))
+                            .text_size(px(10.5))
+                            .text_color(theme::text_muted())
+                            .child(format!("Task {}", report.task_id))
+                            .child(format!("Node {} · event {} · {}", p.node, p.seq, p.recorded))
+                            .child(format!("Producer {producer}"))
+                            .child(format!("Content {}", p.hash)),
+                    )
+                }),
+        )
+    }
+}
+
+impl Render for ChecksView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content: AnyElement = match &self.loaded {
+            Loaded::Loading => div()
+                .text_size(px(12.0))
+                .text_color(theme::text_muted())
+                .child("Loading the saved verification report…")
+                .into_any_element(),
+            Loaded::Unavailable(reason) => ui::empty_state("◌", "Checks are unverified", reason.clone())
+                .into_any_element(),
+            Loaded::Ready(saved) => {
+                let saved = (**saved).clone();
+                self.render_report(&saved, cx).into_any_element()
+            },
+        };
+        div()
+            .id("run-checks")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .v_flex()
+            .gap(px(12.0))
+            .px(px(20.0))
+            .py(px(14.0))
+            .child(
+                div()
+                    .h_flex()
+                    .child(div().flex_1().child(ui::section_label("Verification")))
+                    .child(
+                        Button::new("refresh-checks")
+                            .ghost()
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .label("Refresh")
+                            .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
                     ),
             )
+            .child(div().max_w(px(900.0)).child(content))
     }
 }
 
@@ -312,11 +507,14 @@ mod tests {
             .await
             .unwrap();
         let events = vec![artifact_event(4, valid.hash)];
-        let text = super::load_saved_report(root.path().into(), run, events)
+        let saved = super::load_saved_report(root.path().into(), run, events)
             .await
             .unwrap();
-        assert!(text.contains("Reported outcome: failed"));
-        assert!(text.contains("Event: 4"));
+        assert_eq!(
+            saved.report.outcome,
+            surge_core::VerificationReportOutcome::Failed
+        );
+        assert_eq!(saved.provenance.seq, 4);
         let bad = store
             .put(run, "verification-report", b"invalid schema")
             .await
@@ -356,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn report_identity_uses_only_latest_prior_session_for_its_node() {
+    fn provenance_uses_only_latest_prior_session_for_its_node() {
         let source = super::ReportSource {
             hash: surge_core::ContentHash::compute(b"report"),
             node: "verify_app".into(),
@@ -382,51 +580,38 @@ mod tests {
                 },
             ),
         });
-        let identity = super::report_identity(surge_core::RunId::new(), &source, &sessions);
-        assert!(identity.contains("Producer runtime: codex"));
-        assert!(identity.contains("Producer profile: review@2"));
-        assert!(!identity.contains("wrong"));
-        assert!(!identity.contains("future"));
+        let provenance = super::provenance(&source, &sessions);
+        assert_eq!(
+            provenance.producer,
+            Some(("review@2".to_string(), Some("codex".to_string())))
+        );
     }
 
     #[test]
-    fn native_checks_editor_is_readonly_and_ignores_stale_refresh() {
-        use gpui_kit::{AppContext as _, Modifiers, TestAppContext};
+    fn stale_refresh_never_replaces_the_current_result() {
+        use gpui_kit::TestAppContext;
         let mut cx = TestAppContext::single();
         cx.update(gpui_kit::init);
         crate::theme::init();
-        let (view, window) = cx.add_window_view(|window, cx| {
-            let editor = cx.new(|cx| super::EditorState::new(window, cx).language("plaintext"));
-            super::ChecksView {
-                run_id: surge_core::RunId::new(),
-                generation: 2,
-                text: "Current report".into(),
-                dirty: true,
-                editor,
-            }
+        let (view, window) = cx.add_window_view(|_window, _cx| super::ChecksView {
+            run_id: surge_core::RunId::new(),
+            generation: 2,
+            loaded: super::Loaded::Loading,
+            show_provenance: false,
         });
         view.update(window, |view, _| {
-            view.accept_result(1, Ok("Stale report".into()));
-            assert_eq!(view.text, "Current report");
+            view.accept_result(1, Err("stale".into()));
+            assert!(matches!(view.loaded, super::Loaded::Loading));
             view.accept_result(2, Err("No report".into()));
-            assert!(view.text.contains("Checks unverified"));
-        });
-        window.update(|window, cx| window.draw(cx).clear(cx));
-        let bounds = window.debug_bounds("saved-checks-editor").unwrap();
-        window.simulate_click(bounds.center(), Modifiers::default());
-        window.simulate_input("fabricated pass");
-        view.update(window, |view, cx| {
-            assert_eq!(view.editor.read(cx).value().as_ref(), view.text)
+            assert!(matches!(&view.loaded, super::Loaded::Unavailable(r) if r == "No report"));
         });
     }
 
     #[test]
     fn checks_require_schema_and_show_reported_failure_without_execution_claim() {
         let report = super::parse_report(FAILED.as_bytes()).unwrap();
-        let text = super::report_text(&report);
-        assert!(text.contains("Reported outcome: failed"));
-        assert!(text.contains("npm test"));
-        assert!(text.contains("not independently confirmed"));
+        assert_eq!(report.checks[0].command, "npm test");
+        assert_eq!(super::verdict(&report.checks[0].result), super::Verdict::Failed);
         assert!(
             super::parse_report(FAILED.replace("schema_version = 1\n", "").as_bytes()).is_err()
         );
@@ -441,13 +626,16 @@ mod tests {
                 .as_bytes(),
         )
         .unwrap();
-        assert!(super::report_text(&report).contains("Contradiction"));
+        assert!(super::contradiction(&report));
         let report = super::parse_report(
             FAILED
                 .replace("result = 'failed'", "result = 'unverified'")
                 .as_bytes(),
         )
         .unwrap();
-        assert!(super::report_text(&report).contains("Result reported: unverified"));
+        // An unknown result is kept as unverified, never rounded to a pass.
+        assert_eq!(report.checks[0].result, "unverified");
+        assert_eq!(super::verdict(&report.checks[0].result), super::Verdict::Unverified);
+        assert!(!super::contradiction(&report));
     }
 }

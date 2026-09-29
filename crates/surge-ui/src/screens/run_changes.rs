@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use gpui_kit::component::StyledExt;
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
 use gpui_kit::prelude::FluentBuilder;
@@ -16,9 +16,40 @@ const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_PATCH_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 
+/// What happened to a file, read from its patch header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileChange {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// Lines added / removed and the change kind, counted once when the diff
+/// is read (never per frame).
+fn patch_stats(patch: &str) -> (usize, usize, FileChange) {
+    let mut added = 0;
+    let mut removed = 0;
+    let mut kind = FileChange::Modified;
+    for line in patch.lines() {
+        if line.starts_with("new file mode") {
+            kind = FileChange::Added;
+        } else if line.starts_with("deleted file mode") {
+            kind = FileChange::Deleted;
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            added += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            removed += 1;
+        }
+    }
+    (added, removed, kind)
+}
+
 struct ChangedFile {
     path: String,
     patch: String,
+    added: usize,
+    removed: usize,
+    change: FileChange,
     /// Surge's own working file (plan, contract artifact, agent settings),
     /// not part of the application being built.
     working: bool,
@@ -218,9 +249,13 @@ fn read_changes(path: &Path, base: Option<git2::Oid>) -> Result<Changes, String>
             break;
         }
         total += patch.len();
+        let (added, removed, change) = patch_stats(&patch);
         files.push(ChangedFile {
             path,
             patch,
+            added,
+            removed,
+            change,
             working: false,
         });
     }
@@ -307,6 +342,8 @@ pub(super) struct ChangesView {
     editor_dirty: bool,
     /// Result of the last "Keep app changes".
     keep_note: Option<String>,
+    /// Surge's own files (plans, reports) are folded away until asked for.
+    show_working: bool,
 }
 
 impl ChangesView {
@@ -326,6 +363,7 @@ impl ChangesView {
             decorations,
             editor_dirty: true,
             keep_note: None,
+            show_working: false,
         };
         view.refresh(cx);
         view
@@ -491,98 +529,160 @@ impl Render for ChangesView {
             self.decorations.set(diff_decorations(text), cx);
             self.editor_dirty = false;
         }
-        let mut list = div()
-            .id("changed-files")
-            .w(px(220.0))
-            .flex_shrink_0()
-            .overflow_y_scroll()
-            .v_flex();
         let app_count = self.files.iter().filter(|f| !f.working).count();
         let working_count = self.files.len() - app_count;
-        for (index, file) in self.files.iter().enumerate() {
-            if index == 0 && app_count > 0 {
-                list = list.child(crate::ui::section_label(format!(
-                    "App changes ({app_count})"
-                )));
-            }
-            if file.working && (index == 0 || !self.files[index - 1].working) {
-                list = list.child(div().pt(px(10.0)).child(crate::ui::section_label(format!(
-                    "Surge working files ({working_count})"
-                ))));
-            }
+        let (app_added, app_removed) = self
+            .files
+            .iter()
+            .filter(|f| !f.working)
+            .fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+
+        let mut list = div()
+            .id("changed-files")
+            .w(px(260.0))
+            .flex_shrink_0()
+            .overflow_y_scroll()
+            .v_flex()
+            .gap(px(1.0))
+            .pr(px(4.0));
+        if app_count > 0 {
             list = list.child(
-                Button::new(SharedString::from(format!("changed-file-{index}")))
-                    .ghost()
-                    .label(file.path.clone())
-                    .when(index == self.selected, |button| button.primary())
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.selected = index;
-                        view.editor_dirty = true;
-                        cx.notify();
-                    })),
+                div()
+                    .px(px(8.0))
+                    .pb(px(4.0))
+                    .child(crate::ui::section_label(format!("App · {app_count}"))),
             );
         }
+        for (index, file) in self.files.iter().enumerate() {
+            if file.working && (index == 0 || !self.files[index - 1].working) {
+                let open = self.show_working;
+                list = list.child(
+                    div()
+                        .id("toggle-working-files")
+                        .role(Role::Button)
+                        .h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .px(px(8.0))
+                        .pt(px(12.0))
+                        .pb(px(4.0))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.show_working = !view.show_working;
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
+                                .size(px(11.0))
+                                .text_color(theme::text_dim()),
+                        )
+                        .child(crate::ui::section_label(format!("Surge files · {working_count}"))),
+                );
+            }
+            if file.working && !self.show_working {
+                continue;
+            }
+            list = list.child(self.render_file_row(index, file, cx));
+        }
+
         div()
             .flex_1()
             .min_h_0()
             .v_flex()
-            .gap(px(8.0))
-            .p(px(12.0))
+            .gap(px(10.0))
+            .px(px(20.0))
+            .py(px(12.0))
             .child(
                 div()
                     .h_flex()
-                    .gap(px(8.0))
+                    .gap(px(10.0))
+                    .items_center()
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(11.0))
-                            .text_color(theme::text_muted())
-                            .child(self.note.clone()),
+                            .min_w(px(0.0))
+                            .v_flex()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap(px(8.0))
+                                    .items_center()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme::text_primary())
+                                    .child(format!(
+                                        "{app_count} app file{}",
+                                        if app_count == 1 { "" } else { "s" }
+                                    ))
+                                    .child(div().text_color(theme::success()).child(format!("+{app_added}")))
+                                    .child(div().text_color(theme::error()).child(format!("−{app_removed}"))),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(theme::text_dim())
+                                    .truncate()
+                                    .child(self.note.clone()),
+                            ),
                     )
                     .children(self.keep_note.clone().map(|note| {
                         div()
+                            .max_w(px(360.0))
                             .text_size(px(11.0))
                             .text_color(theme::accent())
                             .child(note)
                     }))
-                    .when(self.files.iter().any(|f| !f.working), |el| {
-                        el.child(
-                            Button::new("keep-app-changes")
-                                .primary()
-                                .label("Keep app changes")
-                                .on_click(cx.listener(|view, _, _, cx| view.keep(cx))),
-                        )
-                    })
                     .child(
                         Button::new("refresh-changes")
                             .ghost()
-                            .label("Refresh")
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .tooltip("Refresh")
                             .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
-                    ),
+                    )
+                    .when(app_count > 0, |el| {
+                        el.child(
+                            Button::new("keep-app-changes")
+                                .primary()
+                                .small()
+                                .icon(IconName::Check)
+                                .label("Keep app changes")
+                                .tooltip("Commit the app files and bring them into your project")
+                                .on_click(cx.listener(|view, _, _, cx| view.keep(cx))),
+                        )
+                    }),
             )
             .child(if self.files.is_empty() {
-                div()
-                    .flex_1()
-                    .child(if self.loading {
-                        "Loading…"
+                crate::ui::empty_state(
+                    "±",
+                    if self.loading {
+                        "Loading changes…"
                     } else if self.note.starts_with("Cannot") {
                         "Changes unavailable"
                     } else {
-                        "No changes against the displayed base"
-                    })
-                    .into_any_element()
+                        "No changes"
+                    },
+                    if self.loading { "" } else { "Nothing differs from the base this run started from." },
+                )
+                .flex_1()
+                .into_any_element()
             } else {
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .gap(px(8.0))
+                    .gap(px(10.0))
                     .child(list)
                     .child(
                         div()
                             .debug_selector(|| "run-diff-editor".into())
                             .flex_1()
                             .min_w_0()
+                            .rounded(px(crate::ui::R_CONTROL + 2.0))
+                            .border_1()
+                            .border_color(theme::hairline())
+                            .overflow_hidden()
                             .child(
                                 Editor::new(&self.editor)
                                     .readonly(true)
@@ -592,6 +692,80 @@ impl Render for ChangesView {
                     )
                     .into_any_element()
             })
+    }
+}
+
+impl ChangesView {
+    fn render_file_row(&self, index: usize, file: &ChangedFile, cx: &mut Context<Self>) -> Stateful<Div> {
+        let selected = index == self.selected;
+        let (dir, name) = match file.path.rsplit_once('/') {
+            Some((dir, name)) => (format!("{dir}/"), name.to_string()),
+            None => (String::new(), file.path.clone()),
+        };
+        let (letter, tone) = match file.change {
+            FileChange::Added => ("A", theme::success()),
+            FileChange::Modified => ("M", theme::warning()),
+            FileChange::Deleted => ("D", theme::error()),
+        };
+        div()
+            .id(SharedString::from(format!("changed-file-{index}")))
+            .role(Role::Button)
+            .aria_label(file.path.clone())
+            .h_flex()
+            .gap(px(8.0))
+            .items_center()
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(crate::ui::R_CONTROL))
+            .cursor_pointer()
+            .when(selected, |el| el.bg(theme::surface()))
+            .hover(|s: StyleRefinement| s.bg(theme::surface()))
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.selected = index;
+                view.editor_dirty = true;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .w(px(12.0))
+                    .flex_none()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(tone)
+                    .child(letter),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_flex()
+                    .overflow_hidden()
+                    .text_size(px(11.5))
+                    .child(
+                        div()
+                            .text_color(if selected {
+                                theme::text_primary()
+                            } else {
+                                theme::text_muted()
+                            })
+                            .flex_none()
+                            .child(name),
+                    )
+                    .child(div().pl(px(6.0)).text_color(theme::text_dim()).truncate().child(dir)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .h_flex()
+                    .gap(px(4.0))
+                    .text_size(px(10.0))
+                    .when(file.added > 0, |el| {
+                        el.child(div().text_color(theme::success()).child(format!("+{}", file.added)))
+                    })
+                    .when(file.removed > 0, |el| {
+                        el.child(div().text_color(theme::error()).child(format!("−{}", file.removed)))
+                    }),
+            )
     }
 }
 
@@ -710,12 +884,27 @@ mod tests {
         let files = ["app.js", "README.md", "styles.css"].map(|path| super::ChangedFile {
             path: path.into(),
             patch: String::new(),
+            added: 0,
+            removed: 0,
+            change: super::FileChange::Modified,
             working: false,
         });
         assert_eq!(super::refreshed_selection(Some("README.md"), &files), 1);
         assert_eq!(super::refreshed_selection(Some("removed"), &files), 0);
         assert_eq!(super::refreshed_selection(None, &files), 0);
         assert_eq!(super::refreshed_selection(Some("README.md"), &[]), 0);
+    }
+
+    #[test]
+    fn patch_stats_count_content_lines_not_headers() {
+        let patch = "diff --git a/x b/x\nnew file mode 100644\n--- /dev/null\n+++ b/x\n@@ -0,0 +1,2 @@\n+one\n+two\n";
+        assert_eq!(super::patch_stats(patch), (2, 0, super::FileChange::Added));
+        let patch = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n context\n";
+        assert_eq!(super::patch_stats(patch), (1, 1, super::FileChange::Modified));
+        assert_eq!(
+            super::patch_stats("deleted file mode 100644\n--- a/x\n+++ /dev/null\n-gone\n").2,
+            super::FileChange::Deleted
+        );
     }
 
     #[test]
@@ -762,6 +951,9 @@ mod tests {
                 files: vec![super::ChangedFile {
                     path: "app.rs".into(),
                     patch: "+addition\n-deletion\n".into(),
+                    added: 1,
+                    removed: 1,
+                    change: super::FileChange::Modified,
                     working: false,
                 }],
                 selected: 0,
@@ -769,6 +961,7 @@ mod tests {
                 editor,
                 editor_dirty: true,
                 keep_note: None,
+                show_working: false,
             }
         });
         window.update(|window, cx| window.draw(cx).clear(cx));

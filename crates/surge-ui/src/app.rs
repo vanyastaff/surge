@@ -8,7 +8,7 @@ use gpui_kit::*;
 
 use crate::actions::*;
 use crate::app_state::AppState;
-use crate::command_palette::{CommandPalette, CommandSelected};
+use crate::command_palette::{CommandPalette, PaletteCommand, PaletteEvent};
 use crate::notifications::SurgeNotification;
 use crate::project::RecentProjects;
 use crate::router::Screen;
@@ -19,9 +19,9 @@ use crate::screens::backlog::{BacklogAction, BacklogScreen};
 use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
 use crate::screens::inbox::{InboxAction, InboxScreen};
-use crate::screens::memory::MemoryScreen;
-use crate::screens::roadmap::RoadmapScreen;
-use crate::screens::runs::RunsScreen;
+use crate::screens::memory::{MemoryAction, MemoryScreen};
+use crate::screens::roadmap::{RoadmapEvent, RoadmapScreen};
+use crate::screens::runs::{RunsEvent, RunsScreen};
 use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
 use crate::screens::spec_wizard::SpecWizardScreen;
@@ -958,6 +958,18 @@ impl SurgeApp {
     }
 
     fn open_project(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        // A recent entry can outlive its folder (tmp dirs, deleted
+        // checkouts). Opening it would load an empty, broken project.
+        if !path.is_dir() {
+            tracing::warn!(path = %path.display(), "project folder not found");
+            self.pending_notifications
+                .push(SurgeNotification::project_missing(&path.display().to_string()));
+            if let AppMode::Welcome(welcome) = &self.mode {
+                welcome.update(cx, |w, cx| w.reload(cx));
+            }
+            cx.notify();
+            return;
+        }
         self.close_run_preview(cx);
         let name = path
             .file_name()
@@ -975,7 +987,7 @@ impl SurgeApp {
         });
 
         // Create top bar.
-        self.install_top_bar(&name, cx);
+        self.install_top_bar(&name, path, cx);
 
         // Reset screen entities so they re-read from AppState.
         self.fleet = None;
@@ -1003,8 +1015,9 @@ impl SurgeApp {
         cx.notify();
     }
 
-    fn install_top_bar(&mut self, name: &str, cx: &mut Context<Self>) {
-        let top_bar = cx.new(|cx| TopBar::new(name, Screen::Fleet, cx));
+    fn install_top_bar(&mut self, name: &str, path: &std::path::Path, cx: &mut Context<Self>) {
+        let path = path.to_path_buf();
+        let top_bar = cx.new(|cx| TopBar::new(name, Some(path), Screen::Fleet, cx));
         cx.subscribe(
             &top_bar,
             |this, _bar, event: &TopBarEvent, cx| match event {
@@ -1014,6 +1027,7 @@ impl SurgeApp {
                     this.handle_welcome_event(WelcomeEvent::BrowseProject, cx);
                 },
                 TopBarEvent::NewProject => this.create_project(cx),
+                TopBarEvent::OpenPalette => this.toggle_palette(cx),
             },
         )
         .detach();
@@ -1434,11 +1448,16 @@ impl SurgeApp {
         let palette = cx.new(CommandPalette::new);
         cx.subscribe(
             &palette,
-            |this: &mut Self, _palette, event: &CommandSelected, cx| {
-                if let Some(screen) = event.0 {
-                    this.navigate(screen, cx);
-                } else {
-                    this.close_palette(cx);
+            |this: &mut Self, _palette, event: &PaletteEvent, cx| {
+                this.close_palette(cx);
+                match *event {
+                    PaletteEvent::Dismiss => {},
+                    PaletteEvent::Run(PaletteCommand::Navigate(screen)) => this.navigate(screen, cx),
+                    PaletteEvent::Run(PaletteCommand::ToggleSidebar) => this.toggle_sidebar(cx),
+                    PaletteEvent::Run(PaletteCommand::OpenProject) => {
+                        this.handle_welcome_event(WelcomeEvent::BrowseProject, cx);
+                    },
+                    PaletteEvent::Run(PaletteCommand::NewApp) => this.create_project(cx),
                 }
             },
         )
@@ -1495,23 +1514,24 @@ impl SurgeApp {
 
     pub fn bind_actions(cx: &mut App) {
         cx.bind_keys([
-            // Surface navigation: Ctrl+1..9
-            KeyBinding::new("ctrl-1", GoToFleet, None),
-            KeyBinding::new("ctrl-2", GoToRoadmap, None),
-            KeyBinding::new("ctrl-3", GoToRuns, None),
-            KeyBinding::new("ctrl-4", GoToFlow, None),
-            KeyBinding::new("ctrl-5", GoToInbox, None),
-            KeyBinding::new("ctrl-6", GoToBacklog, None),
-            KeyBinding::new("ctrl-7", GoToAgents, None),
-            KeyBinding::new("ctrl-8", GoToMemory, None),
-            KeyBinding::new("ctrl-9", GoToSettings, None),
+            // Surface navigation: ⌘1..9 on macOS, Ctrl+1..9 elsewhere
+            KeyBinding::new("secondary-1", GoToFleet, None),
+            KeyBinding::new("secondary-2", GoToRoadmap, None),
+            KeyBinding::new("secondary-3", GoToRuns, None),
+            KeyBinding::new("secondary-4", GoToFlow, None),
+            KeyBinding::new("secondary-5", GoToInbox, None),
+            KeyBinding::new("secondary-6", GoToBacklog, None),
+            KeyBinding::new("secondary-7", GoToAgents, None),
+            KeyBinding::new("secondary-8", GoToMemory, None),
+            KeyBinding::new("secondary-9", GoToSettings, None),
             // UI toggles
-            KeyBinding::new("ctrl-b", ToggleSidebarAction, None),
-            KeyBinding::new("ctrl-k", ToggleCommandPalette, None),
+            KeyBinding::new("secondary-b", ToggleSidebarAction, None),
+            KeyBinding::new("secondary-k", ToggleCommandPalette, None),
             // Project
-            KeyBinding::new("ctrl-shift-p", SwitchProject, None),
+            KeyBinding::new("secondary-shift-p", SwitchProject, None),
             // Tasks
-            KeyBinding::new("ctrl-n", NewTask, None),
+            KeyBinding::new("secondary-n", NewTask, None),
+            KeyBinding::new("secondary-o", OpenProjectDialog, None),
         ]);
     }
 
@@ -1552,7 +1572,14 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let s = self
                     .runs_screen
-                    .get_or_insert_with(|| cx.new(|cx| RunsScreen::new(state, cx)))
+                    .get_or_insert_with(|| {
+                        let r = cx.new(|cx| RunsScreen::new(state, cx));
+                        cx.subscribe(&r, |this: &mut Self, _r, event: &RunsEvent, cx| match event {
+                            RunsEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                        })
+                        .detach();
+                        r
+                    })
                     .clone();
                 // Apply a parked deep-link selection now that the screen
                 // entity is guaranteed to exist.
@@ -1562,14 +1589,27 @@ impl SurgeApp {
                 s.into_any_element()
             },
             Screen::ContextMemory => {
-                let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
+                let state = self.state.clone();
+                let s = self.memory.get_or_insert_with(|| {
+                    let m = cx.new(|cx| MemoryScreen::new(state, cx));
+                    cx.subscribe(&m, |this: &mut Self, _m, event: &MemoryAction, cx| match event {
+                        MemoryAction::OpenRun(run_id) => this.open_run_cockpit(Some(*run_id), cx),
+                    })
+                    .detach();
+                    m
+                });
                 s.clone().into_any_element()
             },
             Screen::Roadmap => {
                 let state = self.state.clone();
-                let s = self
-                    .roadmap
-                    .get_or_insert_with(|| cx.new(|cx| RoadmapScreen::new(state, cx)));
+                let s = self.roadmap.get_or_insert_with(|| {
+                    let r = cx.new(|cx| RoadmapScreen::new(state, cx));
+                    cx.subscribe(&r, |this: &mut Self, _r, event: &RoadmapEvent, cx| match event {
+                        RoadmapEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                    })
+                    .detach();
+                    r
+                });
                 s.clone().into_any_element()
             },
             Screen::Inbox => {
@@ -1600,9 +1640,8 @@ impl SurgeApp {
                     cx.subscribe(
                         &b,
                         |this: &mut Self, _b, event: &BacklogAction, cx| match event {
-                            BacklogAction::OpenTask(id) => {
-                                this.task_detail_id = Some(id.clone());
-                                cx.notify();
+                            BacklogAction::OpenMission(run_id) => {
+                                this.open_run_cockpit(Some(*run_id), cx);
                             },
                             BacklogAction::NewTask => {
                                 this.navigate(Screen::SpecWizard, cx);
@@ -1944,9 +1983,17 @@ impl SurgeApp {
         }
     }
 
-    fn render_palette_overlay(&self) -> AnyElement {
+    fn render_palette_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(palette) = &self.command_palette {
             div()
+                .id("palette-overlay")
+                .occlude()
+                // Clicking the dimmed backdrop closes the palette; clicks on
+                // the palette itself stop before they get here.
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| this.close_palette(cx)),
+                )
                 .absolute()
                 .top_0()
                 .left_0()
@@ -1954,8 +2001,14 @@ impl SurgeApp {
                 .flex()
                 .justify_center()
                 .pt(px(80.0))
-                .bg(hsla(0.0, 0.0, 0.0, 0.5))
-                .child(palette.clone())
+                .bg(hsla(0.0, 0.0, 0.0, if theme::is_dark() { 0.6 } else { 0.3 }))
+                .child(
+                    div()
+                        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(palette.clone()),
+                )
                 .into_any_element()
         } else {
             div().into_any_element()
@@ -1973,22 +2026,7 @@ impl SurgeApp {
                     .h_flex()
                     .gap(px(8.0))
                     .items_center()
-                    .child(
-                        div()
-                            .w(px(15.0))
-                            .h(px(15.0))
-                            .rounded_sm()
-                            .bg(theme::accent())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                div()
-                                    .text_size(px(9.0))
-                                    .text_color(hsla(0.0, 0.0, 0.1, 1.0))
-                                    .child("⚡"),
-                            ),
-                    )
+                    .child(crate::ui::brand_mark(13.0))
                     .child(
                         div()
                             .text_size(px(12.0))
@@ -2005,11 +2043,25 @@ impl Render for SurgeApp {
         // Flush any queued notifications now that we have Window access.
         self.flush_notifications(window, cx);
 
+        // Key bindings dispatch along the focus path. With nothing focused
+        // (startup, after a dialog closes) the root's action handlers are
+        // off that path and ⌘1…9 / ⌘K / ⌘N / ⌘O silently do nothing.
+        if window.focused(cx).is_none() {
+            self.focus.focus(window, cx);
+        }
+
         let content: AnyElement =
             match &self.mode {
                 AppMode::Welcome(welcome) => div()
                     .key_context("SurgeApp")
                     .track_focus(&self.focus)
+                    // The start page's two ways in, on the keys its buttons show.
+                    .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
+                        this.handle_welcome_event(WelcomeEvent::NewProject, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &OpenProjectDialog, _w, cx| {
+                        this.handle_welcome_event(WelcomeEvent::BrowseProject, cx)
+                    }))
                     .size_full()
                     .font_family(crate::ui::MONO)
                     .child(welcome.clone())
@@ -2068,6 +2120,9 @@ impl Render for SurgeApp {
                         .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
                             this.navigate(Screen::SpecWizard, cx)
                         }))
+                        .on_action(cx.listener(|this, _: &OpenProjectDialog, _w, cx| {
+                            this.handle_welcome_event(WelcomeEvent::BrowseProject, cx)
+                        }))
                         .child(
                             div()
                             .size_full()
@@ -2091,7 +2146,7 @@ impl Render for SurgeApp {
                                     ),
                             ),
                         )
-                        .child(self.render_palette_overlay())
+                        .child(self.render_palette_overlay(cx))
                         .child(self.render_task_detail_overlay(cx))
                         .into_any_element()
                 },
