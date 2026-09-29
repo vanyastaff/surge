@@ -128,6 +128,12 @@ trusted. Then pick the smallest shape that still verifies everything:
   is small, because its first step (reproduce, characterise, baseline, audit)
   is what makes the rest checkable.
 
+When the result is something a user can run — a CLI, a service or a web UI —
+put an `app-tester@1.0` step before the verifier of each task or milestone: it
+starts the built program and tries the acceptance criteria as a user would.
+Its report is evidence only; the sealed verifier still decides `verified`. Skip
+it for libraries with no runnable surface.
+
 Do not add stages the roadmap does not need; do not drop verification to save
 steps. Record the decision in root `[metadata]` as `description`: one or two
 plain sentences naming the archetype and why it fits this roadmap (for

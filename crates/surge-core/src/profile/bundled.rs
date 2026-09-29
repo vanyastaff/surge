@@ -39,6 +39,7 @@ const VERIFIER_TOML: &str = include_str!("../../bundled/profiles/verifier-1.0.to
 const VERIFIER_2_0_TOML: &str = include_str!("../../bundled/profiles/verifier-2.0.toml");
 const CROSS_VERIFIER_TOML: &str = include_str!("../../bundled/profiles/cross-verifier-1.0.toml");
 const OLLAMA_VERIFIER_TOML: &str = include_str!("../../bundled/profiles/ollama-verifier-1.0.toml");
+const APP_TESTER_TOML: &str = include_str!("../../bundled/profiles/app-tester-1.0.toml");
 const REVIEWER_TOML: &str = include_str!("../../bundled/profiles/reviewer-1.0.toml");
 const PR_COMPOSER_TOML: &str = include_str!("../../bundled/profiles/pr-composer-1.0.toml");
 
@@ -57,7 +58,7 @@ const FEATURE_PLANNER_TOML: &str = include_str!("../../bundled/profiles/feature-
 
 /// Total number of bundled profiles. Centralized so tests can spot-check
 /// that nothing was added or dropped silently.
-pub const BUNDLED_COUNT: usize = 21;
+pub const BUNDLED_COUNT: usize = 22;
 
 /// Look-up table for compile-time bundled profiles.
 ///
@@ -94,6 +95,7 @@ impl BundledRegistry {
             parse(VERIFIER_2_0_TOML, "verifier"),
             parse(CROSS_VERIFIER_TOML, "cross-verifier"),
             parse(OLLAMA_VERIFIER_TOML, "ollama-verifier"),
+            parse(APP_TESTER_TOML, "app-tester"),
             parse(REVIEWER_TOML, "reviewer"),
             parse(PR_COMPOSER_TOML, "pr-composer"),
             // Specialized (Task 11).
@@ -176,6 +178,21 @@ mod tests {
     /// matters: it does not run the implementer's runtime. Before it existed,
     /// W5 (`SameRuntimeVerification`) could warn and nothing in the bundled
     /// set could answer — every profile resolved to `claude-code`.
+    #[test]
+    fn app_tester_runs_the_app_but_holds_no_verification_authority() {
+        let tester = BundledRegistry::all()
+            .into_iter()
+            .find(|p| p.role.id.as_str() == "app-tester")
+            .expect("app-tester is bundled");
+        assert_eq!(tester.sandbox.mode, SandboxMode::WorkspaceNetwork);
+        assert!(
+            !tester.verification.authority,
+            "the tester reports evidence; a sealed verifier certifies"
+        );
+        let outcomes: Vec<&str> = tester.outcomes.iter().map(|o| o.id.as_ref()).collect();
+        assert_eq!(outcomes, ["exercised", "cannot_run"]);
+    }
+
     #[test]
     fn cross_verifier_is_a_sealed_authority_on_a_different_runtime() {
         let cross =

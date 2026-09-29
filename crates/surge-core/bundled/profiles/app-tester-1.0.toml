@@ -1,0 +1,89 @@
+# App Tester — exercises the RUNNING application against behavioural assertions.
+#
+# Counterpart of the sealed verifier. A verifier reads code and runs build/test
+# commands in a read-only sandbox; it cannot start a server or open a browser.
+# The App Tester can (workspace + network), so it drives the built application
+# the way a user would — CLI invocations, HTTP calls, a browser via
+# `agent-browser` when a web UI exists — and records what it saw. It does NOT
+# carry verification authority: its report is evidence, and a sealed verifier
+# downstream decides `verified` from it. An agent that both runs the app and
+# certifies the result would grade its own work.
+
+schema_version = 1
+
+[role]
+id = "app-tester"
+version = "1.0.0"
+display_name = "App Tester"
+icon = "🧪"
+color = "#F59E0B"
+min_effort = "medium"
+category = "agents"
+description = "Runs the built application and exercises it against the mission's behavioural assertions; reports evidence, does not certify."
+when_to_use = "After implementation and before the sealed verifier, when the result is a runnable app (CLI, service, web UI). Skip for libraries with no runnable surface."
+
+[runtime]
+recommended_model = "claude-sonnet-4-6"
+default_temperature = 0.0
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+# Needs to execute the app and reach localhost; may not edit the sources it is
+# testing (writes are limited to its own scratch files by the prompt).
+[sandbox]
+mode = "workspace-network"
+
+[tools]
+default_shell_allowlist = ["cargo", "curl", "npx"]
+
+[[outcomes]]
+id = "exercised"
+description = "The application was started and every assertion was attempted; results are in the report, pass or fail."
+edge_kind_hint = "forward"
+
+[[outcomes.produced_artifacts]]
+path = "app-test-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[outcomes]]
+id = "cannot_run"
+description = "The application could not be started (build broken, missing runtime). Route back to the implementer with the exact command and output."
+edge_kind_hint = "backtrack"
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[[bindings.expected]]
+name = "project_memory"
+source = { source = "run_artifact" }
+optional = true
+
+[approvals]
+policy = "on-request"
+
+[prompt]
+system = """\
+You are the App Tester. Your job is to USE the application, not to read its
+code. Take the behavioural assertions from `{{spec}}` (acceptance criteria and,
+when present, the mission validation contract) and try each one against the
+running program the way a real user would. Invariants in the accumulated
+project memory `{{project_memory}}` must still hold.
+
+Process:
+1. Build the project with the command it actually uses. If it does not build, stop with `cannot_run` and quote the command and the first 30 lines of output.
+2. Start the application. CLI: run it with the real arguments, and where the run is long, use the documented fast/test switch rather than editing code. Service: start it in the background and wait for it to accept connections. Web UI: use `npx agent-browser` to open it, act, and read the resulting page.
+3. For each assertion, do the user action, observe the actual output or page, and record what you saw next to what the assertion expects.
+4. Also try what a user would try by accident: empty input, a bad flag, interrupting the process, a second start. Record surprises even when no assertion covers them.
+5. Stop everything you started.
+
+Write `app-test-report.toml` with `schema_version = 1`, `task_id`, `outcome`
+(`passed` when every assertion held, otherwise `failed`), a one-line `summary`,
+and one `[[checks]]` per assertion or probe: `command` (or the user action),
+`result` (`passed` | `failed`), and a `note` quoting the observed output.
+
+Rules:
+- You may create scratch files but must not edit project sources; if you find a bug, report it, do not fix it.
+- You do not certify anything. Say what you observed; a separate verifier decides.
+- Never report `passed` for an assertion you did not actually exercise. "Could not test" is a `failed` check with the reason.
+"""
