@@ -89,3 +89,33 @@ an opaque error for a model the account cannot use (`65a30bf`).
 Limits of this record: one project, one runtime (Claude Code), verification by the
 same runtime (`verifier@2.0`). The cross-vendor verifier could not be exercised
 because the Codex account was over its usage limit.
+
+## Recorded result 2 — 2026-09-29, with the App Tester in the flow
+
+Same idea, same runtime (Claude Code), after adding the `app-tester@1.0` profile
+and the generator guidance that places it before each sealed verifier. The
+generator put an `app_test` step before `verify_task`, `ms_verify` and
+`final_verify`.
+
+| Measure | Result |
+|---|---|
+| Follow-up run terminal | `RunCompleted` |
+| Stage outcomes | `app_test` passed ×4, `ms_app_test` passed ×2, `final_app_test` passed ×1, every sealed verifier passed |
+| `TaskVerified` with evidence | t1–t4 and both milestones (m1, m2) |
+| Contract rejections | 0 |
+| Program | `cargo test` passes; `POMODORO_FAST=1 cargo run` prints the work and break notices |
+
+What it took to get here (all fixed, all with tests): four live runs failed at the
+tester stage before this one passed. (1) the stage outcome word `exercised` was
+not a value the `verification-report` file accepts; (2) the profile declared
+`app-test-report.toml` while agents write the contract's standard
+`verification-report.toml`, so every report was rejected on path; (3) the tester
+failed a task for behaviour a later task owns, so its prompt is now scoped to the
+current spec. One run also parked on a provider 529 "Overloaded" and resumed with
+`surge bootstrap resume` after the wake time.
+
+The tester earlier did what it is for: in a failing run it started the program,
+saw that only `Hello, world!` printed, and reported that as evidence rather than
+reading code and approving.
+
+Limits are unchanged: one project, one runtime, same-vendor verification.

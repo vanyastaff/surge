@@ -100,7 +100,7 @@ These are aggregator-level sources; treat individual percentages as unverified.
 
 | Gap | Seen in | Status |
 |---|---|---|
-| Agent-driven QA of the **running app** against the mission validation contract | Factory Missions | Contract exists in roadmap (`[[missions]]`); `app-tester@1.0` profile added (runs the app, reports evidence, holds no verification authority); the flow generator now places it before the sealed verifier for runnable apps. Not yet exercised in a recorded run |
+| Agent-driven QA of the **running app** against the mission validation contract | Factory Missions | Contract exists in roadmap (`[[missions]]`); `app-tester@1.0` profile added (runs the app, reports evidence, holds no verification authority); the flow generator now places it before the sealed verifier for runnable apps. Exercised in a recorded run: 7 of 7 tester stages passed, 0 contract rejections ([`recorded-e2e.md`](recorded-e2e.md)) |
 | Untrusted-content handling (prompt-injection) for tracker/issue text | 2026 security literature | Ticket text is fenced as data in the ticket-run and triage prompts (`surge_core::untrusted`); the runtime sandbox remains the security boundary |
 | Semantic merge-conflict resolution | Aperant | Open |
 | Remote/mobile steering, cloud runners | Factory, Devin, Agentlas | Open (Surge is local) |
