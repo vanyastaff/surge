@@ -627,10 +627,8 @@ impl Engine {
         parent_run_id: RunId,
     ) -> Result<Vec<VersionedEventPayload>, EngineError> {
         use surge_core::keys::NodeKey;
-        use surge_core::run_state::ArtifactRef;
         use surge_persistence::runs::EventSeq;
 
-        const BOOTSTRAP_PARENT_ARTIFACTS: [&str; 3] = ["description", "roadmap", "flow"];
         const BOOTSTRAP_PARENT_NODE: &str = "bootstrap_parent";
 
         let reader = self
@@ -647,56 +645,8 @@ impl Engine {
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-        let mut parent_worktree = None;
-        let mut artifacts = std::collections::BTreeMap::new();
-        for event in parent_events {
-            match event.payload.payload {
-                EventPayload::RunStarted { project_path, .. } => {
-                    parent_worktree = Some(project_path);
-                },
-                EventPayload::ArtifactProduced {
-                    node,
-                    artifact,
-                    path,
-                    name,
-                    ..
-                } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str())
-                    || crate::bootstrap_driver::is_roadmap_toml_alias(&name) =>
-                {
-                    artifacts.insert(
-                        name.clone(),
-                        ArtifactRef {
-                            hash: artifact,
-                            path,
-                            name,
-                            produced_by: node,
-                            produced_at_seq: event.seq.as_u64(),
-                        },
-                    );
-                },
-                _ => {},
-            }
-        }
-
-        // The roadmap planner emits the roadmap under an alias (`roadmap_toml`);
-        // inherit it as `roadmap`, refusing competing aliases rather than guessing.
-        if let Some(roadmap) =
-            crate::bootstrap_driver::canonical_roadmap_ref(artifacts.values(), "roadmap")
-                .map_err(|()| {
-                    EngineError::Internal(format!(
-                        "bootstrap parent {parent_run_id} has competing roadmap artifacts"
-                    ))
-                })?
-                .cloned()
-        {
-            artifacts.insert("roadmap".to_owned(), roadmap);
-        }
-
-        let parent_worktree = parent_worktree.ok_or_else(|| {
-            EngineError::Internal(format!(
-                "bootstrap parent {parent_run_id} has no RunStarted event"
-            ))
-        })?;
+        let (parent_worktree, artifacts) =
+            collect_bootstrap_parent_artifacts(parent_events, parent_run_id)?;
         let inherited_node = NodeKey::try_from(BOOTSTRAP_PARENT_NODE).map_err(|e| {
             EngineError::Internal(format!("invalid bootstrap parent producer key: {e}"))
         })?;
@@ -1376,6 +1326,77 @@ fn artifact_produced_event(
 /// Canonical artifact name under which the run's free-form initial prompt is
 /// surfaced to agent stages. Bootstrap profiles bind to this name (either via
 /// `ArtifactSource::InitialPrompt` or `ArtifactSource::RunArtifact { name }`).
+/// The parent run's worktree and the description / roadmap / flow artifacts a
+/// follow-up run inherits, keyed by logical name.
+///
+/// The roadmap planner emits the roadmap under an alias (`roadmap_toml`); it is
+/// inherited as `roadmap`, refusing competing aliases rather than guessing.
+fn collect_bootstrap_parent_artifacts(
+    parent_events: Vec<surge_persistence::runs::ReadEvent>,
+    parent_run_id: RunId,
+) -> Result<
+    (
+        std::path::PathBuf,
+        std::collections::BTreeMap<String, surge_core::run_state::ArtifactRef>,
+    ),
+    EngineError,
+> {
+    use surge_core::run_state::ArtifactRef;
+
+    let mut parent_worktree = None;
+    let mut artifacts = std::collections::BTreeMap::new();
+    for event in parent_events {
+        match event.payload.payload {
+            EventPayload::RunStarted { project_path, .. } => {
+                parent_worktree = Some(project_path);
+            },
+            EventPayload::ArtifactProduced {
+                node,
+                artifact,
+                path,
+                name,
+                ..
+            } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str())
+                || crate::bootstrap_driver::is_roadmap_toml_alias(&name) =>
+            {
+                artifacts.insert(
+                    name.clone(),
+                    ArtifactRef {
+                        hash: artifact,
+                        path,
+                        name,
+                        produced_by: node,
+                        produced_at_seq: event.seq.as_u64(),
+                    },
+                );
+            },
+            _ => {},
+        }
+    }
+
+    if let Some(roadmap) =
+        crate::bootstrap_driver::canonical_roadmap_ref(artifacts.values(), "roadmap")
+            .map_err(|()| {
+                EngineError::Internal(format!(
+                    "bootstrap parent {parent_run_id} has competing roadmap artifacts"
+                ))
+            })?
+            .cloned()
+    {
+        artifacts.insert("roadmap".to_owned(), roadmap);
+    }
+
+    let parent_worktree = parent_worktree.ok_or_else(|| {
+        EngineError::Internal(format!(
+            "bootstrap parent {parent_run_id} has no RunStarted event"
+        ))
+    })?;
+    Ok((parent_worktree, artifacts))
+}
+
+/// Logical names a follow-up run inherits from its bootstrap parent.
+const BOOTSTRAP_PARENT_ARTIFACTS: [&str; 3] = ["description", "roadmap", "flow"];
+
 pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
 
 /// Canonical artifact name for the stable project context captured at run start.
