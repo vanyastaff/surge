@@ -41,6 +41,17 @@ pub enum OpenSessionError {
     /// Opening was cancelled before a session was delivered.
     #[error("ACP session opening cancelled")]
     Cancelled,
+    /// The agent does not offer a requested session option value
+    /// ([`super::session::ConfigSelection`]).
+    #[error("agent does not offer {category} '{requested}' (offered: {offered})")]
+    ConfigOptionUnavailable {
+        /// `model` or `reasoning level`.
+        category: &'static str,
+        /// Value the step asked for.
+        requested: String,
+        /// Values the agent advertised, comma-separated ("none" when absent).
+        offered: String,
+    },
     /// Total initialize/new-session deadline expired.
     #[error("ACP {phase} exceeded handshake deadline {timeout:?}")]
     HandshakeTimedOut {

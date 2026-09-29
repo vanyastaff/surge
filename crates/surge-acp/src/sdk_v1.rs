@@ -174,6 +174,16 @@ impl ClientConnection {
             .block_task()
             .await
     }
+    pub(crate) async fn set_session_config_option(
+        &self,
+        request: SetSessionConfigOptionRequest,
+    ) -> Result<SetSessionConfigOptionResponse> {
+        self.connection()
+            .await?
+            .send_request(request)
+            .block_task()
+            .await
+    }
     pub(crate) async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse> {
         self.connection()
             .await?
@@ -456,14 +466,21 @@ mod lifecycle_tests {
             // duplex buffer drains and refills, without yielding a turn back to
             // `driver`), which made this assertion flaky — sometimes passing
             // in well under a second, sometimes not resolving in 1s at all.
+            //
+            // The write is not time-boxed: with a 100ms cap a loaded machine
+            // wrote less than the line limit, so there was nothing to reject
+            // and the reader waited forever. Wait for the rejection instead,
+            // then check the frame was never accepted in full.
             let oversized = vec![b'x'; 4 * 1024 * 1024];
-            let write_task = tokio::task::spawn_local(async move {
-                tokio::time::timeout(std::time::Duration::from_millis(100), peer.write_all(&oversized)).await
-            });
-            let write = write_task.await.unwrap();
-            assert!(!matches!(write, Ok(Ok(()))), "oversized frame must not be fully accepted");
-            let error = tokio::time::timeout(std::time::Duration::from_secs(1), task).await.unwrap().unwrap().unwrap_err();
+            let write_task = tokio::task::spawn_local(async move { peer.write_all(&oversized).await });
+            let error = tokio::time::timeout(std::time::Duration::from_secs(10), task).await.unwrap().unwrap().unwrap_err();
             assert!(error.to_string().contains("frame exceeds"));
+            if write_task.is_finished() {
+                let write = write_task.await.unwrap();
+                assert!(write.is_err(), "oversized frame must not be fully accepted");
+            } else {
+                write_task.abort();
+            }
             connection.stop();
         }).await;
     }

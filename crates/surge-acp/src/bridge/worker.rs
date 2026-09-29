@@ -261,6 +261,44 @@ pub(crate) async fn open_session_impl(
     reply: &mut tokio::sync::oneshot::Sender<Result<SessionId, OpenSessionError>>,
     handshake_timeout: Duration,
 ) -> Result<AcpSession, OpenSessionError> {
+    // A launcher-started adapter (npx) occasionally never answers the
+    // handshake — observed live under machine load at `session/new` — and a
+    // single hang used to fail the whole run. The failed attempt's process
+    // group is already reaped; start the agent once more with the same
+    // config. Only a handshake timeout is retried: spawn, protocol and
+    // option errors are deterministic and returned as they are.
+    let mut attempt = 1;
+    loop {
+        match open_session_attempt(event_tx, &config, shutdown, reply, handshake_timeout).await {
+            Err(OpenSessionError::HandshakeTimedOut { phase, timeout })
+                if attempt < HANDSHAKE_ATTEMPTS
+                    && !shutdown.is_cancelled()
+                    && !reply.is_closed() =>
+            {
+                warn!(
+                    kind = config.agent_kind.label(),
+                    phase,
+                    ?timeout,
+                    attempt,
+                    "agent did not finish the ACP handshake; restarting it once"
+                );
+                attempt += 1;
+            },
+            result => return result,
+        }
+    }
+}
+
+/// Launch attempts per session open (see [`open_session_impl`]).
+const HANDSHAKE_ATTEMPTS: u32 = 2;
+
+async fn open_session_attempt(
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    config: &SessionConfig,
+    shutdown: &tokio_util::sync::CancellationToken,
+    reply: &mut tokio::sync::oneshot::Sender<Result<SessionId, OpenSessionError>>,
+    handshake_timeout: Duration,
+) -> Result<AcpSession, OpenSessionError> {
     if shutdown.is_cancelled() || reply.is_closed() {
         return Err(OpenSessionError::Cancelled);
     }
@@ -444,6 +482,40 @@ pub(crate) async fn open_session_impl(
             return Err(error);
         },
     };
+    // Apply requested session options (model, reasoning level) through the
+    // standard `session/set_config_option`, before any prompt is sent.
+    if !config.config_selections.is_empty() {
+        let offered = response.config_options.clone().unwrap_or_default();
+        let applied = async {
+            for selection in &config.config_selections {
+                let (config_id, value) = resolve_config_selection(&offered, selection)?;
+                connection
+                    .set_session_config_option(
+                        agent_client_protocol::schema::v1::SetSessionConfigOptionRequest::new(
+                            response.session_id.clone(),
+                            config_id,
+                            value,
+                        ),
+                    )
+                    .await
+                    .map_err(|error| OpenSessionError::HandshakeFailed {
+                        reason: secrets
+                            .redact_json(&format!("session/set_config_option failed: {error}")),
+                    })?;
+            }
+            Ok::<(), OpenSessionError>(())
+        }
+        .await;
+        if let Err(error) = applied {
+            connection.stop();
+            let _ = io_task_handle.await;
+            drop(connection);
+            reap_failed_open(&mut child).await;
+            drainer.abort();
+            let _ = drainer.await;
+            return Err(error);
+        }
+    }
     inner.borrow_mut().acp_session_id = response.session_id.to_string();
     debug!(session = %session_id, hidden_count = hidden_names.len(), "ACP handshake completed");
     Ok(AcpSession {
@@ -465,9 +537,68 @@ pub(crate) async fn open_session_impl(
         established: Some(BridgeEvent::SessionEstablished {
             session: session_id,
             agent: config.agent_kind.label().into(),
-            bindings: config.bindings,
+            bindings: config.bindings.clone(),
             tools_visible: visible.iter().map(|tool| tool.name.clone()).collect(),
         }),
+    })
+}
+
+/// Find the advertised select option and value for `selection`. Value ids
+/// and display names both match, case-insensitively, so an operator can
+/// write `opus` or `claude-opus-4-7` or the display name the agent shows.
+pub(crate) fn resolve_config_selection(
+    offered: &[agent_client_protocol::schema::v1::SessionConfigOption],
+    selection: &super::session::ConfigSelection,
+) -> Result<
+    (
+        agent_client_protocol::schema::v1::SessionConfigId,
+        agent_client_protocol::schema::v1::SessionConfigValueId,
+    ),
+    OpenSessionError,
+> {
+    use super::session::ConfigCategory;
+    use agent_client_protocol::schema::v1::{
+        SessionConfigKind, SessionConfigOptionCategory, SessionConfigSelectOptions,
+    };
+    let (wanted, label) = match selection.category {
+        ConfigCategory::Model => (SessionConfigOptionCategory::Model, "model"),
+        ConfigCategory::ThoughtLevel => {
+            (SessionConfigOptionCategory::ThoughtLevel, "reasoning level")
+        },
+    };
+    let requested = selection.value.trim();
+    let mut offered_values = Vec::new();
+    for option in offered
+        .iter()
+        .filter(|o| o.category.as_ref() == Some(&wanted))
+    {
+        let SessionConfigKind::Select(select) = &option.kind else {
+            continue;
+        };
+        let choices: Vec<_> = match &select.options {
+            SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+            SessionConfigSelectOptions::Grouped(groups) => {
+                groups.iter().flat_map(|g| g.options.iter()).collect()
+            },
+            _ => Vec::new(),
+        };
+        for choice in choices {
+            offered_values.push(choice.value.to_string());
+            if choice.value.to_string().eq_ignore_ascii_case(requested)
+                || choice.name.eq_ignore_ascii_case(requested)
+            {
+                return Ok((option.id.clone(), choice.value.clone()));
+            }
+        }
+    }
+    Err(OpenSessionError::ConfigOptionUnavailable {
+        category: label,
+        requested: requested.to_string(),
+        offered: if offered_values.is_empty() {
+            "none".into()
+        } else {
+            offered_values.join(", ")
+        },
     })
 }
 
@@ -825,6 +956,91 @@ mod tests {
 
     /// Observed live from codex-acp (2026-09-28): a verifier stage failed the
     /// whole run instead of parking because this wording was unrecognised.
+    fn model_options() -> Vec<agent_client_protocol::schema::v1::SessionConfigOption> {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+        };
+        vec![
+            SessionConfigOption::select(
+                "model",
+                "Model",
+                "sonnet",
+                vec![
+                    SessionConfigSelectOption::new("sonnet", "Claude Sonnet"),
+                    SessionConfigSelectOption::new("opus", "Claude Opus"),
+                ],
+            )
+            .category(SessionConfigOptionCategory::Model),
+            SessionConfigOption::select(
+                "effort",
+                "Reasoning",
+                "medium",
+                vec![
+                    SessionConfigSelectOption::new("low", "Low"),
+                    SessionConfigSelectOption::new("high", "High"),
+                ],
+            )
+            .category(SessionConfigOptionCategory::ThoughtLevel),
+        ]
+    }
+
+    #[test]
+    fn config_selection_matches_value_or_name_within_its_category() {
+        use crate::bridge::session::{ConfigCategory, ConfigSelection};
+        let offered = model_options();
+        let by_value = ConfigSelection {
+            category: ConfigCategory::Model,
+            value: "OPUS".into(),
+        };
+        let (id, value) = resolve_config_selection(&offered, &by_value).unwrap();
+        assert_eq!(
+            (id.to_string(), value.to_string()),
+            ("model".into(), "opus".into())
+        );
+        let by_name = ConfigSelection {
+            category: ConfigCategory::Model,
+            value: "Claude Sonnet".into(),
+        };
+        assert_eq!(
+            resolve_config_selection(&offered, &by_name)
+                .unwrap()
+                .1
+                .to_string(),
+            "sonnet"
+        );
+        let effort = ConfigSelection {
+            category: ConfigCategory::ThoughtLevel,
+            value: "high".into(),
+        };
+        let (id, _) = resolve_config_selection(&offered, &effort).unwrap();
+        assert_eq!(id.to_string(), "effort");
+    }
+
+    #[test]
+    fn config_selection_the_agent_does_not_offer_is_refused_with_its_choices() {
+        use crate::bridge::session::{ConfigCategory, ConfigSelection};
+        let wrong = ConfigSelection {
+            category: ConfigCategory::Model,
+            value: "gpt-9".into(),
+        };
+        let error = resolve_config_selection(&model_options(), &wrong).unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains("gpt-9") && text.contains("sonnet, opus"),
+            "{text}"
+        );
+        // A model value is never matched against the reasoning-level option.
+        let cross = ConfigSelection {
+            category: ConfigCategory::Model,
+            value: "high".into(),
+        };
+        assert!(resolve_config_selection(&model_options(), &cross).is_err());
+        let none = resolve_config_selection(&[], &wrong)
+            .unwrap_err()
+            .to_string();
+        assert!(none.contains("offered: none"), "{none}");
+    }
+
     #[test]
     fn classify_prompt_error_captured_codex_usage_limit() {
         let details = "Internal error: {\n  \"message\": \"You've hit your usage limit. Visit \

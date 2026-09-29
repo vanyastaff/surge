@@ -271,9 +271,31 @@ impl MockAgent {
         if env::args().any(|arg| arg == "--stall-new-session") {
             std::future::pending::<()>().await;
         }
-        Ok(acp::NewSessionResponse::new(acp::SessionId::new(
-            "mock-session-1",
-        )))
+        // `--stall-new-session-once <marker>`: hang only on the first launch
+        // (creates the marker), answer normally once it exists — a transient
+        // adapter hang for the bridge's handshake retry.
+        let args: Vec<_> = env::args().collect();
+        if let Some(index) = args
+            .iter()
+            .position(|arg| arg == "--stall-new-session-once")
+        {
+            let marker = args.get(index + 1).ok_or_else(acp::Error::internal_error)?;
+            if std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(marker)
+                .is_ok()
+            {
+                std::future::pending::<()>().await;
+            }
+        }
+        let response = acp::NewSessionResponse::new(acp::SessionId::new("mock-session-1"));
+        // `--config-options`: advertise a model and a reasoning-level select
+        // (ACP `configOptions`) so clients can exercise set_config_option.
+        if env::args().any(|arg| arg == "--config-options") {
+            return Ok(response.config_options(mock_config_options()));
+        }
+        Ok(response)
     }
 
     async fn prompt(&self, req: acp::PromptRequest) -> Result<acp::PromptResponse, acp::Error> {
@@ -512,6 +534,49 @@ impl MockAgent {
         }
         Ok(())
     }
+}
+
+/// Options advertised under `--config-options`.
+pub(crate) fn mock_config_options() -> Vec<acp::SessionConfigOption> {
+    vec![
+        acp::SessionConfigOption::select(
+            "model",
+            "Model",
+            "sonnet",
+            vec![
+                acp::SessionConfigSelectOption::new("sonnet", "Mock Sonnet"),
+                acp::SessionConfigSelectOption::new("opus", "Mock Opus"),
+            ],
+        )
+        .category(acp::SessionConfigOptionCategory::Model),
+        acp::SessionConfigOption::select(
+            "effort",
+            "Reasoning",
+            "medium",
+            vec![
+                acp::SessionConfigSelectOption::new("low", "Low"),
+                acp::SessionConfigSelectOption::new("high", "High"),
+            ],
+        )
+        .category(acp::SessionConfigOptionCategory::ThoughtLevel),
+    ]
+}
+
+/// Append `id=value` for each `session/set_config_option` to the file named
+/// by `--config-file <path>`.
+pub(crate) fn record_config_choice(line: &str) -> acp::Result<()> {
+    use std::io::Write as _;
+    let args: Vec<_> = env::args().collect();
+    if let Some(index) = args.iter().position(|arg| arg == "--config-file") {
+        let path = args.get(index + 1).ok_or_else(acp::Error::internal_error)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|_| acp::Error::internal_error())?;
+        writeln!(file, "{line}").map_err(|_| acp::Error::internal_error())?;
+    }
+    Ok(())
 }
 
 fn record_marker(flag: &str) -> acp::Result<()> {

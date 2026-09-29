@@ -102,6 +102,7 @@ async fn exercise() -> String {
     let mut events = bridge.subscribe();
     let session = bridge
         .open_session(SessionConfig {
+            config_selections: Vec::new(),
             stage_mcp: Some(Box::new(surge_acp::bridge::session::StageMcpConfig {
                 session: surge_core::SessionId::new(),
                 server: surge_acp::bridge::McpServerStdio::new("redaction-fixture-only", "/unused")

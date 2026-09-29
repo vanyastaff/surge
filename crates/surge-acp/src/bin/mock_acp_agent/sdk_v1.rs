@@ -122,6 +122,20 @@ async fn dispatch(agent: &MockAgent, request: acp::ClientRequest) -> acp::Result
         acp::ClientRequest::PromptRequest(request) => {
             serde_json::to_value(agent.prompt(request).await?)
         },
+        acp::ClientRequest::SetSessionConfigOptionRequest(request) => {
+            let value =
+                serde_json::to_value(&request.value).map_err(|_| acp::Error::internal_error())?;
+            let value = value
+                .get("value")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| value.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            super::record_config_choice(&format!("{}={value}", request.config_id))?;
+            serde_json::to_value(acp::SetSessionConfigOptionResponse::new(
+                super::mock_config_options(),
+            ))
+        },
         _ => return Err(acp::Error::method_not_found()),
     };
     response.map_err(|_| acp::Error::internal_error())

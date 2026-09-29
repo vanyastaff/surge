@@ -60,6 +60,7 @@ impl BridgeFacade for MinimalMock {
 
 fn minimal_session_config() -> SessionConfig {
     SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock { args: vec![] },
         working_dir: std::path::PathBuf::from("/tmp/wt"),

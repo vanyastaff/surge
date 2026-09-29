@@ -677,6 +677,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         permission_policy: PermissionPolicy::default(),
         bindings: session_bindings,
         env: agent_env,
+        // Per-step model / reasoning level chosen by the operator; applied
+        // through the agent's standard ACP session options.
+        config_selections: node_config_selections(p.agent_config),
     };
 
     let stage_context = surge_core::stage_tool::StageToolContext {
@@ -2494,6 +2497,25 @@ fn canonical_runtime_id_for(
         &surge_acp::Registry::builtin(),
         effective_agent_id(agent_config, rp),
     )
+}
+
+/// Session options a node asks for (model, reasoning level).
+fn node_config_selections(
+    agent_config: &AgentConfig,
+) -> Vec<surge_acp::bridge::session::ConfigSelection> {
+    use surge_acp::bridge::session::{ConfigCategory, ConfigSelection};
+    [
+        (ConfigCategory::Model, agent_config.model_override()),
+        (ConfigCategory::ThoughtLevel, agent_config.effort_override()),
+    ]
+    .into_iter()
+    .filter_map(|(category, value)| {
+        value.map(|value| ConfigSelection {
+            category,
+            value: value.to_string(),
+        })
+    })
+    .collect()
 }
 
 /// The provider a node actually runs on: its own

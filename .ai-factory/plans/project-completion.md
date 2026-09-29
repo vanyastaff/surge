@@ -36,7 +36,18 @@ by its active slice; this audit does not create a parallel implementation.
   quota wording unrecognised (now parks); plan catalog now marks runtimes
   unavailable (exhausted quota / unconfigured env) so the generator routes
   around them; UI render loop starved input (cached plan preparation).
-  Remaining: full workspace test/clippy rerun after the dev-profile change
+  Follow-up (same day): per-step plan editing is live — provider, model
+  and reasoning level edited in the Flow inspector ride the flow-gate
+  approval (`node_overrides`), land in the implementation graph, and model /
+  effort reach the agent through ACP `session/set_config_option` (mock wire
+  test + live Claude runs with `sonnet` on impl and `haiku` on verify).
+  Provider picker marks runtimes unavailable (quota / missing env). The
+  bridge restarts an agent once when its handshake hangs. Second live
+  iteration (`run-01M3N74Q1KYZQAXEK8FA2CC1JB`) added a phase-end banner:
+  all milestones and final verify passed, kept commit `fccb044` holds only
+  app files, `node test.js` 14/14 in the project. Workspace: 3161 passed,
+  0 failed; clippy clean.
+  Remaining (earlier note, now superseded where stated above): full workspace test/clippy rerun after the dev-profile change
   (disk exhausted twice during this session), plan-editing UI end-to-end
   (engine + continuation + inspector done and unit-tested; not yet exercised
   on a live flow gate), per-node model/effort override, native Windows/Linux.

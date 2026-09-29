@@ -338,6 +338,7 @@ mod descriptor_tests {
     #[tokio::test]
     async fn descriptor_is_self_contained_without_provider_environment_secrets() {
         let mut config = SessionConfig {
+            config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
             working_dir: std::env::temp_dir(),

@@ -395,6 +395,7 @@ mod tests {
 
         let bridge = AcpBridge::with_defaults().unwrap();
         let cfg = SessionConfig {
+            config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
             working_dir: std::path::PathBuf::from("/tmp/wt"),

@@ -20,6 +20,7 @@ async fn open_send_close_round_trip() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "echo".into()],

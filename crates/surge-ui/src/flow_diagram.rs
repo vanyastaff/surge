@@ -159,6 +159,9 @@ pub struct NodeDetails {
     pub overrides: Vec<&'static str>,
     /// Provider chosen for this step instead of the profile's.
     pub runtime_override: Option<String>,
+    /// Model / reasoning level chosen for this step.
+    pub model_override: Option<String>,
+    pub effort_override: Option<String>,
     /// Declared outcome → next step.
     pub routes: Vec<(String, String)>,
 }
@@ -181,9 +184,13 @@ fn node_details(graph: &Graph) -> BTreeMap<String, NodeDetails> {
     for (nodes, edges) in levels {
         for (key, node) in nodes {
             let (icon, _, color) = describe(node);
-            let runtime_override = match &node.config {
-                NodeConfig::Agent(agent) => agent.runtime_override().map(str::to_string),
-                _ => None,
+            let (runtime_override, model_override, effort_override) = match &node.config {
+                NodeConfig::Agent(agent) => (
+                    agent.runtime_override().map(str::to_string),
+                    agent.model_override().map(str::to_string),
+                    agent.effort_override().map(str::to_string),
+                ),
+                _ => (None, None, None),
             };
             let (profile, node_skills, overrides) = match &node.config {
                 NodeConfig::Agent(agent) => {
@@ -229,6 +236,8 @@ fn node_details(graph: &Graph) -> BTreeMap<String, NodeDetails> {
                     node_skills,
                     overrides,
                     runtime_override,
+                    model_override,
+                    effort_override,
                     routes,
                 },
             );

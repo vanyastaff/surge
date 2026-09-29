@@ -323,6 +323,7 @@ async fn try_one_attempt(
     bindings.insert("intake.attempt".into(), attempt.to_string());
 
     let cfg = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::ClaudeCode {
             binary: claude_binary.to_path_buf(),

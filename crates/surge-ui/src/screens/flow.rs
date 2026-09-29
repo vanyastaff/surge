@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use gpui_kit::component::StyledExt;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::{BundledFlow, BundledFlows, EdgeKind, Node, NodeConfig, NodeKind};
@@ -106,6 +107,13 @@ pub struct FlowScreen {
     plan_selected: Option<String>,
     /// Run whose plan is shown (the planning run while its gate waits).
     plan_run: Option<surge_core::RunId>,
+    /// Why an installed provider cannot run a step right now (not
+    /// configured / quota exhausted), loaded once in the background.
+    provider_notes: Option<std::collections::HashMap<String, String>>,
+    provider_notes_loading: bool,
+    /// Model field of the step editor, and the step it currently edits.
+    model_input: Option<Entity<InputState>>,
+    model_input_for: Option<String>,
     /// Profile registry for the inspector's Agent section (loaded once).
     profiles: Option<std::rc::Rc<surge_orchestrator::profile_loader::ProfileRegistry>>,
     flow: Option<BundledFlow>,
@@ -123,6 +131,10 @@ impl FlowScreen {
             plan_cache: None,
             plan_selected: None,
             plan_run: None,
+            provider_notes: None,
+            provider_notes_loading: false,
+            model_input: None,
+            model_input_for: None,
             profiles: None,
             flow,
             selected,
@@ -188,6 +200,7 @@ impl FlowScreen {
         &mut self,
         key: &str,
         details: &crate::flow_diagram::NodeDetails,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let profiles = self
@@ -208,7 +221,7 @@ impl FlowScreen {
             let key = surge_core::profile::keyref::parse_key_ref(profile).ok()?;
             profiles.resolve(&key).ok()
         });
-        let provider_editor = self.render_provider_editor(key, details, cx);
+        let provider_editor = self.render_provider_editor(key, details, window, cx);
         let state = self.state.as_ref().map(|s| s.read(cx));
 
         let row = |label: &str, value: String| {
@@ -309,7 +322,9 @@ impl FlowScreen {
             } else {
                 provider
             };
-            let model = if profile.runtime.recommended_model.trim().is_empty() {
+            let model = if let Some(model) = &details.model_override {
+                format!("{model} · set on this step")
+            } else if profile.runtime.recommended_model.trim().is_empty() {
                 "provider default".to_string()
             } else {
                 profile.runtime.recommended_model.clone()
@@ -323,6 +338,12 @@ impl FlowScreen {
                 .child(row("Role", profile.role.display_name.clone()))
                 .child(row("Provider", provider))
                 .child(row("Model", model))
+                .children(
+                    details
+                        .effort_override
+                        .clone()
+                        .map(|effort| row("Reasoning", format!("{effort} · set on this step"))),
+                )
                 .child(row(
                     "Sandbox",
                     format!("{:?}", profile.sandbox.mode).to_lowercase(),
@@ -372,12 +393,24 @@ impl FlowScreen {
         }
 
         // Session: the newest project run that has executed this step.
+        // Only this plan's runs: the planning run and the implementation run
+        // that follows it — never an older run with a same-named step.
+        let plan_started = state.as_ref().and_then(|s| {
+            let plan_run = self.plan_run?;
+            s.runs
+                .iter()
+                .find(|r| r.run_id == plan_run)
+                .map(|r| r.started_at)
+        });
         let session = state.as_ref().and_then(|s| {
-            s.project_runs().into_iter().find_map(|run| {
-                let stream = s.run_streams.get(&run.run_id)?;
-                let stage = stream.stages.iter().rev().find(|st| st.node == key)?;
-                Some((run.run_id, stage.clone()))
-            })
+            s.project_runs()
+                .into_iter()
+                .filter(|run| plan_started.is_none_or(|start| run.started_at >= start))
+                .find_map(|run| {
+                    let stream = s.run_streams.get(&run.run_id)?;
+                    let stage = stream.stages.iter().rev().find(|st| st.node == key)?;
+                    Some((run.run_id, stage.clone()))
+                })
         });
         panel = panel.child(section("Session"));
         panel = match session {
@@ -405,101 +438,257 @@ impl FlowScreen {
         panel
     }
 
-    /// Provider chips for a step of a plan that is still awaiting approval.
-    /// Choices are stored as unapproved edits and sent with the approval.
+    /// Step settings (provider, reasoning level, model) for a plan that is
+    /// still awaiting approval. Stored as unapproved edits and sent with the
+    /// approval; the engine applies them to that step only.
     fn render_provider_editor(
-        &self,
+        &mut self,
         key: &str,
         details: &crate::flow_diagram::NodeDetails,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         details.profile.as_ref()?;
         let plan_run = self.plan_run?;
         let state_entity = self.state.clone()?;
-        let state = state_entity.read(cx);
-        let awaiting = state
-            .pending_decisions()
-            .iter()
-            .any(|(run, p)| *run == plan_run && p.node == "flow_gate");
+        let (awaiting, current, agents) = {
+            let state = state_entity.read(cx);
+            let awaiting = state
+                .pending_decisions()
+                .iter()
+                .any(|(run, p)| *run == plan_run && p.node == "flow_gate");
+            let current = state
+                .plan_edits
+                .get(&plan_run)
+                .and_then(|edits| edits.0.get(key))
+                .cloned()
+                .unwrap_or_default();
+            let agents: Vec<(String, String)> = state
+                .installed_agents
+                .iter()
+                .map(|a| (a.entry.id.clone(), a.entry.display_name.clone()))
+                .collect();
+            (awaiting, current, agents)
+        };
         if !awaiting {
             return None;
         }
-        let chosen = state
-            .plan_edits
-            .get(&plan_run)
-            .and_then(|edits| edits.0.get(key))
-            .and_then(|edit| edit.agent_id.clone());
-        let mut options: Vec<(Option<String>, String)> = vec![(None, "Profile default".into())];
-        for agent in &state.installed_agents {
-            options.push((
-                Some(agent.entry.id.clone()),
-                agent.entry.display_name.clone(),
-            ));
+        self.load_provider_notes(cx);
+        let notes = self.provider_notes.clone().unwrap_or_default();
+
+        // Model input: one per inspector, re-targeted to the selected step.
+        if self.model_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Model, e.g. sonnet or haiku (agent default) — Enter to apply")
+            });
+            cx.subscribe_in(
+                &input,
+                window,
+                |this: &mut Self, input, event: &InputEvent, _window, cx| {
+                    if !matches!(event, InputEvent::PressEnter { .. }) {
+                        return;
+                    }
+                    let (Some(plan_run), Some(node), Some(state)) = (
+                        this.plan_run,
+                        this.plan_selected.clone(),
+                        this.state.clone(),
+                    ) else {
+                        return;
+                    };
+                    let value = input.read(cx).value().trim().to_string();
+                    state.update(cx, |state, cx| {
+                        edit_step(state, plan_run, &node, |edit| {
+                            edit.model = (!value.is_empty()).then_some(value);
+                        });
+                        cx.notify();
+                    });
+                },
+            )
+            .detach();
+            self.model_input = Some(input);
         }
-        let mut chips = div().flex().flex_wrap().gap(px(6.0));
-        for (index, (agent_id, label)) in options.into_iter().enumerate() {
-            let selected = agent_id == chosen;
-            let state_entity = state_entity.clone();
+        if self.model_input_for.as_deref() != Some(key) {
+            let text = current.model.clone().unwrap_or_default();
+            if let Some(input) = &self.model_input {
+                input.update(cx, |input, cx| input.set_value(text, window, cx));
+            }
+            self.model_input_for = Some(key.to_string());
+        }
+
+        let chip = |id: String, label: String, selected: bool| {
+            div()
+                .id(SharedString::from(id))
+                .role(Role::Button)
+                .aria_label(label.clone())
+                .px(px(8.0))
+                .py(px(3.0))
+                .rounded_md()
+                .border_1()
+                .cursor_pointer()
+                .text_size(px(10.5))
+                .border_color(if selected {
+                    theme::accent()
+                } else {
+                    theme::hairline_strong()
+                })
+                .text_color(if selected {
+                    theme::accent()
+                } else {
+                    theme::text_primary()
+                })
+                .child(label)
+        };
+
+        let mut providers = div().flex().flex_wrap().gap(px(6.0));
+        let provider_options = std::iter::once((None, "Profile default".to_string()))
+            .chain(agents.into_iter().map(|(id, name)| (Some(id), name)));
+        let mut unavailable = Vec::new();
+        for (index, (agent_id, label)) in provider_options.enumerate() {
+            let selected = agent_id == current.agent_id;
+            let note = agent_id.as_ref().and_then(|id| notes.get(id));
+            if let Some(note) = note {
+                unavailable.push(format!("{label}: {note}"));
+            }
+            let label = if note.is_some() {
+                format!("{label} ⚠")
+            } else {
+                label
+            };
+            let state = state_entity.clone();
             let node = key.to_string();
-            chips = chips.child(
-                div()
-                    .id(SharedString::from(format!("provider-{key}-{index}")))
-                    .role(Role::Button)
-                    .aria_label(format!("Run {key} on {label}"))
-                    .px(px(8.0))
-                    .py(px(3.0))
-                    .rounded_md()
-                    .border_1()
-                    .cursor_pointer()
-                    .text_size(px(10.5))
-                    .border_color(if selected {
-                        theme::accent()
-                    } else {
-                        theme::hairline_strong()
-                    })
-                    .text_color(if selected {
-                        theme::accent()
-                    } else {
-                        theme::text_primary()
-                    })
-                    .child(label)
-                    .on_click(move |_e, _w, cx| {
-                        state_entity.update(cx, |state, cx| {
-                            let edits = state.plan_edits.entry(plan_run).or_default();
-                            match &agent_id {
-                                Some(id) => {
-                                    edits.0.insert(
-                                        node.clone(),
-                                        surge_core::node_overrides::NodeOverride {
-                                            agent_id: Some(id.clone()),
-                                        },
-                                    );
-                                },
-                                None => {
-                                    edits.0.remove(&node);
-                                },
-                            }
+            providers = providers.child(
+                chip(format!("provider-{key}-{index}"), label, selected).on_click(
+                    move |_e, _w, cx| {
+                        let agent_id = agent_id.clone();
+                        state.update(cx, |state, cx| {
+                            edit_step(state, plan_run, &node, |edit| edit.agent_id = agent_id);
                             cx.notify();
                         });
-                    }),
+                    },
+                ),
             );
         }
+
+        let mut efforts = div().flex().flex_wrap().gap(px(6.0));
+        for (index, level) in [None, Some("low"), Some("medium"), Some("high")]
+            .into_iter()
+            .enumerate()
+        {
+            let selected = current.effort.as_deref() == level;
+            let state = state_entity.clone();
+            let node = key.to_string();
+            let label = level.unwrap_or("Default").to_string();
+            efforts = efforts.child(
+                chip(format!("effort-{key}-{index}"), label, selected).on_click(
+                    move |_e, _w, cx| {
+                        state.update(cx, |state, cx| {
+                            edit_step(state, plan_run, &node, |edit| {
+                                edit.effort = level.map(str::to_string);
+                            });
+                            cx.notify();
+                        });
+                    },
+                ),
+            );
+        }
+
+        let model_field = self.model_input.as_ref().map(|input| {
+            div()
+                .h(px(30.0))
+                .px(px(8.0))
+                .rounded_md()
+                .bg(theme::panel_deep())
+                .border_1()
+                .border_color(theme::hairline_strong())
+                .child(
+                    Input::new(input)
+                        .appearance(false)
+                        .accessibility_id("step-model")
+                        .aria_label("Model for this step"),
+                )
+        });
+
         Some(
             div()
                 .v_flex()
                 .gap(px(6.0))
                 .pt(px(8.0))
                 .child(ui::meta(
-                    "Change provider for this step — applied when you approve the plan",
+                    "Edit this step — applied when you approve the plan",
                 ))
-                .child(chips),
+                .child(ui::meta("Provider"))
+                .child(providers)
+                .children(
+                    (!unavailable.is_empty())
+                        .then(|| ui::meta(format!("Unavailable now — {}", unavailable.join("; ")))),
+                )
+                .child(ui::meta(
+                    "Reasoning level — only for agents that offer it (the step will not start otherwise)",
+                ))
+                .child(efforts)
+                .child(ui::meta("Model"))
+                .children(model_field),
         )
+    }
+
+    /// Load provider availability once: required environment present
+    /// (the same check the engine does at launch) and no exhausted quota
+    /// window in the capacity ledger.
+    fn load_provider_notes(&mut self, cx: &mut Context<Self>) {
+        if self.provider_notes.is_some() || self.provider_notes_loading {
+            return;
+        }
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let agents: Vec<(
+            String,
+            std::collections::BTreeMap<String, surge_core::config::AgentEnvValue>,
+        )> = state
+            .read(cx)
+            .installed_agents
+            .iter()
+            .map(|a| (a.entry.id.clone(), a.entry.env.clone()))
+            .collect();
+        self.provider_notes_loading = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut notes = std::collections::HashMap::new();
+            let storage = match surge_core::home::surge_home_dir() {
+                Some(home) => surge_persistence::runs::Storage::open(home).await.ok(),
+                None => None,
+            };
+            for (id, env) in agents {
+                if let Err(error) = surge_acp::agent_env::resolve(&id, &env) {
+                    notes.insert(id, format!("not configured ({error})"));
+                    continue;
+                }
+                if let Some(storage) = &storage
+                    && let Ok(status) = storage.capacity_status(&id).await
+                    && let Some(why) = surge_orchestrator::engine::capacity::exhausted_reason(
+                        &status,
+                        chrono::Utc::now(),
+                    )
+                {
+                    notes.insert(id, why);
+                }
+            }
+            cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.provider_notes = Some(notes);
+                    screen.provider_notes_loading = false;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     fn render_plan(
         &mut self,
         headline: String,
         prepared: &Result<crate::flow_diagram::PreparedPlan, String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let why = prepared
@@ -518,7 +707,7 @@ impl FlowScreen {
                 .plan_selected
                 .as_ref()
                 .and_then(|key| plan.nodes.get(key).map(|d| (key.clone(), d.clone())))
-                .map(|(key, details)| self.render_node_inspector(&key, &details, cx)),
+                .map(|(key, details)| self.render_node_inspector(&key, &details, window, cx)),
             Err(_) => None,
         };
         let body: AnyElement = match prepared {
@@ -1186,12 +1375,28 @@ impl FlowScreen {
     }
 }
 
+/// Change one field of a step's unapproved plan edit; drop the edit when
+/// it no longer changes anything.
+fn edit_step(
+    state: &mut crate::app_state::AppState,
+    plan_run: surge_core::RunId,
+    node: &str,
+    change: impl FnOnce(&mut surge_core::node_overrides::NodeOverride),
+) {
+    let edits = state.plan_edits.entry(plan_run).or_default();
+    let edit = edits.0.entry(node.to_string()).or_default();
+    change(edit);
+    if edit.agent_id.is_none() && edit.model.is_none() && edit.effort.is_none() {
+        edits.0.remove(node);
+    }
+}
+
 impl Render for FlowScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The open project's actual plan wins over the example template.
         if let Some((plan_run, headline, prepared)) = self.current_plan(cx) {
             self.plan_run = Some(plan_run);
-            return self.render_plan(headline, &prepared, cx);
+            return self.render_plan(headline, &prepared, window, cx);
         }
         // Plain .flex() row so the three panes stretch to full height
         // (h_flex would vertically center them in tall windows).

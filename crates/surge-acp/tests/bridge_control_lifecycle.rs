@@ -19,6 +19,7 @@ impl Sandbox for Elevate {
 }
 fn config(root: &Path, flags: &[&str]) -> SessionConfig {
     SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Custom {
             binary: env!("CARGO_BIN_EXE_mock_acp_agent").into(),
@@ -104,6 +105,30 @@ async fn both_handshake_phases_have_deadlines_and_reap() {
         bridge.shutdown().await.unwrap();
         assert_reaped(root.path());
     }
+}
+
+/// A launcher-started adapter that hangs once in `session/new` (observed live
+/// under load) is restarted once, and the session opens on the second launch.
+#[tokio::test(flavor = "multi_thread")]
+async fn transient_handshake_hang_is_retried_once_and_opens() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("stalled-once");
+    let bridge = bridge();
+    let marker_arg = marker.display().to_string();
+    let session = tokio::time::timeout(
+        Duration::from_secs(5),
+        bridge.open_session(config(
+            root.path(),
+            &["--stall-new-session-once", &marker_arg],
+        )),
+    )
+    .await
+    .expect("retry finishes within two handshake budgets")
+    .expect("second launch opens the session");
+    assert!(marker.exists(), "the first launch really stalled");
+    bridge.close_session(session).await.unwrap();
+    bridge.shutdown().await.unwrap();
+    assert_reaped(root.path());
 }
 
 #[tokio::test(flavor = "multi_thread")]

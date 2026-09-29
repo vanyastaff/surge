@@ -17,6 +17,7 @@ use surge_core::{OutcomeKey, SessionId};
 
 fn minimal_session_config() -> SessionConfig {
     SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock { args: vec![] },
         working_dir: PathBuf::from("/tmp/wt"),

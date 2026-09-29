@@ -347,6 +347,7 @@ fn project_context_session_config(
         ("agent".to_string(), invocation.normalized_agent_id.clone()),
     ]);
     Ok(SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: invocation.agent_kind(),
         working_dir: root.to_path_buf(),

@@ -47,6 +47,7 @@ async fn inner_test() {
 
     let wt = TempDir::new().unwrap();
     let cfg = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "echo".into()],

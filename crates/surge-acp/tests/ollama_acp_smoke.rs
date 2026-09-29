@@ -98,6 +98,7 @@ async fn ollama_runtime_handshakes_and_answers() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Custom {
             binary: std::path::PathBuf::from(&entry.command),

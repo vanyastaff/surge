@@ -516,7 +516,8 @@ impl Engine {
                 continue;
             }
             if let Ok(status) = self.storage.capacity_status(&runtime).await
-                && let Some(why) = exhausted_reason(&status, chrono::Utc::now())
+                && let Some(why) =
+                    crate::engine::capacity::exhausted_reason(&status, chrono::Utc::now())
             {
                 unavailable.insert(runtime, why);
             }
@@ -1389,26 +1390,6 @@ const PROFILE_CATALOG_PRODUCER_NODE: &str = "profile_catalog_seed";
 /// Relative path within the worktree where the seeded prompt body is stored.
 const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
 
-/// Why a runtime cannot take work now, when its last observed capacity
-/// window is exhausted and has not reset yet. `None` = usable.
-fn exhausted_reason(
-    status: &surge_core::capacity::CapacityStatus,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<String> {
-    let surge_core::capacity::CapacityStatus::Known(window) = status else {
-        return None;
-    };
-    let empty = window.remaining().is_none_or(|share| share.get() <= 0.0);
-    match window.resets_at() {
-        Some(reset) if reset > now && empty => Some(format!(
-            "provider usage limit, resets {}",
-            reset.format("%Y-%m-%d %H:%M UTC")
-        )),
-        None if empty => Some("provider usage limit reached".into()),
-        _ => None,
-    }
-}
-
 /// Write a finished run's terminal status into the cross-run registry.
 ///
 /// The per-run event log is the source of truth, but `surge engine ls`,
@@ -1542,7 +1523,7 @@ pub(crate) async fn synthesise_run_seed_artifact(
 
 #[cfg(test)]
 mod exhausted_reason_tests {
-    use super::exhausted_reason;
+    use crate::engine::capacity::exhausted_reason;
     use surge_core::capacity::{CapacityStatus, CapacityWindow};
 
     #[test]

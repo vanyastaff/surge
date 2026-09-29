@@ -73,6 +73,29 @@ impl AgentConfig {
             .filter(|id| !id.is_empty())
     }
 
+    /// Model chosen for this node: `custom_fields["runtime"]["model"]`.
+    /// Applied through the agent's advertised ACP session options.
+    #[must_use]
+    pub fn model_override(&self) -> Option<&str> {
+        self.runtime_field("model")
+    }
+
+    /// Reasoning level chosen for this node:
+    /// `custom_fields["runtime"]["effort"]` (ACP `thought_level` option).
+    #[must_use]
+    pub fn effort_override(&self) -> Option<&str> {
+        self.runtime_field("effort")
+    }
+
+    fn runtime_field(&self, key: &str) -> Option<&str> {
+        self.custom_fields
+            .get("runtime")?
+            .get(key)?
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    }
+
     #[must_use = "a malformed declaration (Err) must be surfaced, not silently dropped"]
     pub fn declared_skills(&self) -> Result<Vec<SkillRef>, DeclaredSkillsError> {
         match self.custom_fields.get("skills") {
@@ -224,6 +247,12 @@ mod tests {
             toml::from_str::<toml::Value>(r#"agent_id = "  ""#).unwrap(),
         );
         assert_eq!(cfg.runtime_override(), None);
+        cfg.custom_fields.insert(
+            "runtime".into(),
+            toml::from_str::<toml::Value>("model = \"opus\"\neffort = \"high\"").unwrap(),
+        );
+        assert_eq!(cfg.model_override(), Some("opus"));
+        assert_eq!(cfg.effort_override(), Some("high"));
     }
 
     #[test]

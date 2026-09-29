@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 fn cfg_with(outcome: &str, wt: &std::path::Path) -> SessionConfig {
     SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), format!("report_outcome={outcome}")],

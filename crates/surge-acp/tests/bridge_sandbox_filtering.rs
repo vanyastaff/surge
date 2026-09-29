@@ -33,6 +33,7 @@ async fn denied_tool_does_not_appear_in_visible_list() {
     let sandbox = DenyListSandbox::deny_tools(["shell_exec"]);
 
     let cfg = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "echo".into()],

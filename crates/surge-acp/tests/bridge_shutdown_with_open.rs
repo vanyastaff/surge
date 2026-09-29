@@ -28,6 +28,7 @@ async fn inner_test() {
     let mut sids: Vec<SessionId> = Vec::with_capacity(2);
     for _ in 0..2 {
         let cfg = SessionConfig {
+            config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock {
                 args: vec!["--scenario".into(), "echo".into()],

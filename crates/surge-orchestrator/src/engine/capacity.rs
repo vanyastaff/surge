@@ -286,6 +286,28 @@ impl WorkEstimator for RunHistoryWorkEstimator {
     }
 }
 
+/// Why a runtime cannot take work now (shared by the plan catalog and the
+/// desktop provider picker), when its last observed capacity
+/// window is exhausted and has not reset yet. `None` = usable.
+#[must_use]
+pub fn exhausted_reason(
+    status: &surge_core::capacity::CapacityStatus,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    let surge_core::capacity::CapacityStatus::Known(window) = status else {
+        return None;
+    };
+    let empty = window.remaining().is_none_or(|share| share.get() <= 0.0);
+    match window.resets_at() {
+        Some(reset) if reset > now && empty => Some(format!(
+            "provider usage limit, resets {}",
+            reset.format("%Y-%m-%d %H:%M UTC")
+        )),
+        None if empty => Some("provider usage limit reached".into()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

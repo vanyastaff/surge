@@ -20,6 +20,24 @@ pub struct NodeOverride {
     /// Run this step on another provider (registry id, e.g. `codex-acp`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Model for this step (matched against the agent's ACP model options).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning level for this step (ACP `thought_level` option).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+impl NodeOverride {
+    fn fields(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        [
+            ("agent_id", self.agent_id.as_deref()),
+            ("model", self.model.as_deref()),
+            ("effort", self.effort.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v?.trim())).filter(|(_, v)| !v.is_empty()))
+    }
 }
 
 /// Edits keyed by node id (top-level or inside a loop/sub-flow body).
@@ -52,7 +70,7 @@ impl NodeOverrides {
     /// True when there is nothing to apply.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.values().all(|o| o.agent_id.is_none())
+        self.0.values().all(|o| o.fields().next().is_none())
     }
 
     /// Apply to `graph` in place.
@@ -85,14 +103,14 @@ impl NodeOverrides {
             else {
                 continue;
             };
-            if let Some(agent_id) = edit
-                .agent_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                let mut runtime = toml::map::Map::new();
-                runtime.insert("agent_id".into(), toml::Value::String(agent_id.to_string()));
+            let mut runtime = match agent.custom_fields.remove("runtime") {
+                Some(toml::Value::Table(table)) => table,
+                _ => toml::map::Map::new(),
+            };
+            for (key, value) in edit.fields() {
+                runtime.insert(key.into(), toml::Value::String(value.to_string()));
+            }
+            if !runtime.is_empty() {
                 agent
                     .custom_fields
                     .insert("runtime".into(), toml::Value::Table(runtime));
@@ -127,7 +145,7 @@ mod tests {
         let key = agent_key(&g);
         let response = serde_json::json!({
             "outcome": "approve",
-            "node_overrides": { key.clone(): { "agent_id": "codex-acp" } }
+            "node_overrides": { key.clone(): { "agent_id": "codex-acp", "model": "gpt-5.5", "effort": "high" } }
         });
         let edits = NodeOverrides::from_gate_response(&response).expect("parses");
         edits.apply(&mut g).expect("applies");
@@ -142,6 +160,8 @@ mod tests {
             unreachable!()
         };
         assert_eq!(agent.runtime_override(), Some("codex-acp"));
+        assert_eq!(agent.model_override(), Some("gpt-5.5"));
+        assert_eq!(agent.effort_override(), Some("high"));
     }
 
     #[test]
@@ -152,6 +172,7 @@ mod tests {
             "no_such_step".into(),
             NodeOverride {
                 agent_id: Some("codex-acp".into()),
+                ..Default::default()
             },
         )]));
         assert!(matches!(
@@ -169,6 +190,7 @@ mod tests {
             terminal,
             NodeOverride {
                 agent_id: Some("codex-acp".into()),
+                ..Default::default()
             },
         )]));
         assert!(matches!(

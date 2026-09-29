@@ -113,6 +113,7 @@ async fn run_real_smoke(
     surge_acp::settings_seed::seed_settings_files(&entry.settings_files, &workdir);
     let outcome = OutcomeKey::try_from("done").expect("static outcome key");
     let config = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind,
         working_dir: workdir,

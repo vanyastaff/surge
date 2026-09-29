@@ -93,6 +93,7 @@ async fn helper(root: PathBuf) {
 
 fn config(root: &std::path::Path) -> SessionConfig {
     SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Custom {
             binary: PathBuf::from(env!("CARGO_BIN_EXE_mock_acp_agent")),

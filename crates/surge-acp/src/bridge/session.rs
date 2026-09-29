@@ -191,6 +191,32 @@ pub struct SessionConfig {
     /// no extra env (the default). The bridge applies these after the
     /// inherited environment, so they override it — and it never logs them.
     pub env: BTreeMap<String, String>,
+
+    /// Session options to select right after `session/new` through ACP's
+    /// standard `session/set_config_option` (e.g. the model, the reasoning
+    /// level). Empty = the agent's defaults. An option the agent does not
+    /// offer fails the open: running a step on a different model than the
+    /// operator chose must never happen silently.
+    pub config_selections: Vec<ConfigSelection>,
+}
+
+/// Which advertised ACP session option a [`ConfigSelection`] targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigCategory {
+    /// ACP `SessionConfigOptionCategory::Model`.
+    Model,
+    /// ACP `SessionConfigOptionCategory::ThoughtLevel` (effort / reasoning).
+    ThoughtLevel,
+}
+
+/// One requested session option: category + value (matched against the
+/// option's value ids and display names, case-insensitively).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSelection {
+    /// Which advertised option this selects.
+    pub category: ConfigCategory,
+    /// Requested value id or display name.
+    pub value: String,
 }
 
 impl SessionConfig {
@@ -297,6 +323,7 @@ mod tests {
 
     fn cfg_with(outcomes: Vec<&str>, tools: Vec<ToolDef>) -> SessionConfig {
         SessionConfig {
+            config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
             working_dir: PathBuf::from("/tmp/wt"),

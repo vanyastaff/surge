@@ -32,6 +32,7 @@ async fn inner_test() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
             // Pass --usage as a CLI flag instead of mutating the process-global
