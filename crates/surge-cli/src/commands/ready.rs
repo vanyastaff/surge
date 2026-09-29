@@ -16,7 +16,6 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
-use surge_core::{RoadmapStatus, RunId};
 use surge_orchestrator::operator::{ReadyQuery, query_ready};
 use surge_persistence::runs::Storage;
 
@@ -137,6 +136,7 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::{RoadmapStatus, RunId};
 
     use std::path::PathBuf;
 
