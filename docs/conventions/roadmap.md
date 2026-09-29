@@ -34,6 +34,65 @@ Validation rejects: duplicate milestone/task ids, `depends_on` /
 references, cycles in the task `depends_on` graph, and (at v2) a task missing
 its `size`.
 
+## Missions and validation contracts
+
+Optional `[[missions]]` group milestones into bounded efforts, each with its
+own definition of done. Declare them for a new application or for two or more
+vertical slices; a single-milestone roadmap does not need one.
+
+- `id`, `title`, `goal` — identity and the outcome in one or two sentences.
+- `milestones` — ids of the milestones the mission owns, in order.
+- `[[missions.validation_contract]]` — behavioural assertions: `id` with an
+  area prefix (`VAL-AUTH-001`), `title`, `pass_condition` (observable
+  behaviour that passes or fails), optional `evidence` (what a verifier must
+  capture).
+- Tasks claim assertions through `fulfills = ["VAL-AUTH-001"]`: only the leaf
+  task that makes an assertion testable claims it; infrastructure tasks claim
+  none.
+
+Write the contract from the description before splitting the mission into
+tasks, so it states what the user asked for rather than what the tasks happen
+to build.
+
+When missions are declared, validation also rejects: a milestone in no mission
+or in several, a mission with no milestones or an empty contract, mission
+milestone lists that do not follow the `[[milestones]]` order, duplicate
+assertion ids, and any assertion not claimed by exactly one task of its own
+mission (`validation_contract_coverage`). A task whose `fulfills` names an
+unknown assertion is rejected with or without missions. Roadmap patches keep
+the partition: an inserted milestone joins its anchor's mission, and an
+appended one joins the mission of the current last milestone.
+
+```toml
+[[missions]]
+id = "mission-1"
+title = "Accounts"
+goal = "People can create an account and sign in."
+milestones = ["accounts"]
+
+[[missions.validation_contract]]
+id = "VAL-AUTH-001"
+title = "Sign in"
+pass_condition = "A registered user signs in with email and password and lands on the dashboard."
+evidence = ["end-to-end test output"]
+
+[[milestones]]
+id = "accounts"
+title = "Accounts"
+
+[[milestones.tasks]]
+id = "user-schema"
+title = "User table"
+size = "s"
+
+[[milestones.tasks]]
+id = "sign-in"
+title = "Sign-in flow"
+size = "m"
+depends_on = ["user-schema"]
+fulfills = ["VAL-AUTH-001"]
+```
+
 ## Minimal Valid TOML
 
 ```toml
@@ -97,6 +156,9 @@ mitigation = "Keep profile prompts linked to this convention."
 - The task `depends_on` graph is acyclic.
 - Tasks include clear titles and testable acceptance criteria when known.
 - Markdown compatibility view has `## Milestones`, `## Dependencies`, and `## Risks`.
+- **With missions:** every milestone is in exactly one mission, in order; every
+  mission has a non-empty `validation_contract`; every assertion is claimed by
+  exactly one task of its own mission.
 
 ## Roadmap Patch Artifacts
 

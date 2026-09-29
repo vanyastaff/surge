@@ -174,6 +174,33 @@ mod tests {
     }
 
     #[test]
+    fn every_archetype_has_a_bundled_flow_that_declares_it() {
+        use crate::archetype::ArchetypeName;
+
+        for archetype in ArchetypeName::ALL {
+            let flow = BundledFlows::by_name_latest(archetype.as_str())
+                .unwrap_or_else(|| panic!("{} has no bundled flow", archetype.as_str()));
+            let declared = flow
+                .graph
+                .metadata
+                .archetype
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} lacks [metadata.archetype]", flow.name));
+            assert_eq!(
+                declared.name, archetype,
+                "{} declares the wrong archetype",
+                flow.name
+            );
+        }
+        // Every bundled flow except the bootstrap driver is an archetype.
+        let archetype_flows = BundledFlows::all()
+            .into_iter()
+            .filter(|flow| flow.name != "bootstrap")
+            .count();
+        assert_eq!(archetype_flows, ArchetypeName::ALL.len());
+    }
+
+    #[test]
     fn legacy_template_aliases_resolve_to_canonical_names() {
         for (alias, canonical) in [
             ("bugfix", "bug-fix"),

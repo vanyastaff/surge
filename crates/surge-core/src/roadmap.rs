@@ -23,12 +23,20 @@ const SIZE_REQUIRED_FROM_VERSION: u32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(
     title = "RoadmapArtifact",
-    description = "Surge `roadmap.toml` artifact: ordered milestones, cross-milestone dependencies, and tracked risks."
+    description = "Surge `roadmap.toml` artifact: optional missions with validation contracts, ordered milestones, cross-milestone dependencies, and tracked risks."
 )]
 pub struct RoadmapArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]
     pub schema_version: u32,
+    /// Missions grouping the milestones, in execution order.
+    ///
+    /// Optional. When present, the missions partition [`Self::milestones`]:
+    /// every milestone belongs to exactly one mission and concatenating the
+    /// missions' milestone lists reproduces the milestone order. Milestones
+    /// stay a flat list so flows keep iterating `milestones` directly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missions: Vec<RoadmapMission>,
     /// Deliverable-focused milestones in execution order.
     #[serde(default)]
     pub milestones: Vec<RoadmapMilestone>,
@@ -46,6 +54,7 @@ impl RoadmapArtifact {
     pub fn new(milestones: Vec<RoadmapMilestone>) -> Self {
         Self {
             schema_version: ROADMAP_SCHEMA_VERSION,
+            missions: Vec::new(),
             milestones,
             dependencies: Vec::new(),
             risks: Vec::new(),
@@ -56,6 +65,30 @@ impl RoadmapArtifact {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut out = String::from("# Roadmap\n\n");
+        if !self.missions.is_empty() {
+            out.push_str("## Missions\n");
+            for mission in &self.missions {
+                out.push_str(&format!(
+                    "### {}: {} ({})\n",
+                    mission.id,
+                    mission.title,
+                    mission.milestones.join(", ")
+                ));
+                if mission.status != RoadmapStatus::Pending {
+                    out.push_str(&format!("Status: {}\n", mission.status));
+                }
+                if !mission.goal.trim().is_empty() {
+                    out.push_str(&format!("Goal: {}\n", mission.goal));
+                }
+                for assertion in &mission.validation_contract {
+                    out.push_str(&format!(
+                        "- {}: {} — {}\n",
+                        assertion.id, assertion.title, assertion.pass_condition
+                    ));
+                }
+                out.push('\n');
+            }
+        }
         for milestone in &self.milestones {
             out.push_str(&format!("## {}: {}\n", milestone.id, milestone.title));
             if milestone.status != RoadmapStatus::Pending {
@@ -81,6 +114,9 @@ impl RoadmapArtifact {
                 }
                 for criterion in &task.acceptance_criteria {
                     out.push_str(&format!("  - AC: {criterion}\n"));
+                }
+                if !task.fulfills.is_empty() {
+                    out.push_str(&format!("  - Fulfills: {}\n", task.fulfills.join(", ")));
                 }
             }
             out.push('\n');
@@ -190,6 +226,8 @@ impl RoadmapArtifact {
             }
         }
 
+        self.validate_missions(&milestone_ids, &mut issues);
+
         // Cycle detection is unreliable when duplicate task ids exist (the
         // HashMap in find_task_cycle uses last-write-wins, which can mask
         // edges). Skip it so we don't report a false-negative.
@@ -198,6 +236,152 @@ impl RoadmapArtifact {
         }
 
         issues
+    }
+
+    /// The mission that owns `milestone_id`, if missions are declared.
+    #[must_use]
+    pub fn mission_of_milestone(&self, milestone_id: &str) -> Option<&RoadmapMission> {
+        self.missions
+            .iter()
+            .find(|mission| mission.milestones.iter().any(|id| id == milestone_id))
+    }
+
+    /// Mission-level invariants; a no-op when no missions are declared,
+    /// except that a task claiming `fulfills` then references nothing.
+    ///
+    /// Structure: unique non-empty missions whose milestone lists name
+    /// existing milestones, each milestone in exactly one mission, in
+    /// roadmap order. Contract: every mission carries at least one
+    /// assertion, assertion ids are unique, and each assertion is fulfilled
+    /// by exactly one task inside its own mission (Factory's coverage gate —
+    /// no orphans, no duplicates).
+    fn validate_missions(
+        &self,
+        milestone_ids: &HashSet<&str>,
+        issues: &mut Vec<RoadmapLedgerIssue>,
+    ) {
+        let mut mission_ids: HashSet<&str> = HashSet::new();
+        let mut owner: HashMap<&str, &str> = HashMap::new();
+        let mut structure_ok = true;
+        for mission in &self.missions {
+            if !mission_ids.insert(mission.id.as_str()) {
+                issues.push(RoadmapLedgerIssue::DuplicateMissionId {
+                    mission: mission.id.clone(),
+                });
+            }
+            if mission.milestones.is_empty() {
+                structure_ok = false;
+                issues.push(RoadmapLedgerIssue::EmptyMission {
+                    mission: mission.id.clone(),
+                });
+            }
+            if mission.validation_contract.is_empty() {
+                issues.push(RoadmapLedgerIssue::EmptyValidationContract {
+                    mission: mission.id.clone(),
+                });
+            }
+            for milestone in &mission.milestones {
+                if !milestone_ids.contains(milestone.as_str()) {
+                    structure_ok = false;
+                    issues.push(RoadmapLedgerIssue::UnknownMissionMilestone {
+                        mission: mission.id.clone(),
+                        milestone: milestone.clone(),
+                    });
+                } else if owner
+                    .insert(milestone.as_str(), mission.id.as_str())
+                    .is_some()
+                {
+                    structure_ok = false;
+                    issues.push(RoadmapLedgerIssue::MilestoneInSeveralMissions {
+                        milestone: milestone.clone(),
+                    });
+                }
+            }
+        }
+        if !self.missions.is_empty() {
+            for milestone in &self.milestones {
+                if !owner.contains_key(milestone.id.as_str()) {
+                    structure_ok = false;
+                    issues.push(RoadmapLedgerIssue::MilestoneWithoutMission {
+                        milestone: milestone.id.clone(),
+                    });
+                }
+            }
+        }
+        // Order only means something once membership is a clean partition.
+        if structure_ok {
+            let declared = self
+                .missions
+                .iter()
+                .flat_map(|mission| mission.milestones.iter());
+            let mismatch = declared
+                .zip(&self.milestones)
+                .find(|(declared, actual)| **declared != actual.id);
+            if let Some((_, actual)) = mismatch {
+                issues.push(RoadmapLedgerIssue::MissionOrderMismatch {
+                    milestone: actual.id.clone(),
+                });
+            }
+        }
+
+        // Assertion id -> owning mission.
+        let mut assertion_mission: HashMap<&str, &str> = HashMap::new();
+        for mission in &self.missions {
+            for assertion in &mission.validation_contract {
+                if assertion_mission
+                    .insert(assertion.id.as_str(), mission.id.as_str())
+                    .is_some()
+                {
+                    issues.push(RoadmapLedgerIssue::DuplicateAssertionId {
+                        assertion: assertion.id.clone(),
+                    });
+                }
+            }
+        }
+
+        let mut claims: HashMap<&str, Vec<String>> = HashMap::new();
+        let fulfilled = self.milestones.iter().flat_map(|milestone| {
+            let task_mission = owner.get(milestone.id.as_str()).copied();
+            milestone.tasks.iter().flat_map(move |task| {
+                task.fulfills
+                    .iter()
+                    .map(move |assertion| (task_mission, task, assertion))
+            })
+        });
+        for (task_mission, task, assertion) in fulfilled {
+            match assertion_mission.get(assertion.as_str()) {
+                None => issues.push(RoadmapLedgerIssue::UnknownFulfills {
+                    task: task.id.clone(),
+                    assertion: assertion.clone(),
+                }),
+                Some(mission) if Some(*mission) != task_mission => {
+                    issues.push(RoadmapLedgerIssue::FulfillsOutsideMission {
+                        task: task.id.clone(),
+                        assertion: assertion.clone(),
+                        mission: (*mission).to_owned(),
+                    });
+                },
+                Some(_) => claims
+                    .entry(assertion.as_str())
+                    .or_default()
+                    .push(task.id.clone()),
+            }
+        }
+        for mission in &self.missions {
+            for assertion in &mission.validation_contract {
+                match claims.get(assertion.id.as_str()).map(Vec::as_slice) {
+                    None | Some([]) => issues.push(RoadmapLedgerIssue::UnclaimedAssertion {
+                        mission: mission.id.clone(),
+                        assertion: assertion.id.clone(),
+                    }),
+                    Some([_]) => {},
+                    Some(tasks) => issues.push(RoadmapLedgerIssue::AssertionClaimedTwice {
+                        assertion: assertion.id.clone(),
+                        tasks: tasks.to_vec(),
+                    }),
+                }
+            }
+        }
     }
 
     /// Iterate every task across all milestones in declaration order.
@@ -367,6 +551,79 @@ pub enum RoadmapLedgerIssue {
         /// The task id.
         task: String,
     },
+    /// Two missions share the same id.
+    DuplicateMissionId {
+        /// The duplicated mission id.
+        mission: String,
+    },
+    /// A mission lists no milestones.
+    EmptyMission {
+        /// The mission id.
+        mission: String,
+    },
+    /// A mission has no validation contract assertions.
+    EmptyValidationContract {
+        /// The mission id.
+        mission: String,
+    },
+    /// A mission lists a milestone id that does not exist.
+    UnknownMissionMilestone {
+        /// The mission id.
+        mission: String,
+        /// The missing milestone id.
+        milestone: String,
+    },
+    /// A milestone is listed by more than one mission.
+    MilestoneInSeveralMissions {
+        /// The milestone id.
+        milestone: String,
+    },
+    /// Missions are declared but this milestone belongs to none of them.
+    MilestoneWithoutMission {
+        /// The milestone id.
+        milestone: String,
+    },
+    /// Concatenated mission milestone lists diverge from the milestone order
+    /// at this milestone.
+    MissionOrderMismatch {
+        /// First milestone found out of mission order.
+        milestone: String,
+    },
+    /// Two assertions (in any missions) share the same id.
+    DuplicateAssertionId {
+        /// The duplicated assertion id.
+        assertion: String,
+    },
+    /// A task's `fulfills` names an assertion no mission declares.
+    UnknownFulfills {
+        /// The task id.
+        task: String,
+        /// The unknown assertion id.
+        assertion: String,
+    },
+    /// A task fulfills an assertion owned by a mission other than its own.
+    FulfillsOutsideMission {
+        /// The task id.
+        task: String,
+        /// The assertion id.
+        assertion: String,
+        /// Mission that owns the assertion.
+        mission: String,
+    },
+    /// No task in the mission fulfills this assertion.
+    UnclaimedAssertion {
+        /// The mission id.
+        mission: String,
+        /// The unclaimed assertion id.
+        assertion: String,
+    },
+    /// More than one task claims to fulfill the same assertion.
+    AssertionClaimedTwice {
+        /// The assertion id.
+        assertion: String,
+        /// Every task claiming it.
+        tasks: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for RoadmapLedgerIssue {
@@ -404,6 +661,56 @@ impl std::fmt::Display for RoadmapLedgerIssue {
                 formatter,
                 "task {task:?} is missing its required size (schema v2)"
             ),
+            Self::DuplicateMissionId { mission } => {
+                write!(formatter, "duplicate mission id {mission:?}")
+            },
+            Self::EmptyMission { mission } => {
+                write!(formatter, "mission {mission:?} lists no milestones")
+            },
+            Self::EmptyValidationContract { mission } => write!(
+                formatter,
+                "mission {mission:?} has an empty validation_contract; write the assertions that define done before splitting work"
+            ),
+            Self::UnknownMissionMilestone { mission, milestone } => write!(
+                formatter,
+                "mission {mission:?} lists unknown milestone {milestone:?}"
+            ),
+            Self::MilestoneInSeveralMissions { milestone } => write!(
+                formatter,
+                "milestone {milestone:?} is listed by more than one mission"
+            ),
+            Self::MilestoneWithoutMission { milestone } => write!(
+                formatter,
+                "milestone {milestone:?} belongs to no mission; when missions are declared every milestone needs one"
+            ),
+            Self::MissionOrderMismatch { milestone } => write!(
+                formatter,
+                "milestone {milestone:?} is out of mission order; list missions and their milestones in roadmap order"
+            ),
+            Self::DuplicateAssertionId { assertion } => {
+                write!(formatter, "duplicate validation assertion id {assertion:?}")
+            },
+            Self::UnknownFulfills { task, assertion } => write!(
+                formatter,
+                "task {task:?} fulfills unknown assertion {assertion:?}"
+            ),
+            Self::FulfillsOutsideMission {
+                task,
+                assertion,
+                mission,
+            } => write!(
+                formatter,
+                "task {task:?} fulfills {assertion:?}, which belongs to another mission ({mission:?})"
+            ),
+            Self::UnclaimedAssertion { mission, assertion } => write!(
+                formatter,
+                "assertion {assertion:?} in mission {mission:?} is fulfilled by no task"
+            ),
+            Self::AssertionClaimedTwice { assertion, tasks } => write!(
+                formatter,
+                "assertion {assertion:?} is fulfilled by several tasks ({}); exactly one leaf task must claim it",
+                tasks.join(", ")
+            ),
         }
     }
 }
@@ -412,6 +719,61 @@ impl Default for RoadmapArtifact {
     fn default() -> Self {
         Self::new(Vec::new())
     }
+}
+
+/// A bounded, multi-milestone effort with its own definition of done.
+///
+/// The validation contract is written before the work is split into tasks,
+/// so it describes the behaviour the user asked for rather than the
+/// implementation already planned. Each assertion is claimed by exactly one
+/// task through [`RoadmapTask::fulfills`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RoadmapMission {
+    /// Stable identifier, for example `mission-1`.
+    pub id: String,
+    /// Human-readable mission title.
+    pub title: String,
+    /// The outcome this mission delivers, in one or two sentences.
+    pub goal: String,
+    /// Current execution status.
+    #[serde(default, skip_serializing_if = "RoadmapStatus::is_pending")]
+    pub status: RoadmapStatus,
+    /// Ids of the milestones this mission owns, in execution order.
+    pub milestones: Vec<String>,
+    /// Behavioural assertions that define the mission as done.
+    #[serde(default)]
+    pub validation_contract: Vec<ValidationAssertion>,
+}
+
+impl RoadmapMission {
+    /// Create a pending mission with no milestones or assertions.
+    #[must_use]
+    pub fn new(id: impl Into<String>, title: impl Into<String>, goal: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            goal: goal.into(),
+            status: RoadmapStatus::Pending,
+            milestones: Vec::new(),
+            validation_contract: Vec::new(),
+        }
+    }
+}
+
+/// One testable behavioural assertion in a mission's validation contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ValidationAssertion {
+    /// Stable id with an area prefix, for example `VAL-AUTH-001`.
+    pub id: String,
+    /// Short title.
+    pub title: String,
+    /// Observable pass/fail condition, phrased as behaviour a user or test
+    /// can check.
+    pub pass_condition: String,
+    /// Evidence a verifier must capture (test output, screenshot, HTTP
+    /// exchange, log excerpt).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
 }
 
 /// One deliverable-focused roadmap milestone.
@@ -480,6 +842,12 @@ pub struct RoadmapTask {
     /// stage can claim.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub verified: bool,
+    /// Validation-contract assertion ids this task makes fully testable.
+    ///
+    /// Only the leaf task that completes an assertion claims it;
+    /// infrastructure tasks leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fulfills: Vec<String>,
 }
 
 impl RoadmapTask {
@@ -496,6 +864,7 @@ impl RoadmapTask {
             discovered_from: None,
             size: None,
             verified: false,
+            fulfills: Vec::new(),
         }
     }
 }
@@ -1370,5 +1739,194 @@ title = "Old task"
         let markdown = roadmap.to_markdown();
 
         assert!(markdown.contains("- [~] m1-t1: Currently running (running)"));
+    }
+
+    fn assertion(id: &str) -> ValidationAssertion {
+        ValidationAssertion {
+            id: id.into(),
+            title: id.into(),
+            pass_condition: format!("{id} observably holds"),
+            evidence: Vec::new(),
+        }
+    }
+
+    fn fulfilling(id: &str, fulfills: &[&str]) -> RoadmapTask {
+        let mut task = sized_task(id, &[]);
+        task.fulfills = fulfills.iter().map(ToString::to_string).collect();
+        task
+    }
+
+    /// Two missions over three milestones, every assertion claimed once.
+    fn mission_roadmap() -> RoadmapArtifact {
+        let mut m1 = RoadmapMilestone::new("m1", "Accounts");
+        m1.tasks = vec![
+            fulfilling("m1-t1", &[]),
+            fulfilling("m1-t2", &["VAL-AUTH-001"]),
+        ];
+        let mut m2 = RoadmapMilestone::new("m2", "Profiles");
+        m2.tasks = vec![fulfilling("m2-t1", &["VAL-AUTH-002"])];
+        let mut m3 = RoadmapMilestone::new("m3", "Billing");
+        m3.tasks = vec![fulfilling("m3-t1", &["VAL-PAY-001"])];
+
+        let mut accounts = RoadmapMission::new("mission-1", "Accounts", "Users can sign in");
+        accounts.milestones = vec!["m1".into(), "m2".into()];
+        accounts.validation_contract = vec![assertion("VAL-AUTH-001"), assertion("VAL-AUTH-002")];
+        let mut billing = RoadmapMission::new("mission-2", "Billing", "Users can pay");
+        billing.milestones = vec!["m3".into()];
+        billing.validation_contract = vec![assertion("VAL-PAY-001")];
+
+        let mut roadmap = RoadmapArtifact::new(vec![m1, m2, m3]);
+        roadmap.missions = vec![accounts, billing];
+        roadmap
+    }
+
+    #[test]
+    fn well_formed_missions_validate_and_round_trip() {
+        let roadmap = mission_roadmap();
+        assert_eq!(roadmap.validate_ledger(), Vec::new());
+
+        let text = toml::to_string(&roadmap).unwrap();
+        let parsed: RoadmapArtifact = toml::from_str(&text).unwrap();
+        assert_eq!(parsed, roadmap);
+        assert_eq!(
+            parsed.mission_of_milestone("m2").map(|m| m.id.as_str()),
+            Some("mission-1")
+        );
+    }
+
+    #[test]
+    fn roadmap_without_missions_serializes_without_the_field() {
+        let roadmap = ledger_roadmap(vec![sized_task("t1", &[])]);
+        let text = toml::to_string(&roadmap).unwrap();
+        assert!(!text.contains("missions"), "{text}");
+        assert!(!text.contains("fulfills"), "{text}");
+    }
+
+    #[test]
+    fn missions_must_partition_milestones_in_order() {
+        let mut roadmap = mission_roadmap();
+        roadmap.missions[1].milestones.clear();
+        let issues = roadmap.validate_ledger();
+        assert!(issues.contains(&RoadmapLedgerIssue::EmptyMission {
+            mission: "mission-2".into()
+        }));
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::MilestoneWithoutMission {
+                milestone: "m3".into()
+            })
+        );
+
+        let mut roadmap = mission_roadmap();
+        roadmap.missions[1].milestones.push("m2".into());
+        assert!(roadmap.validate_ledger().contains(
+            &RoadmapLedgerIssue::MilestoneInSeveralMissions {
+                milestone: "m2".into()
+            }
+        ));
+
+        let mut roadmap = mission_roadmap();
+        roadmap.missions[1].milestones.push("m9".into());
+        assert!(
+            roadmap
+                .validate_ledger()
+                .contains(&RoadmapLedgerIssue::UnknownMissionMilestone {
+                    mission: "mission-2".into(),
+                    milestone: "m9".into()
+                })
+        );
+
+        let mut roadmap = mission_roadmap();
+        roadmap.missions[0].milestones = vec!["m2".into(), "m1".into()];
+        assert_eq!(
+            roadmap.validate_ledger(),
+            vec![RoadmapLedgerIssue::MissionOrderMismatch {
+                milestone: "m1".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn validation_contract_is_required_and_claimed_exactly_once() {
+        let mut roadmap = mission_roadmap();
+        roadmap.missions[1].validation_contract.clear();
+        let issues = roadmap.validate_ledger();
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::EmptyValidationContract {
+                mission: "mission-2".into()
+            })
+        );
+        assert!(issues.contains(&RoadmapLedgerIssue::UnknownFulfills {
+            task: "m3-t1".into(),
+            assertion: "VAL-PAY-001".into()
+        }));
+
+        let mut roadmap = mission_roadmap();
+        roadmap.milestones[0].tasks[1].fulfills.clear();
+        assert_eq!(
+            roadmap.validate_ledger(),
+            vec![RoadmapLedgerIssue::UnclaimedAssertion {
+                mission: "mission-1".into(),
+                assertion: "VAL-AUTH-001".into()
+            }]
+        );
+
+        let mut roadmap = mission_roadmap();
+        roadmap.milestones[0].tasks[0].fulfills = vec!["VAL-AUTH-001".into()];
+        assert_eq!(
+            roadmap.validate_ledger(),
+            vec![RoadmapLedgerIssue::AssertionClaimedTwice {
+                assertion: "VAL-AUTH-001".into(),
+                tasks: vec!["m1-t1".into(), "m1-t2".into()]
+            }]
+        );
+
+        let mut roadmap = mission_roadmap();
+        roadmap.missions[1]
+            .validation_contract
+            .push(assertion("VAL-AUTH-001"));
+        assert!(
+            roadmap
+                .validate_ledger()
+                .contains(&RoadmapLedgerIssue::DuplicateAssertionId {
+                    assertion: "VAL-AUTH-001".into()
+                })
+        );
+    }
+
+    #[test]
+    fn a_task_cannot_fulfill_another_missions_assertion() {
+        let mut roadmap = mission_roadmap();
+        roadmap.milestones[2].tasks[0].fulfills = vec!["VAL-AUTH-002".into()];
+        roadmap.milestones[1].tasks[0].fulfills = vec!["VAL-PAY-001".into()];
+        let issues = roadmap.validate_ledger();
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::FulfillsOutsideMission {
+                task: "m3-t1".into(),
+                assertion: "VAL-AUTH-002".into(),
+                mission: "mission-1".into()
+            })
+        );
+        assert!(issues.contains(&RoadmapLedgerIssue::UnclaimedAssertion {
+            mission: "mission-2".into(),
+            assertion: "VAL-PAY-001".into()
+        }));
+    }
+
+    #[test]
+    fn markdown_lists_missions_contracts_and_fulfills() {
+        let markdown = mission_roadmap().to_markdown();
+        assert!(
+            markdown.contains("### mission-1: Accounts (m1, m2)"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("Goal: Users can sign in"), "{markdown}");
+        assert!(
+            markdown.contains("- VAL-PAY-001: VAL-PAY-001"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("  - Fulfills: VAL-AUTH-001"),
+            "{markdown}"
+        );
     }
 }

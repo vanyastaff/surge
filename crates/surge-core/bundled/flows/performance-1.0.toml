@@ -6,6 +6,8 @@ start = "profile_baseline"
 [metadata]
 name = "performance"
 created_at = "2026-05-11T00:00:00Z"
+[metadata.archetype]
+name = "performance"
 
 [nodes.profile_baseline]
 id = "profile_baseline"

@@ -111,12 +111,10 @@ pub enum EngineError {
         detected: String,
     },
 
-    /// A non-bootstrap pipeline graph is missing the `[metadata.archetype]`
-    /// block where one is required (e.g., when running the post-Flow-Generator
-    /// validator on a freshly materialized graph). Reserved for callers that
-    /// want to enforce archetype declarations beyond the bootstrap path; the
-    /// post-Flow-Generator hook itself only enforces consistency when the
-    /// block is present.
+    /// A generated pipeline graph is missing the `[metadata.archetype]`
+    /// block. Raised by `validate::require_archetype` from the
+    /// post-Flow-Generator hook (ADR 0005); hand-authored templates are not
+    /// required to declare one.
     #[error("archetype block missing: {0}")]
     ArchetypeMissing(String),
 

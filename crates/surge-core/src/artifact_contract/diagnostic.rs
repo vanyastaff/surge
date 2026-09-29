@@ -55,6 +55,10 @@ pub enum ArtifactDiagnosticCode {
     DuplicateIdentifier,
     /// Task-level dependencies form a cycle.
     DependencyCycle,
+    /// Missions do not partition the roadmap's milestones in order.
+    MissionStructure,
+    /// A mission's validation contract is not claimed exactly once by its tasks.
+    ValidationContractCoverage,
 }
 
 impl ArtifactDiagnosticCode {
@@ -79,6 +83,8 @@ impl ArtifactDiagnosticCode {
             Self::InvalidReference => "invalid_reference",
             Self::DuplicateIdentifier => "duplicate_identifier",
             Self::DependencyCycle => "dependency_cycle",
+            Self::MissionStructure => "mission_structure",
+            Self::ValidationContractCoverage => "validation_contract_coverage",
         }
     }
 }

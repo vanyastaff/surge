@@ -6,6 +6,8 @@ start = "research_outline"
 [metadata]
 name = "docs"
 created_at = "2026-05-11T00:00:00Z"
+[metadata.archetype]
+name = "docs"
 
 [nodes.research_outline]
 id = "research_outline"

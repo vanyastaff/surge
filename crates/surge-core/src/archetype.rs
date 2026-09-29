@@ -35,6 +35,16 @@ pub enum ArchetypeName {
     Spike,
     /// Single Agent node + Terminal.
     SingleTask,
+    /// Design/plan → Implement core → Integrate and verify.
+    Feature,
+    /// Baseline/profile → Optimize → Benchmark against the baseline.
+    Performance,
+    /// Audit → Fix findings → Security regression tests.
+    Security,
+    /// Outline → Write → Review against the code.
+    Docs,
+    /// Migration plan → Implement → Validate forward and rollback.
+    Migration,
 }
 
 impl ArchetypeName {
@@ -50,7 +60,39 @@ impl ArchetypeName {
             Self::Refactor => "refactor",
             Self::Spike => "spike",
             Self::SingleTask => "single-task",
+            Self::Feature => "feature",
+            Self::Performance => "performance",
+            Self::Security => "security",
+            Self::Docs => "docs",
+            Self::Migration => "migration",
         }
+    }
+
+    /// Every first-party archetype, in catalog order.
+    ///
+    /// The Flow Generator prompt, the bundled flow assets and this list must
+    /// name the same set; tests on both sides check it.
+    pub const ALL: [Self; 12] = [
+        Self::Linear3,
+        Self::LinearWithReview,
+        Self::MultiMilestone,
+        Self::BugFix,
+        Self::Refactor,
+        Self::Spike,
+        Self::SingleTask,
+        Self::Feature,
+        Self::Performance,
+        Self::Security,
+        Self::Docs,
+        Self::Migration,
+    ];
+
+    /// Parse a kebab-case archetype name, the inverse of [`Self::as_str`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|archetype| archetype.as_str() == name)
     }
 }
 
@@ -87,13 +129,29 @@ mod tests {
             (ArchetypeName::Refactor, "refactor"),
             (ArchetypeName::Spike, "spike"),
             (ArchetypeName::SingleTask, "single-task"),
+            (ArchetypeName::Feature, "feature"),
+            (ArchetypeName::Performance, "performance"),
+            (ArchetypeName::Security, "security"),
+            (ArchetypeName::Docs, "docs"),
+            (ArchetypeName::Migration, "migration"),
         ] {
             assert_eq!(name.as_str(), expected);
             // Deserialize accepts the same identifier.
             let de: ArchetypeName =
                 serde_json::from_str(&format!("\"{expected}\"")).expect("deserialize");
             assert_eq!(de, name);
+            assert_eq!(ArchetypeName::from_name(expected), Some(name));
         }
+    }
+
+    #[test]
+    fn all_lists_every_variant_once() {
+        let names: std::collections::HashSet<&str> = ArchetypeName::ALL
+            .iter()
+            .map(ArchetypeName::as_str)
+            .collect();
+        assert_eq!(names.len(), ArchetypeName::ALL.len());
+        assert_eq!(ArchetypeName::from_name("bootstrap"), None);
     }
 
     #[test]

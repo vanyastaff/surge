@@ -1,6 +1,8 @@
 # Process selection: how the planner picks the right shape of work
 
-Status: research + proposal (2026-09-28). Nothing here is implemented yet.
+Status: research + proposal (2026-09-28). P0 and the Mission level (roadmap
+`[[missions]]` with validation contracts and `fulfills`) are implemented; P1–P4
+remain proposals.
 
 Question: when Surge turns an idea into a roadmap, how should the planning
 agents choose *the kind of process* for each level — roadmap, mission,

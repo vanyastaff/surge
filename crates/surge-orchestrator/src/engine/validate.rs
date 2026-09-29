@@ -346,22 +346,55 @@ fn apply_surge_core_validation(graph: &Graph) -> Result<(), EngineError> {
 #[allow(dead_code)]
 pub use validate_for_m6 as validate_for_m5;
 
+/// Require a `[metadata.archetype]` block on a generated graph.
+///
+/// ADR 0005: Flow Generator output must name its archetype so telemetry,
+/// replay and the flow gate can bucket the run. Hand-authored templates are
+/// not held to this; only the post-Flow-Generator hook calls it.
+///
+/// # Errors
+/// Returns [`EngineError::ArchetypeMissing`] when the block is absent.
+pub fn require_archetype(graph: &Graph) -> Result<surge_core::ArchetypeName, EngineError> {
+    graph
+        .metadata
+        .archetype
+        .as_ref()
+        .map(|archetype| archetype.name)
+        .ok_or_else(|| {
+            EngineError::ArchetypeMissing(format!(
+                "flow {:?} has no [metadata.archetype] block; pick exactly one of: {}",
+                graph.metadata.name,
+                surge_core::ArchetypeName::ALL
+                    .iter()
+                    .map(surge_core::ArchetypeName::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+}
+
 /// Validate that the graph's declared archetype matches its topology.
 ///
 /// Runs in addition to [`validate_for_m6`] when the graph carries an
-/// `[metadata.archetype]` block. Today only the `multi-milestone` archetype
-/// has a structural rule: the topology must contain at least one `Loop` node
-/// whose `iterates_over` resolves to an artifact-derived iterable named
-/// `roadmap.milestones`. Other archetypes are linear-shaped and impose no
-/// extra constraints; they pass through silently.
+/// `[metadata.archetype]` block. The one strict rule is the milestone loop,
+/// because the runtime's milestone progression depends on it:
 ///
-/// Used by the post-Flow-Generator validation hook (Task 11). When the graph
-/// has no archetype block, this function is a no-op so legacy graphs continue
-/// to validate without modification.
+/// - `multi-milestone` must contain a `Loop` over `roadmap.milestones`;
+/// - every other archetype must not, since iterating the roadmap's
+///   milestones *is* the multi-milestone shape and a graph that does it
+///   under another name mislabels the run.
+///
+/// Archetype-specific first steps (reproduce, characterise, baseline, audit,
+/// plan) are advisory per ADR 0005 — see [`archetype_advisories`]; each one
+/// found is logged as a warning here.
+///
+/// When the graph has no archetype block, this function is a no-op so
+/// hand-authored graphs continue to validate; [`require_archetype`] is the
+/// separate check for generated flows.
 ///
 /// # Errors
-/// Returns [`EngineError::ArchetypeMismatch`] when the declared archetype is
-/// `multi-milestone` but no qualifying `Loop` is present.
+/// Returns [`EngineError::ArchetypeMismatch`] when the milestone-loop rule is
+/// violated in either direction.
 pub fn validate_archetype_topology(graph: &Graph) -> Result<(), EngineError> {
     use surge_core::ArchetypeName;
 
@@ -369,25 +402,102 @@ pub fn validate_archetype_topology(graph: &Graph) -> Result<(), EngineError> {
         return Ok(());
     };
 
-    match archetype.name {
-        ArchetypeName::MultiMilestone => {
-            if contains_roadmap_milestones_loop(graph) {
-                Ok(())
-            } else {
-                Err(EngineError::ArchetypeMismatch {
-                    declared: archetype.name.as_str().to_owned(),
-                    detected: "no Loop node iterating over an artifact named 'roadmap.milestones'"
-                        .to_owned(),
-                })
-            }
+    let has_milestone_loop = contains_roadmap_milestones_loop(graph);
+    match (archetype.name, has_milestone_loop) {
+        (ArchetypeName::MultiMilestone, false) => {
+            return Err(EngineError::ArchetypeMismatch {
+                declared: archetype.name.as_str().to_owned(),
+                detected: "no Loop node iterating over an artifact named 'roadmap.milestones'"
+                    .to_owned(),
+            });
         },
-        // Linear / single-task archetypes have no extra structural rule
-        // beyond `validate_for_m6`. The wildcard arm covers the
-        // `#[non_exhaustive]` future; new archetypes that need a topology
-        // rule must add an explicit arm above before relying on the
-        // post-Flow-Generator validator to enforce it.
-        _ => Ok(()),
+        (name, true) if name != ArchetypeName::MultiMilestone => {
+            return Err(EngineError::ArchetypeMismatch {
+                declared: name.as_str().to_owned(),
+                detected: "a Loop over 'roadmap.milestones', which is the multi-milestone shape; \
+                           declare multi-milestone or iterate a single milestone's tasks"
+                    .to_owned(),
+            });
+        },
+        _ => {},
     }
+
+    for advisory in archetype_advisories(graph) {
+        tracing::warn!(
+            target: "engine::validate",
+            archetype = archetype.name.as_str(),
+            flow = %graph.metadata.name,
+            "{advisory}"
+        );
+    }
+    Ok(())
+}
+
+/// Advisory (non-blocking) checks that a graph contains the stage its
+/// archetype is named for.
+///
+/// Specialised archetypes exist because their first step — reproducing the
+/// bug, pinning behaviour before a refactor, measuring a baseline — is what
+/// makes the rest checkable. A graph labelled `bug-fix` with no reproduce
+/// stage has lost that. Detection is by node key or bound profile name, so
+/// the result is a hint, not proof; ADR 0005 keeps these soft.
+///
+/// Returns one message per missing stage; empty when the graph has no
+/// archetype block or the archetype has no named stage.
+#[must_use]
+pub fn archetype_advisories(graph: &Graph) -> Vec<String> {
+    use surge_core::ArchetypeName;
+
+    let Some(archetype) = graph.metadata.archetype.as_ref() else {
+        return Vec::new();
+    };
+    let (stage, markers): (&str, &[&str]) = match archetype.name {
+        ArchetypeName::BugFix => ("reproduce", &["reproduc", "bug-fix-implementer"]),
+        ArchetypeName::Refactor => (
+            "behaviour characterisation",
+            &[
+                "characteri",
+                "behaviour",
+                "behavior",
+                "refactor-implementer",
+            ],
+        ),
+        ArchetypeName::Performance => ("baseline measurement", &["baseline", "bench"]),
+        ArchetypeName::Security => ("security audit", &["audit", "security"]),
+        ArchetypeName::Migration => ("migration plan or rollback check", &["migrat", "rollback"]),
+        ArchetypeName::Docs => ("documentation", &["doc"]),
+        ArchetypeName::LinearWithReview => ("review", &["review"]),
+        _ => return Vec::new(),
+    };
+
+    let mentions_marker = agent_stage_labels(graph).any(|label| {
+        let label = label.to_ascii_lowercase();
+        markers.iter().any(|marker| label.contains(marker))
+    });
+    if mentions_marker {
+        Vec::new()
+    } else {
+        vec![format!(
+            "{} flow has no {stage} stage: no agent node key or profile mentions any of {markers:?}",
+            archetype.name.as_str()
+        )]
+    }
+}
+
+/// Node keys and bound profile names of every Agent node, outer graph and
+/// subgraphs alike.
+fn agent_stage_labels(graph: &Graph) -> impl Iterator<Item = &str> {
+    use surge_core::node::NodeConfig;
+
+    graph
+        .nodes
+        .iter()
+        .chain(graph.subgraphs.values().flat_map(|sg| sg.nodes.iter()))
+        .filter_map(|(key, node)| match &node.config {
+            NodeConfig::Agent(cfg) => Some([key.as_str(), cfg.profile.as_str()]),
+            _ => None,
+        })
+        .flatten()
 }
 
 /// Whether `graph` contains at least one `Loop` node whose `iterates_over`
@@ -1382,14 +1492,10 @@ mod tests {
     #[test]
     fn archetype_topology_linear_archetypes_have_no_extra_rule() {
         let iterable = IterableSource::Static(vec![]);
-        for variant in [
-            ArchetypeName::Linear3,
-            ArchetypeName::LinearWithReview,
-            ArchetypeName::BugFix,
-            ArchetypeName::Refactor,
-            ArchetypeName::Spike,
-            ArchetypeName::SingleTask,
-        ] {
+        for variant in ArchetypeName::ALL
+            .into_iter()
+            .filter(|name| *name != ArchetypeName::MultiMilestone)
+        {
             let meta = ArchetypeMetadata {
                 name: variant,
                 milestones: None,
@@ -1399,6 +1505,79 @@ mod tests {
             assert!(
                 validate_archetype_topology(&g).is_ok(),
                 "{variant:?} should not require a milestone loop"
+            );
+        }
+    }
+
+    #[test]
+    fn archetype_topology_rejects_milestone_loop_under_another_name() {
+        let iterable = IterableSource::Artifact {
+            node: NodeKey::try_from("roadmap_planner").unwrap(),
+            name: "roadmap.milestones".into(),
+            jsonpath: "$".into(),
+        };
+        let meta = ArchetypeMetadata {
+            name: ArchetypeName::Feature,
+            milestones: None,
+            edit_loop_cap: None,
+        };
+        let g = graph_with_archetype_and_loop(Some(meta), iterable);
+        match validate_archetype_topology(&g).unwrap_err() {
+            EngineError::ArchetypeMismatch { declared, detected } => {
+                assert_eq!(declared, "feature");
+                assert!(detected.contains("multi-milestone"), "{detected}");
+            },
+            other => panic!("expected ArchetypeMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn require_archetype_rejects_missing_block_and_names_the_catalog() {
+        let g = graph_with_archetype_and_loop(None, IterableSource::Static(vec![]));
+        match require_archetype(&g).unwrap_err() {
+            EngineError::ArchetypeMissing(message) => {
+                for archetype in ArchetypeName::ALL {
+                    assert!(message.contains(archetype.as_str()), "{message}");
+                }
+            },
+            other => panic!("expected ArchetypeMissing, got {other:?}"),
+        }
+        let g = graph_with_archetype_and_loop(
+            Some(multi_milestone_meta()),
+            IterableSource::Static(vec![]),
+        );
+        assert_eq!(
+            require_archetype(&g).unwrap(),
+            ArchetypeName::MultiMilestone
+        );
+    }
+
+    #[test]
+    fn archetype_advisories_flag_a_missing_named_stage() {
+        let meta = ArchetypeMetadata {
+            name: ArchetypeName::BugFix,
+            milestones: None,
+            edit_loop_cap: None,
+        };
+        let g = graph_with_archetype_and_loop(Some(meta), IterableSource::Static(vec![]));
+        let advisories = archetype_advisories(&g);
+        assert_eq!(advisories.len(), 1, "{advisories:?}");
+        assert!(advisories[0].contains("reproduce"), "{advisories:?}");
+    }
+
+    #[test]
+    fn bundled_archetype_flows_pass_topology_and_advisories() {
+        for archetype in ArchetypeName::ALL {
+            let flow = surge_core::bundled_flows::BundledFlows::by_name_latest(archetype.as_str())
+                .expect("bundled flow");
+            assert_eq!(require_archetype(&flow.graph).unwrap(), archetype);
+            validate_archetype_topology(&flow.graph)
+                .unwrap_or_else(|e| panic!("{}: {e}", archetype.as_str()));
+            assert_eq!(
+                archetype_advisories(&flow.graph),
+                Vec::<String>::new(),
+                "{}",
+                archetype.as_str()
             );
         }
     }

@@ -24,7 +24,12 @@ title = "Build app"
 size = "s"
 acceptance_criteria = ["App works"]
 "#;
-const FLOW: &str = include_str!("../../../examples/flow_terminal_only.toml");
+// Generated flows must declare their archetype (ADR 0005); the example is a
+// hand-authored template, so the fixture appends the block itself.
+const FLOW: &str = concat!(
+    include_str!("../../../examples/flow_terminal_only.toml"),
+    "\n[metadata.archetype]\nname = \"single-task\"\n"
+);
 
 struct AuthorBridge {
     sessions: Mutex<HashMap<SessionId, (std::path::PathBuf, usize)>>,

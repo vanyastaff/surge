@@ -6,6 +6,8 @@ start = "migration_plan"
 [metadata]
 name = "migration"
 created_at = "2026-05-11T00:00:00Z"
+[metadata.archetype]
+name = "migration"
 
 [nodes.migration_plan]
 id = "migration_plan"

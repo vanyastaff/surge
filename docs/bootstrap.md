@@ -56,7 +56,8 @@ exhausted, the engine emits `EscalationRequested` and fails the run with an
 explicit edit-loop-cap error.
 
 Flow generation has an additional validation retry path. If `flow.toml` fails
-to parse, fails `validate_for_m6`, or violates the selected archetype topology,
+to parse, fails `validate_for_m6`, has no `[metadata.archetype]` block, or
+violates the selected archetype topology,
 the engine emits `BootstrapEditRequested { stage = Flow }` and backtracks to
 the Flow Generator. A later valid `flow.toml` emits `PipelineMaterialized`.
 
@@ -73,6 +74,21 @@ The Flow Generator chooses one of the bundled archetypes:
 | `refactor` | Spec -> capture behavior -> refactor -> verify -> review, with artifact handoffs. |
 | `spike` | Spec -> bounded experiment; records findings without certifying production code. |
 | `single-task` | Smallest single-agent task flow. |
+| `feature` | Design/plan -> implement core -> integrate and verify. |
+| `performance` | Baseline/profile -> optimize -> benchmark against the baseline. |
+| `security` | Audit -> fix findings -> security regression tests. |
+| `docs` | Outline -> write -> review against the code. |
+| `migration` | Migration plan -> implement -> validate forward and rollback. |
+
+Every generated flow must declare exactly one of these in
+`[metadata.archetype]`; the choice is recorded in `BootstrapTelemetry`. Only
+`multi-milestone` may loop over `roadmap.milestones`, and it must. Flows
+labelled with a specialised archetype that lack its named stage (reproduce,
+behaviour capture, baseline, audit, migration plan, docs, review) pass with a
+logged warning. When the approved roadmap declares missions, the Flow
+Generator picks `multi-milestone` and its milestone verifier checks the
+validation-contract assertions each milestone's tasks fulfil; see
+[conventions/roadmap.md](conventions/roadmap.md#missions-and-validation-contracts).
 
 User templates under `${SURGE_HOME}/templates/*.toml` can shadow bundled
 templates by filename stem or `metadata.name`.

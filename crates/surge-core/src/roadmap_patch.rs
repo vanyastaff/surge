@@ -381,6 +381,11 @@ impl RoadmapPatchApplyContext {
         let milestone = pending_milestone(milestone);
         match insertion {
             InsertionPoint::AppendToRoadmap => {
+                // Joins the mission that owns the current last milestone, so
+                // declared missions keep partitioning the roadmap.
+                if let Some(last) = self.roadmap.milestones.last().map(|m| m.id.clone()) {
+                    self.join_mission_of(&last, &milestone.id, InsertSide::After);
+                }
                 self.inserted_milestones.push(milestone.id.clone());
                 self.roadmap.milestones.push(milestone);
             },
@@ -414,8 +419,24 @@ impl RoadmapPatchApplyContext {
             InsertSide::Before => index,
             InsertSide::After => index + 1,
         };
+        self.join_mission_of(target_id, &milestone.id, side);
         self.inserted_milestones.push(milestone.id.clone());
         self.roadmap.milestones.insert(insert_at, milestone);
+    }
+
+    /// Put `new_id` into the mission that owns `anchor_id`, next to it.
+    /// No-op when the roadmap declares no missions or the anchor has none.
+    fn join_mission_of(&mut self, anchor_id: &str, new_id: &str, side: InsertSide) {
+        for mission in &mut self.roadmap.missions {
+            if let Some(position) = mission.milestones.iter().position(|id| id == anchor_id) {
+                let at = match side {
+                    InsertSide::Before => position,
+                    InsertSide::After => position + 1,
+                };
+                mission.milestones.insert(at, new_id.to_owned());
+                return;
+            }
+        }
     }
 
     fn add_task(
@@ -558,6 +579,17 @@ impl RoadmapPatchApplyContext {
             return;
         }
         self.roadmap.milestones[index] = pending_milestone(replacement);
+        if replacement.id != milestone_id {
+            for id in self
+                .roadmap
+                .missions
+                .iter_mut()
+                .flat_map(|mission| mission.milestones.iter_mut())
+                .filter(|id| *id == milestone_id)
+            {
+                id.clone_from(&replacement.id);
+            }
+        }
         self.replaced_items.push(target_ref);
     }
 
@@ -1653,5 +1685,63 @@ mod tests {
         let codes = conflict_codes(patch.apply_to_roadmap(&roadmap).unwrap_err());
 
         assert!(codes.contains(&RoadmapPatchConflictCode::DependencyCycle));
+    }
+
+    fn mission_roadmap() -> RoadmapArtifact {
+        let mut roadmap = base_roadmap();
+        let mut mission = crate::roadmap::RoadmapMission::new("mission-1", "Core", "Ship it");
+        mission.milestones = vec!["m1".into()];
+        roadmap.missions.push(mission);
+        roadmap
+    }
+
+    #[test]
+    fn appended_milestone_joins_the_last_mission() {
+        let patch = patch(vec![RoadmapPatchOperation::AddMilestone {
+            milestone: RoadmapMilestone::new("m2", "Approval flow"),
+            insertion: Some(InsertionPoint::AppendToRoadmap),
+        }]);
+
+        let result = patch.apply_to_roadmap(&mission_roadmap()).unwrap();
+
+        assert_eq!(result.roadmap.missions[0].milestones, ["m1", "m2"]);
+    }
+
+    #[test]
+    fn milestone_inserted_before_an_anchor_joins_its_mission_in_order() {
+        let patch = patch(vec![RoadmapPatchOperation::AddMilestone {
+            milestone: RoadmapMilestone::new("m0", "Groundwork"),
+            insertion: Some(InsertionPoint::BeforeMilestone {
+                milestone_id: "m1".into(),
+            }),
+        }]);
+
+        let result = patch.apply_to_roadmap(&mission_roadmap()).unwrap();
+
+        assert_eq!(result.roadmap.missions[0].milestones, ["m0", "m1"]);
+        let milestone_order: Vec<&str> = result
+            .roadmap
+            .milestones
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(milestone_order, ["m0", "m1"]);
+    }
+
+    #[test]
+    fn replacing_a_milestone_under_a_new_id_renames_it_in_its_mission() {
+        let patch = patch(vec![RoadmapPatchOperation::ReplaceDraftItem {
+            target: RoadmapItemRef::Milestone {
+                milestone_id: "m1".into(),
+            },
+            replacement: RoadmapPatchItem::Milestone {
+                milestone: RoadmapMilestone::new("m1b", "Foundation, reworked"),
+            },
+            reason: String::new(),
+        }]);
+
+        let result = patch.apply_to_roadmap(&mission_roadmap()).unwrap();
+
+        assert_eq!(result.roadmap.missions[0].milestones, ["m1b"]);
     }
 }

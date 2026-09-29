@@ -15,6 +15,17 @@ Each archetype is a graph topology shaped to a category of work. Without a stabl
 
 ## Decision
 
+> **Amended 2026-09-28.** The catalog grew to twelve: `feature`,
+> `performance`, `security`, `docs` and `migration` were offered by the Flow
+> Generator prompt and shipped as bundled flows but had no enum variant, so a
+> flow declaring them failed to deserialize. They are now variants.
+> `ArchetypeName::ALL` lists the catalog, and tests check it against the
+> bundled flows. The post-Flow-Generator hook now rejects output without
+> `[metadata.archetype]` (`EngineError::ArchetypeMissing`), and the
+> milestone-loop rule runs in both directions. The profile soft checks below
+> became marker checks on node keys and profile names
+> (`validate::archetype_advisories`).
+
 ### Closed `ArchetypeName` enum
 
 Seven first-party archetype names live as a closed enum in `surge-core`:

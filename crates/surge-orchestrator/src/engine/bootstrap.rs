@@ -317,6 +317,7 @@ fn validate_generated_graph(
             format!("required profile inputs failed: {e}. Provide the declared bindings; custom_fields do not supply prompt inputs.")
         })?;
     }
+    crate::engine::validate::require_archetype(graph).map_err(|e| e.to_string())?;
     validate_archetype_topology(graph).map_err(|e| format!("archetype topology check failed: {e}"))
 }
 
@@ -538,9 +539,15 @@ mod tests {
                 policy: EdgePolicy::default(),
             },
         ];
+        let mut metadata = GraphMetadata::new("test", chrono::Utc::now());
+        metadata.archetype = Some(surge_core::ArchetypeMetadata {
+            name: surge_core::ArchetypeName::Linear3,
+            milestones: None,
+            edit_loop_cap: None,
+        });
         let graph = surge_core::graph::Graph {
             schema_version: SCHEMA_VERSION,
-            metadata: GraphMetadata::new("test", chrono::Utc::now()),
+            metadata,
             start: key_a,
             nodes,
             edges,
@@ -758,6 +765,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flow_without_archetype_is_sent_back_with_the_catalog() {
+        let tmp = TempDir::new().unwrap();
+        let worktree = tmp.path().join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let mut graph: surge_core::graph::Graph = toml::from_str(&valid_flow_toml()).unwrap();
+        graph.metadata.archetype = None;
+        std::fs::write(
+            worktree.join(FLOW_ARTIFACT_FILENAME),
+            toml::to_string(&graph).unwrap(),
+        )
+        .unwrap();
+
+        let (_storage, _run_id, writer) = fresh_writer(tmp.path()).await;
+        let memory = RunMemory::default();
+        let node = NodeKey::try_from("flow_generator").unwrap();
+
+        let decision = run_flow_generator_post_processing(&node, &memory, 3, &worktree, &writer)
+            .await
+            .expect("post processing");
+
+        match decision {
+            FlowValidationDecision::EditRequested { feedback } => {
+                assert!(feedback.contains("[metadata.archetype]"), "{feedback}");
+                assert!(feedback.contains("multi-milestone"), "{feedback}");
+            },
+            other => panic!("expected EditRequested, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cap_exceeded_emits_escalation_and_returns_cap_exceeded() {
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
@@ -798,17 +835,15 @@ mod tests {
     /// `multi-milestone` archetype without any matching `roadmap.milestones`
     /// loop — exercising the Task 11 archetype topology rule.
     fn multi_milestone_without_loop_toml() -> String {
-        // Re-use the valid graph (two Agent nodes, no Loop) and inject the
-        // archetype block via search-and-replace. Avoids hand-rolling another
-        // TOML fixture.
-        let base = valid_flow_toml();
-        let injection = "\n\n[metadata.archetype]\nname = \"multi-milestone\"\nmilestones = 3\n";
-        // The serialized GraphMetadata block ends right before the next
-        // top-level table (`[nodes.agent_a]`). Append the archetype subtable
-        // at the end of the document — TOML allows out-of-order sub-tables
-        // as long as the parent table is open at parse time, so this works
-        // even though metadata appears earlier in the file.
-        format!("{base}{injection}")
+        // Re-use the valid graph (two Agent nodes, no Loop) and relabel it
+        // multi-milestone, which requires a milestone Loop it does not have.
+        let mut graph: surge_core::graph::Graph = toml::from_str(&valid_flow_toml()).unwrap();
+        graph.metadata.archetype = Some(surge_core::ArchetypeMetadata {
+            name: surge_core::ArchetypeName::MultiMilestone,
+            milestones: Some(3),
+            edit_loop_cap: None,
+        });
+        toml::to_string(&graph).unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

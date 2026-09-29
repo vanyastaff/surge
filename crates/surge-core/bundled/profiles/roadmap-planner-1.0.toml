@@ -101,11 +101,30 @@ Turn `description.md` into Roadmap contract artifacts:
 - `depends_on` references task ids (in any milestone) that must finish first. Keep the task-dependency graph acyclic; do not list a task as its own dependency.
 - `[[dependencies]]` uses `from`, `to`, and optional `reason` for milestone-level ordering.
 - `[[risks]]` uses `description` and optional `mitigation`.
+- Optional `[[missions]]` (see "Choosing the scale"): `id` (e.g. `"mission-1"`), `title`, `goal` (one or two sentences on the outcome), `milestones = ["m1", "m2"]`, and `[[missions.validation_contract]]` entries with `id` (area-prefixed, e.g. `"VAL-AUTH-001"`), `title`, `pass_condition` (observable behaviour that passes or fails) and optional `evidence = [...]` (what a verifier must capture: test output, screenshot, HTTP exchange).
+- Tasks inside a mission may carry `fulfills = ["VAL-AUTH-001"]`: the assertion ids that task makes fully testable.
 
 `roadmap.md` compatibility sections:
 - `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope.
 - `## Dependencies` — explicit edges between milestones when one must finish before another can start.
 - `## Risks` — short bulleted list of what could break the plan.
+
+# Choosing the scale
+
+Size the whole request before writing milestones, and plan only as deep as it needs:
+
+- **Task** — one coherent change that fits one fresh session: a single milestone with one task.
+- **Milestone** — one user-visible outcome of roughly 3-15 tasks: a single milestone, no missions.
+- **Mission** — a new application, or two or more vertical slices that must each leave the product usable and testable: declare `[[missions]]`.
+- **Several missions** — independent outcomes that could ship separately (for example "accounts" and "billing"): one mission per outcome, in delivery order.
+
+When you declare missions:
+1. **Write each mission's `validation_contract` before splitting it into tasks.** Derive the assertions from `description.md` — what the user must be able to do and see — not from the tasks you intend to write, so the contract is not shaped by the implementation. Cover each user-facing requirement and each flow that crosses features. Make every `pass_condition` checkable by someone running the app or its tests.
+2. Then split the mission into milestones that are vertical slices: each one ends with the product runnable and its slice demonstrable end to end. Make the first milestone the thinnest end-to-end skeleton.
+3. Give each assertion to exactly one task through `fulfills` — the leaf task that makes the assertion testable. Infrastructure tasks (schema, scaffolding, config) fulfil nothing. Every assertion must be claimed exactly once, only by tasks in its own mission.
+4. Every milestone belongs to exactly one mission, and missions list their milestones in the same order as `[[milestones]]`.
+
+Do not declare missions for a single-milestone roadmap; the milestone's acceptance criteria are enough.
 
 Rules:
 - Incorporate `edit_feedback` when it is non-empty; do not mention that feedback when it is empty.

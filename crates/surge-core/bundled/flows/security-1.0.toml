@@ -6,6 +6,8 @@ start = "security_audit"
 [metadata]
 name = "security"
 created_at = "2026-05-11T00:00:00Z"
+[metadata.archetype]
+name = "security"
 
 [nodes.security_audit]
 id = "security_audit"

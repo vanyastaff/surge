@@ -71,7 +71,7 @@ trusted. Then pick the smallest shape that still verifies everything:
 - a tiny, low-risk change to one area → `single-task`;
 - one self-contained task → `linear-3`;
 - one milestone of several tasks → `linear-with-review`;
-- two or more milestones → `multi-milestone`;
+- two or more milestones, or any roadmap that declares `missions` → `multi-milestone`;
 - the work is primarily a bug, refactor, migration, performance, security,
   documentation or research effort → that specialised archetype, even when it
   is small, because its first step (reproduce, characterise, baseline, audit)
@@ -105,6 +105,7 @@ For `multi-milestone`, the emitted graph must make the roadmap shape explicit:
 - The inner task Loop's body subgraph contains the concrete Agent nodes for implementation, verification, and any required review.
 - If milestone-by-milestone approval is needed, wire explicit HumanGate nodes between milestone iterations rather than inventing a new node kind.
 - Validate each milestone as a whole, not only its tasks: after the inner task Loop, and still inside the milestone body, add a Verifier node that checks the integrated result of that milestone (the application builds, its tests pass, and the milestone's user-visible behaviour works end to end). Route its failing outcome back to rework instead of advancing to the next milestone.
+- When the roadmap declares `missions`, each mission's `validation_contract` is its definition of done. The milestone Verifier must also check every assertion that the milestone's tasks list in `fulfills`, exercising the running application the way a user would and capturing the evidence each assertion names. Say in `metadata.description` how many missions and assertions the run carries.
 
 Rules:
 - Incorporate `edit_feedback` when it is non-empty; fix the graph in-place instead of explaining the issue.

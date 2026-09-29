@@ -1,6 +1,5 @@
 ---
 source: crates/surge-core/tests/artifact_schema_snapshots.rs
-assertion_line: 29
 expression: schema
 ---
 {
@@ -397,6 +396,13 @@ expression: schema
         "verified": {
           "description": "True only when a verification-authority node reported the task\nverified. Distinct from [`RoadmapStatus::Completed`], which any\nstage can claim.",
           "type": "boolean"
+        },
+        "fulfills": {
+          "description": "Validation-contract assertion ids this task makes fully testable.\n\nOnly the leaf task that completes an assertion claims it;\ninfrastructure tasks leave this empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

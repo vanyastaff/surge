@@ -1,12 +1,11 @@
 ---
 source: crates/surge-core/tests/artifact_schema_snapshots.rs
-assertion_line: 22
 expression: schema
 ---
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "RoadmapArtifact",
-  "description": "Surge `roadmap.toml` artifact: ordered milestones, cross-milestone dependencies, and tracked risks.",
+  "description": "Surge `roadmap.toml` artifact: optional missions with validation contracts, ordered milestones, cross-milestone dependencies, and tracked risks.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -15,6 +14,13 @@ expression: schema
       "format": "uint32",
       "minimum": 0,
       "default": 2
+    },
+    "missions": {
+      "description": "Missions grouping the milestones, in execution order.\n\nOptional. When present, the missions partition [`Self::milestones`]:\nevery milestone belongs to exactly one mission and concatenating the\nmissions' milestone lists reproduces the milestone order. Milestones\nstay a flat list so flows keep iterating `milestones` directly.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapMission"
+      }
     },
     "milestones": {
       "description": "Deliverable-focused milestones in execution order.",
@@ -42,34 +48,47 @@ expression: schema
     }
   },
   "$defs": {
-    "RoadmapMilestone": {
-      "description": "One deliverable-focused roadmap milestone.",
+    "RoadmapMission": {
+      "description": "A bounded, multi-milestone effort with its own definition of done.\n\nThe validation contract is written before the work is split into tasks,\nso it describes the behaviour the user asked for rather than the\nimplementation already planned. Each assertion is claimed by exactly one\ntask through [`RoadmapTask::fulfills`].",
       "type": "object",
       "properties": {
         "id": {
-          "description": "Stable human-authored identifier, for example `m1`.",
+          "description": "Stable identifier, for example `mission-1`.",
           "type": "string"
         },
         "title": {
-          "description": "Human-readable milestone title.",
+          "description": "Human-readable mission title.",
+          "type": "string"
+        },
+        "goal": {
+          "description": "The outcome this mission delivers, in one or two sentences.",
           "type": "string"
         },
         "status": {
-          "description": "Current execution status for amendment safety checks.",
+          "description": "Current execution status.",
           "$ref": "#/$defs/RoadmapStatus"
         },
-        "tasks": {
-          "description": "Ordered tasks within this milestone.",
+        "milestones": {
+          "description": "Ids of the milestones this mission owns, in execution order.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RoadmapTask"
+            "type": "string"
+          }
+        },
+        "validation_contract": {
+          "description": "Behavioural assertions that define the mission as done.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidationAssertion"
           },
           "default": []
         }
       },
       "required": [
         "id",
-        "title"
+        "title",
+        "goal",
+        "milestones"
       ]
     },
     "RoadmapStatus": {
@@ -115,6 +134,66 @@ expression: schema
           "type": "string",
           "const": "skipped"
         }
+      ]
+    },
+    "ValidationAssertion": {
+      "description": "One testable behavioural assertion in a mission's validation contract.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable id with an area prefix, for example `VAL-AUTH-001`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short title.",
+          "type": "string"
+        },
+        "pass_condition": {
+          "description": "Observable pass/fail condition, phrased as behaviour a user or test\ncan check.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "Evidence a verifier must capture (test output, screenshot, HTTP\nexchange, log excerpt).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "pass_condition"
+      ]
+    },
+    "RoadmapMilestone": {
+      "description": "One deliverable-focused roadmap milestone.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable human-authored identifier, for example `m1`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable milestone title.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current execution status for amendment safety checks.",
+          "$ref": "#/$defs/RoadmapStatus"
+        },
+        "tasks": {
+          "description": "Ordered tasks within this milestone.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoadmapTask"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title"
       ]
     },
     "RoadmapTask": {
@@ -176,6 +255,13 @@ expression: schema
         "verified": {
           "description": "True only when a verification-authority node reported the task\nverified. Distinct from [`RoadmapStatus::Completed`], which any\nstage can claim.",
           "type": "boolean"
+        },
+        "fulfills": {
+          "description": "Validation-contract assertion ids this task makes fully testable.\n\nOnly the leaf task that completes an assertion claims it;\ninfrastructure tasks leave this empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

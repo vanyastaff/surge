@@ -99,7 +99,29 @@ const fn ledger_issue_code(issue: &RoadmapLedgerIssue) -> ArtifactDiagnosticCode
             ArtifactDiagnosticCode::InvalidReference
         },
         RoadmapLedgerIssue::DependencyCycle { .. } => ArtifactDiagnosticCode::DependencyCycle,
-        RoadmapLedgerIssue::MissingSize { .. } => ArtifactDiagnosticCode::MissingField,
+        RoadmapLedgerIssue::MissingSize { .. }
+        | RoadmapLedgerIssue::EmptyValidationContract { .. } => {
+            ArtifactDiagnosticCode::MissingField
+        },
+        RoadmapLedgerIssue::DuplicateMissionId { .. }
+        | RoadmapLedgerIssue::DuplicateAssertionId { .. } => {
+            ArtifactDiagnosticCode::DuplicateIdentifier
+        },
+        RoadmapLedgerIssue::UnknownMissionMilestone { .. }
+        | RoadmapLedgerIssue::UnknownFulfills { .. }
+        | RoadmapLedgerIssue::FulfillsOutsideMission { .. } => {
+            ArtifactDiagnosticCode::InvalidReference
+        },
+        RoadmapLedgerIssue::EmptyMission { .. }
+        | RoadmapLedgerIssue::MilestoneInSeveralMissions { .. }
+        | RoadmapLedgerIssue::MilestoneWithoutMission { .. }
+        | RoadmapLedgerIssue::MissionOrderMismatch { .. } => {
+            ArtifactDiagnosticCode::MissionStructure
+        },
+        RoadmapLedgerIssue::UnclaimedAssertion { .. }
+        | RoadmapLedgerIssue::AssertionClaimedTwice { .. } => {
+            ArtifactDiagnosticCode::ValidationContractCoverage
+        },
     }
 }
 
@@ -115,5 +137,23 @@ fn ledger_issue_location(issue: &RoadmapLedgerIssue) -> Option<String> {
         RoadmapLedgerIssue::UnknownMilestoneDependency { missing } => Some(missing.clone()),
         RoadmapLedgerIssue::MilestoneSelfDependency { milestone } => Some(milestone.clone()),
         RoadmapLedgerIssue::DependencyCycle { cycle } => cycle.first().cloned(),
+        RoadmapLedgerIssue::DuplicateMissionId { mission }
+        | RoadmapLedgerIssue::EmptyMission { mission } => Some(mission.clone()),
+        RoadmapLedgerIssue::EmptyValidationContract { mission } => {
+            Some(format!("{mission}.validation_contract"))
+        },
+        RoadmapLedgerIssue::UnknownMissionMilestone { mission, .. } => {
+            Some(format!("{mission}.milestones"))
+        },
+        RoadmapLedgerIssue::MilestoneInSeveralMissions { milestone }
+        | RoadmapLedgerIssue::MilestoneWithoutMission { milestone }
+        | RoadmapLedgerIssue::MissionOrderMismatch { milestone } => Some(milestone.clone()),
+        RoadmapLedgerIssue::DuplicateAssertionId { assertion }
+        | RoadmapLedgerIssue::UnclaimedAssertion { assertion, .. }
+        | RoadmapLedgerIssue::AssertionClaimedTwice { assertion, .. } => Some(assertion.clone()),
+        RoadmapLedgerIssue::UnknownFulfills { task, .. }
+        | RoadmapLedgerIssue::FulfillsOutsideMission { task, .. } => {
+            Some(format!("{task}.fulfills"))
+        },
     }
 }

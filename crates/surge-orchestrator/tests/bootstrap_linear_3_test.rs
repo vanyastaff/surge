@@ -67,5 +67,9 @@ async fn bootstrap_linear_3_materializes_valid_followup_graph() {
     assert!(telemetry.0.contains_key(&BootstrapStage::Roadmap));
     assert!(telemetry.0.contains_key(&BootstrapStage::Flow));
     assert!(telemetry.1.is_empty());
-    assert!(telemetry.2.is_none());
+    // Generated flows declare their archetype, so telemetry buckets the run.
+    assert_eq!(
+        telemetry.2.as_ref().map(|archetype| archetype.name),
+        Some(surge_core::ArchetypeName::Linear3)
+    );
 }
