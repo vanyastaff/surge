@@ -339,6 +339,25 @@ fn verify_creation(repo: &Repository, spec: &RunWorktreeSpec) -> Result<(), GitE
     Ok(())
 }
 
+/// Whether two paths name the same location, ignoring Windows' verbatim
+/// (`\\?\`) prefix.
+///
+/// `Path::canonicalize` returns `\\?\C:\dir` on Windows while libgit2 reports
+/// worktree paths as `C:\dir`; comparing them with `==` made every existing
+/// checkout look like a registration mismatch. `\\?\UNC\…` is left alone
+/// because it has no plain equivalent to strip to.
+fn same_location(a: &Path, b: &Path) -> bool {
+    a == b || strip_verbatim(&a.to_string_lossy()) == strip_verbatim(&b.to_string_lossy())
+}
+
+fn strip_verbatim(path: &str) -> &str {
+    if path.starts_with(r"\\?\UNC\") {
+        path
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path)
+    }
+}
+
 fn verify_checkout(
     repo: &Repository,
     worktree: &git2::Worktree,
@@ -347,15 +366,19 @@ fn verify_checkout(
 ) -> Result<(), GitError> {
     verify_creation(repo, spec)?;
     worktree.validate()?;
-    if worktree.path() != spec.path || worktree.path().canonicalize()? != spec.path {
+    if !same_location(worktree.path(), &spec.path)
+        || !same_location(&worktree.path().canonicalize()?, &spec.path)
+    {
         return Err(conflict(&spec.path, WorktreeConflict::RegistrationMismatch));
     }
     let checkout = Repository::open(&spec.path)?;
     let linked = git2::Worktree::open_from_repository(&checkout)?;
     if checkout.commondir().canonicalize()? != spec.base.git_common_dir
-        || checkout.workdir().map(Path::to_path_buf) != Some(spec.path.clone())
+        || !checkout
+            .workdir()
+            .is_some_and(|workdir| same_location(workdir, &spec.path))
         || linked.name() != Some(spec.run_id.short().as_str())
-        || linked.path() != spec.path
+        || !same_location(linked.path(), &spec.path)
     {
         return Err(conflict(&spec.path, WorktreeConflict::RegistrationMismatch));
     }
@@ -889,5 +912,35 @@ mod pinned_tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read_dir(&foreign).unwrap().count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn a_verbatim_prefix_does_not_make_a_path_a_different_location() {
+        let verbatim = Path::new(r"\\?\C:\Users\run\worktrees\abc");
+        let plain = Path::new(r"C:\Users\run\worktrees\abc");
+        assert!(same_location(verbatim, plain));
+        assert!(same_location(plain, verbatim));
+        assert!(same_location(plain, plain));
+    }
+
+    #[test]
+    fn different_directories_stay_different() {
+        assert!(!same_location(
+            Path::new(r"\\?\C:\a\b"),
+            Path::new(r"C:\a\c")
+        ));
+        assert!(!same_location(Path::new("/tmp/a"), Path::new("/tmp/b")));
+    }
+
+    #[test]
+    fn a_unc_verbatim_path_is_left_as_is() {
+        assert_eq!(strip_verbatim(r"\\?\UNC\srv\share"), r"\\?\UNC\srv\share");
+        assert_eq!(strip_verbatim(r"\\?\C:\x"), r"C:\x");
+        assert_eq!(strip_verbatim("/plain/unix"), "/plain/unix");
     }
 }
