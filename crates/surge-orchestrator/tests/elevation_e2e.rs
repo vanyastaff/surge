@@ -41,7 +41,12 @@ fn load_flow() -> Graph {
 #[test]
 fn flow_elevation_demo_parses_and_validates() {
     let graph = load_flow();
-    let warnings = validate(&graph).expect("flow_elevation_demo passes graph validation");
+    let report = validate(&graph);
+    assert!(
+        report.is_valid(),
+        "flow_elevation_demo passes graph validation: {report:?}"
+    );
+    let warnings = report.into_findings();
     // The flow declares only required fields; the only expected warning is the
     // W4 "unverified success path" note — this demo has no verifier node, which
     // is fine for an elevation-focused fixture.

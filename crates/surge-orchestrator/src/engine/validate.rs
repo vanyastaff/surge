@@ -317,7 +317,7 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 /// still makes its own (second, cheap) call into `surge_core::validate_with_resolver`
 /// for the reference-specific findings `validate_for_m6` cannot see.
 fn apply_surge_core_validation(graph: &Graph) -> Result<(), EngineError> {
-    let (Ok(findings) | Err(findings)) = surge_core::validate(graph);
+    let findings = surge_core::validate(graph).into_findings();
 
     let mut error_messages: Vec<String> = Vec::new();
     for finding in findings {
@@ -668,7 +668,7 @@ pub fn validate_for_m6_with_resolver(
     // `SameRuntimeVerification`) newly contribute. Only that added subset
     // is inspected below; the rest is skipped so nothing is logged twice
     // under the same target.
-    let (Ok(findings) | Err(findings)) = surge_core::validate_with_resolver(graph, resolver);
+    let findings = surge_core::validate_with_resolver(graph, resolver).into_findings();
     let mut error_messages: Vec<String> = Vec::new();
     for finding in findings {
         let resolver_added = matches!(
@@ -1819,9 +1819,8 @@ mod tests {
         );
         let mut warned: Vec<String> = Vec::new();
         for flow in surge_core::BundledFlows::all() {
-            let findings = match surge_core::validate_with_resolver(&flow.graph, &registry) {
-                Ok(f) | Err(f) => f,
-            };
+            let findings =
+                surge_core::validate_with_resolver(&flow.graph, &registry).into_findings();
             if findings.iter().any(|f| {
                 matches!(
                     f.kind,
@@ -1941,9 +1940,7 @@ mod tests {
             graph: &Graph,
             registry: &crate::profile_loader::ProfileRegistry,
         ) -> usize {
-            let findings = match surge_core::validate_with_resolver(graph, registry) {
-                Ok(f) | Err(f) => f,
-            };
+            let findings = surge_core::validate_with_resolver(graph, registry).into_findings();
             findings
                 .iter()
                 .filter(|f| {

@@ -302,3 +302,11 @@ impl ValidationErrorKind {
         }
     }
 }
+
+impl ValidationError {
+    /// Whether this finding blocks a run or is only advice.
+    #[must_use]
+    pub fn severity(&self) -> Severity {
+        self.kind.severity()
+    }
+}

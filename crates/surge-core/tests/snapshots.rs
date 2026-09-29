@@ -23,7 +23,7 @@ fn linear_trivial_validates_and_snapshots() {
     let g = load_fixture("linear-trivial.toml");
     let result = validate(&g);
     assert!(
-        result.is_ok(),
+        result.is_valid(),
         "linear-trivial validate failed: {:?}",
         result
     );
@@ -33,7 +33,7 @@ fn linear_trivial_validates_and_snapshots() {
 #[test]
 fn linear_with_review_validates() {
     let g = load_fixture("linear-with-review.toml");
-    assert!(validate(&g).is_ok());
+    assert!(validate(&g).is_valid());
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn single_milestone_loop_validates() {
     let g = load_fixture("single-milestone-loop.toml");
     let result = validate(&g);
     assert!(
-        result.is_ok(),
+        result.is_valid(),
         "single-milestone-loop validate failed: {:?}",
         result
     );
@@ -52,7 +52,7 @@ fn nested_3_levels_validates_and_snapshots() {
     let g = load_fixture("nested-3-levels.toml");
     let result = validate(&g);
     assert!(
-        result.is_ok(),
+        result.is_valid(),
         "nested-3-levels failed to validate: {:?}",
         result
     );
@@ -62,13 +62,13 @@ fn nested_3_levels_validates_and_snapshots() {
 #[test]
 fn bug_fix_flow_validates() {
     let g = load_fixture("bug-fix-flow.toml");
-    assert!(validate(&g).is_ok());
+    assert!(validate(&g).is_valid());
 }
 
 #[test]
 fn refactor_flow_validates() {
     let g = load_fixture("refactor-flow.toml");
-    assert!(validate(&g).is_ok());
+    assert!(validate(&g).is_valid());
 }
 
 #[test]
@@ -85,6 +85,6 @@ fn linear_trivial_toml_roundtrips() {
 fn real_world_roadmap_validates() {
     let g = load_fixture("real-world-roadmap.toml");
     let result = validate(&g);
-    assert!(result.is_ok(), "real-world fixture failed: {:?}", result);
+    assert!(result.is_valid(), "real-world fixture failed: {:?}", result);
     insta::assert_debug_snapshot!(g);
 }

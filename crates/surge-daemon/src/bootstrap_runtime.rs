@@ -237,8 +237,11 @@ impl BootstrapRuntime {
 
     /// Resolve every graph agent through the same registries used by the engine.
     pub fn validate_graph(&self, graph: &Graph) -> Result<Vec<String>, BootstrapRuntimeError> {
-        surge_core::validation::validate_with_resolver(graph, self.profiles.as_ref())
-            .map_err(|_| BootstrapRuntimeError::Configuration)?;
+        if surge_core::validation::validate_with_resolver(graph, self.profiles.as_ref())
+            .has_errors()
+        {
+            return Err(BootstrapRuntimeError::Configuration);
+        }
         let nodes = graph.nodes.values().chain(
             graph
                 .subgraphs

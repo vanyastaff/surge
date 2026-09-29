@@ -93,7 +93,7 @@ fn build_n_node_graph(n: usize) -> Graph {
 fn validate_50_nodes(c: &mut Criterion) {
     let g = build_n_node_graph(50);
     c.bench_function("validate_50_node_graph", |b| {
-        b.iter(|| validate(criterion::black_box(&g)).unwrap())
+        b.iter(|| validate(criterion::black_box(&g)).is_valid())
     });
 }
 

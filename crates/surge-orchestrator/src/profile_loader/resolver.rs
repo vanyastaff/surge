@@ -265,10 +265,7 @@ system = "test fixture prompt"
         let reg = registry_with_disk(tmp.path());
         let g = graph_impl_then_verify("implementer@1.0", "verifier@1.0");
 
-        let findings = match surge_core::validate_with_resolver(&g, &reg) {
-            Ok(warnings) => warnings,
-            Err(errs) => errs,
-        };
+        let findings = surge_core::validate_with_resolver(&g, &reg).into_findings();
         match findings
             .iter()
             .find(|f| {
@@ -310,10 +307,7 @@ system = "test fixture prompt"
             "w5-fixture-claude-code-alias@1.0",
         );
 
-        let findings = match surge_core::validate_with_resolver(&g, &reg) {
-            Ok(warnings) => warnings,
-            Err(errs) => errs,
-        };
+        let findings = surge_core::validate_with_resolver(&g, &reg).into_findings();
         assert!(
             findings.iter().any(|f| matches!(
                 f.kind,

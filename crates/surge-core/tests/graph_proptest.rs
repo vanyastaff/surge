@@ -123,14 +123,14 @@ proptest! {
     #[test]
     fn valid_linear_graphs_pass_validation(g in arb_linear_graph(1, 8)) {
         let result = validate(&g);
-        prop_assert!(result.is_ok(), "expected valid graph to pass: {:?}", result);
+        prop_assert!(result.is_valid(), "expected valid graph to pass: {:?}", result);
     }
 
     #[test]
     fn graphs_with_missing_start_fail(mut g in arb_linear_graph(2, 5)) {
         g.start = NodeKey::try_from("nonexistent").unwrap();
         let result = validate(&g);
-        prop_assert!(result.is_err());
+        prop_assert!(result.has_errors());
     }
 
     #[test]

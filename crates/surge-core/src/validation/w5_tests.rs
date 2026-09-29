@@ -289,7 +289,7 @@ fn fires_through_public_validate_with_resolver_entry_point() {
         ],
     );
     let warnings = validate_with_resolver(&g, &resolver)
-        .expect("a Warning-severity finding must not turn this into Err");
+        .expect_valid("a Warning-severity finding must not turn this into Err");
     assert!(
         warnings.iter().any(|f| matches!(
             &f.kind,

@@ -1,9 +1,11 @@
 //! Graph validation. Non-fail-fast — collects all errors and warnings.
 
 mod error;
+mod report;
 mod resolver;
 
 pub use error::{ErrorLocation, NodeKeyOrigin, Severity, ValidationError, ValidationErrorKind};
+pub use report::ValidationReport;
 pub use resolver::{NoOpResolver, ReferenceResolver};
 
 use crate::edge::EdgeKind;
@@ -12,10 +14,11 @@ use crate::keys::{NodeKey, OutcomeKey, SubgraphKey};
 use crate::node::NodeConfig;
 use crate::notify_config::NotifyFailureAction;
 
-/// Validate a graph. Returns Ok(warnings_or_empty) if no errors;
-/// Err(all_findings) if any errors are present.
-#[must_use = "validation results carry errors that must be inspected"]
-pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationError>> {
+/// Validate a graph, collecting every error and warning.
+///
+/// The graph may run when [`ValidationReport::has_errors`] is false; warnings
+/// are advice and never block it.
+pub fn validate(graph: &Graph) -> ValidationReport {
     let mut findings = Vec::new();
 
     rule_1_start_exists(graph, &mut findings);
@@ -39,21 +42,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     validate_sandbox_custom_on_agents(graph, &mut findings);
     validate_declared_skills(graph, &mut findings);
 
-    into_result(findings)
-}
-
-/// Splits findings into `Err` when any is an error, `Ok` (warnings only) otherwise.
-fn into_result(
-    findings: Vec<ValidationError>,
-) -> Result<Vec<ValidationError>, Vec<ValidationError>> {
-    if findings
-        .iter()
-        .any(|f| f.kind.severity() == Severity::Error)
-    {
-        Err(findings)
-    } else {
-        Ok(findings)
-    }
+    ValidationReport::new(findings)
 }
 
 /// Like [`validate`], but additionally resolves named references (profiles,
@@ -65,22 +54,13 @@ fn into_result(
 /// needs [`ReferenceResolver::profile_runtime`] rather than just
 /// `profile_exists`.
 ///
-/// # Errors
-/// Same shape as [`validate`]: returns `Err(findings)` when at least one
-/// finding has [`Severity::Error`].
-#[must_use = "validation results carry errors that must be inspected"]
-pub fn validate_with_resolver(
-    graph: &Graph,
-    resolver: &dyn ReferenceResolver,
-) -> Result<Vec<ValidationError>, Vec<ValidationError>> {
-    let mut findings = match validate(graph) {
-        Ok(warnings) => warnings,
-        Err(errs) => errs,
-    };
+/// The report has the same shape as [`validate`]'s and includes its findings.
+pub fn validate_with_resolver(graph: &Graph, resolver: &dyn ReferenceResolver) -> ValidationReport {
+    let mut findings = validate(graph).into_findings();
     apply_reference_checks(graph, resolver, &mut findings);
     warning_w5_same_runtime_verification(graph, resolver, &mut findings);
 
-    into_result(findings)
+    ValidationReport::new(findings)
 }
 
 fn apply_reference_checks(
@@ -1371,16 +1351,11 @@ pub fn validate_mcp_server_ref(r: &crate::mcp_config::McpServerRef) -> Vec<Valid
 /// Engine and editor consumers call this when they have both pieces;
 /// pure-graph callers (e.g., TOML lint) use the existing graph-level
 /// `validate(...)` directly.
-#[must_use]
 pub fn validate_with_run_config(
     graph: &crate::graph::Graph,
     run_config: &crate::run_event::RunConfig,
-) -> Vec<ValidationError> {
-    // Flatten the Result — both Ok (warnings) and Err (errors) are findings.
-    let mut out = match validate(graph) {
-        Ok(warnings) => warnings,
-        Err(errors) => errors,
-    };
+) -> ValidationReport {
+    let mut out = validate(graph).into_findings();
 
     // Per-server well-formedness.
     for server in &run_config.mcp_servers {
@@ -1398,7 +1373,7 @@ pub fn validate_with_run_config(
         }
     }
 
-    out
+    ValidationReport::new(out)
 }
 
 // ── W4: unverified success path ──────────────────────────────────

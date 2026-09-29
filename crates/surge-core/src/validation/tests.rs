@@ -41,7 +41,7 @@ fn minimal_terminal_only_graph() -> Graph {
 fn empty_terminal_graph_validates() {
     let g = minimal_terminal_only_graph();
     let result = validate(&g);
-    assert!(result.is_ok(), "expected ok, got {:?}", result);
+    assert!(result.is_valid(), "expected ok, got {:?}", result);
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn missing_start_reports_rule_1() {
     let mut g = minimal_terminal_only_graph();
     g.start = NodeKey::try_from("nonexistent").unwrap();
     let result = validate(&g);
-    let errs = result.unwrap_err();
+    let errs = result.expect_errors("expected errors");
     assert!(
         errs.iter()
             .any(|e| matches!(e.kind, ValidationErrorKind::StartNodeMissing))
@@ -70,7 +70,7 @@ fn edge_to_unknown_node_reports_rule_3() {
         policy: EdgePolicy::default(),
     });
     let result = validate(&g);
-    let errs = result.unwrap_err();
+    let errs = result.expect_errors("expected errors");
     assert!(
         errs.iter()
             .any(|e| matches!(e.kind, ValidationErrorKind::EdgeToUnknownNode))
@@ -96,7 +96,7 @@ fn graph_with_no_terminal_reports_rule_7() {
     );
     g.start = bn;
     let result = validate(&g);
-    let errs = result.unwrap_err();
+    let errs = result.expect_errors("expected errors");
     assert!(
         errs.iter()
             .any(|e| matches!(e.kind, ValidationErrorKind::NoTerminalReachable))
@@ -129,7 +129,7 @@ fn missing_subgraph_ref_reports_rule_11b() {
         },
     );
     let result = validate(&g);
-    let errs = result.unwrap_err();
+    let errs = result.expect_errors("expected errors");
     assert!(
         errs.iter()
             .any(|e| matches!(e.kind, ValidationErrorKind::SubgraphRefMissing { .. }))
@@ -199,7 +199,7 @@ fn duplicate_node_key_in_subgraph_reports_rule_17() {
     );
 
     let result = validate(&g);
-    let errs = result.unwrap_err();
+    let errs = result.expect_errors("expected errors");
     assert!(
         errs.iter()
             .any(|e| matches!(e.kind, ValidationErrorKind::NodeKeyCollision { .. }))
@@ -232,7 +232,7 @@ fn orphan_subgraph_reports_warning_not_error() {
         },
     );
     let result = validate(&g);
-    let warnings = result.expect("expected ok-with-warnings");
+    let warnings = result.expect_valid("expected ok-with-warnings");
     assert!(
         warnings
             .iter()
@@ -351,7 +351,7 @@ mod m6_loop_static_cap_tests {
         let result = validate(&g);
         // The minimal graph also triggers other structural errors (e.g., no Terminal at outer level).
         // Filter to only LoopStaticTooLarge findings.
-        let findings = result.unwrap_or_else(|e| e);
+        let findings = result.into_findings();
         assert!(
             !findings
                 .iter()
@@ -367,7 +367,7 @@ mod m6_loop_static_cap_tests {
             .collect();
         let g = graph_with_loop_node(items);
         let result = validate(&g);
-        let errors = result.expect_err("validation should fail");
+        let errors = result.expect_errors("validation should fail");
         let cap_errors: Vec<_> = errors
             .iter()
             .filter(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. }))
@@ -477,7 +477,7 @@ mod m6_loop_static_cap_tests {
         };
 
         let result = validate(&g);
-        let errors = result.expect_err("must fail");
+        let errors = result.expect_errors("must fail");
         let cap_errors: Vec<_> = errors
             .iter()
             .filter(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. }))
@@ -554,7 +554,7 @@ mod m6_notify_validation_tests {
         let n = notify_node_with_outcomes(vec!["sent"], NotifyFailureAction::Continue);
         let g = graph_with_node(n);
         let result = validate(&g);
-        let errors = result.expect_err("validation should fail");
+        let errors = result.expect_errors("validation should fail");
         assert!(
             errors
                 .iter()
@@ -569,7 +569,7 @@ mod m6_notify_validation_tests {
         let g = graph_with_node(n);
         let result = validate(&g);
         // ok branch returns Vec<ValidationError> (warnings only); should be empty.
-        let warnings = result.unwrap_or_else(|errs| errs);
+        let warnings = result.into_findings();
         assert!(
             !warnings
                 .iter()
@@ -584,10 +584,7 @@ mod m6_notify_validation_tests {
         let g = graph_with_node(n);
         // The minimal graph has no edges or Terminal node, so other structural
         // rules fire as errors. Use unwrap_or_else to get all findings regardless.
-        let findings = match validate(&g) {
-            Ok(w) => w,
-            Err(all) => all,
-        };
+        let findings = validate(&g).into_findings();
         assert!(
             findings.iter().any(|w| matches!(
                 w.kind,
@@ -672,7 +669,7 @@ mod m6_notify_validation_tests {
         };
 
         let result = validate(&g);
-        let errors = result.expect_err("must fail");
+        let errors = result.expect_errors("must fail");
         assert!(
             errors
                 .iter()
@@ -847,7 +844,7 @@ fn validate_with_run_config_surfaces_mcp_undeclared() {
         auto_pr: false,
         mcp_servers: vec![], // empty: stage refs an undeclared server
     };
-    let errors = crate::validation::validate_with_run_config(&graph, &run_cfg);
+    let errors = crate::validation::validate_with_run_config(&graph, &run_cfg).into_findings();
     assert!(errors.iter().any(|e| matches!(
         e.kind,
         crate::validation::ValidationErrorKind::McpServerUndeclared { .. }
@@ -947,7 +944,7 @@ fn validate_with_run_config_happy_path_returns_no_mcp_errors() {
         }],
     };
 
-    let errors = crate::validation::validate_with_run_config(&graph, &run_cfg);
+    let errors = crate::validation::validate_with_run_config(&graph, &run_cfg).into_findings();
     // The graph has no edges (no routing) — graph-level validation may
     // still produce structural errors/warnings. Assert that NONE of the
     // M7 MCP-specific kinds are present (allowlist resolves cleanly).
@@ -1033,7 +1030,7 @@ fn invalid_skills_declaration_is_rejected_by_graph_validation() {
     };
 
     let errors = crate::validation::validate(&graph)
-        .expect_err("a malformed skills declaration must be a validation error");
+        .expect_errors("a malformed skills declaration must be a validation error");
     let finding = errors
         .iter()
         .find(|e| matches!(e.kind, ValidationErrorKind::InvalidSkillsDeclaration { .. }))

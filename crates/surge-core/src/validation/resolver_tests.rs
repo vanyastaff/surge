@@ -98,7 +98,7 @@ fn unknown_profile_is_reported_via_resolver() {
         profiles: HashSet::new(),
     };
     let result = validate_with_resolver(&g, &resolver);
-    let errs = result.expect_err("unknown profile must error");
+    let errs = result.expect_errors("unknown profile must error");
     let saw = errs.iter().any(|e| {
         matches!(
             &e.kind,
@@ -115,7 +115,7 @@ fn known_profile_passes_resolver_check() {
         profiles: HashSet::from(["implementer@1.0"]),
     };
     let result = validate_with_resolver(&g, &resolver);
-    let warnings = result.expect("graph should validate");
+    let warnings = result.expect_valid("graph should validate");
     let no_resolver_errors = !warnings.iter().any(|e| {
         matches!(
             &e.kind,
@@ -134,7 +134,7 @@ fn known_profile_passes_resolver_check() {
 fn no_op_resolver_accepts_anything() {
     let g = graph_with_agent("does-not-exist@9.9");
     let result = validate_with_resolver(&g, &NoOpResolver);
-    result.expect("NoOpResolver must accept any profile name");
+    result.expect_valid("NoOpResolver must accept any profile name");
 }
 
 #[test]
@@ -143,5 +143,5 @@ fn syntactic_validate_does_not_check_resolver() {
     // must succeed — its job is structural integrity only.
     let g = graph_with_agent("does-not-exist@9.9");
     let result = validate(&g);
-    result.expect("structural validate ignores profile registry");
+    result.expect_valid("structural validate ignores profile registry");
 }

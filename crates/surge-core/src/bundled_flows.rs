@@ -236,8 +236,12 @@ mod tests {
         ] {
             let flow =
                 BundledFlows::by_name_latest(name).unwrap_or_else(|| panic!("{name} bundled"));
-            let findings = validate(&flow.graph)
-                .unwrap_or_else(|e| panic!("{name} must validate without errors: {e:?}"));
+            let report = validate(&flow.graph);
+            assert!(
+                report.is_valid(),
+                "{name} must validate without errors: {report:?}"
+            );
+            let findings = report.into_findings();
             assert!(
                 !findings
                     .iter()
