@@ -307,6 +307,10 @@ mod tests {
                 broken.push(format!("{}: {e}", archetype.as_str()));
             }
         }
-        assert!(broken.is_empty(), "archetypes that cannot start:\n{}", broken.join("\n"));
+        assert!(
+            broken.is_empty(),
+            "archetypes that cannot start:\n{}",
+            broken.join("\n")
+        );
     }
 }

@@ -119,3 +119,23 @@ saw that only `Hello, world!` printed, and reported that as evidence rather than
 reading code and approving.
 
 Limits are unchanged: one project, one runtime, same-vendor verification.
+
+## Recorded result 3 — 2026-09-29, `code-review` template on the produced code
+
+`surge engine run --template code-review --prompt "<what to review>" --watch` on
+the timer from result 2.
+
+| Stage | Outcome |
+|---|---|
+| `review_brief` | `drafted` — captured the change as `changes.patch` (full diff including new files) and a spec of what it claims to do |
+| `review_scope` | `reviewed` |
+| `verify_review` | failed to start: the cross-vendor verifier runs on Codex and the account's configured model (`gpt-6-luna` in `~/.codex/config.toml`) is not available to the ChatGPT account. The error now names the setting to change instead of "command channel send failed" |
+
+So the template's first two steps are exercised live; the independent
+verification steps could not be, on this machine.
+
+This run also found that seven of the thirteen bundled archetypes could not
+start at all from `--template` (a required `spec`, `diff` or `milestone` binding
+was missing). They are fixed, and `every_bundled_archetype_satisfies_its_profiles_required_bindings`
+now resolves all thirteen against the real profile registry. `surge engine run`
+gained `--prompt` so spec-less templates receive the operator's request.

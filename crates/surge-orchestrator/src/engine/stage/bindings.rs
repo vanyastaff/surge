@@ -80,7 +80,9 @@ pub async fn resolve_bindings(
                     read_artifact_text(&aref.path, worktree_root, &aref.name).await
                 } else {
                     Err(BindingError::UnknownArtifact(
-                        "user_prompt (InitialPrompt)".into(),
+                        "user_prompt (InitialPrompt) — this run was started without a prompt; \
+start it with one (`surge engine run --prompt \"<what you want>\"`)"
+                            .into(),
                     ))
                 }
             },

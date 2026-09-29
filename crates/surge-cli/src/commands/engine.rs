@@ -38,6 +38,10 @@ pub enum EngineCommands {
         /// Route through the long-running surge-daemon (auto-spawn if not running).
         #[arg(long)]
         daemon: bool,
+        /// What you want done. Templates without a spec step (`single-task`,
+        /// `feature`, `code-review`, ...) treat this as the spec.
+        #[arg(long, short = 'p')]
+        prompt: Option<String>,
     },
     /// Tail events from an existing run by id.
     Watch {
@@ -125,7 +129,8 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             watch,
             worktree,
             daemon,
-        } => run_command(spec_path, template, watch, worktree, daemon).await,
+            prompt,
+        } => run_command(spec_path, template, watch, worktree, daemon, prompt).await,
         EngineCommands::Watch { run_id, daemon } => watch_command(run_id, daemon).await,
         EngineCommands::Resume { run_id, daemon } => resume_command(run_id, daemon).await,
         EngineCommands::Stop {
@@ -159,6 +164,7 @@ async fn run_command(
     watch: bool,
     worktree: Option<PathBuf>,
     daemon: bool,
+    prompt: Option<String>,
 ) -> Result<()> {
     use surge_core::graph::Graph;
     use surge_orchestrator::engine::facade::EngineFacade;
@@ -275,6 +281,9 @@ async fn run_command(
         &worktree_path,
         &app_config,
     );
+    if let Some(prompt) = prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        run_config.initial_prompt = prompt.to_owned();
+    }
     // Freeze the operator's [analytics] budget into the run so the engine
     // enforces it at every stage boundary (warn → abort by default).
     run_config.budget = app_config.analytics.budget_guard();
