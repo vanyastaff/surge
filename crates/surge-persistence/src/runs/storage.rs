@@ -333,11 +333,7 @@ impl Storage {
         suffix: &str,
         limit: usize,
     ) -> Result<Vec<RunId>, crate::runs::error::StorageError> {
-        Ok(registry::find_ids_by_suffix(
-            &self.registry_pool,
-            suffix,
-            limit,
-        )?)
+        registry::find_ids_by_suffix(&self.registry_pool, suffix, limit)
     }
 
     /// List runs matching the filter, with stale-pid detection.
