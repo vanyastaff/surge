@@ -266,7 +266,10 @@ fn render_prompt(input: &TriageInput, feedback: Option<&str>) -> String {
         "- task: TaskDetails\n- candidates: TaskSummary[]\n- active_runs: ActiveRunSummary[]\n\n",
     );
     out.push_str("The literal JSON follows:\n\n");
-    out.push_str(&surge_core::untrusted::fence("tracker triage input", &json));
+    out.push_str(&surge_core::untrusted::fence(
+        surge_core::untrusted::ContentSource::TrackerTriageInput,
+        &json,
+    ));
     out.push_str(
         "\n\n# Task\n\nDecide whether this ticket is a duplicate, out-of-scope, unclear, \
                   or should be enqueued. Then, in your working directory:\n\n\

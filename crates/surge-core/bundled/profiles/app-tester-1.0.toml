@@ -28,12 +28,21 @@ default_temperature = 0.0
 default_max_tokens = 64000
 agent_id = "claude-code"
 
-# Needs to execute the app and reach localhost; may not edit the sources it is
-# testing (writes are limited to its own scratch files by the prompt).
+# KNOWN GAP — the boundary is weaker than the prose. The tester has to run the
+# built program and reach localhost, and the only sandbox row that allows network
+# (`workspace-network`) also lets the runtime write anywhere in the workspace;
+# no row offers read-only sources + network + shell. "Do not edit project
+# sources" is therefore enforced by the prompt, not by the sandbox. What limits
+# the damage: the tester holds no verification authority (its report is evidence,
+# never a verdict), a sealed read-only verifier runs after it and judges the
+# result independently, and the change is reviewable in the worktree diff.
+# See docs/sandbox-matrix.md ("Known gaps").
 [sandbox]
 mode = "workspace-network"
 
 [tools]
+# `cargo` builds and runs the program; `curl` probes a service it started;
+# `npx` launches `agent-browser` for web UIs. Nothing else.
 default_shell_allowlist = ["cargo", "curl", "npx"]
 
 [[outcomes]]

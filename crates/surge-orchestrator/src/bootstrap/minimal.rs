@@ -72,7 +72,10 @@ fn render_prompt(prompt: &BootstrapPrompt) -> String {
     ticket.push_str(&prompt.description);
 
     let mut s = String::from("You are working on this ticket.\n\n");
-    s.push_str(&surge_core::untrusted::fence("tracker ticket", &ticket));
+    s.push_str(&surge_core::untrusted::fence(
+        surge_core::untrusted::ContentSource::TrackerTicket,
+        &ticket,
+    ));
     s.push_str(
         "\n\nImplement the request directly in this worktree. Run tests \
          before reporting done. If the request is ambiguous, escalate.",

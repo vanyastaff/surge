@@ -75,3 +75,15 @@ Surge declares awareness of these runtimes but has not yet tested the live launc
 - [Elevation runbook](elevation-runbook.md) — how operators approve/deny mid-run permission requests.
 - [Architecture](ARCHITECTURE.md) — overall sandbox delegation rationale.
 - [ADR-0006](adr/0006-acp-only-transport.md) — why surge is ACP-only and the implications for sandbox handoff.
+
+## Known gaps
+
+- **No "read-only sources + network + shell" row.** `app-tester@1.0` must start
+  the built program and reach localhost, and `workspace-network` (the only row
+  with network) also permits writes anywhere in the workspace. The profile's
+  "do not edit sources" rule is enforced by its prompt, not by the sandbox. The
+  mitigations are structural: the tester holds no verification authority, a sealed
+  read-only verifier certifies afterwards, and the worktree diff stays reviewable.
+  Closing the gap needs a runtime that can express writable scratch roots with
+  read-only sources; `Custom` mode has no launch-flag mapping for Claude Code
+  today.
