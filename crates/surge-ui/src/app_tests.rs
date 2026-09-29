@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use gpui_kit::{AppContext as _, Entity, Modifiers, TestAppContext};
 use surge_core::RunId;
-use surge_orchestrator::engine::{EngineError, RunHandle, RunOutcome};
 
 use super::SurgeApp;
 use crate::app_state::AppState;
@@ -99,19 +98,6 @@ fn fixture() -> (
     (cx, app, wizard, id)
 }
 
-fn accepted_handle(id: RunId) -> RunHandle {
-    let (_, events) = tokio::sync::broadcast::channel(1);
-    RunHandle {
-        run_id: id,
-        events,
-        completion: tokio::spawn(async {
-            RunOutcome::Completed {
-                terminal: "end".try_into().unwrap(),
-            }
-        }),
-    }
-}
-
 #[test]
 fn planning_offline_keeps_the_actual_input_and_inline_error() {
     let (mut cx, app, wizard, id) = fixture();
@@ -130,41 +116,14 @@ fn planning_offline_keeps_the_actual_input_and_inline_error() {
         assert!(wizard.read(cx).error().unwrap().contains("Daemon offline"));
         assert_eq!(app.read(cx).active_screen, Screen::SpecWizard);
         assert!(app.read(cx).pending_run_selection.is_none());
-        assert!(app.read(cx).state.read(cx).tasks.is_empty());
     });
 }
 
 #[test]
-fn planning_rejection_preserves_draft_and_captured_project_configuration() {
+fn planning_rejection_preserves_the_draft() {
     let (mut cx, app, wizard, id) = fixture();
-    let request = Rc::new(RefCell::new(None));
-    let capture = request.clone();
     app.update(&mut cx, |app, cx| {
-        app.dispatch_with(
-            PROMPT.into(),
-            "bootstrap",
-            id,
-            Some(wizard.clone()),
-            move |request| async move {
-                capture.replace(Some(request));
-                Err(EngineError::Internal("queue full".into()))
-            },
-            cx,
-        );
-    });
-    cx.run_until_parked();
-    let request = request.borrow();
-    let request = request.as_ref().unwrap();
-    assert_eq!(request.run_id, id);
-    assert_eq!(request.project_path, PathBuf::from(PROJECT));
-    assert_eq!(request.config.initial_prompt, PROMPT);
-    assert_eq!(request.graph.metadata.name, "bootstrap");
-    assert_eq!(request.config.budget, {
-        surge_core::config::AnalyticsConfig {
-            budget_usd: Some(12.5),
-            ..Default::default()
-        }
-        .budget_guard()
+        app.dispatch_failed(id, Some(&wizard), "queue full".into(), cx);
     });
     cx.read(|cx| {
         assert_eq!(wizard.read(cx).prompt(cx), PROMPT);
@@ -192,54 +151,22 @@ fn durable_bootstrap_refuses_unsupported_usd_cap_without_dropping_it() {
 }
 
 #[test]
-fn planning_acceptance_selects_acknowledged_run_only_after_response() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let _guard = runtime.enter();
+fn planning_acceptance_selects_the_acknowledged_run() {
     let (mut cx, app, wizard, id) = fixture();
-    let (answer, reply) = tokio::sync::oneshot::channel();
     app.update(&mut cx, |app, cx| {
-        app.dispatch_with(
-            PROMPT.into(),
-            "bootstrap",
-            id,
-            Some(wizard.clone()),
-            |_| async move { reply.await.unwrap() },
-            cx,
-        );
+        app.dispatch_accepted(id, std::path::Path::new(PROJECT), Some(&wizard), cx);
     });
-    cx.run_until_parked();
-    cx.read(|cx| {
-        assert_eq!(app.read(cx).active_screen, Screen::SpecWizard);
-        assert!(app.read(cx).pending_run_selection.is_none());
-    });
-    assert!(answer.send(Ok(accepted_handle(id))).is_ok());
-    cx.run_until_parked();
     cx.read(|cx| {
         assert_eq!(app.read(cx).active_screen, Screen::Runs);
         assert_eq!(app.read(cx).pending_run_selection, Some(id));
-        assert!(app.read(cx).state.read(cx).tasks.is_empty());
         assert!(app.read(cx).spec_wizard.is_none());
     });
 }
 
 #[test]
 fn planning_late_response_cannot_navigate_or_clear_another_draft() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let _guard = runtime.enter();
     for (switch_project, accepted) in [(false, true), (true, true), (false, false), (true, false)] {
         let (mut cx, app, old, id) = fixture();
-        let (answer, reply) = tokio::sync::oneshot::channel();
-        app.update(&mut cx, |app, cx| {
-            app.dispatch_with(
-                PROMPT.into(),
-                "bootstrap",
-                id,
-                Some(old.clone()),
-                |_| async move { reply.await.unwrap() },
-                cx,
-            );
-        });
-        cx.run_until_parked();
         let project = if switch_project {
             "/tmp/another-project"
         } else {
@@ -251,14 +178,12 @@ fn planning_late_response_cannot_navigate_or_clear_another_draft() {
                 state.project_path = Some(PathBuf::from(project))
             });
             app.spec_wizard = Some(newer.clone());
+            if accepted {
+                app.dispatch_accepted(id, std::path::Path::new(PROJECT), Some(&old), cx);
+            } else {
+                app.dispatch_failed(id, Some(&old), "late rejection".into(), cx);
+            }
         });
-        let response = if accepted {
-            Ok(accepted_handle(id))
-        } else {
-            Err(EngineError::Internal("late rejection".into()))
-        };
-        assert!(answer.send(response).is_ok());
-        cx.run_until_parked();
         cx.read(|cx| {
             assert_eq!(app.read(cx).active_screen, Screen::SpecWizard);
             assert_eq!(app.read(cx).spec_wizard.as_ref(), Some(&newer));

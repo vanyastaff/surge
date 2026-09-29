@@ -43,17 +43,6 @@ impl std::fmt::Debug for ConnectionState {
 }
 
 impl ConnectionState {
-    /// Convenience for the top-bar indicator.
-    #[must_use]
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Disconnected => "Daemon: Disconnected",
-            Self::Connecting => "Daemon: Connecting…",
-            Self::Connected(_) => "Daemon: Connected",
-            Self::Failed(_) => "Daemon: Connection failed",
-        }
-    }
-
     /// Hands the live facade to callers that need IPC. `None` for any
     /// other state.
     #[must_use]

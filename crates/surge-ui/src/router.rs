@@ -25,11 +25,9 @@ pub enum Screen {
     ContextMemory,
     Settings,
     // ── Secondary screens (palette / contextual) ──
-    SpecExplorer,
     SpecWizard,
     AgentHub,
     AgentTerminals,
-    Worktrees,
 }
 
 impl Screen {
@@ -45,11 +43,9 @@ impl Screen {
             Self::Agents => "Agents",
             Self::ContextMemory => "Memory",
             Self::Settings => "Settings",
-            Self::SpecExplorer => "Specs",
             Self::SpecWizard => "Plan a task",
             Self::AgentHub => "Agent Hub",
             Self::AgentTerminals => "Terminals",
-            Self::Worktrees => "Worktrees",
         }
     }
 
@@ -66,11 +62,9 @@ impl Screen {
             Self::Agents => IconName::Bot,
             Self::ContextMemory => IconName::Brain,
             Self::Settings => IconName::Settings,
-            Self::SpecExplorer => IconName::Search,
             Self::SpecWizard => IconName::Plus,
             Self::AgentHub => IconName::Bot,
             Self::AgentTerminals => IconName::SquareTerminal,
-            Self::Worktrees => IconName::FolderOpen,
         }
     }
 

@@ -9,10 +9,8 @@ pub mod memory;
 pub mod roadmap;
 pub mod runs;
 pub mod settings;
-pub mod spec_explorer;
 pub mod spec_wizard;
 pub mod welcome;
-pub mod worktrees;
 
 #[cfg(test)]
 mod smoke_test;

@@ -261,11 +261,6 @@ fn kind_label(node: &Node) -> &'static str {
 /// Click handler for a diagram step (receives the node id).
 pub type OnSelect = std::rc::Rc<dyn Fn(String, &mut Window, &mut App)>;
 
-/// Render `graph` as a horizontally scrollable swimlane diagram.
-pub fn flow_diagram(graph: &Graph, id: impl Into<ElementId>) -> AnyElement {
-    render_prepared(&PreparedPlan::new(graph), id)
-}
-
 /// Render a [`PreparedPlan`] (no parsing or layout work per frame).
 pub fn render_prepared(plan: &PreparedPlan, id: impl Into<ElementId>) -> AnyElement {
     render_interactive(plan, id, None, None)

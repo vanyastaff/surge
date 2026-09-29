@@ -34,8 +34,6 @@ pub struct ThinkingBlock {
 #[derive(Debug, Clone)]
 pub struct PermissionBlock {
     pub description: String,
-    pub tool_call_id: String,
-    pub options: Vec<String>,
     pub resolved: Option<bool>,
 }
 
@@ -336,16 +334,12 @@ impl AgentTerminalScreen {
                         }
                         surge_core::SurgeEvent::PermissionRequested {
                             description,
-                            tool_call_id,
-                            options,
                             ..
                         } => {
                             cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
                                     this.items.push(ChatItem::Permission(PermissionBlock {
                                         description,
-                                        tool_call_id,
-                                        options,
                                         resolved: None,
                                     }));
                                     this.scroll_handle.scroll_to_bottom();

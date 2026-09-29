@@ -12,7 +12,7 @@ use std::path::PathBuf;
 // the glob form is not safe to use in this file.
 use gpui_kit::{AppContext as _, Context, Render, TestAppContext, Window};
 
-use crate::app_state::{AppState, TaskEntry, UiRun, WorktreeEntry};
+use crate::app_state::{AppState, UiRun};
 
 use super::agent_hub::AgentHubScreen;
 use super::agent_terminal::AgentTerminalScreen;
@@ -25,10 +25,8 @@ use super::memory::MemoryScreen;
 use super::roadmap::RoadmapScreen;
 use super::runs::RunsScreen;
 use super::settings::SettingsScreen;
-use super::spec_explorer::SpecExplorerScreen;
 use super::spec_wizard::SpecWizardScreen;
 use super::welcome::WelcomeScreen;
-use super::worktrees::WorktreesScreen;
 
 /// Mirrors `main.rs`'s startup sequence. `gpui_kit::component::init` registers
 /// the globals `Button`/`Input`/`Select`/... read; a screen using one of
@@ -52,34 +50,6 @@ fn populated_app_state() -> AppState {
     state.project_path = Some(PathBuf::from("/tmp/surge-ui-smoke/project"));
     state.project_name = "smoke-project".to_string();
     state.current_branch = "feat/smoke".to_string();
-
-    state.tasks.push(TaskEntry {
-        id: surge_core::TaskId::new(),
-        _spec_id: surge_core::SpecId::new(),
-        title: "Wire the render smoke harness".to_string(),
-        description: "Construct and render every surge-ui screen under test.".to_string(),
-        state: surge_core::TaskState::Executing {
-            completed: 1,
-            total: 3,
-        },
-        agent: Some("claude-acp".to_string()),
-        complexity: "Standard".to_string(),
-        _created_at: "2026-09-01T00:00:00Z".to_string(),
-        updated_at: "2026-09-08T00:00:00Z".to_string(),
-    });
-
-    state.specs.push(surge_core::Spec::new(
-        "Smoke-test coverage",
-        "Give surge-ui a render-level smoke test.",
-        surge_core::Complexity::Standard,
-    ));
-
-    state.worktrees.push(WorktreeEntry {
-        spec_id: "spec-smoke".to_string(),
-        branch: "feat/smoke".to_string(),
-        path: PathBuf::from("/tmp/surge-ui-smoke/project/.worktrees/spec-smoke"),
-        exists: true,
-    });
 
     state.runs.push(UiRun {
         run_id: surge_core::RunId::new(),
@@ -249,38 +219,6 @@ fn settings_screen_renders_populated_state() {
     init_components(&mut cx);
     let state = cx.new(|_| populated_app_state());
     render_screen(&mut cx, |_, cx| SettingsScreen::new(state, cx));
-}
-
-#[test]
-fn spec_explorer_screen_renders_empty_state() {
-    let mut cx = TestAppContext::single();
-    init_components(&mut cx);
-    let state = cx.new(|_| empty_app_state());
-    render_screen(&mut cx, |_, cx| SpecExplorerScreen::new(state, cx));
-}
-
-#[test]
-fn spec_explorer_screen_renders_populated_state() {
-    let mut cx = TestAppContext::single();
-    init_components(&mut cx);
-    let state = cx.new(|_| populated_app_state());
-    render_screen(&mut cx, |_, cx| SpecExplorerScreen::new(state, cx));
-}
-
-#[test]
-fn worktrees_screen_renders_empty_state() {
-    let mut cx = TestAppContext::single();
-    init_components(&mut cx);
-    let state = cx.new(|_| empty_app_state());
-    render_screen(&mut cx, |_, cx| WorktreesScreen::new(state, cx));
-}
-
-#[test]
-fn worktrees_screen_renders_populated_state() {
-    let mut cx = TestAppContext::single();
-    init_components(&mut cx);
-    let state = cx.new(|_| populated_app_state());
-    render_screen(&mut cx, |_, cx| WorktreesScreen::new(state, cx));
 }
 
 // ── `(cx)`-only screens ──────────────────────────────────────────────────

@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use gpui_kit::component::StyledExt as _;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::actions::*;
@@ -23,10 +22,8 @@ use crate::screens::memory::{MemoryAction, MemoryScreen};
 use crate::screens::roadmap::{RoadmapEvent, RoadmapScreen};
 use crate::screens::runs::{RunsEvent, RunsScreen};
 use crate::screens::settings::SettingsScreen;
-use crate::screens::spec_explorer::SpecExplorerScreen;
 use crate::screens::spec_wizard::SpecWizardScreen;
 use crate::screens::welcome::{WelcomeEvent, WelcomeScreen};
-use crate::screens::worktrees::WorktreesScreen;
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
 use crate::top_bar::{TopBar, TopBarEvent};
@@ -35,13 +32,6 @@ use crate::top_bar::{TopBar, TopBarEvent};
 enum AppMode {
     Welcome(Entity<WelcomeScreen>),
     Project { _path: PathBuf, _name: String },
-}
-
-struct PlanningRequest {
-    run_id: surge_core::RunId,
-    graph: surge_core::graph::Graph,
-    project_path: PathBuf,
-    config: surge_orchestrator::engine::EngineRunConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,8 +55,6 @@ pub struct SurgeApp {
     top_bar: Option<Entity<TopBar>>,
     command_palette_open: bool,
     command_palette: Option<Entity<CommandPalette>>,
-    /// Task detail overlay — set when a kanban card is clicked.
-    task_detail_id: Option<String>,
     // Screen entities (created on demand).
     fleet: Option<Entity<FleetScreen>>,
     flow: Option<Entity<FlowScreen>>,
@@ -77,11 +65,9 @@ pub struct SurgeApp {
     backlog: Option<Entity<BacklogScreen>>,
     agents_screen: Option<Entity<AgentsScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
-    spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
     wizard_drafts: HashMap<PathBuf, Entity<SpecWizardScreen>>,
     agent_terminal: Option<Entity<AgentTerminalScreen>>,
-    worktrees: Option<Entity<WorktreesScreen>>,
     settings: Option<Entity<SettingsScreen>>,
     /// Queued notifications to flush on next render (needs Window access).
     pending_notifications: Vec<gpui_kit::component::notification::Notification>,
@@ -137,18 +123,6 @@ impl SurgeApp {
         )
         .detach();
 
-        // Subscribe to SurgeEvents from AppState → queue notifications.
-        // (Currently dormant — no in-process emitter; kept for the
-        // in-process orchestrator path that may surface later.)
-        cx.subscribe(
-            &state,
-            |this, _state, event: &surge_core::SurgeEvent, cx| {
-                this.queue_notification_for_event(event);
-                cx.notify(); // trigger re-render to flush
-            },
-        )
-        .detach();
-
         // Start in Welcome mode.
         let welcome = cx.new(WelcomeScreen::new);
         cx.subscribe(
@@ -169,7 +143,6 @@ impl SurgeApp {
             top_bar: None,
             command_palette_open: false,
             command_palette: None,
-            task_detail_id: None,
             fleet: None,
             flow: None,
             memory: None,
@@ -180,10 +153,8 @@ impl SurgeApp {
             agents_screen: None,
             agent_terminal: None,
             agent_hub: None,
-            spec_explorer: None,
             spec_wizard: None,
             wizard_drafts: HashMap::new(),
-            worktrees: None,
             settings: None,
             pending_notifications: Vec::new(),
             stream_subscribed: HashSet::new(),
@@ -255,7 +226,6 @@ impl SurgeApp {
         cx.notify();
     }
 
-    /// Submit planning through the existing daemon protocol; the daemon owns the run.
     /// Start an application from a free-form request (Fleet command bar,
     /// Backlog dispatch). Goes through the daemon-supervised bootstrap
     /// operation, which continues from the approved plan into the
@@ -263,149 +233,6 @@ impl SurgeApp {
     /// and never built anything.
     fn dispatch_run(&mut self, prompt: String, cx: &mut Context<Self>) {
         self.dispatch_bootstrap(prompt, surge_core::RunId::new(), None, cx);
-    }
-
-    fn dispatch_planning(
-        &mut self,
-        prompt: String,
-        template: &'static str,
-        run_id: surge_core::RunId,
-        origin: Option<Entity<SpecWizardScreen>>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
-            self.dispatch_failed(
-                run_id,
-                origin.as_ref(),
-                "Daemon offline. Start it from the sidebar, then retry.".into(),
-                cx,
-            );
-            return;
-        };
-        self.dispatch_with(
-            prompt,
-            template,
-            run_id,
-            origin,
-            move |request| async move {
-                use surge_orchestrator::engine::facade::EngineFacade as _;
-                facade
-                    .start_run(
-                        request.run_id,
-                        request.graph,
-                        request.project_path,
-                        request.config,
-                    )
-                    .await
-            },
-            cx,
-        );
-    }
-
-    /// The injected start operation is the same submission boundary in production and tests.
-    fn dispatch_with<F, Fut>(
-        &mut self,
-        prompt: String,
-        template: &str,
-        run_id: surge_core::RunId,
-        origin: Option<Entity<SpecWizardScreen>>,
-        start: F,
-        cx: &mut Context<Self>,
-    ) where
-        F: FnOnce(PlanningRequest) -> Fut + 'static,
-        Fut: std::future::Future<
-                Output = Result<
-                    surge_orchestrator::engine::RunHandle,
-                    surge_orchestrator::engine::EngineError,
-                >,
-            > + 'static,
-    {
-        if self.stream_subscribed.contains(&run_id) {
-            return;
-        }
-        let request = (|| {
-            if prompt.trim().is_empty() {
-                return Err("Describe the work before starting a planning run.".to_string());
-            }
-            let state = self.state.read(cx);
-            let project_path = state.project_path.clone().ok_or("Open a project first.")?;
-            if let Some(wizard) = &origin {
-                let wizard = wizard.read(cx);
-                if wizard.project_path != project_path || !wizard.is_submitting(run_id) {
-                    return Err(
-                        "The project changed. Return to this draft's project to submit it.".into(),
-                    );
-                }
-            }
-            let graph = surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
-                .and_then(|registry| registry.resolve(template))
-                .map_err(|error| format!("Could not load planning flow: {error}"))?
-                .graph;
-            let app_config = state.config.clone().unwrap_or_default();
-            let mut config = surge_orchestrator::project_context::with_project_context_seed(
-                surge_orchestrator::engine::EngineRunConfig::default(),
-                &project_path,
-                &app_config,
-            );
-            config.budget = app_config.analytics.budget_guard();
-            config.initial_prompt = prompt;
-            Ok(PlanningRequest {
-                run_id,
-                graph,
-                project_path,
-                config,
-            })
-        })();
-        let request = match request {
-            Ok(request) => request,
-            Err(error) => {
-                self.dispatch_failed(run_id, origin.as_ref(), error, cx);
-                return;
-            },
-        };
-        let project_path = request.project_path.clone();
-        self.stream_subscribed.insert(run_id);
-        let state = self.state.downgrade();
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            match start(request).await {
-                Ok(handle) => {
-                    let mut rx = handle.events;
-                    let _ = this.update(cx, |app, cx| {
-                        app.dispatch_accepted(run_id, &project_path, origin.as_ref(), cx);
-                    });
-                    loop {
-                        match rx.recv().await {
-                            Ok(event) => {
-                                if state.update(cx, |state, cx| {
-                                    state.run_streams.entry(run_id).or_default().apply(&event);
-                                    cx.notify();
-                                }).is_err() {
-                                    return;
-                                }
-                            },
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(run_id = %run_id, dropped = n, "run stream lagged");
-                            },
-                        }
-                    }
-                    let _ = state.update(cx, |state, cx| {
-                        if let Some(stream) = state.run_streams.get_mut(&run_id) {
-                            stream.live = false;
-                        }
-                        cx.notify();
-                    });
-                    let _ = this.update(cx, |app, _| { app.stream_subscribed.remove(&run_id); });
-                },
-                Err(error) => {
-                    let message = format!("Could not confirm planning request {run_id}: {error}. Check Runs before retrying; the daemon may have received the request.");
-                    let _ = this.update(cx, |app, cx| {
-                        app.dispatch_failed(run_id, origin.as_ref(), message, cx);
-                    });
-                },
-            }
-        }).detach();
-        cx.notify();
     }
 
     /// Submit a stable, daemon-owned application operation and retain its identity locally.
@@ -472,7 +299,6 @@ impl SurgeApp {
         if let Err(error) = Self::save_bootstrap_index(&self.bootstrap_index) {
             tracing::warn!(%operation_id, %error, "could not persist desktop bootstrap index");
         }
-        let state = self.state.downgrade();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = async {
                 let intent = surge_core::bootstrap_operation::BootstrapIntent::new(
@@ -502,7 +328,6 @@ impl SurgeApp {
                             facade.clone(),
                             operation_id,
                             project_path.clone(),
-                            project_path.clone(),
                             cx,
                         );
                     });
@@ -523,7 +348,6 @@ impl SurgeApp {
         facade: std::sync::Arc<surge_orchestrator::engine::daemon_facade::DaemonEngineFacade>,
         operation_id: surge_core::RunId,
         display_project: PathBuf,
-        project_path: PathBuf,
         cx: &mut Context<Self>,
     ) {
         let state = self.state.downgrade();
@@ -686,7 +510,6 @@ impl SurgeApp {
                         .as_ref()
                         .filter(|path| ***path == entry.project_path)
                         .map_or_else(|| entry.project_path.clone(), Clone::clone),
-                    entry.project_path,
                     cx,
                 );
             }
@@ -1002,9 +825,7 @@ impl SurgeApp {
         self.agents_screen = None;
         self.agent_hub = None;
         self.agent_terminal = None;
-        self.spec_explorer = None;
         self.spec_wizard = None;
-        self.worktrees = None;
         self.settings = None;
 
         self.mode = AppMode::Project {
@@ -1105,64 +926,7 @@ impl SurgeApp {
         cx.notify();
     }
 
-    /// Queue a notification for a SurgeEvent (flushed during render when Window is available).
-    fn queue_notification_for_event(&mut self, event: &surge_core::SurgeEvent) {
-        // Also send OS-level notification
-        crate::notifications::os_notify_event(event);
-
-        use surge_core::SurgeEvent;
-
-        let notification = match event {
-            SurgeEvent::TaskStateChanged {
-                task_id, new_state, ..
-            } => {
-                let id_short = task_id.short();
-                match new_state {
-                    surge_core::TaskState::Completed => {
-                        Some(SurgeNotification::task_completed(&id_short))
-                    },
-                    surge_core::TaskState::Failed { .. } => {
-                        Some(SurgeNotification::task_failed(&id_short, "task failed"))
-                    },
-                    _ => None,
-                }
-            },
-            SurgeEvent::GateAwaitingApproval {
-                task_id, gate_name, ..
-            } => {
-                let label = format!("{} ({})", gate_name, task_id.short());
-                Some(SurgeNotification::review_needed(&label))
-            },
-            SurgeEvent::AgentConnected { agent_name } => {
-                Some(SurgeNotification::agent_connected(agent_name))
-            },
-            SurgeEvent::AgentDisconnected { agent_name } => {
-                Some(SurgeNotification::agent_disconnected(agent_name))
-            },
-            SurgeEvent::AgentRateLimited {
-                agent_name,
-                retry_after_secs,
-            } => Some(SurgeNotification::rate_limit_warning(
-                agent_name,
-                *retry_after_secs,
-            )),
-            SurgeEvent::CircuitBreakerOpened {
-                agent_name, reason, ..
-            } => Some(SurgeNotification::task_failed(
-                agent_name,
-                &format!("circuit breaker: {reason}"),
-            )),
-            _ => None,
-        };
-
-        if let Some(notif) = notification {
-            self.pending_notifications.push(notif);
-        }
-    }
-
     /// Queue a notification for a `GlobalDaemonEvent` (run lifecycle).
-    /// Mirrors `queue_notification_for_event` for the SurgeEvent path
-    /// but consumes daemon-side run lifecycle events instead.
     fn queue_notification_for_global(
         &mut self,
         event: &surge_orchestrator::engine::ipc::GlobalDaemonEvent,
@@ -1426,17 +1190,6 @@ impl SurgeApp {
         }
     }
 
-    /// Push a single notification immediately (used from UI button handlers).
-    pub fn push_notification(
-        &mut self,
-        notif: gpui_kit::component::notification::Notification,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        use gpui_kit::component::WindowExt as _;
-        window.push_notification(notif, cx);
-    }
-
     fn toggle_palette(&mut self, cx: &mut Context<Self>) {
         if self.command_palette_open {
             self.close_palette(cx);
@@ -1474,45 +1227,6 @@ impl SurgeApp {
     fn close_palette(&mut self, cx: &mut Context<Self>) {
         self.command_palette = None;
         self.command_palette_open = false;
-        cx.notify();
-    }
-
-    /// Persist an operator gate decision to `.surge/gates/<task>.json`
-    /// where the engine's gate poller picks it up. Called by the Inbox.
-    /// Synchronous on purpose: it is a tiny local write, and the operator
-    /// must SEE a failure — a fire-and-forget task that only logs would
-    /// silently lose the decision. Does not navigate; callers decide what
-    /// happens next.
-    fn write_gate_decision(&mut self, task_id: String, approved: bool, cx: &mut Context<Self>) {
-        let project_path = match &self.mode {
-            AppMode::Project { _path, .. } => _path.clone(),
-            _ => return,
-        };
-
-        let gate_dir = project_path.join(".surge").join("gates");
-        let decision_file = gate_dir.join(format!("{task_id}.json"));
-
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let decision_data = serde_json::json!({
-            "task_id": task_id,
-            "approved": approved,
-            "timestamp": timestamp.to_string(),
-        });
-
-        let result = std::fs::create_dir_all(&gate_dir)
-            .and_then(|()| std::fs::write(&decision_file, decision_data.to_string()));
-
-        let notification = match result {
-            Ok(()) => SurgeNotification::gate_decision_recorded(&task_id, approved),
-            Err(e) => {
-                tracing::error!("failed to write gate decision for {task_id}: {e}");
-                SurgeNotification::gate_decision_failed(&task_id, &e.to_string())
-            },
-        };
-        self.pending_notifications.push(notification);
         cx.notify();
     }
 
@@ -1637,9 +1351,6 @@ impl SurgeApp {
                                 this.open_run_cockpit(Some(*run_id), cx);
                             },
                             InboxAction::OpenPlan => this.navigate(Screen::Flow, cx),
-                            InboxAction::TaskDecision { task_id, approved } => {
-                                this.write_gate_decision(task_id.clone(), *approved, cx);
-                            },
                         },
                     )
                     .detach();
@@ -1697,13 +1408,6 @@ impl SurgeApp {
                     .get_or_insert_with(|| cx.new(|cx| AgentHubScreen::new(state, cx)));
                 agent_hub.clone().into_any_element()
             },
-            Screen::SpecExplorer => {
-                let state = self.state.clone();
-                let spec_explorer = self
-                    .spec_explorer
-                    .get_or_insert_with(|| cx.new(|cx| SpecExplorerScreen::new(state, cx)));
-                spec_explorer.clone().into_any_element()
-            },
             Screen::AgentTerminals => {
                 let state = self.state.clone();
                 let terminal = self
@@ -1734,13 +1438,6 @@ impl SurgeApp {
                 });
                 spec_wizard.clone().into_any_element()
             },
-            Screen::Worktrees => {
-                let state = self.state.clone();
-                let s = self
-                    .worktrees
-                    .get_or_insert_with(|| cx.new(|cx| WorktreesScreen::new(state, cx)));
-                s.clone().into_any_element()
-            },
             Screen::Settings => {
                 let state = self.state.clone();
                 let s = self
@@ -1748,252 +1445,6 @@ impl SurgeApp {
                     .get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
                 s.clone().into_any_element()
             },
-        }
-    }
-
-    fn render_task_detail_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(task_id) = &self.task_detail_id {
-            let task = self
-                .state
-                .read(cx)
-                .tasks
-                .iter()
-                .find(|t| t.id.to_string() == *task_id)
-                .cloned();
-
-            let card_content = if let Some(task) = task {
-                let status_label = format!("{:?}", task.state);
-                let (sub_done, sub_total) = match &task.state {
-                    surge_core::TaskState::Executing { completed, total } => (*completed, *total),
-                    _ => (0, 0),
-                };
-
-                div()
-                    .id("task-detail-card")
-                    .v_flex()
-                    .gap_3()
-                    .p_5()
-                    .w(px(500.0))
-                    .max_h(px(500.0))
-                    .rounded_xl()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::text_muted().opacity(0.1))
-                    .on_click(|_e, _w, _cx| {}) // absorb click
-                    // Header: title + close
-                    .child(
-                        div()
-                            .h_flex()
-                            .justify_between()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::text_primary())
-                                    .child(task.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .id("task-detail-close")
-                                    .role(Role::Button)
-                                    .aria_label("Close task details")
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .text_color(theme::text_muted())
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .hover(|s| s.bg(theme::text_muted().opacity(0.1)))
-                                    .on_click(cx.listener(|this, _e, _w, cx| {
-                                        this.task_detail_id = None;
-                                        cx.notify();
-                                    }))
-                                    .child("X"),
-                            ),
-                    )
-                    // Badges row: ID + status
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded_md()
-                                    .bg(theme::primary().opacity(0.15))
-                                    .text_color(theme::primary())
-                                    .child(format!("#{}", task.id)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded_md()
-                                    .bg(theme::warning().opacity(0.15))
-                                    .text_color(theme::warning())
-                                    .child(status_label),
-                            ),
-                    )
-                    // Description
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text_muted())
-                                    .child("Description"),
-                            )
-                            .child(div().text_sm().text_color(theme::text_primary()).child(
-                                if task.description.is_empty() {
-                                    "(no description)".to_string()
-                                } else {
-                                    task.description.clone()
-                                },
-                            )),
-                    )
-                    // Subtask progress (if executing)
-                    .when(sub_total > 0, |el: Stateful<Div>| {
-                        let pct = sub_done as f32 / sub_total as f32;
-                        el.child(
-                            div()
-                                .v_flex()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme::text_muted())
-                                        .child(format!("Subtasks: {sub_done}/{sub_total}")),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(4.0))
-                                        .rounded_full()
-                                        .bg(theme::text_muted().opacity(0.1))
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .rounded_full()
-                                                .bg(theme::primary())
-                                                .w(relative(pct)),
-                                        ),
-                                ),
-                        )
-                    })
-                    // Agent + Complexity
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_4()
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme::text_muted())
-                                            .child("Agent"),
-                                    )
-                                    .child(div().text_sm().text_color(theme::text_primary()).child(
-                                        task.agent.unwrap_or_else(|| "unassigned".to_string()),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme::text_muted())
-                                            .child("Complexity"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme::text_primary())
-                                            .child(task.complexity.clone()),
-                                    ),
-                            ),
-                    )
-            } else {
-                // Task not found
-                div()
-                    .id("task-detail-card")
-                    .v_flex()
-                    .gap_3()
-                    .p_5()
-                    .w(px(500.0))
-                    .rounded_xl()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::text_muted().opacity(0.1))
-                    .on_click(|_e, _w, _cx| {})
-                    .child(
-                        div()
-                            .h_flex()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::text_primary())
-                                    .child("Task not found"),
-                            )
-                            .child(
-                                div()
-                                    .id("task-detail-close-nf")
-                                    .role(Role::Button)
-                                    .aria_label("Close task details")
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .text_color(theme::text_muted())
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .hover(|s| s.bg(theme::text_muted().opacity(0.1)))
-                                    .on_click(cx.listener(|this, _e, _w, cx| {
-                                        this.task_detail_id = None;
-                                        cx.notify();
-                                    }))
-                                    .child("X"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme::text_muted())
-                            .child(format!("Task ID: {}", task_id)),
-                    )
-            };
-
-            div()
-                .id("task-detail-backdrop")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(hsla(0.0, 0.0, 0.0, 0.5))
-                .on_click(cx.listener(|this, _e, _w, cx| {
-                    this.task_detail_id = None;
-                    cx.notify();
-                }))
-                .child(card_content)
-                .into_any_element()
-        } else {
-            div().into_any_element()
         }
     }
 
@@ -2161,7 +1612,6 @@ impl Render for SurgeApp {
                             ),
                         )
                         .child(self.render_palette_overlay(cx))
-                        .child(self.render_task_detail_overlay(cx))
                         .into_any_element()
                 },
             };

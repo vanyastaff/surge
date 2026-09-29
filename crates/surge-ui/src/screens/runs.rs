@@ -424,7 +424,7 @@ fn attention_reason(
         ),
         R::WorktreeConflict => (
             "Its working copy could not be confirmed",
-            "Check the run's worktree in Worktrees, then retry.",
+            "Check the run's worktree under .worktrees/ in the project, then retry.",
         ),
         R::InvalidMaterialization => (
             "The plan could not be validated",

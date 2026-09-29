@@ -49,7 +49,6 @@ impl Tone {
 /// One rendered event-log row.
 #[derive(Clone)]
 pub struct RunLogRow {
-    pub seq: u64,
     /// Local receive time (the wire event carries no timestamp).
     pub time: String,
     pub kind: &'static str,
@@ -245,7 +244,6 @@ impl RunStreamState {
                 }
                 if let Some((kind, tone, text)) = describe(payload) {
                     self.log.push_back(RunLogRow {
-                        seq: *seq,
                         time: now,
                         kind,
                         tone,
@@ -259,7 +257,6 @@ impl RunStreamState {
             EngineRunEvent::StreamError { message } => {
                 self.live = false;
                 self.log.push_back(RunLogRow {
-                    seq: self.last_seq,
                     time: now,
                     kind: "STREAM",
                     tone: Tone::Err,

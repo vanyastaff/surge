@@ -23,7 +23,6 @@ use gpui_kit::component::StyledExt;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use surge_core::TaskState;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::facade::EngineFacade as _;
 use surge_orchestrator::engine::handle::RunStatus;
@@ -40,8 +39,6 @@ pub enum InboxAction {
     OpenRun(RunId),
     /// Show the plan under review full-size (Flow screen).
     OpenPlan,
-    /// Operator decided a task-level review gate (approve / reject).
-    TaskDecision { task_id: String, approved: bool },
 }
 
 impl EventEmitter<InboxAction> for InboxScreen {}
@@ -57,8 +54,6 @@ enum Source {
         kind: DecisionKind,
         call_id: Option<String>,
     },
-    /// A task sitting in HumanReview / QaReview.
-    Task { task_id: String },
     /// A failed or aborted run needing triage.
     FailedRun { run_id: RunId },
 }
@@ -66,8 +61,7 @@ enum Source {
 /// One decision unit in the queue.
 #[derive(Clone)]
 struct InboxItem {
-    /// Urgency class (lower = first). Live kinds 0-4, reviews 5-6,
-    /// failures 7.
+    /// Urgency class (lower = first). Live kinds 0-4, failures 7.
     rank: u8,
     badge: &'static str,
     badge_color: Hsla,
@@ -85,7 +79,6 @@ impl InboxItem {
     fn identity(&self) -> String {
         match &self.source {
             Source::Live { run_id, seq, .. } => format!("live-{run_id}-{seq}"),
-            Source::Task { task_id } => format!("task-{task_id}"),
             Source::FailedRun { run_id } => format!("failed-{run_id}"),
         }
     }
@@ -291,43 +284,7 @@ impl InboxScreen {
             });
         }
 
-        // 2. Tasks blocked in review states.
-        for task in &state.tasks {
-            let (badge, rank, evidence): (&'static str, u8, Vec<(String, String)>) =
-                match &task.state {
-                    TaskState::HumanReview => ("review", 5, Vec::new()),
-                    TaskState::QaReview { verdict, reasoning } => {
-                        let mut ev = Vec::new();
-                        if let Some(v) = verdict {
-                            ev.push(("QA verdict".to_string(), v.clone()));
-                        }
-                        if let Some(r) = reasoning {
-                            ev.push(("Why".to_string(), r.clone()));
-                        }
-                        ("QA review", 6, ev)
-                    },
-                    _ => continue,
-                };
-            items.push(InboxItem {
-                rank,
-                badge,
-                badge_color: theme::warning(),
-                title: task.title.clone(),
-                mission: None,
-                meta: format!(
-                    "task t-{} · {}",
-                    task.id.short().to_lowercase(),
-                    task.agent.clone().unwrap_or_else(|| "unassigned".into())
-                ),
-                age: task.updated_at.clone(),
-                evidence,
-                source: Source::Task {
-                    task_id: task.id.to_string(),
-                },
-            });
-        }
-
-        // 3. Failed / aborted runs — failure triage.
+        // 2. Failed / aborted runs — failure triage.
         for run in state.unacknowledged_failures() {
             if !matches!(run.status, RunStatus::Failed | RunStatus::Aborted) {
                 continue;
@@ -484,12 +441,6 @@ impl InboxScreen {
                     }
                 }
                 self.resolve_live(*run_id, node.clone(), call_id.clone(), payload, cx);
-            },
-            Source::Task { task_id } => {
-                cx.emit(InboxAction::TaskDecision {
-                    task_id: task_id.clone(),
-                    approved: outcome == "approve",
-                });
             },
             Source::FailedRun { run_id } => {
                 cx.emit(InboxAction::OpenRun(*run_id));
@@ -772,29 +723,7 @@ impl InboxScreen {
                 ..
             } if surge_core::id::GateRequestId::from_event_call_id(id).is_some()
         );
-        let is_elevation = matches!(
-            &item.source,
-            Source::Live {
-                kind: DecisionKind::Elevation { .. },
-                ..
-            }
-        );
-        let is_roadmap_patch = matches!(
-            &item.source,
-            Source::Live {
-                kind: DecisionKind::RoadmapPatch { .. },
-                ..
-            }
-        );
         let is_failure = matches!(&item.source, Source::FailedRun { .. });
-        let is_escalation = matches!(
-            &item.source,
-            Source::Live {
-                kind: DecisionKind::Escalation { .. },
-                ..
-            }
-        );
-        let is_task = matches!(&item.source, Source::Task { .. });
 
         // The document scrolls; the response field and decision buttons live
         // in a pinned footer so a long plan never pushes Approve off-screen.
@@ -964,7 +893,7 @@ impl InboxScreen {
             .px(px(26.0))
             .border_t_1()
             .border_color(theme::hairline());
-        if is_tool_input || is_gate_input || is_task {
+        if is_tool_input || is_gate_input {
             footer = footer.child(
                 div()
                     .mt(px(18.0))
@@ -1080,16 +1009,6 @@ impl InboxScreen {
                     ),
                 );
             }
-        } else if is_elevation || is_escalation || is_roadmap_patch {
-            if let Source::Live { run_id, .. } = item.source {
-                actions = actions.child(
-                    secondary("inbox-open-run-2".into(), "Open cockpit".to_string()).on_click(
-                        cx.listener(move |_this, _e, _w, cx| {
-                            cx.emit(InboxAction::OpenRun(run_id));
-                        }),
-                    ),
-                );
-            }
         } else if is_tool_input {
             let item_send = item.clone();
             actions = actions.child(
@@ -1147,25 +1066,17 @@ impl InboxScreen {
                 );
             }
         } else {
-            // Task review gates: canonical approve / reject.
-            let item_approve = item.clone();
-            let item_reject = item.clone();
-            actions = actions
-                .child(
-                    primary("inbox-approve".into(), "Approve".to_string()).on_click(cx.listener(
-                        move |this, _e, window, cx| {
-                            this.decide(&item_approve, "approve", window, cx);
-                        },
-                    )),
-                )
-                .child(div().flex_1())
-                .child(
-                    danger("inbox-reject".into(), "Reject".to_string()).on_click(cx.listener(
-                        move |this, _e, window, cx| {
-                            this.decide(&item_reject, "reject", window, cx);
-                        },
-                    )),
+            // Elevations, escalations, roadmap patches and unbound legacy
+            // requests are answered in the run itself, not here.
+            if let Source::Live { run_id, .. } = item.source {
+                actions = actions.child(
+                    secondary("inbox-open-run-2".into(), "Open cockpit".to_string()).on_click(
+                        cx.listener(move |_this, _e, _w, cx| {
+                            cx.emit(InboxAction::OpenRun(run_id));
+                        }),
+                    ),
                 );
+            }
         }
 
         div()

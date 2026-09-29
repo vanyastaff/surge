@@ -2,12 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui_kit::EventEmitter;
 use surge_acp::{
     AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry,
 };
+use surge_core::SurgeConfig;
 use surge_core::id::RunId;
-use surge_core::{Spec, SpecId, SurgeConfig, SurgeEvent, TaskId, TaskState};
 use surge_orchestrator::engine::handle::{RunStatus, RunSummary};
 use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
 
@@ -43,15 +42,6 @@ pub struct AppState {
     /// a cache.
     pub fallback_health: HealthTracker,
 
-    // ── Tasks ──
-    pub tasks: Vec<TaskEntry>,
-
-    // ── Specs ──
-    pub specs: Vec<Spec>,
-
-    // ── Worktrees ──
-    pub worktrees: Vec<WorktreeEntry>,
-
     // ── ACP ──
     /// Agent pool for ACP connections (created when project has agents configured).
     pub agent_pool: Option<Arc<AgentPool>>,
@@ -82,33 +72,6 @@ pub struct AppState {
     /// Latest durable bootstrap operation snapshots observed by this UI session.
     pub bootstrap_operations:
         HashMap<RunId, surge_core::bootstrap_operation::BootstrapOperationStatus>,
-
-    // ── Events ──
-    pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
-    pub recent_events: Vec<SurgeEvent>,
-}
-
-/// A task tracked in the UI (in-memory, SQLite later).
-#[derive(Debug, Clone)]
-pub struct TaskEntry {
-    pub id: TaskId,
-    pub _spec_id: SpecId,
-    pub title: String,
-    pub description: String,
-    pub state: TaskState,
-    pub agent: Option<String>,
-    pub complexity: String,
-    pub _created_at: String,
-    pub updated_at: String,
-}
-
-/// A git worktree entry for display.
-#[derive(Debug, Clone)]
-pub struct WorktreeEntry {
-    pub spec_id: String,
-    pub branch: String,
-    pub path: PathBuf,
-    pub exists: bool,
 }
 
 /// UI-side projection of a daemon-hosted run. Mirrors the orchestrator's
@@ -152,7 +115,6 @@ impl From<&RunSummary> for UiRun {
 impl AppState {
     /// Create initial state with empty data and real registry.
     pub fn new() -> Self {
-        let (event_tx, _) = tokio::sync::broadcast::channel(256);
         let registry = Registry::builtin();
         let installed_agents = registry.detect_installed_with_paths();
 
@@ -171,9 +133,6 @@ impl AppState {
             registry,
             installed_agents,
             fallback_health,
-            tasks: Vec::new(),
-            specs: Vec::new(),
-            worktrees: Vec::new(),
             agent_pool: None,
             daemon_state: ConnectionState::default(),
             runs: Vec::new(),
@@ -181,8 +140,6 @@ impl AppState {
             dismissed_runs: crate::dismissed::DismissedRuns::load(),
             plan_edits: HashMap::new(),
             bootstrap_operations: HashMap::new(),
-            _event_tx: event_tx,
-            recent_events: Vec::new(),
         }
     }
 
@@ -330,17 +287,11 @@ impl AppState {
         runs
     }
 
-    /// Decisions blocked on the operator in the open project: live gates,
-    /// tasks in review and failed/aborted runs. One number for the Inbox
-    /// badge and the Fleet chip so the two can never disagree.
+    /// Decisions blocked on the operator in the open project: live gates
+    /// and failed/aborted runs. One number for the Inbox badge and the
+    /// Fleet chip so the two can never disagree.
     pub fn needs_you_count(&self) -> usize {
-        let reviews = self
-            .tasks
-            .iter()
-            .filter(|t| matches!(t.state, TaskState::HumanReview | TaskState::QaReview { .. }))
-            .count();
-        let failed = self.unacknowledged_failures().len();
-        self.pending_decisions().len() + reviews + failed
+        self.pending_decisions().len() + self.unacknowledged_failures().len()
     }
 
     /// Failed/aborted runs of the open project the operator has not
@@ -466,41 +417,7 @@ impl AppState {
         Ok(())
     }
 
-    /// Handle a SurgeEvent — update state and emit for UI subscribers.
-    pub fn handle_event(&mut self, event: SurgeEvent, cx: &mut gpui_kit::Context<Self>) {
-        // Keep last 100 events for recent activity.
-        self.recent_events.push(event.clone());
-        if self.recent_events.len() > 100 {
-            self.recent_events.remove(0);
-        }
-
-        match &event {
-            SurgeEvent::TaskStateChanged {
-                task_id, new_state, ..
-            } => {
-                if let Some(task) = self.tasks.iter_mut().find(|t| &t.id == task_id) {
-                    task.state = new_state.clone();
-                }
-            },
-            SurgeEvent::AgentConnected { agent_name } => {
-                // Registration only — the fallback tracker is never the
-                // one recording outcomes (see the field's doc). Harmless
-                // to keep registering here even once a pool exists: reads
-                // never consult this tracker while `agent_pool` is set.
-                self.fallback_health.register(agent_name);
-            },
-            _ => {},
-        }
-
-        cx.emit(event);
-    }
-
     // ── Computed accessors ──
-
-    /// Agents that are installed (for Configured tab).
-    pub fn configured_agents(&self) -> &[DetectedAgent] {
-        &self.installed_agents
-    }
 
     /// Registry entries NOT installed (for Available tab).
     pub fn available_agents(&self) -> Vec<&RegistryEntry> {
@@ -539,11 +456,6 @@ impl AppState {
         }
     }
 
-    /// Count tasks by state.
-    pub fn task_count_by_state(&self, state_match: fn(&TaskState) -> bool) -> usize {
-        self.tasks.iter().filter(|t| state_match(&t.state)).count()
-    }
-
     /// All pending operator decisions across live run streams, most
     /// urgent first (kind rank, then age). Powers the Inbox and the
     /// "needs you" counters.
@@ -564,8 +476,6 @@ impl AppState {
         all
     }
 }
-
-impl EventEmitter<SurgeEvent> for AppState {}
 
 /// Detect current git branch name from a path.
 fn detect_branch(path: &std::path::Path) -> Option<String> {

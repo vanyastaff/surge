@@ -3,18 +3,11 @@ use gpui_kit::component::notification::Notification;
 
 /// Surge notification builders — convenience wrappers around gpui-component Notification.
 ///
-/// Usage: call `window.push_notification(SurgeNotification::task_completed("my-task"), cx);`
+/// Usage: call `window.push_notification(SurgeNotification::run_completed("…"), cx);`
 /// from any context with access to `&mut Window` and `&mut App`.
 pub struct SurgeNotification;
 
 impl SurgeNotification {
-    pub fn task_completed(task_name: &str) -> Notification {
-        Notification::success(SharedString::from(format!(
-            "{task_name} finished successfully"
-        )))
-        .title("Task Completed")
-    }
-
     pub fn task_failed(task_name: &str, reason: &str) -> Notification {
         Notification::error(SharedString::from(format!("{task_name}: {reason}")))
             .title("Task Failed")
@@ -25,45 +18,11 @@ impl SurgeNotification {
         Notification::info(SharedString::from(format!("{agent} is ready"))).title("Agent Connected")
     }
 
-    pub fn agent_disconnected(agent: &str) -> Notification {
-        Notification::warning(SharedString::from(format!("{agent} connection lost")))
-            .title("Agent Disconnected")
-            .autohide(false)
-    }
-
-    pub fn gate_decision_recorded(task_id: &str, approved: bool) -> Notification {
-        let verdict = if approved { "approved" } else { "rejected" };
-        Notification::success(SharedString::from(format!("{task_id} {verdict}")))
-            .title("Gate Decision Recorded")
-    }
-
-    pub fn gate_decision_failed(task_id: &str, reason: &str) -> Notification {
-        Notification::error(SharedString::from(format!(
-            "{task_id}: decision NOT saved — {reason}"
-        )))
-        .title("Gate Decision Failed")
-        .autohide(false)
-    }
-
     pub fn project_missing(path: &str) -> Notification {
         Notification::error(SharedString::from(format!(
             "{path} no longer exists. Remove it from recent projects or restore the folder."
         )))
         .title("Project folder not found")
-        .autohide(false)
-    }
-
-    pub fn review_needed(task_name: &str) -> Notification {
-        Notification::warning(SharedString::from(format!("{task_name} needs your review")))
-            .title("Review Required")
-            .autohide(false)
-    }
-
-    pub fn rate_limit_warning(agent: &str, reset_secs: u64) -> Notification {
-        Notification::warning(SharedString::from(format!(
-            "{agent} rate limited — resets in {reset_secs}s"
-        )))
-        .title("Rate Limit")
         .autohide(false)
     }
 
@@ -212,55 +171,6 @@ pub fn os_notify_global(event: &surge_orchestrator::engine::ipc::GlobalDaemonEve
         ),
         // `GlobalDaemonEvent` is `#[non_exhaustive]`. Silently drop
         // unknown future variants here; add cases as new ones land.
-        _ => return,
-    };
-
-    send_os_notification(&title, &body);
-}
-
-/// Send OS notification for a SurgeEvent.
-pub fn os_notify_event(event: &surge_core::SurgeEvent) {
-    use surge_core::SurgeEvent;
-
-    let (title, body): (String, String) = match event {
-        SurgeEvent::TaskStateChanged {
-            task_id, new_state, ..
-        } => {
-            let id_short = task_id.short();
-            match new_state {
-                surge_core::TaskState::Completed => (
-                    "Task Completed".into(),
-                    format!("{id_short} finished successfully"),
-                ),
-                surge_core::TaskState::Failed { .. } => {
-                    ("Task Failed".into(), format!("{id_short} failed"))
-                },
-                _ => return,
-            }
-        },
-        SurgeEvent::GateAwaitingApproval {
-            task_id, gate_name, ..
-        } => {
-            let id_short = task_id.short();
-            (
-                "Review Required".into(),
-                format!("{gate_name} ({id_short}) needs your review"),
-            )
-        },
-        SurgeEvent::AgentConnected { agent_name } => {
-            ("Agent Connected".into(), format!("{agent_name} is ready"))
-        },
-        SurgeEvent::AgentDisconnected { agent_name } => (
-            "Agent Disconnected".into(),
-            format!("{agent_name} connection lost"),
-        ),
-        SurgeEvent::AgentRateLimited {
-            agent_name,
-            retry_after_secs,
-        } => (
-            "Rate Limit".into(),
-            format!("{agent_name} rate limited — resets in {retry_after_secs}s"),
-        ),
         _ => return,
     };
 

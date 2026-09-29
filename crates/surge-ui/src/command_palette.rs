@@ -73,11 +73,9 @@ fn all_commands() -> Vec<Command> {
         Command::nav("Agents", Screen::Agents, Some("Ctrl+7")),
         Command::nav("Memory", Screen::ContextMemory, Some("Ctrl+8")),
         Command::nav("Settings", Screen::Settings, Some("Ctrl+9")),
-        Command::nav("Specs", Screen::SpecExplorer, None),
         Command::nav("Plan a task", Screen::SpecWizard, Some("Ctrl+N")),
         Command::nav("Agent catalog", Screen::AgentHub, None),
         Command::nav("Terminals", Screen::AgentTerminals, None),
-        Command::nav("Worktrees", Screen::Worktrees, None),
         Command::app("Open project…", PaletteCommand::OpenProject, Some("Ctrl+O")),
         Command::app("New app…", PaletteCommand::NewApp, None),
         Command::app(

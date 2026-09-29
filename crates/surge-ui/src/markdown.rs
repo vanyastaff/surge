@@ -56,7 +56,7 @@ enum FormatTag {
     Bold,
     Italic,
     Strikethrough,
-    Link(String),
+    Link,
 }
 
 enum ListKind {
@@ -106,7 +106,7 @@ impl MarkdownRenderer {
     fn is_link(&self) -> bool {
         self.format_stack
             .iter()
-            .any(|f| matches!(f, FormatTag::Link(_)))
+            .any(|f| matches!(f, FormatTag::Link))
     }
 
     fn is_strikethrough(&self) -> bool {
@@ -281,10 +281,7 @@ impl MarkdownRenderer {
             Tag::Strong => self.format_stack.push(FormatTag::Bold),
             Tag::Emphasis => self.format_stack.push(FormatTag::Italic),
             Tag::Strikethrough => self.format_stack.push(FormatTag::Strikethrough),
-            Tag::Link { dest_url, .. } => {
-                self.format_stack
-                    .push(FormatTag::Link(dest_url.to_string()));
-            },
+            Tag::Link { .. } => self.format_stack.push(FormatTag::Link),
             Tag::CodeBlock(kind) => {
                 self.flush_paragraph();
                 let lang = match kind {
@@ -394,8 +391,7 @@ impl MarkdownRenderer {
                     .retain(|f| !matches!(f, FormatTag::Strikethrough));
             },
             TagEnd::Link => {
-                self.format_stack
-                    .retain(|f| !matches!(f, FormatTag::Link(_)));
+                self.format_stack.retain(|f| !matches!(f, FormatTag::Link));
             },
             TagEnd::CodeBlock => {
                 if let Some(code) = self.code_buf.take() {

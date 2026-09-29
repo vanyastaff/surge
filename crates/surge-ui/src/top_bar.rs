@@ -67,11 +67,6 @@ impl TopBar {
         cx.notify();
     }
 
-    pub fn set_project(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.project_name = name.to_string();
-        cx.notify();
-    }
-
     pub fn toggle_switcher(&mut self, cx: &mut Context<Self>) {
         if self.switcher.is_some() {
             self.switcher = None;
