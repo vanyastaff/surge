@@ -50,7 +50,7 @@ use surge_persistence::runs::registry::RunSummary;
 use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 use tokio::sync::OnceCell;
 
-use crate::commands::common::{connect_daemon_at, project_root, resolve_run_id};
+use crate::commands::common::{RunIdError, connect_daemon_at, project_root, resolve_run_id};
 use crate::commands::inbox::AttentionGroup;
 use crate::commands::ledger::{LedgerArgs, query_records as query_ledger};
 use crate::commands::ready::{ReadyArgs, query_records as query_ready};
@@ -929,17 +929,14 @@ fn validated_limit(requested: Option<i64>, default: usize, max: usize) -> Result
         })
 }
 
-/// Map `resolve_run_id`'s untyped failure onto the stable codes. Its caller
-/// errors are bare messages while a storage failure carries added context, so
-/// the chain length separates a fault from a bad id; `no run matching` is its
-/// own not-found wording. Coupled to `commands::common::resolve_run_id`.
+/// Map `resolve_run_id`'s failure onto the stable codes: a
+/// [`RunIdError`] is the caller's id (missing or unusable), anything else is a
+/// fault.
 fn classify_run_id_error(error: anyhow::Error) -> ToolError {
-    if error.chain().count() > 1 {
-        ToolError::Failed(error)
-    } else if error.to_string().starts_with("no run matching") {
-        ToolError::RunNotFound(error.to_string())
-    } else {
-        ToolError::InvalidRunId(error.to_string())
+    match error.downcast_ref::<RunIdError>() {
+        Some(RunIdError::NotFound { .. }) => ToolError::RunNotFound(error.to_string()),
+        Some(_) => ToolError::InvalidRunId(error.to_string()),
+        None => ToolError::Failed(error),
     }
 }
 

@@ -56,10 +56,10 @@ pub(crate) async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Resul
         return Ok(id);
     }
     if value.len() < MIN_SUFFIX_LEN {
-        return Err(anyhow!(
-            "run id {value:?} is not a full ULID and is too short to match by suffix \
-             (need ≥{MIN_SUFFIX_LEN} chars, or pass the full id)"
-        ));
+        return Err(RunIdError::TooShort {
+            value: value.to_owned(),
+        }
+        .into());
     }
     let runs = storage
         .list_runs(RunFilter {
@@ -77,16 +77,46 @@ pub(crate) async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Resul
         .collect();
     match matches.as_slice() {
         [one] if !truncated => Ok(*one),
-        [_one] => Err(anyhow!(
-            "matched run {value:?}, but there are ≥{SUFFIX_SCAN_LIMIT} runs so the match \
-             may be ambiguous; pass the full run id"
-        )),
-        [] => Err(anyhow!("no run matching {value:?}")),
-        many => Err(anyhow!(
-            "{} runs match {value:?}; use the full run id",
-            many.len()
-        )),
+        [_one] => Err(RunIdError::PossiblyAmbiguous {
+            value: value.to_owned(),
+        }
+        .into()),
+        [] => Err(RunIdError::NotFound {
+            value: value.to_owned(),
+        }
+        .into()),
+        many => Err(RunIdError::Ambiguous {
+            value: value.to_owned(),
+            count: many.len(),
+        }
+        .into()),
     }
+}
+
+/// Why a run id given on the command line (or by an MCP client) did not
+/// resolve to exactly one run. Storage failures are *not* this type: they carry
+/// their own context, so a caller can tell a bad id from a fault with
+/// `error.downcast_ref::<RunIdError>()`.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RunIdError {
+    /// Not a full ULID and too short to match by suffix.
+    #[error(
+        "run id {value:?} is not a full ULID and is too short to match by suffix \
+         (need ≥{MIN_SUFFIX_LEN} chars, or pass the full id)"
+    )]
+    TooShort { value: String },
+    /// Matched one run, but the scan hit its ceiling so the match may not be unique.
+    #[error(
+        "matched run {value:?}, but there are ≥{SUFFIX_SCAN_LIMIT} runs so the match \
+         may be ambiguous; pass the full run id"
+    )]
+    PossiblyAmbiguous { value: String },
+    /// No run ends with the given suffix.
+    #[error("no run matching {value:?}")]
+    NotFound { value: String },
+    /// More than one run ends with the given suffix.
+    #[error("{count} runs match {value:?}; use the full run id")]
+    Ambiguous { value: String, count: usize },
 }
 
 /// Connect to the already-running daemon (does not spawn one — a fresh daemon
@@ -102,4 +132,29 @@ pub(crate) async fn connect_daemon_at(socket: PathBuf) -> Result<DaemonEngineFac
     DaemonEngineFacade::connect(socket)
         .await
         .map_err(|e| anyhow!("no running daemon to reach: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_id_errors_read_as_the_old_messages_and_survive_anyhow() {
+        let err: anyhow::Error = RunIdError::NotFound {
+            value: "ABCDEF".into(),
+        }
+        .into();
+        assert_eq!(err.to_string(), "no run matching \"ABCDEF\"");
+        assert!(matches!(
+            err.downcast_ref::<RunIdError>(),
+            Some(RunIdError::NotFound { .. })
+        ));
+
+        let too_short: anyhow::Error = RunIdError::TooShort { value: "x".into() }.into();
+        assert!(too_short.to_string().contains("too short"));
+
+        // A storage fault is anyhow context, never a RunIdError.
+        let fault = anyhow::anyhow!("disk").context("list runs for id match");
+        assert!(fault.downcast_ref::<RunIdError>().is_none());
+    }
 }
