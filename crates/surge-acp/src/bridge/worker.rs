@@ -938,9 +938,22 @@ pub(crate) async fn send_message_impl(
 ///
 /// Every other failure stays a generic bridge transport error, preserving
 /// the previous behaviour.
+/// Whether the agent's error says the configured model is unavailable to the
+/// account (observed live from codex-acp: "The 'x' model is not supported when
+/// using Codex with a ChatGPT account"). Deliberately narrow: it must name a
+/// model *and* say it is unsupported or missing.
+fn looks_like_unsupported_model(details: &str) -> bool {
+    let text = details.to_ascii_lowercase();
+    text.contains("model_not_found")
+        || (text.contains("model")
+            && (text.contains("is not supported") || text.contains("does not exist")))
+}
+
 pub(crate) fn classify_prompt_dispatch_error(details: String) -> super::error::SendMessageError {
     if crate::pool::is_auth_failure(&details) {
         super::error::SendMessageError::AgentAuthenticationFailed { details }
+    } else if looks_like_unsupported_model(&details) {
+        super::error::SendMessageError::AgentModelUnsupported { details }
     } else if surge_core::capacity::looks_like_rate_limit(&details) {
         let retry_after =
             surge_core::capacity::parse_retry_after_secs(&details).map(Duration::from_secs);
@@ -1082,6 +1095,21 @@ mod tests {
             ),
             "captured subscription quota must reach capacity handling: {error:?}"
         );
+    }
+
+    #[test]
+    fn classify_prompt_error_maps_unsupported_model_to_its_own_variant() {
+        use crate::bridge::error::SendMessageError;
+        let live = "Internal error: {\"message\": \"{\\\"type\\\":\\\"error\\\",\\\"status\\\":400,\\\"error\\\":{\\\"message\\\":\\\"The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.\\\"}}\"}";
+        assert!(matches!(
+            classify_prompt_dispatch_error(live.to_string()),
+            SendMessageError::AgentModelUnsupported { .. }
+        ));
+        // A generic failure that merely mentions a model stays a bridge error.
+        assert!(matches!(
+            classify_prompt_dispatch_error("model warm-up took 3s, channel closed".into()),
+            SendMessageError::Bridge(_)
+        ));
     }
 
     #[test]

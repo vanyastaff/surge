@@ -144,6 +144,20 @@ pub enum SendMessageError {
         details: String,
     },
 
+    /// The agent rejected the prompt because the model it is configured to
+    /// use is not available to this account (for example a default model in
+    /// the agent's own config file that the subscription does not include).
+    /// An operator/environment problem, not a transport failure.
+    #[error(
+        "the agent's configured model is not available to this account — pick another model \
+         for this step, or change the agent's own default (e.g. `model` in \
+         ~/.codex/config.toml); details: {details}"
+    )]
+    AgentModelUnsupported {
+        /// Raw error text from the agent/ACP layer, kept for debugging.
+        details: String,
+    },
+
     /// The agent rejected the prompt because the account has hit a
     /// provider-side rate limit or usage quota (HTTP 429, or a
     /// provider-specific exhaustion signal such as `rate_limit_error`,
