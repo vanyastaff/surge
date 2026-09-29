@@ -736,8 +736,9 @@ where
 
 /// Convert a filesystem path into the platform-appropriate
 /// `local_socket::Name`. On Unix the path is used directly as a
-/// filesystem socket path; on Windows the path's `file_name` is used
-/// as a namespaced pipe name (mapping to `\\.\pipe\<name>`).
+/// filesystem socket path; on Windows the name is a namespaced pipe
+/// (`\\.\pipe\<name>`) built by [`windows_pipe_name`], which keeps two
+/// different `SURGE_HOME` directories from sharing one pipe.
 ///
 /// This is the correct cross-platform handler for the daemon's
 /// IPC socket discovery. Both `surge-daemon::server` (listener)
@@ -754,7 +755,7 @@ pub fn local_socket_name_from_path(
     #[cfg(windows)]
     {
         use interprocess::local_socket::{GenericNamespaced, ToNsName};
-        let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        let name = windows_pipe_name(path).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "socket path has no valid file name",
@@ -764,9 +765,65 @@ pub fn local_socket_name_from_path(
     }
 }
 
+/// The Windows pipe name for a daemon socket at `path`: `<hash>-<file name>`,
+/// where `<hash>` is 8 hex characters of the parent directory.
+///
+/// Windows named pipes live in one machine-wide namespace, so the file name
+/// alone (always `daemon.sock` for the production daemon) would make every
+/// `SURGE_HOME` connect to the same pipe. The parent is folded to lower case
+/// with `/` separators first, because Windows paths are case-insensitive and
+/// both ends must derive the same name from `C:\Users\Me\.surge` and
+/// `c:/users/me/.surge`. `None` when `path` has no UTF-8 file name.
+///
+/// Platform-neutral (and unit-tested everywhere); only the Windows arm of
+/// [`local_socket_name_from_path`] uses it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_pipe_name(path: &std::path::Path) -> Option<String> {
+    let file = path.file_name()?.to_str()?;
+    let parent = path
+        .parent()
+        .map(|p| fold_home(&p.to_string_lossy()))
+        .unwrap_or_default();
+    let hash = surge_core::ContentHash::compute(parent.as_bytes()).to_hex();
+    Some(format!("{}-{file}", &hash[..8]))
+}
+
+/// A directory spelled the way every Windows spelling of it agrees on: lower
+/// case, `/` separators.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn fold_home(dir: &str) -> String {
+    dir.to_lowercase().replace('\\', "/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipe_names_differ_per_home_and_ignore_case() {
+        use std::path::Path;
+        let a = windows_pipe_name(Path::new("/C/Users/Me/.surge/daemon/daemon.sock")).unwrap();
+        let same = windows_pipe_name(Path::new("/c/users/me/.surge/daemon/daemon.sock")).unwrap();
+        let other =
+            windows_pipe_name(Path::new("/C/Users/Me/work/.surge/daemon/daemon.sock")).unwrap();
+        assert_eq!(a, same, "case must not change the pipe");
+        assert_ne!(a, other, "two SURGE_HOMEs must not share a pipe");
+        assert!(a.ends_with("-daemon.sock"), "{a}");
+        assert_eq!(a.len(), 8 + "-daemon.sock".len());
+        assert!(windows_pipe_name(Path::new("/")).is_none());
+    }
+
+    #[test]
+    fn a_windows_home_folds_to_one_spelling() {
+        assert_eq!(
+            fold_home("C:\\Users\\Me\\.surge\\daemon"),
+            "c:/users/me/.surge/daemon"
+        );
+        assert_eq!(
+            fold_home("c:/users/me/.surge/daemon"),
+            "c:/users/me/.surge/daemon"
+        );
+    }
 
     #[test]
     fn ping_request_serde_roundtrips() {
