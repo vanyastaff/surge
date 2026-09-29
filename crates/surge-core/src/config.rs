@@ -1126,6 +1126,17 @@ impl Default for SurgeConfig {
     }
 }
 
+/// Overwrites `slot` with the parsed value of env var `key`. An unset variable
+/// keeps the value; an unparsable one is reported and ignored rather than
+/// silently swallowed.
+fn override_from_env<T: std::str::FromStr>(key: &str, slot: &mut T) {
+    let Ok(raw) = std::env::var(key) else { return };
+    match raw.parse::<T>() {
+        Ok(parsed) => *slot = parsed,
+        Err(_) => tracing::warn!(key, value = %raw, "ignoring unparsable environment override"),
+    }
+}
+
 impl SurgeConfig {
     /// Load config from a TOML file at the given path.
     pub fn load(path: &Path) -> Result<Self, crate::SurgeError> {
@@ -1232,52 +1243,22 @@ impl SurgeConfig {
     /// - SURGE_GATE_AFTER_EACH_SUBTASK
     /// - SURGE_GATE_AFTER_QA
     pub fn apply_env_overrides(&mut self) {
-        // Override default_agent
         if let Ok(value) = std::env::var("SURGE_DEFAULT_AGENT") {
             self.default_agent = value;
         }
-
-        // Override pipeline.max_qa_iterations
-        if let Ok(value) = std::env::var("SURGE_MAX_QA_ITERATIONS")
-            && let Ok(parsed) = value.parse::<u32>()
-        {
-            self.pipeline.max_qa_iterations = parsed;
-        }
-
-        // Override pipeline.max_parallel
-        if let Ok(value) = std::env::var("SURGE_MAX_PARALLEL")
-            && let Ok(parsed) = value.parse::<usize>()
-        {
-            self.pipeline.max_parallel = parsed;
-        }
-
-        // Override pipeline.gates.after_spec
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_SPEC")
-            && let Ok(parsed) = value.parse::<bool>()
-        {
-            self.pipeline.gates.after_spec = parsed;
-        }
-
-        // Override pipeline.gates.after_plan
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_PLAN")
-            && let Ok(parsed) = value.parse::<bool>()
-        {
-            self.pipeline.gates.after_plan = parsed;
-        }
-
-        // Override pipeline.gates.after_each_subtask
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_EACH_SUBTASK")
-            && let Ok(parsed) = value.parse::<bool>()
-        {
-            self.pipeline.gates.after_each_subtask = parsed;
-        }
-
-        // Override pipeline.gates.after_qa
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_QA")
-            && let Ok(parsed) = value.parse::<bool>()
-        {
-            self.pipeline.gates.after_qa = parsed;
-        }
+        override_from_env(
+            "SURGE_MAX_QA_ITERATIONS",
+            &mut self.pipeline.max_qa_iterations,
+        );
+        override_from_env("SURGE_MAX_PARALLEL", &mut self.pipeline.max_parallel);
+        let gates = &mut self.pipeline.gates;
+        override_from_env("SURGE_GATE_AFTER_SPEC", &mut gates.after_spec);
+        override_from_env("SURGE_GATE_AFTER_PLAN", &mut gates.after_plan);
+        override_from_env(
+            "SURGE_GATE_AFTER_EACH_SUBTASK",
+            &mut gates.after_each_subtask,
+        );
+        override_from_env("SURGE_GATE_AFTER_QA", &mut gates.after_qa);
     }
 
     /// Save config to a TOML file at the given path.

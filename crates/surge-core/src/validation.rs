@@ -372,7 +372,6 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     rule_11b_subgraph_refs_exist(graph, &mut findings);
     rules_12_13_subgraphs_well_formed(graph, &mut findings);
     rule_14_terminal_outcome_no_edge(graph, &mut findings);
-    rule_15_backtrack_target_reachable(graph, &mut findings);
     rule_16_subgraph_cycle(graph, &mut findings);
     rule_17_node_key_uniqueness(graph, &mut findings);
     warning_w1_escalate_target(graph, &mut findings);
@@ -384,10 +383,17 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     validate_sandbox_custom_on_agents(graph, &mut findings);
     validate_declared_skills(graph, &mut findings);
 
-    let has_error = findings
+    into_result(findings)
+}
+
+/// Splits findings into `Err` when any is an error, `Ok` (warnings only) otherwise.
+fn into_result(
+    findings: Vec<ValidationError>,
+) -> Result<Vec<ValidationError>, Vec<ValidationError>> {
+    if findings
         .iter()
-        .any(|f| f.kind.severity() == Severity::Error);
-    if has_error {
+        .any(|f| f.kind.severity() == Severity::Error)
+    {
         Err(findings)
     } else {
         Ok(findings)
@@ -418,14 +424,7 @@ pub fn validate_with_resolver(
     apply_reference_checks(graph, resolver, &mut findings);
     warning_w5_same_runtime_verification(graph, resolver, &mut findings);
 
-    let has_error = findings
-        .iter()
-        .any(|f| f.kind.severity() == Severity::Error);
-    if has_error {
-        Err(findings)
-    } else {
-        Ok(findings)
-    }
+    into_result(findings)
 }
 
 fn apply_reference_checks(
@@ -939,11 +938,6 @@ fn rule_14_terminal_outcome_no_edge(graph: &Graph, out: &mut Vec<ValidationError
             }
         }
     }
-}
-
-fn rule_15_backtrack_target_reachable(_graph: &Graph, _out: &mut Vec<ValidationError>) {
-    // Backtrack edges should form valid cycles. Full implementation deferred to M5
-    // (executor) when traversal semantics are concrete. M1 stub.
 }
 
 fn rule_16_subgraph_cycle(graph: &Graph, out: &mut Vec<ValidationError>) {
