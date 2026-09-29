@@ -916,9 +916,9 @@ impl SurgeMcpServer {
             tags: params.tags,
             limit: SCAN_CEILING,
         };
-        // rusqlite is synchronous; keep it off the async workers. Fetch past
-        // the caller's limit so `total` is real and the tag filter sees every
-        // hit, then cut each category down to `limit`.
+        // rusqlite is synchronous; keep it off the async workers. The spec/tag
+        // filters run inside the query; fetch past the caller's limit only so
+        // `total` is the real match count, then cut each category to `limit`.
         let mut results =
             tokio::task::spawn_blocking(move || query_memory(&store_path, &memory_query))
                 .await

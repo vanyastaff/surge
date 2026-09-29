@@ -22,6 +22,6 @@ pub mod fts;
 pub use audit::{
     AuditReport, RunCorrelatedClaim, StaleClaim, StaleReason, UnverifiableClaim, run_audit,
 };
-pub use fts::{CategorySearchResults, MemoryCategory, SearchResults};
+pub use fts::{CategorySearchResults, MemoryCategory, SearchFilter, SearchResults};
 pub use models::{Discovery, FileContext, Gotcha, Pattern};
 pub use store::MemoryStore;

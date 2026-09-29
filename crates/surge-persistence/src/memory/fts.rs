@@ -3,6 +3,40 @@
 use crate::memory::models::{Discovery, FileContext, Gotcha, Pattern};
 use serde::{Deserialize, Serialize};
 
+// ── Search filter ───────────────────────────────────────────────────
+
+/// Narrows a full-text search by spec and tags **inside the query**, so the
+/// `limit` counts matching rows rather than rows fetched before filtering.
+///
+/// `tags` is an OR: a row matches when it carries any of them. An empty filter
+/// matches everything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchFilter {
+    /// Bound as the row's `spec_id` column (`None` keeps every row).
+    pub(crate) spec_id: Option<String>,
+    /// JSON array bound to `json_each` (`None` when no tag filter is set).
+    pub(crate) tags_json: Option<String>,
+}
+
+impl SearchFilter {
+    /// A filter that keeps everything.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Keep only rows recorded for `spec_id` and, when `tags` is non-empty,
+    /// carrying at least one of `tags`.
+    #[must_use]
+    pub fn new(spec_id: Option<&surge_core::SpecId>, tags: &[String]) -> Self {
+        Self {
+            spec_id: spec_id.map(ToString::to_string),
+            tags_json: (!tags.is_empty())
+                .then(|| serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_owned())),
+        }
+    }
+}
+
 // ── Search Result Types ─────────────────────────────────────────────
 
 /// Search results across all memory categories.

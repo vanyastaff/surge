@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use surge_core::SpecId;
-use surge_persistence::memory::{MemoryStore, SearchResults};
+use surge_persistence::memory::{MemoryStore, SearchFilter, SearchResults};
 
 use crate::operator::error::OperatorError;
 
@@ -17,16 +17,16 @@ pub struct MemoryQuery {
     /// Keep only entries carrying at least one of these tags (OR); empty keeps
     /// every entry.
     pub tags: Vec<String>,
-    /// Maximum results fetched from the index, per category.
+    /// Maximum matching results, per category.
     pub limit: usize,
 }
 
 /// FTS5 search over the project-memory store at `store_path`.
 ///
-/// The index is searched first (`limit` per category); the `spec_id` filter
-/// applies next, then the `tags` filter, both to the fetched rows — so a
-/// filtered search can return fewer than `limit` results. A tag filter is an
-/// OR: an entry matches when it carries any of the tags.
+/// The `spec_id` and `tags` filters are part of the index query, so `limit`
+/// (per category) counts matching rows: a filtered search returns up to `limit`
+/// matches, not whatever was left of the top `limit` unfiltered hits. A tag
+/// filter is an OR: an entry matches when it carries any of the tags.
 ///
 /// A query FTS5 cannot parse is retried once as a quoted exact phrase (an
 /// embedded `"` doubled, FTS5's escape); if that also fails, the original
@@ -42,39 +42,13 @@ pub fn query_memory(
     query: &MemoryQuery,
 ) -> Result<SearchResults, OperatorError> {
     let store = MemoryStore::open(store_path).map_err(OperatorError::MemoryStore)?;
-    let mut results = match store.search_all(&query.text, Some(query.limit)) {
+    let filter = SearchFilter::new(query.spec_id.as_ref(), &query.tags);
+    let results = match store.search_all_filtered(&query.text, &filter, Some(query.limit)) {
         Ok(results) => results,
         Err(first_error) => store
-            .search_all(&quoted_phrase(&query.text), Some(query.limit))
+            .search_all_filtered(&quoted_phrase(&query.text), &filter, Some(query.limit))
             .map_err(|_| OperatorError::MemoryStore(first_error))?,
     };
-    let tags_filter = query.tags.as_slice();
-
-    if let Some(sid) = query.spec_id.as_ref() {
-        results
-            .discoveries
-            .retain(|d| d.spec_id.as_ref() == Some(sid));
-        results.patterns.retain(|p| p.spec_id.as_ref() == Some(sid));
-        results.gotchas.retain(|g| g.spec_id.as_ref() == Some(sid));
-        results
-            .file_contexts
-            .retain(|f| f.spec_id.as_ref() == Some(sid));
-    }
-
-    if !tags_filter.is_empty() {
-        results
-            .discoveries
-            .retain(|d| tags_filter.iter().any(|tag| d.tags.contains(tag)));
-        results
-            .patterns
-            .retain(|p| tags_filter.iter().any(|tag| p.tags.contains(tag)));
-        results
-            .gotchas
-            .retain(|g| tags_filter.iter().any(|tag| g.tags.contains(tag)));
-        results
-            .file_contexts
-            .retain(|f| tags_filter.iter().any(|tag| f.tags.contains(tag)));
-    }
     Ok(results)
 }
 

@@ -1,5 +1,6 @@
 //! SQLite-based storage for project memory and knowledge base.
 
+use crate::memory::fts::SearchFilter;
 use crate::memory::models::{Discovery, FileContext, Gotcha, Pattern};
 use crate::memory::schema::{CREATE_MEMORY_CLAIMS_TABLE, SCHEMA_DDL, SCHEMA_VERSION};
 use crate::{PersistenceError, Result};
@@ -432,21 +433,28 @@ impl MemoryStore {
         query: &str,
         limit: Option<usize>,
     ) -> Result<crate::memory::fts::SearchResults> {
+        self.search_all_filtered(query, &SearchFilter::none(), limit)
+    }
+
+    /// Like [`Self::search_all`], narrowed by spec and tags in the query itself
+    /// (`limit` applies per category to the *matching* rows).
+    ///
+    /// # Errors
+    /// Fails if `query` is not valid FTS5 syntax or the store cannot be read.
+    pub fn search_all_filtered(
+        &self,
+        query: &str,
+        filter: &SearchFilter,
+        limit: Option<usize>,
+    ) -> Result<crate::memory::fts::SearchResults> {
         use crate::memory::fts::SearchResults;
 
         let limit = limit.unwrap_or(10) as i64;
 
-        // Search discoveries
-        let discoveries = self.search_discoveries_fts(query, limit)?;
-
-        // Search patterns
-        let patterns = self.search_patterns_fts(query, limit)?;
-
-        // Search gotchas
-        let gotchas = self.search_gotchas_fts(query, limit)?;
-
-        // Search file contexts
-        let file_contexts = self.search_file_contexts_fts(query, limit)?;
+        let discoveries = self.search_discoveries_fts(query, limit, filter)?;
+        let patterns = self.search_patterns_fts(query, limit, filter)?;
+        let gotchas = self.search_gotchas_fts(query, limit, filter)?;
+        let file_contexts = self.search_file_contexts_fts(query, limit, filter)?;
 
         Ok(SearchResults {
             discoveries,
@@ -486,19 +494,19 @@ impl MemoryStore {
 
         match category {
             MemoryCategory::Discoveries => {
-                let results = self.search_discoveries_fts(query, limit)?;
+                let results = self.search_discoveries_fts(query, limit, &SearchFilter::none())?;
                 Ok(CategorySearchResults::Discoveries(results))
             },
             MemoryCategory::Patterns => {
-                let results = self.search_patterns_fts(query, limit)?;
+                let results = self.search_patterns_fts(query, limit, &SearchFilter::none())?;
                 Ok(CategorySearchResults::Patterns(results))
             },
             MemoryCategory::Gotchas => {
-                let results = self.search_gotchas_fts(query, limit)?;
+                let results = self.search_gotchas_fts(query, limit, &SearchFilter::none())?;
                 Ok(CategorySearchResults::Gotchas(results))
             },
             MemoryCategory::FileContexts => {
-                let results = self.search_file_contexts_fts(query, limit)?;
+                let results = self.search_file_contexts_fts(query, limit, &SearchFilter::none())?;
                 Ok(CategorySearchResults::FileContexts(results))
             },
         }
@@ -713,7 +721,12 @@ impl MemoryStore {
     // ── FTS5 Helper Methods ─────────────────────────────────────────────
 
     /// Search discoveries using FTS5.
-    fn search_discoveries_fts(&self, query: &str, limit: i64) -> Result<Vec<Discovery>> {
+    fn search_discoveries_fts(
+        &self,
+        query: &str,
+        limit: i64,
+        filter: &SearchFilter,
+    ) -> Result<Vec<Discovery>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT d.id, d.title, d.content, d.task_id, d.spec_id, d.category,
@@ -721,42 +734,54 @@ impl MemoryStore {
             FROM discoveries d
             INNER JOIN discoveries_fts fts ON d.rowid = fts.rowid
             WHERE discoveries_fts MATCH ?1
+            AND (?3 IS NULL OR d.spec_id = ?3)
+            AND (?4 IS NULL OR EXISTS (
+                SELECT 1 FROM json_each(d.tags)
+                WHERE value IN (SELECT value FROM json_each(?4))))
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let discoveries = stmt
-            .query_map(rusqlite::params![query, limit], |row| {
-                let tags_json: String = row.get(6)?;
-                // Note: unwrap_or_default is intentional here — we're inside a
-                // rusqlite row callback that can only return rusqlite::Error, not
-                // our PersistenceError. Corrupted JSON gracefully degrades to [].
-                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            .query_map(
+                rusqlite::params![query, limit, filter.spec_id, filter.tags_json],
+                |row| {
+                    let tags_json: String = row.get(6)?;
+                    // Note: unwrap_or_default is intentional here — we're inside a
+                    // rusqlite row callback that can only return rusqlite::Error, not
+                    // our PersistenceError. Corrupted JSON gracefully degrades to [].
+                    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
-                Ok(Discovery {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    content: row.get(2)?,
-                    task_id: row
-                        .get::<_, Option<String>>(3)?
-                        .and_then(|s| s.parse().ok()),
-                    spec_id: row
-                        .get::<_, Option<String>>(4)?
-                        .and_then(|s| s.parse().ok()),
-                    category: row.get(5)?,
-                    tags,
-                    created_at: row.get::<_, i64>(7)? as u64,
-                    updated_at: row.get::<_, i64>(8)? as u64,
-                })
-            })?
+                    Ok(Discovery {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        content: row.get(2)?,
+                        task_id: row
+                            .get::<_, Option<String>>(3)?
+                            .and_then(|s| s.parse().ok()),
+                        spec_id: row
+                            .get::<_, Option<String>>(4)?
+                            .and_then(|s| s.parse().ok()),
+                        category: row.get(5)?,
+                        tags,
+                        created_at: row.get::<_, i64>(7)? as u64,
+                        updated_at: row.get::<_, i64>(8)? as u64,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(discoveries)
     }
 
     /// Search patterns using FTS5.
-    fn search_patterns_fts(&self, query: &str, limit: i64) -> Result<Vec<Pattern>> {
+    fn search_patterns_fts(
+        &self,
+        query: &str,
+        limit: i64,
+        filter: &SearchFilter,
+    ) -> Result<Vec<Pattern>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.name, p.description, p.example, p.task_id, p.spec_id,
@@ -764,41 +789,53 @@ impl MemoryStore {
             FROM patterns p
             INNER JOIN patterns_fts fts ON p.rowid = fts.rowid
             WHERE patterns_fts MATCH ?1
+            AND (?3 IS NULL OR p.spec_id = ?3)
+            AND (?4 IS NULL OR EXISTS (
+                SELECT 1 FROM json_each(p.tags)
+                WHERE value IN (SELECT value FROM json_each(?4))))
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let patterns = stmt
-            .query_map(rusqlite::params![query, limit], |row| {
-                let tags_json: String = row.get(8)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            .query_map(
+                rusqlite::params![query, limit, filter.spec_id, filter.tags_json],
+                |row| {
+                    let tags_json: String = row.get(8)?;
+                    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
-                Ok(Pattern {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    description: row.get(2)?,
-                    example: row.get(3)?,
-                    task_id: row
-                        .get::<_, Option<String>>(4)?
-                        .and_then(|s| s.parse().ok()),
-                    spec_id: row
-                        .get::<_, Option<String>>(5)?
-                        .and_then(|s| s.parse().ok()),
-                    language: row.get(6)?,
-                    category: row.get(7)?,
-                    tags,
-                    created_at: row.get::<_, i64>(9)? as u64,
-                    updated_at: row.get::<_, i64>(10)? as u64,
-                })
-            })?
+                    Ok(Pattern {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        example: row.get(3)?,
+                        task_id: row
+                            .get::<_, Option<String>>(4)?
+                            .and_then(|s| s.parse().ok()),
+                        spec_id: row
+                            .get::<_, Option<String>>(5)?
+                            .and_then(|s| s.parse().ok()),
+                        language: row.get(6)?,
+                        category: row.get(7)?,
+                        tags,
+                        created_at: row.get::<_, i64>(9)? as u64,
+                        updated_at: row.get::<_, i64>(10)? as u64,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(patterns)
     }
 
     /// Search gotchas using FTS5.
-    fn search_gotchas_fts(&self, query: &str, limit: i64) -> Result<Vec<Gotcha>> {
+    fn search_gotchas_fts(
+        &self,
+        query: &str,
+        limit: i64,
+        filter: &SearchFilter,
+    ) -> Result<Vec<Gotcha>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT g.id, g.title, g.description, g.symptom, g.solution, g.task_id,
@@ -806,42 +843,54 @@ impl MemoryStore {
             FROM gotchas g
             INNER JOIN gotchas_fts fts ON g.rowid = fts.rowid
             WHERE gotchas_fts MATCH ?1
+            AND (?3 IS NULL OR g.spec_id = ?3)
+            AND (?4 IS NULL OR EXISTS (
+                SELECT 1 FROM json_each(g.tags)
+                WHERE value IN (SELECT value FROM json_each(?4))))
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let gotchas = stmt
-            .query_map(rusqlite::params![query, limit], |row| {
-                let tags_json: String = row.get(9)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            .query_map(
+                rusqlite::params![query, limit, filter.spec_id, filter.tags_json],
+                |row| {
+                    let tags_json: String = row.get(9)?;
+                    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
-                Ok(Gotcha {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    symptom: row.get(3)?,
-                    solution: row.get(4)?,
-                    task_id: row
-                        .get::<_, Option<String>>(5)?
-                        .and_then(|s| s.parse().ok()),
-                    spec_id: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| s.parse().ok()),
-                    severity: row.get(7)?,
-                    category: row.get(8)?,
-                    tags,
-                    created_at: row.get::<_, i64>(10)? as u64,
-                    updated_at: row.get::<_, i64>(11)? as u64,
-                })
-            })?
+                    Ok(Gotcha {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        description: row.get(2)?,
+                        symptom: row.get(3)?,
+                        solution: row.get(4)?,
+                        task_id: row
+                            .get::<_, Option<String>>(5)?
+                            .and_then(|s| s.parse().ok()),
+                        spec_id: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|s| s.parse().ok()),
+                        severity: row.get(7)?,
+                        category: row.get(8)?,
+                        tags,
+                        created_at: row.get::<_, i64>(10)? as u64,
+                        updated_at: row.get::<_, i64>(11)? as u64,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(gotchas)
     }
 
     /// Search file contexts using FTS5.
-    fn search_file_contexts_fts(&self, query: &str, limit: i64) -> Result<Vec<FileContext>> {
+    fn search_file_contexts_fts(
+        &self,
+        query: &str,
+        limit: i64,
+        filter: &SearchFilter,
+    ) -> Result<Vec<FileContext>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT fc.id, fc.file_path, fc.summary, fc.key_apis, fc.description,
@@ -850,44 +899,51 @@ impl MemoryStore {
             FROM file_contexts fc
             INNER JOIN file_contexts_fts fts ON fc.rowid = fts.rowid
             WHERE file_contexts_fts MATCH ?1
+            AND (?3 IS NULL OR fc.spec_id = ?3)
+            AND (?4 IS NULL OR EXISTS (
+                SELECT 1 FROM json_each(fc.tags)
+                WHERE value IN (SELECT value FROM json_each(?4))))
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let contexts = stmt
-            .query_map(rusqlite::params![query, limit], |row| {
-                let key_apis_json: String = row.get(3)?;
-                let key_apis: Vec<String> =
-                    serde_json::from_str(&key_apis_json).unwrap_or_default();
+            .query_map(
+                rusqlite::params![query, limit, filter.spec_id, filter.tags_json],
+                |row| {
+                    let key_apis_json: String = row.get(3)?;
+                    let key_apis: Vec<String> =
+                        serde_json::from_str(&key_apis_json).unwrap_or_default();
 
-                let dependencies_json: String = row.get(5)?;
-                let dependencies: Vec<String> =
-                    serde_json::from_str(&dependencies_json).unwrap_or_default();
+                    let dependencies_json: String = row.get(5)?;
+                    let dependencies: Vec<String> =
+                        serde_json::from_str(&dependencies_json).unwrap_or_default();
 
-                let tags_json: String = row.get(10)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+                    let tags_json: String = row.get(10)?;
+                    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
-                Ok(FileContext {
-                    id: row.get(0)?,
-                    file_path: row.get(1)?,
-                    summary: row.get(2)?,
-                    key_apis,
-                    description: row.get(4)?,
-                    dependencies,
-                    task_id: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| s.parse().ok()),
-                    spec_id: row
-                        .get::<_, Option<String>>(7)?
-                        .and_then(|s| s.parse().ok()),
-                    language: row.get(8)?,
-                    module_category: row.get(9)?,
-                    tags,
-                    created_at: row.get::<_, i64>(11)? as u64,
-                    updated_at: row.get::<_, i64>(12)? as u64,
-                })
-            })?
+                    Ok(FileContext {
+                        id: row.get(0)?,
+                        file_path: row.get(1)?,
+                        summary: row.get(2)?,
+                        key_apis,
+                        description: row.get(4)?,
+                        dependencies,
+                        task_id: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|s| s.parse().ok()),
+                        spec_id: row
+                            .get::<_, Option<String>>(7)?
+                            .and_then(|s| s.parse().ok()),
+                        language: row.get(8)?,
+                        module_category: row.get(9)?,
+                        tags,
+                        created_at: row.get::<_, i64>(11)? as u64,
+                        updated_at: row.get::<_, i64>(12)? as u64,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(contexts)
@@ -1561,6 +1617,69 @@ mod tests {
         // Search with default limit (10)
         let results = store.search_all("test", None).unwrap();
         assert_eq!(results.discoveries.len(), 10);
+    }
+
+    #[test]
+    fn filtered_search_limit_counts_matching_rows_not_fetched_ones() {
+        let store = MemoryStore::in_memory().unwrap();
+        let wanted = surge_core::SpecId::new();
+
+        // 12 unrelated hits that rank equally, then 3 for the wanted spec. With a
+        // filter applied AFTER a limit of 5, every one of the 3 could be cut.
+        for i in 0..12 {
+            store
+                .add_discovery(&Discovery::new(
+                    format!("noise {i}"),
+                    "shared needle text".into(),
+                    test_timestamp(),
+                ))
+                .unwrap();
+        }
+        for i in 0..3 {
+            let mut d = Discovery::new(
+                format!("wanted {i}"),
+                "shared needle text".into(),
+                test_timestamp(),
+            );
+            d.spec_id = Some(wanted);
+            d.tags = vec!["keep".into(), "extra".into()];
+            store.add_discovery(&d).unwrap();
+        }
+
+        let by_spec = store
+            .search_all_filtered("needle", &SearchFilter::new(Some(&wanted), &[]), Some(5))
+            .unwrap();
+        assert_eq!(
+            by_spec.discoveries.len(),
+            3,
+            "all three matches survive the limit"
+        );
+        assert!(
+            by_spec
+                .discoveries
+                .iter()
+                .all(|d| d.spec_id.as_ref() == Some(&wanted))
+        );
+
+        // Tags are an OR; unknown tags match nothing; no filter keeps the limit.
+        let by_tag = store
+            .search_all_filtered(
+                "needle",
+                &SearchFilter::new(None, &["nope".into(), "keep".into()]),
+                Some(5),
+            )
+            .unwrap();
+        assert_eq!(by_tag.discoveries.len(), 3);
+        let none = store
+            .search_all_filtered(
+                "needle",
+                &SearchFilter::new(None, &["nope".into()]),
+                Some(5),
+            )
+            .unwrap();
+        assert!(none.discoveries.is_empty());
+        let unfiltered = store.search_all("needle", Some(5)).unwrap();
+        assert_eq!(unfiltered.discoveries.len(), 5);
     }
 
     #[test]
