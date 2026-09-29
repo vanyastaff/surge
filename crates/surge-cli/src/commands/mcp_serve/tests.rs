@@ -30,12 +30,13 @@ use super::{
 };
 use crate::commands::resolve::PendingInput;
 
-const ALL_TOOLS: [&str; 9] = [
+const ALL_TOOLS: [&str; 10] = [
     "surge_inbox",
     "surge_run_status",
     "surge_ready_tasks",
     "surge_ledger",
     "surge_run_report",
+    "surge_run_trace",
     "surge_steer",
     "surge_resolve",
     "surge_bootstrap_start",
@@ -448,6 +449,35 @@ async fn resolve_never_answers_a_bootstrap_approval_gate() {
     .await;
     let message = expect_error(&result, "human_only_gate");
     assert!(message.contains("bootstrap approval"), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_trace_exports_an_otlp_trace_for_a_seeded_run() {
+    let home = tempfile::tempdir().unwrap();
+    let run = seed_working_run(home.path()).await;
+    let client = connect(home.path(), false).await;
+
+    let trace = call(
+        &client,
+        "surge_run_trace",
+        json!({"run_id": run.to_string()}),
+    )
+    .await;
+    assert_eq!(trace.is_error, Some(false), "{trace:?}");
+    let spans = structured(&trace)["trace"]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .expect("OTLP spans");
+    assert_eq!(spans[0]["name"], "surge.run");
+    assert!(text(&trace).contains("span(s)"), "{}", text(&trace));
+
+    let missing = call(
+        &client,
+        "surge_run_trace",
+        json!({"run_id": "01ZZZZZZZZZZZZZZZZZZZZZZZZ"}),
+    )
+    .await;
+    assert_eq!(missing.is_error, Some(true));
+    assert_eq!(structured(&missing)["error"]["kind"], "run_not_found");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

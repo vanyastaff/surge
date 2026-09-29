@@ -142,6 +142,7 @@ go to stderr.
 | `surge_ready_tasks(status?, discovered?, run_id?, limit?)` | read | `surge ready` | no |
 | `surge_ledger(run_id?, limit?)` | read | `surge ledger` | no |
 | `surge_run_report(run_id, format?)` | read | `surge run report` | no |
+| `surge_run_trace(run_id)` | read | `surge run trace` | no |
 | `surge_memory_search(query, tags?, limit?)` | read | `surge memory search` | no |
 | `surge_steer(run_id, message)` | write | `surge steer` | yes |
 | `surge_resolve(run_id, expected_node, decision, note?)` | write | `surge resolve` | yes |

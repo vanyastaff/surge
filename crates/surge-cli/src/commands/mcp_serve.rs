@@ -148,7 +148,7 @@ struct ToolSpec {
 /// ([`SurgeMcpServer::begin_mutation`]); a test checks the table against the
 /// registered router (names and `read_only_hint`), so a tool cannot be added
 /// to one and not the other.
-const TOOLS: [ToolSpec; 9] = [
+const TOOLS: [ToolSpec; 10] = [
     ToolSpec {
         name: "surge_inbox",
         mutating: false,
@@ -167,6 +167,10 @@ const TOOLS: [ToolSpec; 9] = [
     },
     ToolSpec {
         name: "surge_run_report",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_run_trace",
         mutating: false,
     },
     ToolSpec {
@@ -403,6 +407,13 @@ pub struct RunReportParams {
     /// full machine-readable report regardless.
     #[serde(default)]
     pub format: ReportFormat,
+}
+
+/// Arguments of `surge_run_trace`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RunTraceParams {
+    /// Run id (full ULID or unique suffix).
+    pub run_id: String,
 }
 
 /// Arguments of `surge_steer`.
@@ -726,6 +737,22 @@ impl SurgeMcpServer {
         Ok(ToolOutput {
             summary,
             data: json!({ "report": to_json(&report)? }),
+        })
+    }
+
+    async fn run_trace_impl(&self, params: RunTraceParams) -> ToolResult {
+        let run_id = self.existing_run(&params.run_id).await?;
+        let storage = self.storage().await?;
+        let rendered = run::compile_trace(storage, &run_id.to_string()).await?;
+        let trace: Value = serde_json::from_str(&rendered)
+            .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("parse trace JSON")))?;
+        let spans = trace
+            .pointer("/resourceSpans/0/scopeSpans/0/spans")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        Ok(ToolOutput {
+            summary: format!("run {run_id}: OTLP trace with {spans} span(s)"),
+            data: json!({ "trace": trace }),
         })
     }
 
@@ -1194,6 +1221,20 @@ impl SurgeMcpServer {
         Parameters(params): Parameters<RunReportParams>,
     ) -> CallToolResult {
         into_call_result(self.run_report_impl(params).await)
+    }
+
+    #[tool(
+        description = "The run as an OpenTelemetry trace in OTLP/JSON (structuredContent.trace): a \
+                       surge.run span with a child span per stage attempt and span events for \
+                       outcomes, hook rejections, verified tasks and tool calls. Post it to any \
+                       collector's /v1/traces.",
+        annotations(read_only_hint = true)
+    )]
+    async fn surge_run_trace(
+        &self,
+        Parameters(params): Parameters<RunTraceParams>,
+    ) -> CallToolResult {
+        into_call_result(self.run_trace_impl(params).await)
     }
 
     #[tool(
