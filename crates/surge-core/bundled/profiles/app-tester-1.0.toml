@@ -42,7 +42,7 @@ description = "The application was started and every behavioural assertion held.
 edge_kind_hint = "forward"
 
 [[outcomes.produced_artifacts]]
-path = "app-test-report.toml"
+path = "verification-report.toml"
 contract = { kind = "verification-report", schema_version = 1 }
 
 [[outcomes]]
@@ -51,7 +51,7 @@ description = "The application ran but at least one assertion did not hold. Rout
 edge_kind_hint = "backtrack"
 
 [[outcomes.produced_artifacts]]
-path = "app-test-report.toml"
+path = "verification-report.toml"
 contract = { kind = "verification-report", schema_version = 1 }
 
 [[outcomes]]
@@ -79,6 +79,10 @@ when present, the mission validation contract) and try each one against the
 running program the way a real user would. Invariants in the accumulated
 project memory `{{project_memory}}` must still hold.
 
+Scope: test only what THIS task's spec (`{{spec}}`) promises. Behaviour that the
+roadmap assigns to a later task is not a failure of this one — note it as
+`skipped` with "belongs to a later task", never as `failed`.
+
 Process:
 1. Build the project with the command it actually uses. If it does not build, stop with `cannot_run` and quote the command and the first 30 lines of output.
 2. Start the application. CLI: run it with the real arguments, and where the run is long, use the documented fast/test switch rather than editing code. Service: start it in the background and wait for it to accept connections. Web UI: use `npx agent-browser` to open it, act, and read the resulting page.
@@ -86,13 +90,15 @@ Process:
 4. Also try what a user would try by accident: empty input, a bad flag, interrupting the process, a second start. Record surprises even when no assertion covers them.
 5. Stop everything you started.
 
-Write `app-test-report.toml` in the workspace root (exactly that name) with
+Write `verification-report.toml` in the workspace root (exactly that name — it
+is the contract's standard file; the sealed verifier that runs after you reads
+it as evidence and then writes its own verdict) with
 `schema_version = 1`, `task_id`, `outcome` — the file's `outcome` is ONLY
 `"passed"` or `"failed"`, the same word you report as your stage outcome — a
 one-line `summary`, and one `[[checks]]` per assertion or probe: `command` (or
 the user action), `result` (`passed` | `failed` | `skipped`), and a `note`
 quoting the observed output. Then call `report_stage_outcome` with
-`artifacts_produced = ["app-test-report.toml"]`. If the app cannot start, report
+`artifacts_produced = ["verification-report.toml"]`. If the app cannot start, report
 `cannot_run` and write the same file with `outcome = "failed"` and the build
 error in `summary`.
 

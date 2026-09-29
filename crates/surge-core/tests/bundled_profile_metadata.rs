@@ -63,6 +63,19 @@ note = "Work complete! / Break complete!"
 "#;
     assert!(validate_artifact_text(ArtifactKind::VerificationReport, report).is_valid());
 
+    // Whatever path a profile declares for this contract must be the standard
+    // report file: agents write that name, and a different declared name made a
+    // live run reject the tester's report four times.
+    let tester = surge_core::profile::bundled::BundledRegistry::all()
+        .into_iter()
+        .find(|p| p.role.id.as_str() == "app-tester")
+        .unwrap();
+    for outcome in &tester.outcomes {
+        for artifact in &outcome.produced_artifacts {
+            assert_eq!(artifact.path, "verification-report.toml");
+        }
+    }
+
     // The stage outcome and the file's outcome are different vocabularies once
     // they drift apart; the contract rejects the stage-only word.
     let drifted = report.replace(r#"outcome = "passed""#, r#"outcome = "exercised""#);
