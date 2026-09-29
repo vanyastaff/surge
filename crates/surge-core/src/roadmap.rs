@@ -126,13 +126,12 @@ impl RoadmapArtifact {
                     out.push_str(&format!("- Exit: {criterion}\n"));
                 }
                 out.push('\n');
-                for id in &stage.milestones {
-                    let found = self.milestones.iter().find(|milestone| milestone.id == *id);
-                    if let Some(milestone) = found
-                        && rendered.insert(milestone.id.as_str())
-                    {
-                        push_milestone_markdown(&mut out, milestone);
-                    }
+                let owned = stage
+                    .milestones
+                    .iter()
+                    .filter_map(|id| self.milestones.iter().find(|milestone| milestone.id == *id));
+                for milestone in owned.filter(|milestone| rendered.insert(milestone.id.as_str())) {
+                    push_milestone_markdown(&mut out, milestone);
                 }
             }
             // Milestones a malformed roadmap left outside every stage still

@@ -414,7 +414,7 @@ impl FlowScreen {
                             .rounded_md()
                             .bg(details.color.opacity(0.16))
                             .text_color(details.color)
-                            .child(details.icon),
+                            .child(details.icon.clone()),
                     )
                     .child(
                         div()

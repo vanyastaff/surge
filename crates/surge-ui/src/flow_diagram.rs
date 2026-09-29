@@ -70,7 +70,7 @@ struct Placed {
     key: String,
     x: f32,
     y: f32,
-    icon: &'static str,
+    icon: SharedString,
     title: String,
     subtitle: String,
     color: Hsla,
@@ -148,7 +148,7 @@ pub struct PreparedPlan {
 #[derive(Clone, Debug)]
 pub struct NodeDetails {
     pub title: String,
-    pub icon: &'static str,
+    pub icon: SharedString,
     pub kind: &'static str,
     pub color: Hsla,
     /// `profile@x.y` for agent steps.
@@ -471,7 +471,7 @@ fn node_box(node: Placed, selected: bool, on_select: Option<OnSelect>) -> Statef
                 .bg(node.color.opacity(0.16))
                 .text_size(px(12.0))
                 .text_color(node.color)
-                .child(node.icon),
+                .child(node.icon.clone()),
         )
         .child(
             div()
@@ -848,7 +848,62 @@ pub(crate) fn lane_of(node: &Node) -> Lane {
     }
 }
 
-fn describe(node: &Node) -> (&'static str, String, Hsla) {
+fn describe(node: &Node) -> (SharedString, String, Hsla) {
+    let (icon, subtitle, color) = describe_kind(node);
+    match &node.config {
+        NodeConfig::Agent(agent) => match profile_look(agent.profile.as_str()) {
+            Some(look) => (
+                look.icon
+                    .map_or(SharedString::from(icon), SharedString::from),
+                subtitle,
+                look.color.unwrap_or(color),
+            ),
+            None => (icon.into(), subtitle, color),
+        },
+        _ => (icon.into(), subtitle, color),
+    }
+}
+
+/// Raw `(icon, #RRGGBB colour)` a bundled role declares.
+type RoleLook = (Option<String>, Option<String>);
+
+/// Display metadata a bundled profile declares for its role.
+struct ProfileLook {
+    icon: Option<String>,
+    color: Option<Hsla>,
+}
+
+/// The role's own icon and colour for a `name@version` profile reference, so
+/// the diagram tells reviewers from implementers at a glance.
+fn profile_look(profile_ref: &str) -> Option<ProfileLook> {
+    use std::sync::OnceLock;
+    static LOOKS: OnceLock<HashMap<String, RoleLook>> = OnceLock::new();
+    let looks = LOOKS.get_or_init(|| {
+        surge_core::profile::bundled::BundledRegistry::all()
+            .into_iter()
+            .map(|p| (p.role.id.as_str().to_string(), (p.role.icon, p.role.color)))
+            .collect()
+    });
+    let name = profile_ref.split('@').next().unwrap_or(profile_ref);
+    let (icon, color) = looks.get(name)?;
+    Some(ProfileLook {
+        icon: icon.clone(),
+        color: color.as_deref().and_then(parse_hex_color),
+    })
+}
+
+/// `#RRGGBB` to a colour; anything else is ignored rather than guessed.
+fn parse_hex_color(hex: &str) -> Option<Hsla> {
+    let digits = hex.strip_prefix('#')?;
+    if digits.len() != 6 {
+        return None;
+    }
+    u32::from_str_radix(digits, 16)
+        .ok()
+        .map(|rgb_value| rgb(rgb_value).into())
+}
+
+fn describe_kind(node: &Node) -> (&'static str, String, Hsla) {
     match &node.config {
         NodeConfig::Agent(agent) => {
             let profile = agent.profile.to_string();
@@ -905,7 +960,7 @@ fn kind_color(kind: NodeKind) -> Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{Lane, NODE_H, NODE_W, flatten, humanize, layout};
+    use super::{Lane, NODE_H, NODE_W, flatten, humanize, layout, parse_hex_color, profile_look};
 
     fn graphs() -> Vec<(&'static str, surge_core::graph::Graph)> {
         [
@@ -982,5 +1037,21 @@ mod tests {
     fn identifiers_read_as_words() {
         assert_eq!(humanize("spec_1"), "Spec 1");
         assert_eq!(humanize("final-verify"), "Final verify");
+    }
+
+    #[test]
+    fn bundled_roles_bring_their_own_icon_and_colour() {
+        let look = profile_look("security-reviewer@1.0").expect("bundled role");
+        assert!(look.icon.is_some());
+        assert!(look.color.is_some());
+        assert!(profile_look("no-such-role@1.0").is_none());
+    }
+
+    #[test]
+    fn hex_colours_are_parsed_strictly() {
+        assert!(parse_hex_color("#EF4444").is_some());
+        assert!(parse_hex_color("EF4444").is_none());
+        assert!(parse_hex_color("#EF44").is_none());
+        assert!(parse_hex_color("#GGGGGG").is_none());
     }
 }
