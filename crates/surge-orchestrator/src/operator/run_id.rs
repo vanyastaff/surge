@@ -4,17 +4,19 @@ use std::sync::Arc;
 
 use surge_core::RunId;
 use surge_persistence::runs::Storage;
-use surge_persistence::runs::registry::RunFilter;
 
-use crate::operator::error::{MIN_SUFFIX_LEN, OperatorError, RunIdError, SUFFIX_SCAN_LIMIT};
+use crate::operator::error::{MIN_SUFFIX_LEN, OperatorError, RunIdError};
+
+/// How many matching runs are fetched to report an ambiguity; the reported
+/// count is capped here.
+const AMBIGUITY_CAP: usize = 50;
 
 /// Resolve a run id, accepting the full ULID or a unique short suffix (as shown
 /// by `surge inbox`).
 ///
-/// Guards: an empty or too-short suffix is rejected (`ends_with("")` would
-/// match every run); if the run scan hits its ceiling, an otherwise-unique
-/// match is treated as ambiguous rather than trusted, since a colliding run
-/// could sit beyond the window.
+/// Guards: an empty or too-short suffix is rejected. The suffix is matched by
+/// the database against every run, so a unique match is trustworthy — there is
+/// no scan window a colliding run could hide beyond.
 ///
 /// # Errors
 /// Returns [`OperatorError::RunId`] for an unusable or non-unique id and
@@ -30,26 +32,12 @@ pub async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Result<RunId
         }
         .into());
     }
-    let runs = storage
-        .list_runs(RunFilter {
-            status: None,
-            project_path: None,
-            limit: Some(SUFFIX_SCAN_LIMIT),
-        })
+    let matches = storage
+        .find_run_ids_by_suffix(value, AMBIGUITY_CAP)
         .await
         .map_err(OperatorError::ListRuns)?;
-    let truncated = runs.len() >= SUFFIX_SCAN_LIMIT;
-    let matches: Vec<RunId> = runs
-        .iter()
-        .filter(|r| r.id.to_string().ends_with(value))
-        .map(|r| r.id)
-        .collect();
     match matches.as_slice() {
-        [one] if !truncated => Ok(*one),
-        [_one] => Err(RunIdError::PossiblyAmbiguous {
-            value: value.to_owned(),
-        }
-        .into()),
+        [one] => Ok(*one),
         [] => Err(RunIdError::NotFound {
             value: value.to_owned(),
         }

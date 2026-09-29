@@ -167,6 +167,37 @@ pub(crate) fn list_runs_connection(
     Ok(rows)
 }
 
+/// Ids of the runs whose id ends with `suffix`, newest first, at most `limit`.
+///
+/// The match is done by the database (`substr` on the tail), so it sees every
+/// run rather than a scanned window, and `suffix` is compared literally — no
+/// `LIKE` wildcards, so a `%` or `_` typed by an operator matches nothing.
+pub fn find_ids_by_suffix(
+    pool: &Pool<SqliteConnectionManager>,
+    suffix: &str,
+    limit: usize,
+) -> Result<Vec<RunId>, StorageError> {
+    let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    let mut stmt = conn.prepare(
+        "SELECT id FROM runs \
+         WHERE length(?1) > 0 AND substr(id, -length(?1)) = ?1 \
+         ORDER BY started_at DESC LIMIT ?2",
+    )?;
+    let ids = stmt
+        .query_map(params![suffix, limit as i64], |row| {
+            let id_str: String = row.get(0)?;
+            id_str.parse::<RunId>().map_err(|e: ulid::DecodeError| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
+}
+
 /// Delete a run row.
 pub fn delete_run(
     pool: &Pool<SqliteConnectionManager>,
@@ -343,6 +374,50 @@ mod tests {
 
         delete_run(&pool, &s.id).unwrap();
         assert!(get_run(&pool, &s.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn suffix_lookup_matches_the_tail_literally_and_sees_every_run() {
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+
+        // More runs than any scan window a caller might have used.
+        let mut ids = Vec::new();
+        for i in 0..120i64 {
+            let mut s = fixture_summary(RunId::new(), None);
+            s.started_at_ms = 1_700_000_000_000 + i;
+            insert_run(&pool, &s).unwrap();
+            ids.push(s.id);
+        }
+        let oldest = ids[0];
+        let tail = |id: &RunId, n: usize| {
+            let text = id.to_string();
+            text[text.len() - n..].to_owned()
+        };
+
+        // The very first run is found by its full-length tail.
+        let found = find_ids_by_suffix(&pool, &tail(&oldest, 12), 5).unwrap();
+        assert_eq!(found, vec![oldest]);
+
+        // Nothing matches an unrelated tail, an empty suffix, or LIKE wildcards.
+        assert!(
+            find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(find_ids_by_suffix(&pool, "", 5).unwrap().is_empty());
+        assert!(find_ids_by_suffix(&pool, "%", 5).unwrap().is_empty());
+        assert!(find_ids_by_suffix(&pool, "_", 5).unwrap().is_empty());
+
+        // A one-character tail is shared by several runs; newest first, capped.
+        let c = tail(&ids[119], 1);
+        let shared = find_ids_by_suffix(&pool, &c, 3).unwrap();
+        assert!(!shared.is_empty() && shared.len() <= 3);
+        assert_eq!(
+            shared[0],
+            *ids.iter().rev().find(|i| tail(i, 1) == c).unwrap()
+        );
     }
 
     #[test]

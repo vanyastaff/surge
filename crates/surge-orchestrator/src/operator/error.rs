@@ -14,13 +14,8 @@ use crate::engine::EngineError;
 
 /// Minimum length of a run-id suffix accepted by
 /// [`resolve_run_id`](crate::operator::resolve_run_id). Short/empty suffixes
-/// (`""` matches every run via `ends_with`) are rejected outright.
+/// are rejected outright.
 pub(crate) const MIN_SUFFIX_LEN: usize = 6;
-
-/// Upper bound on runs scanned when matching a suffix. Chosen well above any
-/// realistic active-run count; if a scan hits it, the match is reported as
-/// possibly-truncated rather than silently wrong.
-pub(crate) const SUFFIX_SCAN_LIMIT: usize = 5000;
 
 /// Why a run id given by an operator (CLI argument or MCP client) did not
 /// resolve to exactly one run. Storage failures are *not* this type: they are
@@ -34,15 +29,6 @@ pub enum RunIdError {
          (need ≥{MIN_SUFFIX_LEN} chars, or pass the full id)"
     )]
     TooShort {
-        /// The id as the operator gave it.
-        value: String,
-    },
-    /// Matched one run, but the scan hit its ceiling so the match may not be unique.
-    #[error(
-        "matched run {value:?}, but there are ≥{SUFFIX_SCAN_LIMIT} runs so the match \
-         may be ambiguous; pass the full run id"
-    )]
-    PossiblyAmbiguous {
         /// The id as the operator gave it.
         value: String,
     },

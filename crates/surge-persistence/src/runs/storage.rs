@@ -317,6 +317,29 @@ impl Storage {
         })
     }
 
+    /// Ids of runs whose id ends with `suffix`, newest first, at most `limit`.
+    ///
+    /// Matched in the database against every run (not a scanned window). An
+    /// empty `suffix` matches nothing.
+    ///
+    /// # Errors
+    /// Returns [`crate::runs::error::StorageError`] if the registry cannot be read.
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "async keeps the Storage query surface uniform (`list_runs`, `get_run`) so callers `.await` every registry read the same way"
+    )]
+    pub async fn find_run_ids_by_suffix(
+        &self,
+        suffix: &str,
+        limit: usize,
+    ) -> Result<Vec<RunId>, crate::runs::error::StorageError> {
+        Ok(registry::find_ids_by_suffix(
+            &self.registry_pool,
+            suffix,
+            limit,
+        )?)
+    }
+
     /// List runs matching the filter, with stale-pid detection.
     ///
     /// **`Parked` is deliberately never rewritten here** (Task 12 M2): the
