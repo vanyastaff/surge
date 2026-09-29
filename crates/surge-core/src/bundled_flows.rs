@@ -20,11 +20,12 @@ const PERFORMANCE_1_0_TOML: &str = include_str!("../bundled/flows/performance-1.
 const SECURITY_1_0_TOML: &str = include_str!("../bundled/flows/security-1.0.toml");
 const DOCS_1_0_TOML: &str = include_str!("../bundled/flows/docs-1.0.toml");
 const MIGRATION_1_0_TOML: &str = include_str!("../bundled/flows/migration-1.0.toml");
+const CODE_REVIEW_1_0_TOML: &str = include_str!("../bundled/flows/code-review-1.0.toml");
 const SPIKE_1_0_TOML: &str = include_str!("../bundled/flows/spike-1.0.toml");
 const SINGLE_TASK_1_0_TOML: &str = include_str!("../bundled/flows/single-task-1.0.toml");
 
 /// Total number of bundled flow assets registered in [`BundledFlows`].
-pub const BUNDLED_FLOW_COUNT: usize = 13;
+pub const BUNDLED_FLOW_COUNT: usize = 14;
 
 /// Parsed bundled flow plus registry metadata derived from the asset name.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +52,7 @@ impl BundledFlows {
             "sec" => "security".to_string(),
             "doc" => "docs".to_string(),
             "migrate" => "migration".to_string(),
+            "review" | "pr-review" => "code-review".to_string(),
             canonical => canonical.to_string(),
         }
     }
@@ -74,6 +76,7 @@ impl BundledFlows {
             parse(SECURITY_1_0_TOML, "security", "1.0.0"),
             parse(DOCS_1_0_TOML, "docs", "1.0.0"),
             parse(MIGRATION_1_0_TOML, "migration", "1.0.0"),
+            parse(CODE_REVIEW_1_0_TOML, "code-review", "1.0.0"),
             parse(SPIKE_1_0_TOML, "spike", "1.0.0"),
             parse(SINGLE_TASK_1_0_TOML, "single-task", "1.0.0"),
         ]
@@ -164,6 +167,7 @@ mod tests {
             "security",
             "docs",
             "migration",
+            "code-review",
             "spike",
             "single-task",
         ] {
@@ -209,6 +213,8 @@ mod tests {
             ("sec", "security"),
             ("doc", "docs"),
             ("migrate", "migration"),
+            ("review", "code-review"),
+            ("pr-review", "code-review"),
         ] {
             let flow = BundledFlows::by_name_latest(alias).expect("alias resolves");
             assert_eq!(flow.name, canonical);

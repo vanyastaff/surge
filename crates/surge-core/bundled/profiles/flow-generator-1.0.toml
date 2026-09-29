@@ -10,6 +10,9 @@ schema_version = 1
 id = "flow-generator"
 version = "1.0.0"
 display_name = "Flow Generator"
+icon = "🧩"
+color = "#6366F1"
+min_effort = "high"
 category = "_bootstrap"
 description = "Compiles roadmap.md into a validated flow.toml graph wired to registry profiles."
 when_to_use = "Third bootstrap stage — final artifact before the engine starts executing."
@@ -121,7 +124,7 @@ trusted. Then pick the smallest shape that still verifies everything:
 - one milestone of several tasks → `linear-with-review`;
 - two or more milestones, or any roadmap that declares `missions` → `multi-milestone`;
 - the work is primarily a bug, refactor, migration, performance, security,
-  documentation or research effort → that specialised archetype, even when it
+  documentation, code-review or research effort → that specialised archetype, even when it
   is small, because its first step (reproduce, characterise, baseline, audit)
   is what makes the rest checkable.
 
@@ -143,6 +146,7 @@ Pick exactly one archetype and include it in `[metadata.archetype]`:
 - `security` — security audit -> fixes -> security regression tests.
 - `docs` — outline -> write -> review/publish documentation.
 - `migration` — migration plan -> implementation -> rollback validation.
+- `code-review` — review an existing change (no code written): general review -> security pass -> independent verification.
 - `spike` — bounded research/prototype path; may skip Architect and Reviewer when appropriate.
 - `single-task` — one focused Agent node plus Terminal for tiny, low-risk work.
 

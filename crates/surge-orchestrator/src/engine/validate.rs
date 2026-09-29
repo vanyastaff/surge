@@ -466,7 +466,7 @@ pub fn archetype_advisories(graph: &Graph) -> Vec<String> {
         ArchetypeName::Security => ("security audit", &["audit", "security"]),
         ArchetypeName::Migration => ("migration plan or rollback check", &["migrat", "rollback"]),
         ArchetypeName::Docs => ("documentation", &["doc"]),
-        ArchetypeName::LinearWithReview => ("review", &["review"]),
+        ArchetypeName::LinearWithReview | ArchetypeName::CodeReview => ("review", &["review"]),
         _ => return Vec::new(),
     };
 

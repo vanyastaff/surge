@@ -1,0 +1,234 @@
+# Code-review convention flow: review an existing change (a PR, a branch, an
+# AI-generated diff) without writing code. Each review pass is followed by an
+# independent cross-vendor verifier that owns the verdict on that pass, so no
+# finding reaches the report on the reviewer's word alone.
+
+schema_version = 1
+start = "review_scope"
+
+[metadata]
+name = "code-review"
+created_at = "2026-09-29T00:00:00Z"
+[metadata.archetype]
+name = "code-review"
+
+[nodes.review_scope]
+id = "review_scope"
+
+[nodes.review_scope.position]
+x = 0
+y = 0
+
+[[nodes.review_scope.declared_outcomes]]
+id = "reviewed"
+description = "Change read end to end; correctness, design and test gaps listed with file:line"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.review_scope.config]
+node_kind = "agent"
+profile = "reviewer@1.0"
+bindings = []
+hooks = []
+
+[nodes.review_scope.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.review_scope.config.custom_fields]
+
+[nodes.verify_review]
+id = "verify_review"
+
+[nodes.verify_review.position]
+x = 200
+y = 0
+
+[[nodes.verify_review.declared_outcomes]]
+id = "passed"
+description = "Review findings reproduced or refuted by an independent verifier"
+edge_kind_hint = "forward"
+is_terminal = false
+ledger_effect = "verified"
+
+[[nodes.verify_review.declared_outcomes]]
+id = "failed"
+description = "A blocking finding stands"
+edge_kind_hint = "escalate"
+is_terminal = false
+ledger_effect = "failed_verification"
+
+[nodes.verify_review.config]
+node_kind = "agent"
+profile = "cross-verifier@1.0"
+bindings = []
+hooks = []
+
+[nodes.verify_review.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.verify_review.config.custom_fields]
+
+[nodes.security_pass]
+id = "security_pass"
+
+[nodes.security_pass.position]
+x = 400
+y = 0
+
+[[nodes.security_pass.declared_outcomes]]
+id = "audited"
+description = "Injection, authn/z, secrets and dependency risks checked against the diff"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.security_pass.config]
+node_kind = "agent"
+profile = "security-reviewer@1.0"
+bindings = []
+hooks = []
+
+[nodes.security_pass.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.security_pass.config.custom_fields]
+
+[nodes.verify_security]
+id = "verify_security"
+
+[nodes.verify_security.position]
+x = 600
+y = 0
+
+[[nodes.verify_security.declared_outcomes]]
+id = "passed"
+description = "Security findings reproduced or refuted by an independent verifier"
+edge_kind_hint = "forward"
+is_terminal = false
+ledger_effect = "verified"
+
+[[nodes.verify_security.declared_outcomes]]
+id = "failed"
+description = "A blocking finding stands"
+edge_kind_hint = "escalate"
+is_terminal = false
+ledger_effect = "failed_verification"
+
+[nodes.verify_security.config]
+node_kind = "agent"
+profile = "cross-verifier@1.0"
+bindings = []
+hooks = []
+
+[nodes.verify_security.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.verify_security.config.custom_fields]
+
+[nodes.success]
+id = "success"
+declared_outcomes = []
+
+[nodes.success.position]
+x = 800.0
+y = 0.0
+
+[nodes.success.config]
+node_kind = "terminal"
+
+[nodes.success.config.kind]
+type = "success"
+
+[nodes.failure]
+id = "failure"
+declared_outcomes = []
+
+[nodes.failure.position]
+x = 800.0
+y = 200.0
+
+[nodes.failure.config]
+node_kind = "terminal"
+
+[nodes.failure.config.kind]
+type = "failure"
+exit_code = 1
+
+[[edges]]
+id = "e_review_done"
+to = "verify_review"
+kind = "forward"
+
+[edges.from]
+node = "review_scope"
+outcome = "reviewed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_ok"
+to = "security_pass"
+kind = "forward"
+
+[edges.from]
+node = "verify_review"
+outcome = "passed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_blocked"
+to = "failure"
+kind = "forward"
+
+[edges.from]
+node = "verify_review"
+outcome = "failed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_sec_done"
+to = "verify_security"
+kind = "forward"
+
+[edges.from]
+node = "security_pass"
+outcome = "audited"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_sec_ok"
+to = "success"
+kind = "forward"
+
+[edges.from]
+node = "verify_security"
+outcome = "passed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_sec_blocked"
+to = "failure"
+kind = "forward"
+
+[edges.from]
+node = "verify_security"
+outcome = "failed"
+
+[edges.policy]
+on_max_exceeded = "escalate"

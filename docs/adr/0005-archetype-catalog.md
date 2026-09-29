@@ -25,6 +25,10 @@ Each archetype is a graph topology shaped to a category of work. Without a stabl
 > milestone-loop rule runs in both directions. The profile soft checks below
 > became marker checks on node keys and profile names
 > (`validate::archetype_advisories`).
+>
+> **Amended 2026-09-29.** A thirteenth, `code-review`, judges an existing
+> change (a PR, a branch, an AI-generated diff) without writing code: review,
+> security pass, then an independent cross-vendor verifier that owns the verdict.
 
 ### Closed `ArchetypeName` enum
 

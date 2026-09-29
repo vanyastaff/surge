@@ -79,6 +79,7 @@ The Flow Generator chooses one of the bundled archetypes:
 | `security` | Audit -> fix findings -> security regression tests. |
 | `docs` | Outline -> write -> review against the code. |
 | `migration` | Migration plan -> implement -> validate forward and rollback. |
+| `code-review` | Review an existing change (PR, branch, AI-generated diff) without writing code: review -> security pass -> independent cross-vendor verification. |
 
 Every generated flow must declare exactly one of these in
 `[metadata.archetype]`; the choice is recorded in `BootstrapTelemetry`. Only

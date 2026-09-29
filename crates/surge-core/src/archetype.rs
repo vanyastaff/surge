@@ -45,6 +45,8 @@ pub enum ArchetypeName {
     Docs,
     /// Migration plan → Implement → Validate forward and rollback.
     Migration,
+    /// Review scope → Security pass → Independent verification (no code written).
+    CodeReview,
 }
 
 impl ArchetypeName {
@@ -65,6 +67,7 @@ impl ArchetypeName {
             Self::Security => "security",
             Self::Docs => "docs",
             Self::Migration => "migration",
+            Self::CodeReview => "code-review",
         }
     }
 
@@ -72,7 +75,7 @@ impl ArchetypeName {
     ///
     /// The Flow Generator prompt, the bundled flow assets and this list must
     /// name the same set; tests on both sides check it.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Linear3,
         Self::LinearWithReview,
         Self::MultiMilestone,
@@ -85,6 +88,7 @@ impl ArchetypeName {
         Self::Security,
         Self::Docs,
         Self::Migration,
+        Self::CodeReview,
     ];
 
     /// Parse a kebab-case archetype name, the inverse of [`Self::as_str`].
@@ -134,6 +138,7 @@ mod tests {
             (ArchetypeName::Security, "security"),
             (ArchetypeName::Docs, "docs"),
             (ArchetypeName::Migration, "migration"),
+            (ArchetypeName::CodeReview, "code-review"),
         ] {
             assert_eq!(name.as_str(), expected);
             // Deserialize accepts the same identifier.

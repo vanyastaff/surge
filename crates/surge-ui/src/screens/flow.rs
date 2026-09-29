@@ -79,6 +79,10 @@ fn archetype_blurb(name: &str) -> (&'static str, &'static str) {
             "Kind",
             "Documentation only: outline, write, check against the code.",
         ),
+        "code-review" => (
+            "Kind",
+            "An existing change to judge: review it, audit security, then verify independently.",
+        ),
         "spike" => (
             "Kind",
             "Unknown feasibility: a bounded experiment that answers a question.",

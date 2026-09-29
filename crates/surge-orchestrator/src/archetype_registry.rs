@@ -209,6 +209,7 @@ mod tests {
             "security",
             "docs",
             "migration",
+            "code-review",
             "spike",
             "single-task",
         ] {
@@ -278,6 +279,7 @@ mod tests {
             ("sec", "security"),
             ("doc", "docs"),
             ("migrate", "migration"),
+            ("review", "code-review"),
         ] {
             let resolved = registry.resolve(alias).unwrap();
             assert_eq!(resolved.name, canonical);

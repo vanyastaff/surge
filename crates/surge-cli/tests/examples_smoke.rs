@@ -115,6 +115,8 @@ fn bundled_template_names_and_legacy_aliases_resolve_valid_graphs() {
         ("doc", "docs"),
         ("migration", "migration"),
         ("migrate", "migration"),
+        ("code-review", "code-review"),
+        ("review", "code-review"),
     ] {
         let resolved = registry.resolve(name).unwrap();
         assert_eq!(resolved.name, canonical);
