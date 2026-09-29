@@ -220,6 +220,27 @@ surge ledger --all-projects --json
 > carry `depends_on` (it lives in the roadmap artifact). Dependency-filtered
 > readiness is a planned follow-up.
 
+## Inspecting A Run (`surge run`)
+
+| Command | What it gives you |
+|---|---|
+| `surge run diff <run>` | What the run's agents changed in its worktree |
+| `surge run path <run>` | The worktree path (`cd "$(surge run path <run>)"`) |
+| `surge run report <run> --format md\|json\|html` | The Run Report: nodes, outcomes, verifier verdicts, evidence, cost, skills, steers, approvals — enough to accept or reject a run without the transcript |
+| `surge run trace <run> [--out FILE]` | The run as an **OpenTelemetry trace** (OTLP/JSON) |
+
+`surge run trace` derives the trace from the event log, so it works for any past
+run and is byte-identical on every export. One `surge.run` span (status from the
+terminal event) holds a child span per stage attempt with `surge.node`,
+`surge.attempt`, `surge.outcome` and the agent profile, plus span events for
+reported outcomes, hook rejections, verified tasks, tool calls and token usage
+(`gen_ai.*` attributes when the runtime reports them). Send it to any collector:
+
+```bash
+surge run trace <run> --out trace.json
+curl -H 'content-type: application/json' --data @trace.json http://localhost:4318/v1/traces
+```
+
 ## Artifact Validation
 
 Generated role artifacts can be validated directly:

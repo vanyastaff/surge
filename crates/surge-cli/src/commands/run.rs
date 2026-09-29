@@ -10,6 +10,8 @@
 //! - `surge run report <run>` — the compiled Run Report (R28): one document
 //!   a reviewer reads to accept or reject the run without opening the
 //!   transcript. See `surge_core::run_report`.
+//! - `surge run trace <run>` — the run as an OpenTelemetry trace (OTLP/JSON),
+//!   derived from the event log; post it to any collector's `/v1/traces`.
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Subcommand, ValueEnum};
@@ -45,6 +47,19 @@ pub enum RunCommand {
         #[arg(long, value_enum, default_value = "md")]
         format: RunReportFormat,
     },
+    /// Export the run as an OpenTelemetry trace in OTLP/JSON: one `surge.run`
+    /// span with a child span per stage attempt and span events for outcomes,
+    /// hook rejections, verified tasks, tool calls and token usage. Derived from
+    /// the event log, so it works for any past run and is identical on every
+    /// export. Send it with
+    /// `curl -H 'content-type: application/json' --data @trace.json <collector>/v1/traces`.
+    Trace {
+        /// Run id (or its short suffix as shown by `surge inbox`).
+        run: String,
+        /// Write to this file instead of stdout.
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 /// `surge run report --format` values (R28: `json|md|html`).
@@ -78,7 +93,40 @@ pub async fn run(cmd: RunCommand) -> Result<()> {
         RunCommand::Diff { run } => diff(&run).await,
         RunCommand::Path { run } => path(&run).await,
         RunCommand::Report { run, format } => report(&run, format).await,
+        RunCommand::Trace { run, out } => trace(&run, out.as_deref()).await,
     }
+}
+
+async fn trace(run: &str, out: Option<&std::path::Path>) -> Result<()> {
+    let storage = Storage::open(&common::surge_home_dir()?)
+        .await
+        .context("open storage")?;
+    let rendered = compile_trace(&storage, run).await?;
+    match out {
+        Some(path) => std::fs::write(path, rendered)
+            .with_context(|| format!("write trace to {}", path.display())),
+        None => {
+            use std::io::Write as _;
+            // A truncated pipe (`| head`) is normal, not a panic.
+            let _ = writeln!(std::io::stdout().lock(), "{rendered}");
+            Ok(())
+        },
+    }
+}
+
+/// The OTLP/JSON trace for `run` (full ULID or unique suffix), pretty-printed.
+///
+/// # Errors
+/// Returns an error if the run cannot be resolved or its event log read.
+pub(crate) async fn compile_trace(storage: &std::sync::Arc<Storage>, run: &str) -> Result<String> {
+    let run_id = common::resolve_run_id(storage, run).await?;
+    let reader = storage
+        .open_run_reader(run_id)
+        .await
+        .with_context(|| format!("open event log for run {run_id}"))?;
+    let events = read_run_events(&reader).await?;
+    let trace = surge_core::run_trace::to_otlp_json(run_id, &events);
+    serde_json::to_string_pretty(&trace).context("render trace as JSON")
 }
 
 async fn diff(run: &str) -> Result<()> {

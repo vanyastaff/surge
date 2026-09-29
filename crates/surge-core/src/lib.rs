@@ -65,6 +65,7 @@ pub mod run_event;
 pub mod run_report;
 pub mod run_state;
 pub mod run_status;
+pub mod run_trace;
 pub mod runtime;
 pub mod sandbox;
 pub mod sandbox_matrix;

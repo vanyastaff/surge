@@ -105,7 +105,7 @@ These are aggregator-level sources; treat individual percentages as unverified.
 | Semantic merge-conflict resolution | Aperant | Open |
 | Remote/mobile steering, cloud runners | Factory, Devin, Agentlas | Open (Surge is local) |
 | Kanban queue, Insights chat, changelog generation | Aperant | Open |
-| OpenTelemetry trace export | 2026 observability guidance | Open |
+| OpenTelemetry trace export | 2026 observability guidance | `surge run trace` exports any run as OTLP/JSON, derived from the event log (post-hoc; no live streaming) |
 | Packaged installers for all platforms | Aperant, Agentlas | Open |
 | Test-first enforcement and separate AI code-review pass | 2026 practice | `code-review` archetype exists; test-first not enforced |
 

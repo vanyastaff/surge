@@ -39,7 +39,8 @@ one runtime; read the limits there.
   `--allow-write`) steer / resolve / start-bootstrap over MCP; Surge also supervises MCP servers for its agents.
 - **Profiles with identity** — each role has a name, icon, colour and a reasoning-effort floor; the flow diagram
   shows them.
-- **Event-sourced runs** — append-only per-run SQLite log; replay, fork-from-here, steer and crash recovery are folds.
+- **Event-sourced runs** — append-only per-run SQLite log; replay, fork-from-here, steer and crash recovery are folds, and
+  `surge run trace` exports any run as an OpenTelemetry (OTLP/JSON) trace.
 - **Safe by default** — sandbox delegated to each runtime; third-party ticket text is fenced as untrusted data;
   hash-pinned skills; provider rate limits park a run instead of failing it; budgets freeze and resume.
 - **Thirteen archetypes** — `feature`, `bug-fix`, `refactor`, `security`, `docs`, `migration`, `performance`,
@@ -52,7 +53,7 @@ one runtime; read the limits there.
 ## Status
 
 Surge is **pre-release software**. What is not there yet: hosted or mobile clients, semantic merge-conflict
-resolution, a kanban queue, OpenTelemetry export. See
+resolution, a kanban queue, live OpenTelemetry streaming (traces export after the fact). See
 [`docs/competitive-comparison-2026-09-29.md`](docs/competitive-comparison-2026-09-29.md) for a sourced comparison with
 Factory, Aperant and Agentlas, including where they are ahead. No head-to-head benchmark exists.
 
