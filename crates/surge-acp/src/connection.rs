@@ -705,16 +705,31 @@ mod tests {
                 .expect("Failed to kill process");
 
             // Verify process was killed (check that PID no longer exists)
-            let check = Command::new("ps")
-                .args(["-p", &pid.to_string()])
-                .output()
-                .await
-                .expect("Failed to run ps");
+            assert!(process_is_gone(pid).await, "Process {pid} should be killed");
+        }
 
-            assert!(
-                !check.status.success(),
-                "Process should be killed (ps should fail)"
-            );
+        /// Whether no process with `pid` exists. `ps` does not exist on Windows,
+        /// where `tasklist` answers "No tasks are running" for an unknown PID.
+        async fn process_is_gone(pid: u32) -> bool {
+            #[cfg(windows)]
+            {
+                let out = Command::new("tasklist")
+                    .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                    .output()
+                    .await
+                    .expect("Failed to run tasklist");
+                let text = String::from_utf8_lossy(&out.stdout);
+                text.contains("No tasks") || !text.contains(&pid.to_string())
+            }
+            #[cfg(not(windows))]
+            {
+                let check = Command::new("ps")
+                    .args(["-p", &pid.to_string()])
+                    .output()
+                    .await
+                    .expect("Failed to run ps");
+                !check.status.success()
+            }
         }
 
         /// Test that wait_or_kill() respects grace period.
