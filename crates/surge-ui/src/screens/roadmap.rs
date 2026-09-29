@@ -22,7 +22,8 @@ use gpui_kit::component::{Disableable, Icon, IconName, Selectable, Sizable, Styl
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::roadmap::{
-    RoadmapArtifact, RoadmapMilestone, RoadmapStatus, RoadmapTask, TaskSize,
+    RoadmapArtifact, RoadmapMilestone, RoadmapStage, RoadmapStatus, RoadmapTask, TaskPriority,
+    TaskSize,
 };
 
 use crate::app_state::AppState;
@@ -610,6 +611,8 @@ impl RoadmapScreen {
                     .truncate()
                     .child(task.title.clone()),
             )
+            .children(task.priority.map(priority_chip))
+            .children(task.parallel_group.as_deref().map(group_chip))
             .child(if task.verified {
                 div()
                     .h_flex()
@@ -876,6 +879,99 @@ impl RoadmapScreen {
     }
 }
 
+/// One row of the milestone timeline.
+enum Row<'a> {
+    Stage(usize, &'a RoadmapStage),
+    Milestone(&'a RoadmapMilestone),
+}
+
+/// The timeline in reading order: each stage banner followed by its
+/// milestones, or the plain milestone list when no stages are declared.
+/// Milestones a stage names but the roadmap lacks are skipped, never invented.
+fn layout_rows(artifact: &RoadmapArtifact) -> Vec<Row<'_>> {
+    if artifact.stages.is_empty() {
+        return artifact.milestones.iter().map(Row::Milestone).collect();
+    }
+    let mut rows = Vec::new();
+    for (index, stage) in artifact.stages.iter().enumerate() {
+        rows.push(Row::Stage(index, stage));
+        rows.extend(
+            stage
+                .milestones
+                .iter()
+                .filter_map(|id| artifact.milestones.iter().find(|m| &m.id == id))
+                .map(Row::Milestone),
+        );
+    }
+    rows
+}
+
+/// P0..P3 as a small pill; P0 is the only one that shouts.
+fn priority_chip(priority: TaskPriority) -> Div {
+    let role = match priority {
+        TaskPriority::P0 => Semantic::Failure,
+        TaskPriority::P1 => Semantic::You,
+        TaskPriority::P2 | TaskPriority::P3 => Semantic::External,
+    };
+    let color = role.color();
+    ui::pill(
+        priority.to_string().to_uppercase(),
+        color,
+        theme::tint(color),
+    )
+}
+
+/// Tasks sharing a group run at the same time.
+fn group_chip(group: &str) -> Div {
+    let color = Semantic::Loop.color();
+    ui::pill(format!("∥ {group}"), color, theme::tint(color))
+}
+
+/// A stage banner: its title and goal, then the conditions that end it.
+fn render_stage_header(index: usize, stage: &RoadmapStage) -> Div {
+    div()
+        .v_flex()
+        .gap(px(4.0))
+        .mt(px(if index == 0 { 0.0 } else { 14.0 }))
+        .pb(px(6.0))
+        .border_b_1()
+        .border_color(theme::hairline())
+        .child(
+            div()
+                .h_flex()
+                .gap(px(8.0))
+                .items_center()
+                .child(ui::pill(
+                    format!("Stage {}", index + 1),
+                    Semantic::Plan.color(),
+                    theme::tint(Semantic::Plan.color()),
+                ))
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme::text_primary())
+                        .child(stage.title.clone()),
+                ),
+        )
+        .when(!stage.goal.trim().is_empty(), |el| {
+            el.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::text_muted())
+                    .child(stage.goal.clone()),
+            )
+        })
+        .when(!stage.exit_criteria.is_empty(), |el| {
+            el.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme::text_dim())
+                    .child(format!("Done when: {}", stage.exit_criteria.join(" · "))),
+            )
+        })
+}
+
 fn progress_bar(pct: f32, color: Hsla) -> Div {
     div()
         .w_full()
@@ -1007,12 +1103,19 @@ impl Render for RoadmapScreen {
                 content = content.child(self.render_stats(&tally(artifact)));
                 content = content.child(self.render_about(cx));
                 let n = artifact.milestones.len();
-                let milestones: Vec<Div> = artifact
-                    .milestones
-                    .iter()
-                    .enumerate()
-                    .map(|(i, m)| self.render_milestone(i, i + 1 == n, m, cx))
-                    .collect();
+                let mut milestones: Vec<Div> = Vec::new();
+                let mut index = 0;
+                for row in layout_rows(artifact) {
+                    match row {
+                        Row::Stage(stage_index, stage) => {
+                            milestones.push(render_stage_header(stage_index, stage));
+                        },
+                        Row::Milestone(m) => {
+                            milestones.push(self.render_milestone(index, index + 1 == n, m, cx));
+                            index += 1;
+                        },
+                    }
+                }
                 content = content
                     .child(ui::section_label(format!("Milestones · {n}")))
                     .child(div().v_flex().children(milestones))
@@ -1042,7 +1145,7 @@ impl Render for RoadmapScreen {
 
 #[cfg(test)]
 mod tests {
-    use super::{RoadmapScreen, summary_of, tally};
+    use super::{RoadmapArtifact, RoadmapScreen, Row, layout_rows, summary_of, tally};
     use crate::app_state::AppState;
     use gpui_kit::{AppContext, TestAppContext};
 
@@ -1113,5 +1216,34 @@ status = "failed"
         .unwrap();
         let t = tally(&artifact);
         assert_eq!((t.total, t.done, t.verified, t.attention), (3, 2, 1, 1));
+    }
+
+    #[test]
+    fn stages_group_their_milestones_and_none_means_a_flat_list() {
+        let flat: RoadmapArtifact =
+            toml::from_str("schema_version = 2\n[[milestones]]\nid = \"m1\"\ntitle = \"One\"\n")
+                .unwrap();
+        assert!(matches!(layout_rows(&flat)[..], [Row::Milestone(_)]));
+
+        let staged: RoadmapArtifact = toml::from_str(
+            r#"
+schema_version = 2
+[[stages]]
+id = "s1"
+title = "Usable core"
+milestones = ["m1", "m2"]
+[[milestones]]
+id = "m1"
+title = "One"
+[[milestones]]
+id = "m2"
+title = "Two"
+"#,
+        )
+        .unwrap();
+        let rows = layout_rows(&staged);
+        assert!(matches!(rows[0], Row::Stage(0, _)));
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[2], Row::Milestone(m) if m.id == "m2"));
     }
 }
