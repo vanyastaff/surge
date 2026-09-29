@@ -82,8 +82,7 @@ notice when each ends"), every gate answered `approve`:
 | Result | `cargo test` 4 passed, `cargo clippy -D warnings` clean, `POMODORO_FAST=1 cargo run` prints `Work complete!` / `Break complete!` and exits 0 |
 
 Findings this run produced, all fixed the same day: a profile reasoning floor
-that failed sessions on agents without reasoning levels (`990aade`'s parent
-`bc78ce8`), console follow-up runs that were not seeded with the approved
+that failed sessions on agents without reasoning levels (`bc78ce8`), console follow-up runs that were not seeded with the approved
 artifacts and did not accept the planner's `roadmap_toml` alias (`990aade`), and
 an opaque error for a model the account cannot use (`65a30bf`).
 
