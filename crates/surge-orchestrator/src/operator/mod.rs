@@ -25,14 +25,14 @@ mod run_id;
 pub mod steer;
 
 pub use backlog::{LedgerQuery, ReadyQuery, query_ledger, query_ready};
-pub use error::{InvalidFilter, OperatorError, RunIdError};
+pub use error::{OperatorError, OperatorErrorKind, RunIdError};
 pub use inbox::{AttentionGroup, InboxEntry, classify, collect_entries};
 pub use journal::{fold_run_state, read_run_events};
-pub use memory::query_memory;
+pub use memory::{MemoryQuery, query_memory};
 pub use pending::{
     GateOption, OperatorAnswer, PendingInput, PendingKind, ValidatedAnswer, deliver_answer,
     inspect_pending,
 };
 pub use report::{compile_report, compile_trace};
 pub use run_id::resolve_run_id;
-pub use steer::queue_steer;
+pub use steer::{cancel_steer, list_steers, queue_steer};

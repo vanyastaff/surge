@@ -9,11 +9,10 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
-use surge_orchestrator::engine::facade::EngineFacade;
-use surge_orchestrator::operator::{OperatorError, queue_steer};
+use surge_orchestrator::operator::{cancel_steer, list_steers, queue_steer};
 use surge_persistence::runs::Storage;
 
-use crate::commands::common::{connect_daemon, resolve_run_id, surge_home_dir};
+use crate::commands::common::{connect_daemon, operator_failure, resolve_run_id, surge_home_dir};
 
 /// Arguments for `surge steer`.
 #[derive(Args, Debug)]
@@ -60,10 +59,9 @@ pub async fn run(args: SteerArgs) -> Result<()> {
     let daemon = connect_daemon().await?;
 
     if let Some(steer_id) = &args.cancel {
-        let removed = daemon
-            .cancel_steer(run_id, steer_id.clone())
+        let removed = cancel_steer(&daemon, run_id, steer_id)
             .await
-            .map_err(daemon_err)?;
+            .map_err(operator_failure)?;
         if removed {
             println!("✓ dropped queued steer {steer_id} on run {run_id}");
         } else {
@@ -76,7 +74,9 @@ pub async fn run(args: SteerArgs) -> Result<()> {
     }
 
     if args.list {
-        let steers = daemon.list_steers(run_id).await.map_err(daemon_err)?;
+        let steers = list_steers(&daemon, run_id)
+            .await
+            .map_err(operator_failure)?;
         if steers.is_empty() {
             println!("no steer messages queued for run {run_id}");
         } else {
@@ -91,7 +91,9 @@ pub async fn run(args: SteerArgs) -> Result<()> {
     // `message` is present here: the no-action guard returned early otherwise,
     // and neither --cancel nor --list was set. `if let` keeps this panic-free.
     if let Some(message) = message {
-        let steer_id = queue_steer(&daemon, run_id, message).await?;
+        let steer_id = queue_steer(&daemon, run_id, message)
+            .await
+            .map_err(operator_failure)?;
         println!("✓ Steer queued for run {run_id} (id {steer_id})");
         println!("  Applies at the next step — not interrupting the current agent.");
         println!(
@@ -100,9 +102,4 @@ pub async fn run(args: SteerArgs) -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// Steer failures the daemon reports, worded for the operator.
-fn daemon_err(cause: surge_orchestrator::engine::error::EngineError) -> anyhow::Error {
-    OperatorError::SteerFailed { cause }.into()
 }

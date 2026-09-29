@@ -18,7 +18,7 @@ use crate::operator::error::{MIN_SUFFIX_LEN, OperatorError, RunIdError, SUFFIX_S
 ///
 /// # Errors
 /// Returns [`OperatorError::RunId`] for an unusable or non-unique id and
-/// [`OperatorError::ListRunsForIdMatch`] if the registry cannot be listed.
+/// [`OperatorError::ListRuns`] if the registry cannot be listed.
 pub async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Result<RunId, OperatorError> {
     let value = value.trim();
     if let Ok(id) = value.parse::<RunId>() {
@@ -37,7 +37,7 @@ pub async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Result<RunId
             limit: Some(SUFFIX_SCAN_LIMIT),
         })
         .await
-        .map_err(OperatorError::ListRunsForIdMatch)?;
+        .map_err(OperatorError::ListRuns)?;
     let truncated = runs.len() >= SUFFIX_SCAN_LIMIT;
     let matches: Vec<RunId> = runs
         .iter()

@@ -2,11 +2,11 @@ use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use surge_core::MemoryClaimId;
 use surge_core::run_event::EscalationCause;
-use surge_orchestrator::operator::query_memory;
+use surge_orchestrator::operator::{MemoryQuery, query_memory};
 use surge_persistence::memory::{AuditReport, MemoryStore, StaleReason, models::*, run_audit};
 use surge_persistence::runs::Storage;
 
-use super::common::surge_home_dir;
+use super::common::{operator_failure, surge_home_dir};
 use super::load_spec_by_id;
 
 /// Memory entry category
@@ -268,8 +268,6 @@ fn search_memory(
         return Ok(());
     }
 
-    let store = MemoryStore::open(&store_path)?;
-
     // Parse spec ID if provided
     let spec_id = if let Some(spec_str) = spec {
         let spec_file = load_spec_by_id(&spec_str)?;
@@ -283,11 +281,20 @@ fn search_memory(
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
 
-    let results =
-        query_memory(&store, &query, spec_id.as_ref(), &tags_filter, limit).inspect_err(|e| {
-            eprintln!("⚠️  Search error: {e}");
-            eprintln!("   Try quoting your search query or using simpler terms.");
-        })?;
+    let results = query_memory(
+        &store_path,
+        &MemoryQuery {
+            text: query.clone(),
+            spec_id,
+            tags: tags_filter,
+            limit,
+        },
+    )
+    .inspect_err(|e| {
+        eprintln!("⚠️  Search error: {e}");
+        eprintln!("   Try quoting your search query or using simpler terms.");
+    })
+    .map_err(operator_failure)?;
 
     // Display results
     println!("⚡ Memory Search Results");

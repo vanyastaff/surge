@@ -16,10 +16,11 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
+use surge_core::{RoadmapStatus, RunId};
 use surge_orchestrator::operator::{ReadyQuery, query_ready};
 use surge_persistence::runs::Storage;
 
-use crate::commands::common::surge_home_dir;
+use crate::commands::common::{operator_failure, surge_home_dir};
 use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 
 /// Arguments for `surge ready`.
@@ -28,20 +29,20 @@ pub struct ReadyArgs {
     /// Only tasks with this exact status (e.g. `pending`,
     /// `ready_for_verification`, `failed_verification`).
     #[arg(long)]
-    pub status: Option<String>,
+    pub status: Option<RoadmapStatus>,
     /// Only tasks discovered mid-run (with a `discovered_from` edge).
     #[arg(long)]
     pub discovered: bool,
     /// Only tasks belonging to this run id.
     #[arg(long = "run")]
-    pub run_id: Option<String>,
+    pub run_id: Option<RunId>,
     /// Accepted for compatibility. Per-project scoping is currently disabled —
     /// all projects are always shown (see the module docs), so this flag is a
     /// no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Maximum rows to return.
-    #[arg(long, default_value_t = 200)]
+    #[arg(long, default_value_t = ReadyQuery::DEFAULT_LIMIT)]
     pub limit: usize,
     /// Emit JSON instead of a table.
     #[arg(long)]
@@ -77,15 +78,16 @@ pub async fn run(args: ReadyArgs) -> Result<()> {
 fn query_records(storage: &Storage, args: &ReadyArgs) -> Result<Vec<TaskLedgerIndexRecord>> {
     // Per-project scoping is disabled: `--all-projects` is an accepted no-op.
     let _ = args.all_projects;
-    Ok(query_ready(
+    query_ready(
         storage,
         &ReadyQuery {
-            status: args.status.clone(),
+            status: args.status,
             discovered_only: args.discovered,
-            run_id: args.run_id.clone(),
+            run_id: args.run_id,
             limit: args.limit,
         },
-    )?)
+    )
+    .map_err(operator_failure)
 }
 
 /// Render the actionable-backlog table to `out`. The default view (no

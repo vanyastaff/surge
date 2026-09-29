@@ -42,12 +42,13 @@ use rmcp::{ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router}
 use serde::Deserialize;
 use serde_json::{Value, json};
 use surge_core::bootstrap_operation::BootstrapIntent;
-use surge_core::{RunId, RunState};
+use surge_core::{RoadmapStatus, RunId, RunState};
 use surge_orchestrator::engine::daemon_facade::{BootstrapClientError, DaemonEngineFacade};
 use surge_orchestrator::operator::{
-    AttentionGroup, LedgerQuery, OperatorAnswer, OperatorError, PendingInput, PendingKind,
-    ReadyQuery, classify, collect_entries, compile_report, compile_trace, deliver_answer,
-    fold_run_state, inspect_pending, query_ledger, query_memory, query_ready, queue_steer,
+    self, AttentionGroup, LedgerQuery, MemoryQuery, OperatorAnswer, OperatorError,
+    OperatorErrorKind, PendingInput, PendingKind, ReadyQuery, classify, collect_entries,
+    compile_report, compile_trace, deliver_answer, fold_run_state, inspect_pending, query_ledger,
+    query_memory, query_ready, queue_steer,
 };
 use surge_persistence::memory::MemoryStore;
 use surge_persistence::runs::Storage;
@@ -56,7 +57,7 @@ use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 use tokio::sync::OnceCell;
 
 use crate::commands::bootstrap;
-use crate::commands::common::{RunIdError, connect_daemon_at, project_root, resolve_run_id};
+use crate::commands::common::{connect_daemon_at, project_root};
 
 /// Default row cap for the inbox's Done tail and the ready backlog.
 const DEFAULT_ROW_LIMIT: usize = 200;
@@ -543,7 +544,7 @@ impl SurgeMcpServer {
     /// row, telling a malformed/ambiguous id from a missing run from a fault.
     async fn load_run(&self, value: &str) -> Result<RunSummary, ToolError> {
         let storage = self.storage().await?;
-        let run_id = resolve_run_id(storage, value)
+        let run_id = operator::resolve_run_id(storage, value)
             .await
             .map_err(classify_run_id_error)?;
         match storage.get_run(&run_id).await {
@@ -661,13 +662,19 @@ impl SurgeMcpServer {
         let limit = validated_limit(params.limit, DEFAULT_ROW_LIMIT, MAX_ROW_LIMIT)?;
         let storage = self.storage().await?;
         let run_id = self.optional_run_id(params.run_id.as_deref()).await?;
+        let status = params
+            .status
+            .as_deref()
+            .map(str::parse::<RoadmapStatus>)
+            .transpose()
+            .map_err(|e| ToolError::InvalidArgument(format!("invalid status: {e}")))?;
         let query = ReadyQuery {
-            status: params.status,
+            status,
             discovered_only: params.discovered,
             run_id,
             limit: SCAN_CEILING,
         };
-        let mut tasks = normalized(query_ready(storage, &query).map_err(backlog_query_error)?);
+        let mut tasks = normalized(query_ready(storage, &query)?);
         let total = tasks.len();
         tasks.truncate(limit);
         Ok(ToolOutput {
@@ -689,7 +696,7 @@ impl SurgeMcpServer {
             run_id,
             limit: SCAN_CEILING,
         };
-        let mut tasks = normalized(query_ledger(storage, &query).map_err(backlog_query_error)?);
+        let mut tasks = normalized(query_ledger(storage, &query)?);
         let total = tasks.len();
         tasks.truncate(limit);
         let verified = tasks.iter().filter(|t| t.is_evidence_backed()).count();
@@ -707,9 +714,9 @@ impl SurgeMcpServer {
 
     /// Resolve an optional run reference to the full-ULID string the ledger
     /// queries expect.
-    async fn optional_run_id(&self, value: Option<&str>) -> Result<Option<String>, ToolError> {
+    async fn optional_run_id(&self, value: Option<&str>) -> Result<Option<RunId>, ToolError> {
         match value {
-            Some(value) => Ok(Some(self.existing_run(value).await?.to_string())),
+            Some(value) => Ok(Some(self.existing_run(value).await?)),
             None => Ok(None),
         }
     }
@@ -774,7 +781,7 @@ impl SurgeMcpServer {
         );
         let steer_id = queue_steer(&daemon, run_id, &params.message)
             .await
-            .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
+            .map_err(daemon_rejection)?;
         Ok(ToolOutput {
             summary: format!("steer {steer_id} queued for run {run_id}; applies at the next stage"),
             data: json!({ "run_id": run_id.to_string(), "steer_id": steer_id }),
@@ -827,7 +834,7 @@ impl SurgeMcpServer {
         );
         deliver_answer(&daemon, run_id, validated)
             .await
-            .map_err(|e| ToolError::Rejected(e.to_string()))?;
+            .map_err(daemon_rejection)?;
         Ok(ToolOutput {
             summary: format!("resolved run {run_id} at @{node}"),
             data: json!({
@@ -905,16 +912,21 @@ impl SurgeMcpServer {
                 }),
             });
         }
-        let tags = params.tags;
+        let memory_query = MemoryQuery {
+            text: query,
+            spec_id: None,
+            tags: params.tags,
+            limit: SCAN_CEILING,
+        };
         // rusqlite is synchronous; keep it off the async workers. Fetch past
         // the caller's limit so `total` is real and the tag filter sees every
         // hit, then cut each category down to `limit`.
-        let mut results = tokio::task::spawn_blocking(move || {
-            let store = MemoryStore::open(&store_path).map_err(OperatorError::MemoryStore)?;
-            query_memory(&store, &query, None, &tags, SCAN_CEILING)
-        })
-        .await
-        .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("memory search task")))??;
+        let mut results =
+            tokio::task::spawn_blocking(move || query_memory(&store_path, &memory_query))
+                .await
+                .map_err(|e| {
+                    ToolError::Failed(anyhow::Error::new(e).context("memory search task"))
+                })??;
         let total = results.total_count();
         results.discoveries.truncate(limit);
         results.patterns.truncate(limit);
@@ -949,26 +961,22 @@ fn validated_limit(requested: Option<i64>, default: usize, max: usize) -> Result
         })
 }
 
-/// Map `resolve_run_id`'s failure onto the stable codes: a
-/// [`RunIdError`] is the caller's id (missing or unusable), anything else is a
-/// fault.
-fn classify_run_id_error(error: anyhow::Error) -> ToolError {
-    match error.downcast_ref::<RunIdError>() {
-        Some(RunIdError::NotFound { .. }) => ToolError::RunNotFound(error.to_string()),
-        Some(_) => ToolError::InvalidRunId(error.to_string()),
-        None => ToolError::Failed(error),
-    }
+/// A daemon that declined a steer or an answer, with the full cause chain and
+/// what an MCP client can do about it.
+fn daemon_rejection(error: OperatorError) -> ToolError {
+    ToolError::Rejected(format!(
+        "{:#}. The run must be active in a running daemon.",
+        anyhow::Error::new(error)
+    ))
 }
 
-/// The backlog queries parse the caller's `status` and run filters before
-/// querying the index: a malformed filter is the caller's argument, anything
-/// else a fault.
-fn backlog_query_error(error: OperatorError) -> ToolError {
-    match error {
-        OperatorError::InvalidStatus(_) | OperatorError::InvalidRunFilter(_) => {
-            ToolError::InvalidArgument(format!("{:#}", anyhow::Error::new(error)))
-        },
-        other => ToolError::from(other),
+/// Map `resolve_run_id`'s failure onto the stable codes: an id the caller got
+/// wrong is `run_not_found` or `invalid_run_id`, anything else is a fault.
+fn classify_run_id_error(error: OperatorError) -> ToolError {
+    match error.kind() {
+        OperatorErrorKind::NotFound => ToolError::RunNotFound(error.to_string()),
+        OperatorErrorKind::InvalidInput => ToolError::InvalidRunId(error.to_string()),
+        OperatorErrorKind::NotAwaitingInput | OperatorErrorKind::Fault => ToolError::from(error),
     }
 }
 

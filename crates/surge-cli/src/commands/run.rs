@@ -101,7 +101,9 @@ async fn trace(run: &str, out: Option<&std::path::Path>) -> Result<()> {
     let storage = Storage::open(&common::surge_home_dir()?)
         .await
         .context("open storage")?;
-    let rendered = compile_trace(&storage, run).await?;
+    let rendered = compile_trace(&storage, run)
+        .await
+        .map_err(common::operator_failure)?;
     match out {
         Some(path) => std::fs::write(path, rendered)
             .with_context(|| format!("write trace to {}", path.display())),
@@ -142,7 +144,9 @@ async fn report(run: &str, format: RunReportFormat) -> Result<()> {
     let storage = Storage::open(&common::surge_home_dir()?)
         .await
         .context("open storage")?;
-    let compiled = compile_report(&storage, run).await?;
+    let compiled = compile_report(&storage, run)
+        .await
+        .map_err(common::operator_failure)?;
 
     let rendered = match format {
         RunReportFormat::Json => render_json(&compiled).context("render report as JSON")?,

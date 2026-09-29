@@ -11,8 +11,6 @@ use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::operator::{self, OperatorError};
 use surge_persistence::runs::Storage;
 
-pub(crate) use surge_orchestrator::operator::RunIdError;
-
 /// Resolve `~/.surge` (honoring `SURGE_HOME`). Delegates to
 /// [`surge_core::home::surge_home_dir`], the canonical resolver shared
 /// with the daemon's `pidfile::daemon_dir` and the persistence layer's
@@ -37,16 +35,39 @@ pub(crate) fn project_root(cwd: &Path) -> PathBuf {
 }
 
 /// Resolve a run id, accepting the full ULID or a unique short suffix (as shown
-/// by `surge inbox`). Delegates to [`surge_orchestrator::operator::resolve_run_id`];
-/// a bad id surfaces as a [`RunIdError`] so callers can tell it from a storage
-/// fault with `error.downcast_ref::<RunIdError>()`.
+/// by `surge inbox`). Delegates to [`surge_orchestrator::operator::resolve_run_id`].
 pub(crate) async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Result<RunId> {
     operator::resolve_run_id(storage, value)
         .await
-        .map_err(|error| match error {
-            OperatorError::RunId(bad_id) => anyhow::Error::new(bad_id),
-            fault => anyhow::Error::new(fault),
-        })
+        .map_err(operator_failure)
+}
+
+/// The CLI-side hint that turns a neutral [`OperatorError`] into an
+/// actionable message for someone at a terminal: which flag to pass or which
+/// command to run next.
+fn hint(error: &OperatorError) -> Option<&'static str> {
+    match error {
+        OperatorError::NotAwaitingInput { .. } => {
+            Some("Bootstrap approvals are answered via `surge bootstrap` or Telegram.")
+        },
+        OperatorError::MissingToolAnswer => Some("Pass --text or --json."),
+        OperatorError::MissingOutcome => {
+            Some("Pass --outcome <key>; run `surge resolve <run>` for the options.")
+        },
+        OperatorError::DeliveryFailed { .. } | OperatorError::SteerFailed { .. } => Some(
+            "The run must be active in a running daemon (started with `surge engine run --daemon`).",
+        ),
+        _ => None,
+    }
+}
+
+/// Convert an operator failure for the CLI: the full cause chain, followed by
+/// [`hint`] when there is one.
+pub(crate) fn operator_failure(error: OperatorError) -> anyhow::Error {
+    let Some(hint) = hint(&error) else {
+        return anyhow::Error::new(error);
+    };
+    anyhow!("{:#}. {hint}", anyhow::Error::new(error))
 }
 
 /// Connect to the already-running daemon (does not spawn one — a fresh daemon
@@ -69,22 +90,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_id_errors_read_as_the_old_messages_and_survive_anyhow() {
-        let err: anyhow::Error = RunIdError::NotFound {
-            value: "ABCDEF".into(),
-        }
-        .into();
-        assert_eq!(err.to_string(), "no run matching \"ABCDEF\"");
-        assert!(matches!(
-            err.downcast_ref::<RunIdError>(),
-            Some(RunIdError::NotFound { .. })
-        ));
+    fn operator_failure_appends_the_cli_hint_after_the_cause_chain() {
+        let error = operator_failure(OperatorError::MissingOutcome);
+        let text = error.to_string();
+        assert!(text.starts_with("this gate needs an outcome. "), "{text}");
+        assert!(text.contains("--outcome"), "{text}");
 
-        let too_short: anyhow::Error = RunIdError::TooShort { value: "x".into() }.into();
-        assert!(too_short.to_string().contains("too short"));
-
-        // A storage fault is anyhow context, never a RunIdError.
-        let fault = anyhow::anyhow!("disk").context("list runs for id match");
-        assert!(fault.downcast_ref::<RunIdError>().is_none());
+        let plain = operator_failure(OperatorError::BlankSteer);
+        assert_eq!(plain.to_string(), "steer message must not be blank");
     }
 }

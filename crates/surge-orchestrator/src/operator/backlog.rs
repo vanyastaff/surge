@@ -6,77 +6,93 @@ use surge_core::{RoadmapStatus, RunId};
 use surge_persistence::runs::Storage;
 use surge_persistence::task_ledger::{TaskLedgerIndexFilter, TaskLedgerIndexRecord};
 
-use crate::operator::error::{InvalidFilter, OperatorError};
+use crate::operator::error::OperatorError;
 
 /// Which tasks of the actionable backlog to list.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ReadyQuery {
-    /// Only tasks with this exact status (`pending`, `ready_for_verification`,
-    /// `failed_verification`, ...). `None` lists every unsettled task.
-    pub status: Option<String>,
+    /// Only tasks with this exact status. `None` lists every unsettled task.
+    pub status: Option<RoadmapStatus>,
     /// Only tasks discovered mid-run (with a `discovered_from` edge).
     pub discovered_only: bool,
-    /// Only tasks belonging to this full run id.
-    pub run_id: Option<String>,
+    /// Only tasks belonging to this run.
+    pub run_id: Option<RunId>,
     /// Maximum rows to return.
     pub limit: usize,
 }
 
+impl ReadyQuery {
+    /// Row cap the `surge ready` command applies unless told otherwise.
+    pub const DEFAULT_LIMIT: usize = 200;
+}
+
+impl Default for ReadyQuery {
+    /// Every unsettled task of every run, capped at [`Self::DEFAULT_LIMIT`].
+    fn default() -> Self {
+        Self {
+            status: None,
+            discovered_only: false,
+            run_id: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
 /// Which tasks of the full ledger to list.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LedgerQuery {
-    /// Scope to this full run id.
-    pub run_id: Option<String>,
+    /// Scope to this run.
+    pub run_id: Option<RunId>,
     /// Maximum rows to return.
     pub limit: usize,
+}
+
+impl LedgerQuery {
+    /// Row cap the `surge ledger` command applies unless told otherwise.
+    pub const DEFAULT_LIMIT: usize = 500;
+}
+
+impl Default for LedgerQuery {
+    /// The ledger of every run, capped at [`Self::DEFAULT_LIMIT`].
+    fn default() -> Self {
+        Self {
+            run_id: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
 }
 
 /// The rows of the actionable backlog for `query` (raw, un-normalized —
 /// callers that emit JSON apply
 /// [`TaskLedgerIndexRecord::with_verified_normalized`]).
 ///
+/// Without an explicit `status`, settled tasks (completed, failed, skipped) are
+/// dropped and the result is cut to `limit`; with one, the index applies the
+/// status and `limit` itself.
+///
 /// Per-project scoping is disabled: a run records its isolated worktree path
 /// as its project path, which never equals the invoking repo, so every project
 /// is always listed.
 ///
 /// # Errors
-/// Returns [`OperatorError::InvalidStatus`] or
-/// [`OperatorError::InvalidRunFilter`] for a malformed filter, and
-/// [`OperatorError::TaskLedger`] if the index query fails.
+/// Returns [`OperatorError::TaskLedger`] if the index query fails.
 pub fn query_ready(
     storage: &Storage,
     query: &ReadyQuery,
 ) -> Result<Vec<TaskLedgerIndexRecord>, OperatorError> {
-    let status = query
-        .status
-        .as_deref()
-        .map(parse_status)
-        .transpose()
-        .map_err(OperatorError::InvalidStatus)?;
-    let run_id = query
-        .run_id
-        .as_deref()
-        .map(parse_run_id)
-        .transpose()
-        .map_err(OperatorError::InvalidRunFilter)?;
-
-    let query_limit = if status.is_none() {
-        None
-    } else {
-        Some(query.limit)
-    };
+    let query_limit = query.status.map(|_| query.limit);
     let mut records = storage
         .task_ledger_store()
         .list(&TaskLedgerIndexFilter {
-            status,
+            status: query.status,
             project_path: None,
-            run_id,
+            run_id: query.run_id,
             discovered_only: query.discovered_only,
             limit: query_limit,
         })
         .map_err(OperatorError::TaskLedger)?;
 
-    if status.is_none() {
+    if query.status.is_none() {
         records.retain(|r| !is_settled(r.status));
         records.truncate(query.limit);
     }
@@ -88,24 +104,17 @@ pub fn query_ready(
 /// scoping is disabled for the reason given on [`query_ready`].
 ///
 /// # Errors
-/// Returns [`OperatorError::InvalidRunFilter`] if the run id is malformed and
-/// [`OperatorError::TaskLedger`] if the index query fails.
+/// Returns [`OperatorError::TaskLedger`] if the index query fails.
 pub fn query_ledger(
     storage: &Storage,
     query: &LedgerQuery,
 ) -> Result<Vec<TaskLedgerIndexRecord>, OperatorError> {
-    let run_id = query
-        .run_id
-        .as_deref()
-        .map(parse_run_id)
-        .transpose()
-        .map_err(OperatorError::InvalidRunFilter)?;
     storage
         .task_ledger_store()
         .list(&TaskLedgerIndexFilter {
             status: None,
             project_path: None,
-            run_id,
+            run_id: query.run_id,
             discovered_only: false,
             limit: Some(query.limit),
         })
@@ -120,43 +129,9 @@ fn is_settled(status: RoadmapStatus) -> bool {
     )
 }
 
-fn parse_status(value: &str) -> Result<RoadmapStatus, InvalidFilter> {
-    Ok(match value.trim().to_ascii_lowercase().as_str() {
-        "pending" => RoadmapStatus::Pending,
-        "running" => RoadmapStatus::Running,
-        "paused" => RoadmapStatus::Paused,
-        "ready_for_verification" | "ready-for-verification" => RoadmapStatus::ReadyForVerification,
-        "failed_verification" | "failed-verification" => RoadmapStatus::FailedVerification,
-        "completed" => RoadmapStatus::Completed,
-        "failed" => RoadmapStatus::Failed,
-        "skipped" => RoadmapStatus::Skipped,
-        other => return Err(InvalidFilter::new(format!("unknown status {other:?}"))),
-    })
-}
-
-fn parse_run_id(value: &str) -> Result<RunId, InvalidFilter> {
-    value
-        .parse()
-        .map_err(|error| InvalidFilter::new(format!("invalid run id {value:?}: {error}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_status_accepts_ledger_statuses() {
-        assert_eq!(parse_status("pending").unwrap(), RoadmapStatus::Pending);
-        assert_eq!(
-            parse_status("ready_for_verification").unwrap(),
-            RoadmapStatus::ReadyForVerification
-        );
-        assert_eq!(
-            parse_status("failed-verification").unwrap(),
-            RoadmapStatus::FailedVerification
-        );
-        assert!(parse_status("bogus").is_err());
-    }
 
     #[test]
     fn settled_states_are_dropped_from_default_view() {

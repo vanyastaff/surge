@@ -7,10 +7,11 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
+use surge_core::RunId;
 use surge_orchestrator::operator::{LedgerQuery, query_ledger};
 use surge_persistence::runs::Storage;
 
-use crate::commands::common::surge_home_dir;
+use crate::commands::common::{operator_failure, surge_home_dir};
 use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 
 /// Arguments for `surge ledger`.
@@ -18,14 +19,14 @@ use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 pub struct LedgerArgs {
     /// Scope to one run id.
     #[arg(long = "run")]
-    pub run_id: Option<String>,
+    pub run_id: Option<RunId>,
     /// Accepted for compatibility. Per-project scoping is currently disabled —
     /// all projects are always shown (runs store their worktree path, not the
     /// origin repo), so this flag is a no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Maximum rows to return.
-    #[arg(long, default_value_t = 500)]
+    #[arg(long, default_value_t = LedgerQuery::DEFAULT_LIMIT)]
     pub limit: usize,
     /// Emit JSON instead of a table.
     #[arg(long)]
@@ -62,13 +63,14 @@ pub async fn run(args: LedgerArgs) -> Result<()> {
 fn query_records(storage: &Storage, args: &LedgerArgs) -> Result<Vec<TaskLedgerIndexRecord>> {
     // Per-project scoping is disabled: `--all-projects` is an accepted no-op.
     let _ = args.all_projects;
-    Ok(query_ledger(
+    query_ledger(
         storage,
         &LedgerQuery {
-            run_id: args.run_id.clone(),
+            run_id: args.run_id,
             limit: args.limit,
         },
-    )?)
+    )
+    .map_err(operator_failure)
 }
 
 /// Render the ledger table to `out`. Split from [`run`] so a test can assert

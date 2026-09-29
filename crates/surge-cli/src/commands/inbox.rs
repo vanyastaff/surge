@@ -11,7 +11,7 @@ use surge_core::capacity::{CapacityStatus, WakeBasis};
 use surge_orchestrator::operator::{AttentionGroup, InboxEntry, collect_entries};
 use surge_persistence::runs::Storage;
 
-use crate::commands::common::surge_home_dir;
+use crate::commands::common::{operator_failure, surge_home_dir};
 
 /// Arguments for `surge inbox`.
 #[derive(Args, Debug)]
@@ -46,7 +46,9 @@ pub async fn run(args: InboxArgs) -> Result<()> {
     // record their origin repo (tracked follow-up). `--all-projects` is kept as
     // an accepted no-op so scripts don't break.
     let _ = args.all_projects;
-    let entries = collect_entries(&storage, None, args.limit).await?;
+    let entries = collect_entries(&storage, None, args.limit)
+        .await
+        .map_err(operator_failure)?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&entries)?);

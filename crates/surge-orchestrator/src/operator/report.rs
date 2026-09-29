@@ -39,7 +39,7 @@ async fn load_events(
     let reader = storage
         .open_run_reader(run_id)
         .await
-        .map_err(|source| OperatorError::OpenEventLog { run_id, source })?;
+        .map_err(|source| OperatorError::OpenRun { run_id, source })?;
     let events = read_run_events(&reader).await?;
     Ok((run_id, events))
 }

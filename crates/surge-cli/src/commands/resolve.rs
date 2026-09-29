@@ -13,7 +13,7 @@ use surge_orchestrator::operator::{
 };
 use surge_persistence::runs::Storage;
 
-use crate::commands::common::{connect_daemon, resolve_run_id, surge_home_dir};
+use crate::commands::common::{connect_daemon, operator_failure, resolve_run_id, surge_home_dir};
 
 /// Arguments for `surge resolve`.
 #[derive(Args, Debug)]
@@ -44,7 +44,9 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
         .await
         .context("open storage")?;
     let run_id = resolve_run_id(&storage, &args.run_id).await?;
-    let pending = inspect_pending(&storage, run_id).await?;
+    let pending = inspect_pending(&storage, run_id)
+        .await
+        .map_err(operator_failure)?;
 
     // Inspect mode: no resolution flag → show the question and how to answer.
     if args.outcome.is_none() && args.text.is_none() && args.json.is_none() {
@@ -67,7 +69,9 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
 
     let answer = validated_answer(&pending, &args)?;
     let daemon = connect_daemon().await?;
-    deliver_answer(&daemon, run_id, answer).await?;
+    deliver_answer(&daemon, run_id, answer)
+        .await
+        .map_err(operator_failure)?;
     println!("✓ resolved run {run_id}");
     Ok(())
 }
@@ -101,5 +105,5 @@ fn validated_answer(pending: &PendingInput, args: &ResolveArgs) -> Result<Valida
         },
     };
     let answer = answer.ok_or_else(|| anyhow!("pass --outcome, --text or --json"))?;
-    Ok(pending.build_answer(answer)?)
+    pending.build_answer(answer).map_err(operator_failure)
 }

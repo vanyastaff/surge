@@ -357,10 +357,63 @@ impl std::fmt::Display for RoadmapStatus {
     }
 }
 
+/// A string that names no [`RoadmapStatus`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown status {value:?}")]
+pub struct ParseRoadmapStatusError {
+    /// The rejected input, trimmed and lowercased.
+    pub value: String,
+}
+
+impl std::str::FromStr for RoadmapStatus {
+    type Err = ParseRoadmapStatusError;
+
+    /// Parse a status name, ignoring case and surrounding whitespace. Accepts
+    /// the [`Display`](std::fmt::Display) form (`ready_for_verification`) and
+    /// its hyphenated spelling (`ready-for-verification`).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.trim().to_ascii_lowercase().as_str() {
+            "pending" => Self::Pending,
+            "running" => Self::Running,
+            "paused" => Self::Paused,
+            "ready_for_verification" | "ready-for-verification" => Self::ReadyForVerification,
+            "failed_verification" | "failed-verification" => Self::FailedVerification,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "skipped" => Self::Skipped,
+            other => {
+                return Err(ParseRoadmapStatusError {
+                    value: other.to_owned(),
+                });
+            },
+        })
+    }
+}
+
 pub(super) const fn markdown_checkbox(status: RoadmapStatus) -> &'static str {
     match status {
         RoadmapStatus::Completed => "x",
         RoadmapStatus::Running => "~",
         _ => " ",
+    }
+}
+
+#[cfg(test)]
+mod roadmap_status_parse_tests {
+    use super::RoadmapStatus;
+
+    #[test]
+    fn from_str_round_trips_display_and_accepts_hyphens_and_case() {
+        for status in RoadmapStatus::ALL {
+            assert_eq!(status.to_string().parse::<RoadmapStatus>(), Ok(status));
+        }
+        assert_eq!(
+            " Failed-Verification ".parse::<RoadmapStatus>(),
+            Ok(RoadmapStatus::FailedVerification)
+        );
+        assert_eq!(
+            "bogus".parse::<RoadmapStatus>().unwrap_err().to_string(),
+            "unknown status \"bogus\""
+        );
     }
 }
