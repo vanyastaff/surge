@@ -10,6 +10,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use surge_orchestrator::engine::facade::EngineFacade;
+use surge_orchestrator::operator::{OperatorError, queue_steer};
 use surge_persistence::runs::Storage;
 
 use crate::commands::common::{connect_daemon, resolve_run_id, surge_home_dir};
@@ -101,30 +102,7 @@ pub async fn run(args: SteerArgs) -> Result<()> {
     Ok(())
 }
 
-/// Queue `message` as a steer on `run_id` and return the steer id. Shared by
-/// `surge steer` and the MCP `surge_steer` tool.
-///
-/// # Errors
-/// Returns an error if `message` is blank or the daemon rejects the steer
-/// (run not active in that daemon).
-pub(crate) async fn queue_steer(
-    daemon: &surge_orchestrator::engine::daemon_facade::DaemonEngineFacade,
-    run_id: surge_core::RunId,
-    message: &str,
-) -> Result<String> {
-    let message = message.trim();
-    if message.is_empty() {
-        return Err(anyhow!("steer message must not be blank"));
-    }
-    daemon
-        .submit_steer(run_id, message.to_owned())
-        .await
-        .map_err(daemon_err)
-}
-
-fn daemon_err(e: surge_orchestrator::engine::error::EngineError) -> anyhow::Error {
-    anyhow!(
-        "steer failed: {e}. The run must be active in a running daemon \
-         (started with `surge engine run --daemon`)."
-    )
+/// Steer failures the daemon reports, worded for the operator.
+fn daemon_err(cause: surge_orchestrator::engine::error::EngineError) -> anyhow::Error {
+    OperatorError::SteerFailed { cause }.into()
 }

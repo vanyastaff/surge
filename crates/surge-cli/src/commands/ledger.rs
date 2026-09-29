@@ -5,13 +5,13 @@
 //! the complete picture: verified completions, failures, and the
 //! `discovered_from` edges of mid-run discoveries.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::Args;
-use surge_core::RunId;
+use surge_orchestrator::operator::{LedgerQuery, query_ledger};
 use surge_persistence::runs::Storage;
 
 use crate::commands::common::surge_home_dir;
-use surge_persistence::task_ledger::{TaskLedgerIndexFilter, TaskLedgerIndexRecord};
+use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 
 /// Arguments for `surge ledger`.
 #[derive(Args, Debug)]
@@ -57,37 +57,18 @@ pub async fn run(args: LedgerArgs) -> Result<()> {
     Ok(())
 }
 
-/// The ledger rows `surge ledger` shows for `args` (raw, un-normalized —
-/// callers that emit JSON apply
-/// [`TaskLedgerIndexRecord::with_verified_normalized`]). Shared by the CLI and
-/// the MCP `surge_ledger` tool.
-///
-/// # Errors
-/// Returns an error if `--run` is not a valid run id or the index query fails.
-pub(crate) fn query_records(
-    storage: &Storage,
-    args: &LedgerArgs,
-) -> Result<Vec<TaskLedgerIndexRecord>> {
-    let run_id = args
-        .run_id
-        .as_deref()
-        .map(parse_run_id)
-        .transpose()
-        .context("parse --run")?;
-    // Per-project scoping is disabled for now: a run records its isolated
-    // worktree path as project_path, which never equals the invoking repo, so a
-    // current-dir filter silently matched nothing (same reason inbox/ready pass
-    // None). Show all until runs record their origin repo. `--all-projects` is a
-    // no-op kept for compatibility.
+/// The ledger rows `surge ledger` shows for `args`, via the shared backlog
+/// service.
+fn query_records(storage: &Storage, args: &LedgerArgs) -> Result<Vec<TaskLedgerIndexRecord>> {
+    // Per-project scoping is disabled: `--all-projects` is an accepted no-op.
     let _ = args.all_projects;
-
-    Ok(storage.task_ledger_store().list(&TaskLedgerIndexFilter {
-        status: None,
-        project_path: None,
-        run_id,
-        discovered_only: false,
-        limit: Some(args.limit),
-    })?)
+    Ok(query_ledger(
+        storage,
+        &LedgerQuery {
+            run_id: args.run_id.clone(),
+            limit: args.limit,
+        },
+    )?)
 }
 
 /// Render the ledger table to `out`. Split from [`run`] so a test can assert
@@ -132,17 +113,12 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn parse_run_id(value: &str) -> Result<RunId> {
-    value
-        .parse()
-        .map_err(|error| anyhow!("invalid run id {value:?}: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
     use surge_core::RoadmapStatus;
+    use surge_core::RunId;
 
     fn record(task_id: &str, status: RoadmapStatus, verified: bool) -> TaskLedgerIndexRecord {
         TaskLedgerIndexRecord {

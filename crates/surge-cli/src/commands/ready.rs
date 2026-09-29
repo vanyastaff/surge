@@ -14,13 +14,14 @@
 //! satisfied) is not yet applied — the index does not carry `depends_on`, which
 //! lives in the roadmap artifact. This is a documented follow-up.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::Args;
 use surge_core::{RoadmapStatus, RunId};
+use surge_orchestrator::operator::{ReadyQuery, query_ready};
 use surge_persistence::runs::Storage;
 
 use crate::commands::common::surge_home_dir;
-use surge_persistence::task_ledger::{TaskLedgerIndexFilter, TaskLedgerIndexRecord};
+use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 
 /// Arguments for `surge ready`.
 #[derive(Args, Debug)]
@@ -73,69 +74,19 @@ pub async fn run(args: ReadyArgs) -> Result<()> {
     Ok(())
 }
 
-/// The rows `surge ready` shows for `args` (raw, un-normalized — callers that
-/// emit JSON apply [`TaskLedgerIndexRecord::with_verified_normalized`]).
-/// Shared by the CLI and the MCP `surge_ready_tasks` tool so both read the
-/// same backlog with the same filters.
-///
-/// # Errors
-/// Returns an error if a filter is malformed or the ledger index query fails.
-pub(crate) fn query_records(
-    storage: &Storage,
-    args: &ReadyArgs,
-) -> Result<Vec<TaskLedgerIndexRecord>> {
-    let status = args
-        .status
-        .as_deref()
-        .map(parse_status)
-        .transpose()
-        .context("parse --status")?;
-    let run_id = args
-        .run_id
-        .as_deref()
-        .map(parse_run_id)
-        .transpose()
-        .context("parse --run")?;
-    // Per-project scoping is disabled for now: a run records its isolated
-    // worktree path as project_path, which never equals the invoking repo, so a
-    // current-dir filter silently matched nothing. Show all projects until runs
-    // record their origin repo (tracked follow-up). `--all-projects` is kept as
-    // an accepted no-op so scripts don't break.
+/// The rows `surge ready` shows for `args`, via the shared backlog service.
+fn query_records(storage: &Storage, args: &ReadyArgs) -> Result<Vec<TaskLedgerIndexRecord>> {
+    // Per-project scoping is disabled: `--all-projects` is an accepted no-op.
     let _ = args.all_projects;
-    let project_path = None;
-
-    // For the default actionable view (no explicit --status) we filter out
-    // settled tasks in Rust, so the SQL LIMIT must NOT be applied first — a
-    // backlog of newer settled tasks would otherwise fill the window and hide
-    // real work. Fetch unbounded, filter, then truncate to the display limit.
-    let query_limit = if status.is_none() {
-        None
-    } else {
-        Some(args.limit)
-    };
-    let mut records = storage.task_ledger_store().list(&TaskLedgerIndexFilter {
-        status,
-        project_path,
-        run_id,
-        discovered_only: args.discovered,
-        limit: query_limit,
-    })?;
-
-    // Default view (no explicit --status): actionable backlog only — drop
-    // tasks that have reached a terminal state, then apply the display limit.
-    if status.is_none() {
-        records.retain(|r| !is_settled(r.status));
-        records.truncate(args.limit);
-    }
-    Ok(records)
-}
-
-/// A task is settled when no further work is expected on it.
-fn is_settled(status: RoadmapStatus) -> bool {
-    matches!(
-        status,
-        RoadmapStatus::Completed | RoadmapStatus::Failed | RoadmapStatus::Skipped
-    )
+    Ok(query_ready(
+        storage,
+        &ReadyQuery {
+            status: args.status.clone(),
+            discovered_only: args.discovered,
+            run_id: args.run_id.clone(),
+            limit: args.limit,
+        },
+    )?)
 }
 
 /// Render the actionable-backlog table to `out`. The default view (no
@@ -183,52 +134,9 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn parse_status(value: &str) -> Result<RoadmapStatus> {
-    Ok(match value.trim().to_ascii_lowercase().as_str() {
-        "pending" => RoadmapStatus::Pending,
-        "running" => RoadmapStatus::Running,
-        "paused" => RoadmapStatus::Paused,
-        "ready_for_verification" | "ready-for-verification" => RoadmapStatus::ReadyForVerification,
-        "failed_verification" | "failed-verification" => RoadmapStatus::FailedVerification,
-        "completed" => RoadmapStatus::Completed,
-        "failed" => RoadmapStatus::Failed,
-        "skipped" => RoadmapStatus::Skipped,
-        other => return Err(anyhow!("unknown status {other:?}")),
-    })
-}
-
-fn parse_run_id(value: &str) -> Result<RunId> {
-    value
-        .parse()
-        .map_err(|error| anyhow!("invalid run id {value:?}: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_status_accepts_ledger_statuses() {
-        assert_eq!(parse_status("pending").unwrap(), RoadmapStatus::Pending);
-        assert_eq!(
-            parse_status("ready_for_verification").unwrap(),
-            RoadmapStatus::ReadyForVerification
-        );
-        assert_eq!(
-            parse_status("failed-verification").unwrap(),
-            RoadmapStatus::FailedVerification
-        );
-        assert!(parse_status("bogus").is_err());
-    }
-
-    #[test]
-    fn settled_states_are_dropped_from_default_view() {
-        assert!(is_settled(RoadmapStatus::Completed));
-        assert!(is_settled(RoadmapStatus::Failed));
-        assert!(is_settled(RoadmapStatus::Skipped));
-        assert!(!is_settled(RoadmapStatus::Pending));
-        assert!(!is_settled(RoadmapStatus::ReadyForVerification));
-    }
 
     use std::path::PathBuf;
 

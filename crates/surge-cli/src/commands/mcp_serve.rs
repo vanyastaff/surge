@@ -45,8 +45,9 @@ use surge_core::bootstrap_operation::BootstrapIntent;
 use surge_core::{RunId, RunState};
 use surge_orchestrator::engine::daemon_facade::{BootstrapClientError, DaemonEngineFacade};
 use surge_orchestrator::operator::{
-    AttentionGroup, OperatorError, PendingInput, build_answer, classify, collect_entries,
-    compile_report, compile_trace, deliver_answer, fold_run_state, inspect_pending,
+    AttentionGroup, LedgerQuery, OperatorError, PendingInput, ReadyQuery, build_answer, classify,
+    collect_entries, compile_report, compile_trace, deliver_answer, fold_run_state,
+    inspect_pending, query_ledger, query_memory, query_ready, queue_steer,
 };
 use surge_persistence::memory::MemoryStore;
 use surge_persistence::runs::Storage;
@@ -54,10 +55,8 @@ use surge_persistence::runs::registry::RunSummary;
 use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 use tokio::sync::OnceCell;
 
+use crate::commands::bootstrap;
 use crate::commands::common::{RunIdError, connect_daemon_at, project_root, resolve_run_id};
-use crate::commands::ledger::{LedgerArgs, query_records as query_ledger};
-use crate::commands::ready::{ReadyArgs, query_records as query_ready};
-use crate::commands::{bootstrap, memory, steer};
 
 /// Default row cap for the inbox's Done tail and the ready backlog.
 const DEFAULT_ROW_LIMIT: usize = 200;
@@ -662,15 +661,13 @@ impl SurgeMcpServer {
         let limit = validated_limit(params.limit, DEFAULT_ROW_LIMIT, MAX_ROW_LIMIT)?;
         let storage = self.storage().await?;
         let run_id = self.optional_run_id(params.run_id.as_deref()).await?;
-        let args = ReadyArgs {
+        let query = ReadyQuery {
             status: params.status,
-            discovered: params.discovered,
+            discovered_only: params.discovered,
             run_id,
-            all_projects: false,
             limit: SCAN_CEILING,
-            json: true,
         };
-        let mut tasks = normalized(query_ready(storage, &args).map_err(ready_query_error)?);
+        let mut tasks = normalized(query_ready(storage, &query).map_err(backlog_query_error)?);
         let total = tasks.len();
         tasks.truncate(limit);
         Ok(ToolOutput {
@@ -688,13 +685,11 @@ impl SurgeMcpServer {
         let limit = validated_limit(params.limit, DEFAULT_LEDGER_LIMIT, MAX_ROW_LIMIT)?;
         let storage = self.storage().await?;
         let run_id = self.optional_run_id(params.run_id.as_deref()).await?;
-        let args = LedgerArgs {
+        let query = LedgerQuery {
             run_id,
-            all_projects: false,
             limit: SCAN_CEILING,
-            json: true,
         };
-        let mut tasks = normalized(query_ledger(storage, &args)?);
+        let mut tasks = normalized(query_ledger(storage, &query).map_err(backlog_query_error)?);
         let total = tasks.len();
         tasks.truncate(limit);
         let verified = tasks.iter().filter(|t| t.is_evidence_backed()).count();
@@ -777,7 +772,7 @@ impl SurgeMcpServer {
             run_id,
             format_args!("queueing steer, message_len={}", params.message.len()),
         );
-        let steer_id = steer::queue_steer(&daemon, run_id, &params.message)
+        let steer_id = queue_steer(&daemon, run_id, &params.message)
             .await
             .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
         Ok(ToolOutput {
@@ -928,8 +923,8 @@ impl SurgeMcpServer {
         // the caller's limit so `total` is real and the tag filter sees every
         // hit, then cut each category down to `limit`.
         let mut results = tokio::task::spawn_blocking(move || {
-            let store = MemoryStore::open(&store_path)?;
-            memory::query_memory(&store, &query, None, &tags, SCAN_CEILING)
+            let store = MemoryStore::open(&store_path).map_err(OperatorError::MemoryStore)?;
+            query_memory(&store, &query, None, &tags, SCAN_CEILING)
         })
         .await
         .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("memory search task")))??;
@@ -978,14 +973,15 @@ fn classify_run_id_error(error: anyhow::Error) -> ToolError {
     }
 }
 
-/// `query_ready` parses `status` and `run_id` and queries the index; a parse
-/// failure is the caller's argument, everything else a fault. Its parse errors
-/// are the ones carrying the `parse --status` context.
-fn ready_query_error(error: anyhow::Error) -> ToolError {
-    if error.to_string().starts_with("parse --status") {
-        ToolError::InvalidArgument(format!("{error:#}"))
-    } else {
-        ToolError::Failed(error)
+/// The backlog queries parse the caller's `status` and run filters before
+/// querying the index: a malformed filter is the caller's argument, anything
+/// else a fault.
+fn backlog_query_error(error: OperatorError) -> ToolError {
+    match error {
+        OperatorError::InvalidStatus(_) | OperatorError::InvalidRunFilter(_) => {
+            ToolError::InvalidArgument(format!("{:#}", anyhow::Error::new(error)))
+        },
+        other => ToolError::from(other),
     }
 }
 

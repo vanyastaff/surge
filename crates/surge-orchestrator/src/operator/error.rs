@@ -8,6 +8,8 @@ use surge_core::run_state::FoldError;
 use surge_core::{Attention, RunId};
 use surge_persistence::runs::{OpenError, StorageError};
 
+use surge_persistence::PersistenceError;
+
 use crate::engine::EngineError;
 
 /// Minimum length of a run-id suffix accepted by
@@ -58,6 +60,18 @@ pub enum RunIdError {
         /// How many runs matched.
         count: usize,
     },
+}
+
+/// A filter value an operator supplied that does not parse; the message names
+/// the value and the reason.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidFilter(String);
+
+impl InvalidFilter {
+    pub(crate) fn new(message: String) -> Self {
+        Self(message)
+    }
 }
 
 /// Failure of an operator service call.
@@ -148,4 +162,28 @@ pub enum OperatorError {
     /// The OTLP trace could not be rendered as JSON.
     #[error("render trace as JSON")]
     RenderTrace(#[source] serde_json::Error),
+    /// The status filter is not a known task status.
+    #[error("parse --status")]
+    InvalidStatus(#[source] InvalidFilter),
+    /// The run filter is not a valid full run id.
+    #[error("parse --run")]
+    InvalidRunFilter(#[source] InvalidFilter),
+    /// The task-ledger index query failed.
+    #[error(transparent)]
+    TaskLedger(StorageError),
+    /// The steer message is blank.
+    #[error("steer message must not be blank")]
+    BlankSteer,
+    /// The daemon hosting the run declined or could not take the steer.
+    #[error(
+        "steer failed: {cause}. The run must be active in a running daemon \
+         (started with `surge engine run --daemon`)."
+    )]
+    SteerFailed {
+        /// The daemon-side failure.
+        cause: EngineError,
+    },
+    /// The project-memory store could not be opened or searched.
+    #[error(transparent)]
+    MemoryStore(PersistenceError),
 }
