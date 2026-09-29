@@ -56,7 +56,34 @@ pub async fn run(args: ReadyArgs) -> Result<()> {
     let storage = Storage::open(&surge_home_dir()?)
         .await
         .context("open storage")?;
+    let records = query_records(&storage, &args)?;
 
+    if args.json {
+        // Same rule the table applies (spec §10/R30): `verified` here means
+        // evidence-backed, not the raw stored flag — see
+        // `TaskLedgerIndexRecord::with_verified_normalized`'s own doc.
+        let records: Vec<_> = records
+            .into_iter()
+            .map(TaskLedgerIndexRecord::with_verified_normalized)
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&records)?);
+    } else {
+        print_ready_table(&mut std::io::stdout().lock(), &records);
+    }
+    Ok(())
+}
+
+/// The rows `surge ready` shows for `args` (raw, un-normalized — callers that
+/// emit JSON apply [`TaskLedgerIndexRecord::with_verified_normalized`]).
+/// Shared by the CLI and the MCP `surge_ready_tasks` tool so both read the
+/// same backlog with the same filters.
+///
+/// # Errors
+/// Returns an error if a filter is malformed or the ledger index query fails.
+pub(crate) fn query_records(
+    storage: &Storage,
+    args: &ReadyArgs,
+) -> Result<Vec<TaskLedgerIndexRecord>> {
     let status = args
         .status
         .as_deref()
@@ -100,20 +127,7 @@ pub async fn run(args: ReadyArgs) -> Result<()> {
         records.retain(|r| !is_settled(r.status));
         records.truncate(args.limit);
     }
-
-    if args.json {
-        // Same rule the table applies (spec §10/R30): `verified` here means
-        // evidence-backed, not the raw stored flag — see
-        // `TaskLedgerIndexRecord::with_verified_normalized`'s own doc.
-        let records: Vec<_> = records
-            .into_iter()
-            .map(TaskLedgerIndexRecord::with_verified_normalized)
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&records)?);
-    } else {
-        print_ready_table(&mut std::io::stdout().lock(), &records);
-    }
-    Ok(())
+    Ok(records)
 }
 
 /// A task is settled when no further work is expected on it.

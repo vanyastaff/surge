@@ -109,13 +109,7 @@ async fn report(run: &str, format: RunReportFormat) -> Result<()> {
     let storage = Storage::open(&common::surge_home_dir()?)
         .await
         .context("open storage")?;
-    let run_id = common::resolve_run_id(&storage, run).await?;
-    let reader = storage
-        .open_run_reader(run_id)
-        .await
-        .with_context(|| format!("open event log for run {run_id}"))?;
-    let events = read_run_events(&reader).await?;
-    let compiled = RunReport::compile(run_id, &events);
+    let compiled = compile_report(&storage, run).await?;
 
     let rendered = match format {
         RunReportFormat::Json => render_json(&compiled).context("render report as JSON")?,
@@ -131,6 +125,25 @@ async fn report(run: &str, format: RunReportFormat) -> Result<()> {
     use std::io::Write as _;
     let _ = writeln!(std::io::stdout().lock(), "{rendered}");
     Ok(())
+}
+
+/// Compile the Run Report for `run` (full ULID or unique short suffix) from
+/// its event log. Shared by `surge run report` and the MCP `surge_run_report`
+/// tool.
+///
+/// # Errors
+/// Returns an error if the run cannot be resolved or its event log read.
+pub(crate) async fn compile_report(
+    storage: &std::sync::Arc<Storage>,
+    run: &str,
+) -> Result<RunReport> {
+    let run_id = common::resolve_run_id(storage, run).await?;
+    let reader = storage
+        .open_run_reader(run_id)
+        .await
+        .with_context(|| format!("open event log for run {run_id}"))?;
+    let events = read_run_events(&reader).await?;
+    Ok(RunReport::compile(run_id, &events))
 }
 
 /// Resolve a run id (full ULID or unique short suffix) against the run store.

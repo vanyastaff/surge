@@ -40,26 +40,7 @@ pub async fn run(args: LedgerArgs) -> Result<()> {
     let storage = Storage::open(&surge_home_dir()?)
         .await
         .context("open storage")?;
-    let run_id = args
-        .run_id
-        .as_deref()
-        .map(parse_run_id)
-        .transpose()
-        .context("parse --run")?;
-    // Per-project scoping is disabled for now: a run records its isolated
-    // worktree path as project_path, which never equals the invoking repo, so a
-    // current-dir filter silently matched nothing (same reason inbox/ready pass
-    // None). Show all until runs record their origin repo. `--all-projects` is a
-    // no-op kept for compatibility.
-    let _ = args.all_projects;
-
-    let records = storage.task_ledger_store().list(&TaskLedgerIndexFilter {
-        status: None,
-        project_path: None,
-        run_id,
-        discovered_only: false,
-        limit: Some(args.limit),
-    })?;
+    let records = query_records(&storage, &args)?;
 
     if args.json {
         // Same rule the table applies (spec §10/R30): `verified` here means
@@ -74,6 +55,39 @@ pub async fn run(args: LedgerArgs) -> Result<()> {
         print_ledger_table(&mut std::io::stdout().lock(), &records);
     }
     Ok(())
+}
+
+/// The ledger rows `surge ledger` shows for `args` (raw, un-normalized —
+/// callers that emit JSON apply
+/// [`TaskLedgerIndexRecord::with_verified_normalized`]). Shared by the CLI and
+/// the MCP `surge_ledger` tool.
+///
+/// # Errors
+/// Returns an error if `--run` is not a valid run id or the index query fails.
+pub(crate) fn query_records(
+    storage: &Storage,
+    args: &LedgerArgs,
+) -> Result<Vec<TaskLedgerIndexRecord>> {
+    let run_id = args
+        .run_id
+        .as_deref()
+        .map(parse_run_id)
+        .transpose()
+        .context("parse --run")?;
+    // Per-project scoping is disabled for now: a run records its isolated
+    // worktree path as project_path, which never equals the invoking repo, so a
+    // current-dir filter silently matched nothing (same reason inbox/ready pass
+    // None). Show all until runs record their origin repo. `--all-projects` is a
+    // no-op kept for compatibility.
+    let _ = args.all_projects;
+
+    Ok(storage.task_ledger_store().list(&TaskLedgerIndexFilter {
+        status: None,
+        project_path: None,
+        run_id,
+        discovered_only: false,
+        limit: Some(args.limit),
+    })?)
 }
 
 /// Render the ledger table to `out`. Split from [`run`] so a test can assert

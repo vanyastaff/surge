@@ -44,6 +44,17 @@ pub enum McpCommands {
         #[arg(long)]
         tail: Option<usize>,
     },
+    /// Serve Surge itself as an MCP server over stdio, so a main agent
+    /// (Claude Code, Codex, any MCP client) can read the inbox and drive runs.
+    /// Read tools are always on; steer / resolve / bootstrap need
+    /// `--allow-write`. Bootstrap approval gates always stay human-only.
+    Serve {
+        /// Enable the mutating tools (`surge_steer`, `surge_resolve`,
+        /// `surge_bootstrap_start`). Every mutation is logged to stderr with
+        /// the client's announced name.
+        #[arg(long)]
+        allow_write: bool,
+    },
 }
 
 /// Output format selector.
@@ -58,6 +69,7 @@ pub enum McpFormat {
 /// Top-level dispatcher for `surge mcp` invocations.
 pub async fn run(cmd: McpCommands) -> Result<()> {
     match cmd {
+        McpCommands::Serve { allow_write } => super::mcp_serve::run(allow_write).await,
         McpCommands::Stop { name } => {
             // Explicit idempotent ack (ADR-0014 / Alternative A1
             // Option D): per-run isolation means no persistent child.

@@ -62,7 +62,7 @@ pub struct InboxArgs {
 
 /// One classified run for the inbox.
 #[derive(Debug, Serialize)]
-struct InboxEntry {
+pub(crate) struct InboxEntry {
     run_id: String,
     project_path: PathBuf,
     /// `needs_input` | `working` | `done`.
@@ -112,6 +112,20 @@ struct InboxEntry {
     started_at_ms: i64,
 }
 
+impl InboxEntry {
+    /// Whether the run sits in the inbox's NEEDS INPUT group — the only group
+    /// whose blocking question an operator (or an MCP client acting for one)
+    /// has been shown and may answer.
+    pub(crate) fn is_needs_input(&self) -> bool {
+        self.attention == "needs_input"
+    }
+
+    /// The attention group label: `needs_input` | `working` | `waiting` | `done`.
+    pub(crate) fn attention(&self) -> &'static str {
+        self.attention
+    }
+}
+
 /// Run `surge inbox`.
 ///
 /// # Errors
@@ -138,7 +152,7 @@ pub async fn run(args: InboxArgs) -> Result<()> {
 
 /// List runs for `project_path` (or all) and classify each. Extracted from
 /// [`run`] so the classification is testable against a live storage.
-async fn collect_entries(
+pub(crate) async fn collect_entries(
     storage: &std::sync::Arc<Storage>,
     project_path: Option<PathBuf>,
     limit: usize,
@@ -215,7 +229,10 @@ async fn collect_entries(
 ///   round of this project got exactly that shortcut wrong.
 /// - `Completed`: `NeverObserved`, as before — a run that reached its own
 ///   terminal success node needs no capacity accounting at all.
-async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Result<InboxEntry> {
+pub(crate) async fn classify(
+    storage: &std::sync::Arc<Storage>,
+    summary: &RunSummary,
+) -> Result<InboxEntry> {
     let base = |attention: &'static str, done_reason, active_node, prompt, capacity| InboxEntry {
         run_id: summary.id.to_string(),
         project_path: summary.project_path.clone(),

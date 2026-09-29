@@ -93,6 +93,12 @@ pub(crate) async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Resul
 /// would not hold the run's in-memory state that these commands act on).
 pub(crate) async fn connect_daemon() -> Result<DaemonEngineFacade> {
     let socket = surge_daemon::pidfile::socket_path().context("resolve daemon socket path")?;
+    connect_daemon_at(socket).await
+}
+
+/// [`connect_daemon`] against an explicit socket path (the MCP server resolves
+/// its home once at startup instead of re-reading `SURGE_HOME` per call).
+pub(crate) async fn connect_daemon_at(socket: PathBuf) -> Result<DaemonEngineFacade> {
     DaemonEngineFacade::connect(socket)
         .await
         .map_err(|e| anyhow!("no running daemon to reach: {e}"))

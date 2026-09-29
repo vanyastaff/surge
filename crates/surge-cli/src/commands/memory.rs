@@ -252,6 +252,56 @@ fn add_memory(
     Ok(())
 }
 
+/// FTS5 search over `store`, filtered by spec and tags. Shared by
+/// `surge memory search` and the MCP `surge_memory_search` tool.
+///
+/// A query FTS5 cannot parse is retried once as a quoted exact phrase; if that
+/// also fails, the original error is returned.
+///
+/// # Errors
+/// Returns an error if the store query fails.
+pub(crate) fn query_memory(
+    store: &MemoryStore,
+    query: &str,
+    spec_id: Option<&surge_core::SpecId>,
+    tags_filter: &[String],
+    limit: usize,
+) -> Result<surge_persistence::memory::SearchResults> {
+    let mut results = match store.search_all(query, Some(limit)) {
+        Ok(results) => results,
+        Err(first_error) => store
+            .search_all(&format!("\"{query}\""), Some(limit))
+            .map_err(|_| first_error)?,
+    };
+
+    if let Some(sid) = spec_id {
+        results
+            .discoveries
+            .retain(|d| d.spec_id.as_ref() == Some(sid));
+        results.patterns.retain(|p| p.spec_id.as_ref() == Some(sid));
+        results.gotchas.retain(|g| g.spec_id.as_ref() == Some(sid));
+        results
+            .file_contexts
+            .retain(|f| f.spec_id.as_ref() == Some(sid));
+    }
+
+    if !tags_filter.is_empty() {
+        results
+            .discoveries
+            .retain(|d| tags_filter.iter().any(|tag| d.tags.contains(tag)));
+        results
+            .patterns
+            .retain(|p| tags_filter.iter().any(|tag| p.tags.contains(tag)));
+        results
+            .gotchas
+            .retain(|g| tags_filter.iter().any(|tag| g.tags.contains(tag)));
+        results
+            .file_contexts
+            .retain(|f| tags_filter.iter().any(|tag| f.tags.contains(tag)));
+    }
+    Ok(results)
+}
+
 fn search_memory(
     query: String,
     spec: Option<String>,
@@ -282,54 +332,11 @@ fn search_memory(
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
 
-    // Execute FTS5 search
-    // Note: If the query contains FTS5 special characters and causes an error,
-    // try wrapping it in quotes for exact phrase search
-    let mut results = match store.search_all(&query, Some(limit)) {
-        Ok(results) => results,
-        Err(e) => {
-            // If FTS5 query fails, try again with quoted query for exact phrase match
-            let quoted_query = format!("\"{}\"", query);
-            match store.search_all(&quoted_query, Some(limit)) {
-                Ok(results) => results,
-                Err(_) => {
-                    eprintln!("⚠️  Search error: {}", e);
-                    eprintln!("   Try quoting your search query or using simpler terms.");
-                    return Err(e.into());
-                },
-            }
-        },
-    };
-
-    // Apply spec_id filter if provided
-    if let Some(sid) = spec_id {
-        results
-            .discoveries
-            .retain(|d| d.spec_id.as_ref() == Some(&sid));
-        results
-            .patterns
-            .retain(|p| p.spec_id.as_ref() == Some(&sid));
-        results.gotchas.retain(|g| g.spec_id.as_ref() == Some(&sid));
-        results
-            .file_contexts
-            .retain(|f| f.spec_id.as_ref() == Some(&sid));
-    }
-
-    // Apply tags filter if provided
-    if !tags_filter.is_empty() {
-        results
-            .discoveries
-            .retain(|d| tags_filter.iter().any(|tag| d.tags.contains(tag)));
-        results
-            .patterns
-            .retain(|p| tags_filter.iter().any(|tag| p.tags.contains(tag)));
-        results
-            .gotchas
-            .retain(|g| tags_filter.iter().any(|tag| g.tags.contains(tag)));
-        results
-            .file_contexts
-            .retain(|f| tags_filter.iter().any(|tag| f.tags.contains(tag)));
-    }
+    let results =
+        query_memory(&store, &query, spec_id.as_ref(), &tags_filter, limit).inspect_err(|e| {
+            eprintln!("⚠️  Search error: {e}");
+            eprintln!("   Try quoting your search query or using simpler terms.");
+        })?;
 
     // Display results
     println!("⚡ Memory Search Results");

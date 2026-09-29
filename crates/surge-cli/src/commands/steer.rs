@@ -90,10 +90,7 @@ pub async fn run(args: SteerArgs) -> Result<()> {
     // `message` is present here: the no-action guard returned early otherwise,
     // and neither --cancel nor --list was set. `if let` keeps this panic-free.
     if let Some(message) = message {
-        let steer_id = daemon
-            .submit_steer(run_id, message.to_owned())
-            .await
-            .map_err(daemon_err)?;
+        let steer_id = queue_steer(&daemon, run_id, message).await?;
         println!("✓ Steer queued for run {run_id} (id {steer_id})");
         println!("  Applies at the next step — not interrupting the current agent.");
         println!(
@@ -102,6 +99,27 @@ pub async fn run(args: SteerArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Queue `message` as a steer on `run_id` and return the steer id. Shared by
+/// `surge steer` and the MCP `surge_steer` tool.
+///
+/// # Errors
+/// Returns an error if `message` is blank or the daemon rejects the steer
+/// (run not active in that daemon).
+pub(crate) async fn queue_steer(
+    daemon: &surge_orchestrator::engine::daemon_facade::DaemonEngineFacade,
+    run_id: surge_core::RunId,
+    message: &str,
+) -> Result<String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(anyhow!("steer message must not be blank"));
+    }
+    daemon
+        .submit_steer(run_id, message.to_owned())
+        .await
+        .map_err(daemon_err)
 }
 
 fn daemon_err(e: surge_orchestrator::engine::error::EngineError) -> anyhow::Error {

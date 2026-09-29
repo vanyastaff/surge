@@ -16,6 +16,7 @@ pub mod insights;
 pub mod intake;
 pub mod ledger;
 pub mod mcp;
+pub mod mcp_serve;
 pub mod memory;
 pub mod migrate_spec;
 pub mod profile;

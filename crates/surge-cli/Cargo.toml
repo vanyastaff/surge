@@ -20,6 +20,7 @@ surge-intake = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 agent-client-protocol = { workspace = true }
@@ -33,6 +34,9 @@ chrono = { workspace = true }
 surge-daemon = { workspace = true }
 rusqlite = { workspace = true }
 semver = { workspace = true }
+# `surge mcp serve` exposes Surge as an MCP *server* over stdio; the workspace
+# entry only enables the client half.
+rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 which = "6"
 
 [target.'cfg(unix)'.dependencies]

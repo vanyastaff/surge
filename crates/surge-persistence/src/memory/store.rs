@@ -96,7 +96,16 @@ impl MemoryStore {
     /// recorded here rather than silently left for the next reader of
     /// either file to rediscover.
     pub fn default_path() -> Result<PathBuf> {
-        Ok(surge_home_dir()?.join("memory.db"))
+        Ok(Self::path_in(&surge_home_dir()?))
+    }
+
+    /// Location of the memory store inside an already-resolved surge home
+    /// (`<home>/memory.db`). [`Self::default_path`] is this applied to the
+    /// process-wide home; callers that carry an explicit home (the MCP
+    /// server) use this directly instead of re-reading `SURGE_HOME`.
+    #[must_use]
+    pub fn path_in(home: &Path) -> PathBuf {
+        home.join("memory.db")
     }
 
     /// Initialize or verify the database schema.

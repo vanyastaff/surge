@@ -469,14 +469,20 @@ fn load_project_config_for_current_repo() -> Result<(SurgeConfig, PathBuf)> {
     let project_root = GitManager::discover()
         .map(|manager| manager.repo_path().to_path_buf())
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let config_path = project_root.join("surge.toml");
-    let config = if config_path.exists() {
-        SurgeConfig::load(&config_path)
-            .with_context(|| format!("load {}", config_path.display()))?
-    } else {
-        SurgeConfig::discover().context("load surge config")?
-    };
+    let config = load_project_config_at(&project_root)?;
     Ok((config, project_root))
+}
+
+/// Load `<project_root>/surge.toml`, falling back to the user-level default
+/// config when the project has none. Shared with the MCP `surge_bootstrap_start`
+/// tool so both resolve the project's configuration identically.
+pub(crate) fn load_project_config_at(project_root: &Path) -> Result<SurgeConfig> {
+    let config_path = project_root.join("surge.toml");
+    if config_path.exists() {
+        SurgeConfig::load(&config_path).with_context(|| format!("load {}", config_path.display()))
+    } else {
+        SurgeConfig::discover().context("load surge config")
+    }
 }
 
 fn parse_run_id(s: &str) -> Result<RunId> {

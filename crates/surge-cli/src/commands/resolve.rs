@@ -6,10 +6,14 @@
 //! must be daemon-hosted and still active. With no resolution flag the command
 //! prints the pending question and its valid outcomes ("inspect mode").
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
+use surge_core::RunId;
 use surge_core::node::NodeConfig;
 use surge_core::run_state::RunState;
+use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::runs::Storage;
 
@@ -45,6 +49,65 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
         .await
         .context("open storage")?;
     let run_id = resolve_run_id(&storage, &args.run_id).await?;
+    let pending = inspect_pending(&storage, run_id).await?;
+
+    // Inspect mode: no resolution flag → show the question and how to answer.
+    if args.outcome.is_none() && args.text.is_none() && args.json.is_none() {
+        println!("Run {run_id} is blocked at @{}", pending.node);
+        println!("  {}", pending.prompt.trim());
+        if !pending.gate_options.is_empty() {
+            println!("\nAnswer with `--outcome <key>`:");
+            for (key, label) in &pending.gate_options {
+                println!("  {key:<20} {label}");
+            }
+        } else if pending.is_tool_call {
+            println!("\nAnswer with `--text <string>` or `--json <json>`.");
+        }
+        return Ok(());
+    }
+
+    let (_, response) = build_answer(
+        pending.is_tool_call,
+        pending.call_id.clone(),
+        &pending.gate_options,
+        args.outcome.as_deref(),
+        args.comment.as_deref(),
+        args.text.as_deref(),
+        args.json.as_deref(),
+    )?;
+
+    let daemon = connect_daemon().await?;
+    deliver_answer(&daemon, run_id, &pending, response).await?;
+    println!("✓ resolved run {run_id}");
+    Ok(())
+}
+
+/// The question a run is currently blocked on, as `surge resolve` (inspect
+/// mode) and the MCP `surge_resolve` tool both present it.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingInput {
+    /// Graph node that issued the request.
+    pub node: surge_core::keys::NodeKey,
+    /// Scoped tool-call key or namespaced gate-request id.
+    pub call_id: Option<String>,
+    /// Prompt shown to the operator.
+    pub prompt: String,
+    /// `(outcome key, label)` pairs when the pending node is a `HumanGate`;
+    /// empty for a tool-driven `request_human_input`.
+    pub gate_options: Vec<(String, String)>,
+    /// A tool-driven free-form request rather than a `HumanGate` outcome.
+    pub is_tool_call: bool,
+    /// The pending node is a bootstrap-mode `HumanGate` (description / roadmap
+    /// / flow approval). Those are human decisions by design.
+    pub is_bootstrap_gate: bool,
+}
+
+/// Fold `run_id`'s event log and return what it is blocked on.
+///
+/// # Errors
+/// Returns an error if the run cannot be read or is not waiting for pipeline
+/// human input (bootstrap approvals are never answerable through here).
+pub(crate) async fn inspect_pending(storage: &Arc<Storage>, run_id: RunId) -> Result<PendingInput> {
     let reader = storage
         .open_run_reader(run_id)
         .await
@@ -81,33 +144,28 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
         .call_id
         .as_deref()
         .is_some_and(|id| surge_core::id::GateRequestId::from_event_call_id(id).is_none());
-
-    // Inspect mode: no resolution flag → show the question and how to answer.
-    if args.outcome.is_none() && args.text.is_none() && args.json.is_none() {
-        println!("Run {run_id} is blocked at @{}", pending.node);
-        println!("  {}", pending.prompt.trim());
-        if !gate_options.is_empty() {
-            println!("\nAnswer with `--outcome <key>`:");
-            for (key, label) in &gate_options {
-                println!("  {key:<20} {label}");
-            }
-        } else if is_tool_call {
-            println!("\nAnswer with `--text <string>` or `--json <json>`.");
-        }
-        return Ok(());
-    }
-
-    let (_, response) = build_answer(
+    let is_bootstrap_gate = matches!(
+        gate_node.map(|n| &n.config),
+        Some(NodeConfig::HumanGate(cfg))
+            if matches!(cfg.mode, surge_core::human_gate_config::HumanGateMode::Bootstrap { .. })
+    );
+    Ok(PendingInput {
+        node: pending.node.clone(),
+        call_id: pending.call_id.clone(),
+        prompt: pending.prompt.clone(),
+        gate_options,
         is_tool_call,
-        pending.call_id.clone(),
-        &gate_options,
-        args.outcome.as_deref(),
-        args.comment.as_deref(),
-        args.text.as_deref(),
-        args.json.as_deref(),
-    )?;
+        is_bootstrap_gate,
+    })
+}
 
-    let daemon = connect_daemon().await?;
+/// Deliver an already-validated `response` to the daemon hosting `run_id`.
+pub(crate) async fn deliver_answer(
+    daemon: &DaemonEngineFacade,
+    run_id: RunId,
+    pending: &PendingInput,
+    response: serde_json::Value,
+) -> Result<()> {
     daemon
         .resolve_requested_input(
             run_id,
@@ -121,9 +179,7 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
                 "resolve failed: {e}. The run must be active in a running daemon \
                  (started with `surge engine run --daemon`)."
             )
-        })?;
-    println!("✓ resolved run {run_id}");
-    Ok(())
+        })
 }
 
 /// Build the `(call_id, response)` pair for `Engine::resolve_human_input` from
@@ -131,7 +187,7 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
 /// value under the pending `call_id`; a HumanGate takes an `--outcome` (checked
 /// against the gate's declared options) with no `call_id`, plus an optional
 /// comment.
-fn build_answer(
+pub(crate) fn build_answer(
     is_tool_call: bool,
     call_id: Option<String>,
     gate_options: &[(String, String)],

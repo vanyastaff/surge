@@ -56,6 +56,14 @@ pub fn socket_path() -> Result<PathBuf, PidfileError> {
     Ok(daemon_dir()?.join("daemon.sock"))
 }
 
+/// Socket marker path inside an already-resolved surge home
+/// (`<home>/daemon/daemon.sock`). [`socket_path`] is this applied to the
+/// process-wide home; callers carrying an explicit home use it directly.
+#[must_use]
+pub fn socket_path_in(home: &Path) -> PathBuf {
+    home.join("daemon").join("daemon.sock")
+}
+
 /// Returns the version-marker path.
 pub fn version_path() -> Result<PathBuf, PidfileError> {
     Ok(daemon_dir()?.join("version"))
