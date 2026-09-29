@@ -73,6 +73,7 @@ pub mod spill_config;
 pub mod stage_tool;
 pub mod subgraph_config;
 pub mod terminal_config;
+pub mod untrusted;
 pub mod validation;
 
 // ── Legacy re-exports (kept stable) ──
