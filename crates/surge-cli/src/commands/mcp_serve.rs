@@ -3,10 +3,10 @@
 //! Lets a "main agent" (Claude Code, Codex, any MCP client) drive Surge:
 //! read the fleet inbox, inspect runs, steer them, answer the human gates the
 //! operator surfaced, and start the idea → description → roadmap → flow
-//! bootstrap journey. Every tool is a thin adapter over the same
-//! `pub(crate)` functions the matching CLI command uses (`inbox`, `ready`,
-//! `ledger`, `run report`, `steer`, `resolve`, `memory search`) — no query or
-//! validation logic lives here.
+//! bootstrap journey. Every tool is a thin adapter over the same services the
+//! matching CLI command uses — `surge_orchestrator::operator` (inbox, pending
+//! input, run report/trace) and the `ready`, `ledger`, `steer` and `memory
+//! search` command modules — no query or validation logic lives here.
 //!
 //! # Safety model
 //!
@@ -44,6 +44,10 @@ use serde_json::{Value, json};
 use surge_core::bootstrap_operation::BootstrapIntent;
 use surge_core::{RunId, RunState};
 use surge_orchestrator::engine::daemon_facade::{BootstrapClientError, DaemonEngineFacade};
+use surge_orchestrator::operator::{
+    AttentionGroup, OperatorError, PendingInput, build_answer, classify, collect_entries,
+    compile_report, compile_trace, deliver_answer, fold_run_state, inspect_pending,
+};
 use surge_persistence::memory::MemoryStore;
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::registry::RunSummary;
@@ -51,12 +55,9 @@ use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 use tokio::sync::OnceCell;
 
 use crate::commands::common::{RunIdError, connect_daemon_at, project_root, resolve_run_id};
-use crate::commands::inbox::AttentionGroup;
 use crate::commands::ledger::{LedgerArgs, query_records as query_ledger};
 use crate::commands::ready::{ReadyArgs, query_records as query_ready};
-use crate::commands::resolve::{PendingInput, build_answer, deliver_answer, inspect_pending};
-use crate::commands::run_fold::fold_run_state;
-use crate::commands::{bootstrap, inbox, memory, run, steer};
+use crate::commands::{bootstrap, memory, steer};
 
 /// Default row cap for the inbox's Done tail and the ready backlog.
 const DEFAULT_ROW_LIMIT: usize = 200;
@@ -238,6 +239,12 @@ enum ToolError {
     /// An internal fault: storage, IO, serialization.
     #[error("{0:#}")]
     Failed(#[from] anyhow::Error),
+}
+
+impl From<OperatorError> for ToolError {
+    fn from(error: OperatorError) -> Self {
+        Self::Failed(anyhow::Error::new(error))
+    }
 }
 
 impl ToolError {
@@ -577,7 +584,7 @@ impl SurgeMcpServer {
             .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("open run")))?;
         match fold_run_state(&reader, run_id).await? {
             RunState::Bootstrapping { .. } => Ok(PendingState::BootstrapApproval),
-            _ => Err(ToolError::Failed(inspect_error)),
+            _ => Err(ToolError::from(inspect_error)),
         }
     }
 
@@ -586,7 +593,7 @@ impl SurgeMcpServer {
         let storage = self.storage().await?;
         // Every run is classified anyway; cap the Done listing here so its
         // `total` is real.
-        let entries = inbox::collect_entries(storage, None, usize::MAX).await?;
+        let entries = collect_entries(storage, None, usize::MAX).await?;
 
         let mut needs_input = Vec::new();
         let mut working = Vec::new();
@@ -594,7 +601,7 @@ impl SurgeMcpServer {
         let mut done = Vec::new();
         let mut done_total = 0_usize;
         for entry in &entries {
-            match entry.attention() {
+            match entry.attention {
                 AttentionGroup::NeedsInput => needs_input.push(to_json(entry)?),
                 AttentionGroup::Working => working.push(to_json(entry)?),
                 AttentionGroup::Waiting => waiting.push(to_json(entry)?),
@@ -635,12 +642,12 @@ impl SurgeMcpServer {
         let summary = self.load_run(&params.run_id).await?;
         let run_id = summary.id;
         let storage = self.storage().await?;
-        let entry = inbox::classify(storage, &summary).await?;
-        let pending = self.load_pending(run_id, entry.attention()).await?;
+        let entry = classify(storage, &summary).await?;
+        let pending = self.load_pending(run_id, entry.attention).await?;
         Ok(ToolOutput {
             summary: format!(
                 "run {run_id}: {} ({})",
-                entry.attention().as_str(),
+                entry.attention.as_str(),
                 summary.status.as_str()
             ),
             data: json!({
@@ -715,7 +722,7 @@ impl SurgeMcpServer {
     async fn run_report_impl(&self, params: RunReportParams) -> ToolResult {
         let run_id = self.existing_run(&params.run_id).await?;
         let storage = self.storage().await?;
-        let report = run::compile_report(storage, &run_id.to_string()).await?;
+        let report = compile_report(storage, &run_id.to_string()).await?;
         let completion = to_json(&report.completion)?;
         let one_line = format!(
             "run {}: {} — {} node(s), {} verdict(s), evidence_backed={}",
@@ -743,7 +750,7 @@ impl SurgeMcpServer {
     async fn run_trace_impl(&self, params: RunTraceParams) -> ToolResult {
         let run_id = self.existing_run(&params.run_id).await?;
         let storage = self.storage().await?;
-        let rendered = run::compile_trace(storage, &run_id.to_string()).await?;
+        let rendered = compile_trace(storage, &run_id.to_string()).await?;
         let trace: Value = serde_json::from_str(&rendered)
             .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("parse trace JSON")))?;
         let spans = trace
@@ -786,7 +793,7 @@ impl SurgeMcpServer {
         let storage = self.storage().await?;
         // The very classifier `surge inbox` uses decides whether the run was
         // surfaced to an operator at all.
-        let attention = inbox::classify(storage, &summary).await?.attention();
+        let attention = classify(storage, &summary).await?.attention;
         let pending = self.load_pending(run_id, attention).await?;
 
         let authorized = authorize_resolution(
@@ -818,7 +825,11 @@ impl SurgeMcpServer {
                 None,
             ),
         }
-        .map_err(|e| ToolError::Failed(e.context("build answer for an authorized resolution")))?;
+        .map_err(|e| {
+            ToolError::Failed(
+                anyhow::Error::new(e).context("build answer for an authorized resolution"),
+            )
+        })?;
 
         let daemon = self.daemon().await?;
         let node = authorized.pending.node.to_string();
@@ -834,7 +845,7 @@ impl SurgeMcpServer {
         );
         deliver_answer(&daemon, run_id, authorized.pending, response)
             .await
-            .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
+            .map_err(|e| ToolError::Rejected(e.to_string()))?;
         Ok(ToolOutput {
             summary: format!("resolved run {run_id} at @{node}"),
             data: json!({

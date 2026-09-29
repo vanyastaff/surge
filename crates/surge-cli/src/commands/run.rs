@@ -16,12 +16,12 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Subcommand, ValueEnum};
 use surge_core::RunId;
-use surge_core::run_report::{RunReport, render_html, render_json, render_markdown};
+use surge_core::run_report::{render_html, render_json, render_markdown};
 use surge_git::GitManager;
+use surge_orchestrator::operator::{compile_report, compile_trace};
 use surge_persistence::runs::Storage;
 
 use crate::commands::common;
-use crate::commands::run_fold::read_run_events;
 
 /// `surge run` subcommands.
 #[derive(Subcommand, Debug)]
@@ -114,21 +114,6 @@ async fn trace(run: &str, out: Option<&std::path::Path>) -> Result<()> {
     }
 }
 
-/// The OTLP/JSON trace for `run` (full ULID or unique suffix), pretty-printed.
-///
-/// # Errors
-/// Returns an error if the run cannot be resolved or its event log read.
-pub(crate) async fn compile_trace(storage: &std::sync::Arc<Storage>, run: &str) -> Result<String> {
-    let run_id = common::resolve_run_id(storage, run).await?;
-    let reader = storage
-        .open_run_reader(run_id)
-        .await
-        .with_context(|| format!("open event log for run {run_id}"))?;
-    let events = read_run_events(&reader).await?;
-    let trace = surge_core::run_trace::to_otlp_json(run_id, &events);
-    serde_json::to_string_pretty(&trace).context("render trace as JSON")
-}
-
 async fn diff(run: &str) -> Result<()> {
     let run_id = resolve_run_id(run).await?;
     let git = GitManager::discover().context("not inside a git repository")?;
@@ -173,25 +158,6 @@ async fn report(run: &str, format: RunReportFormat) -> Result<()> {
     use std::io::Write as _;
     let _ = writeln!(std::io::stdout().lock(), "{rendered}");
     Ok(())
-}
-
-/// Compile the Run Report for `run` (full ULID or unique short suffix) from
-/// its event log. Shared by `surge run report` and the MCP `surge_run_report`
-/// tool.
-///
-/// # Errors
-/// Returns an error if the run cannot be resolved or its event log read.
-pub(crate) async fn compile_report(
-    storage: &std::sync::Arc<Storage>,
-    run: &str,
-) -> Result<RunReport> {
-    let run_id = common::resolve_run_id(storage, run).await?;
-    let reader = storage
-        .open_run_reader(run_id)
-        .await
-        .with_context(|| format!("open event log for run {run_id}"))?;
-    let events = read_run_events(&reader).await?;
-    Ok(RunReport::compile(run_id, &events))
 }
 
 /// Resolve a run id (full ULID or unique short suffix) against the run store.

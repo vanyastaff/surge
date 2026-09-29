@@ -25,7 +25,6 @@ pub mod ready;
 pub mod registry;
 pub mod resolve;
 pub mod run;
-pub mod run_fold;
 mod run_lifecycle;
 pub mod skill;
 pub mod steer;

@@ -28,7 +28,7 @@ use super::{
     Answer, AttentionGroup, PendingState, ResolveRequest, ServeOptions, SurgeMcpServer, TOOLS,
     ToolError, authorize_resolution, serve,
 };
-use crate::commands::resolve::PendingInput;
+use surge_orchestrator::operator::PendingInput;
 
 const ALL_TOOLS: [&str; 10] = [
     "surge_inbox",

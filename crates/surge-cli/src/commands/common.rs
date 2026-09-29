@@ -8,17 +8,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use surge_core::RunId;
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
+use surge_orchestrator::operator::{self, OperatorError};
 use surge_persistence::runs::Storage;
-use surge_persistence::runs::registry::RunFilter;
 
-/// Minimum length of a run-id suffix accepted by [`resolve_run_id`]. Short/empty
-/// suffixes (`""` matches every run via `ends_with`) are rejected outright.
-const MIN_SUFFIX_LEN: usize = 6;
-
-/// Upper bound on runs scanned when matching a suffix. Chosen well above any
-/// realistic active-run count; if a scan hits it, the match is reported as
-/// possibly-truncated rather than silently wrong.
-const SUFFIX_SCAN_LIMIT: usize = 5000;
+pub(crate) use surge_orchestrator::operator::RunIdError;
 
 /// Resolve `~/.surge` (honoring `SURGE_HOME`). Delegates to
 /// [`surge_core::home::surge_home_dir`], the canonical resolver shared
@@ -44,79 +37,16 @@ pub(crate) fn project_root(cwd: &Path) -> PathBuf {
 }
 
 /// Resolve a run id, accepting the full ULID or a unique short suffix (as shown
-/// by `surge inbox`).
-///
-/// Guards: an empty or under-[`MIN_SUFFIX_LEN`] suffix is rejected (`ends_with("")`
-/// would match every run); if the run scan hits [`SUFFIX_SCAN_LIMIT`], an
-/// otherwise-unique match is treated as ambiguous rather than trusted, since a
-/// colliding run could sit beyond the window.
+/// by `surge inbox`). Delegates to [`surge_orchestrator::operator::resolve_run_id`];
+/// a bad id surfaces as a [`RunIdError`] so callers can tell it from a storage
+/// fault with `error.downcast_ref::<RunIdError>()`.
 pub(crate) async fn resolve_run_id(storage: &Arc<Storage>, value: &str) -> Result<RunId> {
-    let value = value.trim();
-    if let Ok(id) = value.parse::<RunId>() {
-        return Ok(id);
-    }
-    if value.len() < MIN_SUFFIX_LEN {
-        return Err(RunIdError::TooShort {
-            value: value.to_owned(),
-        }
-        .into());
-    }
-    let runs = storage
-        .list_runs(RunFilter {
-            status: None,
-            project_path: None,
-            limit: Some(SUFFIX_SCAN_LIMIT),
-        })
+    operator::resolve_run_id(storage, value)
         .await
-        .context("list runs for id match")?;
-    let truncated = runs.len() >= SUFFIX_SCAN_LIMIT;
-    let matches: Vec<RunId> = runs
-        .iter()
-        .filter(|r| r.id.to_string().ends_with(value))
-        .map(|r| r.id)
-        .collect();
-    match matches.as_slice() {
-        [one] if !truncated => Ok(*one),
-        [_one] => Err(RunIdError::PossiblyAmbiguous {
-            value: value.to_owned(),
-        }
-        .into()),
-        [] => Err(RunIdError::NotFound {
-            value: value.to_owned(),
-        }
-        .into()),
-        many => Err(RunIdError::Ambiguous {
-            value: value.to_owned(),
-            count: many.len(),
-        }
-        .into()),
-    }
-}
-
-/// Why a run id given on the command line (or by an MCP client) did not
-/// resolve to exactly one run. Storage failures are *not* this type: they carry
-/// their own context, so a caller can tell a bad id from a fault with
-/// `error.downcast_ref::<RunIdError>()`.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum RunIdError {
-    /// Not a full ULID and too short to match by suffix.
-    #[error(
-        "run id {value:?} is not a full ULID and is too short to match by suffix \
-         (need ≥{MIN_SUFFIX_LEN} chars, or pass the full id)"
-    )]
-    TooShort { value: String },
-    /// Matched one run, but the scan hit its ceiling so the match may not be unique.
-    #[error(
-        "matched run {value:?}, but there are ≥{SUFFIX_SCAN_LIMIT} runs so the match \
-         may be ambiguous; pass the full run id"
-    )]
-    PossiblyAmbiguous { value: String },
-    /// No run ends with the given suffix.
-    #[error("no run matching {value:?}")]
-    NotFound { value: String },
-    /// More than one run ends with the given suffix.
-    #[error("{count} runs match {value:?}; use the full run id")]
-    Ambiguous { value: String, count: usize },
+        .map_err(|error| match error {
+            OperatorError::RunId(bad_id) => anyhow::Error::new(bad_id),
+            fault => anyhow::Error::new(fault),
+        })
 }
 
 /// Connect to the already-running daemon (does not spawn one — a fresh daemon
