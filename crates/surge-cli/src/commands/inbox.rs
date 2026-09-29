@@ -7,8 +7,9 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
+use surge_core::RunId;
 use surge_core::capacity::{CapacityStatus, WakeBasis};
-use surge_orchestrator::operator::{AttentionGroup, InboxEntry, collect_entries};
+use surge_orchestrator::operator::{AttentionGroup, DoneReason, InboxEntry, collect_entries};
 use surge_persistence::runs::Storage;
 
 use crate::commands::common::{operator_failure, surge_home_dir};
@@ -104,7 +105,7 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
     } else {
         for e in &needs {
             let node = e.active_node.as_deref().unwrap_or("-");
-            let _ = writeln!(out, "  {}  @{}", short_run(&e.run_id), node);
+            let _ = writeln!(out, "  {}  @{}", short_run(e.run_id), node);
             if let Some(prompt) = &e.prompt {
                 let _ = writeln!(out, "      ↳ {}", first_line(prompt));
             }
@@ -116,7 +117,7 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
         let _ = writeln!(out, "\n⏸ WAITING (parked on capacity) ({})", waiting.len());
         for e in &waiting {
             let node = e.active_node.as_deref().unwrap_or("-");
-            let _ = writeln!(out, "  {}  @{}", short_run(&e.run_id), node);
+            let _ = writeln!(out, "  {}  @{}", short_run(e.run_id), node);
             let _ = writeln!(out, "      ↻ {}", format_wake_line(e));
             print_capacity_line(out, e);
         }
@@ -125,7 +126,7 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
     let _ = writeln!(out, "\n▶ WORKING ({})", working.len());
     for e in &working {
         let node = e.active_node.as_deref().unwrap_or("-");
-        let _ = writeln!(out, "  {}  @{}", short_run(&e.run_id), node);
+        let _ = writeln!(out, "  {}  @{}", short_run(e.run_id), node);
         print_capacity_line(out, e);
     }
 
@@ -153,8 +154,8 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
             let _ = writeln!(
                 out,
                 "  {}  {}{marker}",
-                short_run(&e.run_id),
-                e.done_reason.unwrap_or("done")
+                short_run(e.run_id),
+                e.done_reason.map_or("done", DoneReason::as_str)
             );
             print_capacity_line(out, e);
         }
@@ -231,14 +232,11 @@ fn format_resets_in(
     }
 }
 
-fn short_run(run_id: &str) -> &str {
-    // ULID run ids are 26 chars; show the last 8 for a compact, still-unique
-    // handle in a single-user local context.
-    if run_id.len() > 8 {
-        &run_id[run_id.len() - 8..]
-    } else {
-        run_id
-    }
+fn short_run(run_id: RunId) -> String {
+    // The display form is `run-` + a 26-char ULID; show the last 8 characters
+    // for a compact, still-unique handle in a single-user local context.
+    let full = run_id.to_string();
+    full[full.len().saturating_sub(8)..].to_owned()
 }
 
 fn first_line(s: &str) -> &str {
@@ -262,7 +260,7 @@ mod tests {
         // line, and this test goes red.
         let wake_at = chrono::Utc::now() + chrono::Duration::minutes(5);
         let entry = InboxEntry {
-            run_id: "01ABCDEFPARKEDRUNID12345".into(),
+            run_id: RunId::new(),
             project_path: PathBuf::from("/proj"),
             attention: AttentionGroup::Waiting,
             done_reason: None,
@@ -293,12 +291,12 @@ mod tests {
         );
     }
 
-    fn done_entry(run_id: &str, evidence_backed: Option<bool>) -> InboxEntry {
+    fn done_entry(run_id: RunId, evidence_backed: Option<bool>) -> InboxEntry {
         InboxEntry {
-            run_id: run_id.into(),
+            run_id,
             project_path: PathBuf::from("/proj"),
             attention: AttentionGroup::Done,
-            done_reason: Some("completed"),
+            done_reason: Some(DoneReason::Completed),
             active_node: None,
             prompt: None,
             capacity: CapacityStatus::NeverObserved,
@@ -316,13 +314,14 @@ mod tests {
     /// that only fixes one view still fails the other.
     #[test]
     fn print_inbox_flags_an_unverified_done_entry_distinctly_from_a_verified_one() {
-        // `short_run` prints only the last 8 characters of `run_id` — these
-        // two ids are built so that suffix is unambiguous ("UNVERIF1" /
-        // "VERIFIE2"), so the per-line assertions below can find the right
-        // printed row rather than matching on a prefix the renderer drops.
+        // `short_run` prints only the last 8 characters of the run id, so
+        // the per-line assertions find each row by that printed handle.
+        let (unverified_id, verified_id) = (RunId::new(), RunId::new());
+        let (unverified_handle, verified_handle) =
+            (short_run(unverified_id), short_run(verified_id));
         let entries = vec![
-            done_entry(&format!("{}UNVERIF1", "x".repeat(20)), Some(false)),
-            done_entry(&format!("{}VERIFIE2", "x".repeat(20)), Some(true)),
+            done_entry(unverified_id, Some(false)),
+            done_entry(verified_id, Some(true)),
         ];
 
         let collapsed = {
@@ -344,11 +343,11 @@ mod tests {
         let lines: Vec<&str> = expanded.lines().collect();
         let unverified_line = lines
             .iter()
-            .find(|l| l.contains("UNVERIF1"))
+            .find(|l| l.contains(&unverified_handle))
             .expect("unverified entry printed");
         let verified_line = lines
             .iter()
-            .find(|l| l.contains("VERIFIE2"))
+            .find(|l| l.contains(&verified_handle))
             .expect("verified entry printed");
         assert!(
             unverified_line.contains("unverified"),

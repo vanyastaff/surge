@@ -171,9 +171,6 @@ pub enum OperatorError {
     /// The project-memory store could not be opened or searched.
     #[error(transparent)]
     MemoryStore(PersistenceError),
-    /// The OTLP trace could not be rendered as JSON.
-    #[error("render trace as JSON")]
-    RenderTrace(#[source] serde_json::Error),
 }
 
 impl OperatorError {
@@ -195,8 +192,7 @@ impl OperatorError {
             | Self::DeliveryFailed { .. }
             | Self::TaskLedger(_)
             | Self::SteerFailed { .. }
-            | Self::MemoryStore(_)
-            | Self::RenderTrace(_) => OperatorErrorKind::Fault,
+            | Self::MemoryStore(_) => OperatorErrorKind::Fault,
         }
     }
 }

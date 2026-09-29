@@ -30,7 +30,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use surge_core::capacity::{CapacityStatus, WakeBasis};
-use surge_core::{Attention, RunId, RunState, TerminalReason};
+use surge_core::{Attention, RunId, RunState, RunStatus, TerminalReason};
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::registry::{RunFilter, RunSummary};
 use surge_persistence::task_ledger::TaskLedgerIndexFilter;
@@ -66,24 +66,74 @@ impl AttentionGroup {
     }
 }
 
+/// Why a settled run is in the Done group. Serializes as the lowercase label
+/// (`completed` | `failed` | `aborted` | `crashed`) `--json` has always used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoneReason {
+    /// Reached its terminal success node.
+    Completed,
+    /// Ended in failure.
+    Failed,
+    /// Aborted by the operator or the engine.
+    Aborted,
+    /// The daemon that hosted it died without a terminal event.
+    Crashed,
+}
+
+impl DoneReason {
+    /// The stable lowercase label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Aborted => "aborted",
+            Self::Crashed => "crashed",
+        }
+    }
+
+    /// The reason for a terminal registry status; `None` while the run is
+    /// still active.
+    fn from_status(status: RunStatus) -> Option<Self> {
+        match status {
+            RunStatus::Completed => Some(Self::Completed),
+            RunStatus::Failed => Some(Self::Failed),
+            RunStatus::Aborted => Some(Self::Aborted),
+            RunStatus::Crashed => Some(Self::Crashed),
+            RunStatus::Bootstrapping | RunStatus::Running | RunStatus::Parked => None,
+        }
+    }
+}
+
+impl From<TerminalReason> for DoneReason {
+    fn from(reason: TerminalReason) -> Self {
+        match reason {
+            TerminalReason::Completed => Self::Completed,
+            TerminalReason::Failed => Self::Failed,
+            TerminalReason::Aborted => Self::Aborted,
+        }
+    }
+}
+
 /// One classified run for the inbox.
 #[derive(Debug, Serialize)]
 pub struct InboxEntry {
-    /// Full ULID of the run.
-    pub run_id: String,
+    /// The run. Serializes as its prefixed display form (`run-<ULID>`).
+    #[serde(serialize_with = "serialize_display")]
+    pub run_id: RunId,
     /// Project (worktree) path the run recorded.
     pub project_path: PathBuf,
-    /// `needs_input` | `working` | `done`.
+    /// `needs_input` | `working` | `waiting` | `done`.
     pub attention: AttentionGroup,
-    /// Terminal reason when done (`completed` / `failed` / `aborted`), else null.
+    /// Why the run is done, when it is; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub done_reason: Option<&'static str>,
-    /// Whether a `done_reason == "completed"` run's success is backed by
+    pub done_reason: Option<DoneReason>,
+    /// Whether a [`DoneReason::Completed`] run's success is backed by
     /// verifier evidence (spec §10/R30's shared
     /// [`surge_core::evidence::is_evidence_backed`] predicate, read via
     /// [`surge_persistence::task_ledger::TaskLedgerIndexRecord::is_evidence_backed`]
     /// — the same predicate `surge run report` and `surge ledger` apply).
-    /// `None` for every other `done_reason` (failed/aborted/crashed) and for
+    /// `None` for every other done reason (failed/aborted/crashed) and for
     /// every non-"done" attention: the question is only meaningful for a
     /// claimed success.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,10 +171,14 @@ pub struct InboxEntry {
     pub started_at_ms: i64,
 }
 
+fn serialize_display<S: serde::Serializer>(id: &RunId, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(id)
+}
+
 /// List runs for `project_path` (or all) and classify each.
 ///
-/// Every run is classified before `limit` applies; only the settled Done
-/// tail is capped.
+/// Every run is classified before `done_limit` applies; only the settled Done
+/// tail is capped at `done_limit` entries.
 ///
 /// # Errors
 /// Returns [`OperatorError`] if the run registry cannot be listed or a
@@ -132,10 +186,10 @@ pub struct InboxEntry {
 pub async fn collect_entries(
     storage: &Arc<Storage>,
     project_path: Option<PathBuf>,
-    limit: usize,
+    done_limit: usize,
 ) -> Result<Vec<InboxEntry>, OperatorError> {
-    // Fetch ALL runs, not a newest-`limit` window: a run still blocked on human
-    // input can be older than `limit` more-recently-started (settled) runs, and
+    // Fetch ALL runs, not a newest-`done_limit` window: a run still blocked on human
+    // input can be older than `done_limit` more-recently-started (settled) runs, and
     // it must never fall out of the NEEDS INPUT group — the whole point of the
     // inbox. This is not free — every non-terminal run still costs a full
     // `read_events(0..MAX)` for its attention fold (unrelated to the capacity
@@ -156,13 +210,13 @@ pub async fn collect_entries(
         entries.push(classify(storage, summary).await?);
     }
     // Bound only the settled/Done tail: keep every NEEDS INPUT / WORKING entry,
-    // cap Done at `limit` (Done is a count/`--all` view anyway).
+    // cap Done at `done_limit` (Done is a count/`--all` view anyway).
     entries.sort_by_key(|e| e.attention == AttentionGroup::Done);
     let done_start = entries
         .iter()
         .position(|e| e.attention == AttentionGroup::Done)
         .unwrap_or(entries.len());
-    entries.truncate(done_start.saturating_add(limit));
+    entries.truncate(done_start.saturating_add(done_limit));
     Ok(entries)
 }
 
@@ -215,7 +269,7 @@ pub async fn classify(
     summary: &RunSummary,
 ) -> Result<InboxEntry, OperatorError> {
     let base = |attention: AttentionGroup, done_reason, active_node, prompt, capacity| InboxEntry {
-        run_id: summary.id.to_string(),
+        run_id: summary.id,
         project_path: summary.project_path.clone(),
         attention,
         done_reason,
@@ -233,7 +287,7 @@ pub async fn classify(
         started_at_ms: summary.started_at_ms,
     };
 
-    if summary.status.is_terminal() {
+    if let Some(reason) = DoneReason::from_status(summary.status) {
         // No reader opened, no event read, for any terminal status —
         // `Failed`/`Aborted`/`Crashed` alike (see this fn's own doc for why
         // that is a deliberate narrowing of the old scan's class, not a
@@ -241,13 +295,13 @@ pub async fn classify(
         // indexed registry query (not an event-log read) to answer spec
         // §10/R30's "was this proven" question — see
         // `evidence_backed_for_completed_run`.
-        if summary.status == surge_core::RunStatus::Completed {
+        if reason == DoneReason::Completed {
             let evidence_backed = evidence_backed_for_completed_run(storage, summary.id).await;
             return Ok(InboxEntry {
                 evidence_backed,
                 ..base(
                     AttentionGroup::Done,
-                    Some(terminal_label(summary.status)),
+                    Some(reason),
                     None,
                     None,
                     CapacityStatus::NeverObserved,
@@ -256,7 +310,7 @@ pub async fn classify(
         }
         return Ok(base(
             AttentionGroup::Done,
-            Some(terminal_label(summary.status)),
+            Some(reason),
             None,
             None,
             CapacityStatus::NeverObserved,
@@ -271,7 +325,7 @@ pub async fn classify(
             run_id: summary.id,
             source,
         })?;
-    let state = fold_run_state(&reader, summary.id).await?;
+    let state = fold_run_state(&reader).await?;
     let active_node = active_node(&state);
     let attention = state.attention();
     // Capacity is a registry point-lookup keyed on *this run's own* parked
@@ -327,7 +381,7 @@ pub async fn classify(
                 evidence_backed,
                 ..base(
                     AttentionGroup::Done,
-                    Some(reason_label(reason)),
+                    Some(reason.into()),
                     None,
                     None,
                     capacity,
@@ -422,29 +476,6 @@ fn active_node(state: &RunState) -> Option<String> {
     }
 }
 
-fn terminal_label(status: surge_core::RunStatus) -> &'static str {
-    use surge_core::RunStatus;
-    match status {
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::Aborted => "aborted",
-        RunStatus::Crashed => "crashed",
-        // Only ever called with `is_terminal()` statuses (see the call
-        // site above); `Bootstrapping`/`Running`/`Parked` are unreachable
-        // here in practice — kept explicit, not a wildcard, per the same
-        // reasoning `classify`'s own doc gives for enumerating every
-        // `RunStatus` by name rather than falling through to "the rest."
-        RunStatus::Bootstrapping | RunStatus::Running | RunStatus::Parked => "running",
-    }
-}
-
-fn reason_label(reason: TerminalReason) -> &'static str {
-    match reason {
-        TerminalReason::Completed => "completed",
-        TerminalReason::Failed => "failed",
-        TerminalReason::Aborted => "aborted",
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,7 +603,7 @@ mod tests {
         let find = |id: RunId| {
             entries
                 .iter()
-                .find(|e| e.run_id == id.to_string())
+                .find(|e| e.run_id == id)
                 .unwrap_or_else(|| panic!("missing {id}"))
         };
         let b = find(blocked);
@@ -584,7 +615,7 @@ mod tests {
 
         let d = find(done);
         assert_eq!(d.attention, AttentionGroup::Done);
-        assert_eq!(d.done_reason, Some("completed"));
+        assert_eq!(d.done_reason, Some(DoneReason::Completed));
         // Spec §10/R30: a completed run that never ran a verifier reads
         // `Some(false)`, never `None` — "success without proof" is a known
         // fact, not an unanswered question.
@@ -693,7 +724,7 @@ mod tests {
         let find = |id: RunId| {
             entries
                 .iter()
-                .find(|e| e.run_id == id.to_string())
+                .find(|e| e.run_id == id)
                 .unwrap_or_else(|| panic!("missing {id}"))
         };
         assert_eq!(find(verified_run).evidence_backed, Some(true));
@@ -756,7 +787,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == mixed_run.to_string())
+            .find(|e| e.run_id == mixed_run)
             .unwrap_or_else(|| panic!("missing {mixed_run}"));
         assert_eq!(entry.evidence_backed, Some(false));
     }
@@ -802,7 +833,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run_id.to_string())
+            .find(|e| e.run_id == run_id)
             .unwrap_or_else(|| panic!("missing {run_id}"));
         assert_eq!(entry.attention, AttentionGroup::Done);
         assert_eq!(
@@ -850,7 +881,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == parked.to_string())
+            .find(|e| e.run_id == parked)
             .expect("parked run present");
         assert_eq!(entry.attention, AttentionGroup::Waiting);
         // Task 12 M5: the wake time and its basis must ride along on the
@@ -948,7 +979,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run.to_string())
+            .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(
             entry.attention,
@@ -1007,7 +1038,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run.to_string())
+            .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(entry.attention, AttentionGroup::Waiting);
         let window = entry.capacity.window().expect(
@@ -1081,7 +1112,7 @@ mod tests {
         let find = |id: RunId| {
             entries
                 .iter()
-                .find(|e| e.run_id == id.to_string())
+                .find(|e| e.run_id == id)
                 .unwrap_or_else(|| panic!("missing {id}"))
         };
         let window_a = find(run_a).capacity.window().expect(
@@ -1146,7 +1177,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run.to_string())
+            .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(entry.attention, AttentionGroup::Waiting);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
@@ -1210,7 +1241,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run.to_string())
+            .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(entry.attention, AttentionGroup::Done);
         assert_eq!(
@@ -1256,7 +1287,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run.to_string())
+            .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(entry.attention, AttentionGroup::Working);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
@@ -1280,7 +1311,7 @@ mod tests {
             .unwrap();
         let entry = entries
             .iter()
-            .find(|e| e.run_id == run.to_string())
+            .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
     }

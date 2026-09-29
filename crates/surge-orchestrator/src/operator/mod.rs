@@ -26,7 +26,7 @@ pub mod steer;
 
 pub use backlog::{LedgerQuery, ReadyQuery, query_ledger, query_ready};
 pub use error::{OperatorError, OperatorErrorKind, RunIdError};
-pub use inbox::{AttentionGroup, InboxEntry, classify, collect_entries};
+pub use inbox::{AttentionGroup, DoneReason, InboxEntry, classify, collect_entries};
 pub use journal::{fold_run_state, read_run_events};
 pub use memory::{MemoryQuery, query_memory};
 pub use pending::{

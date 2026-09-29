@@ -582,7 +582,7 @@ impl SurgeMcpServer {
             .open_run_reader(run_id)
             .await
             .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("open run")))?;
-        match fold_run_state(&reader, run_id).await? {
+        match fold_run_state(&reader).await? {
             RunState::Bootstrapping { .. } => Ok(PendingState::BootstrapApproval),
             _ => Err(ToolError::from(inspect_error)),
         }
@@ -752,9 +752,7 @@ impl SurgeMcpServer {
     async fn run_trace_impl(&self, params: RunTraceParams) -> ToolResult {
         let run_id = self.existing_run(&params.run_id).await?;
         let storage = self.storage().await?;
-        let rendered = compile_trace(storage, &run_id.to_string()).await?;
-        let trace: Value = serde_json::from_str(&rendered)
-            .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("parse trace JSON")))?;
+        let trace = compile_trace(storage, &run_id.to_string()).await?;
         let spans = trace
             .pointer("/resourceSpans/0/scopeSpans/0/spans")
             .and_then(Value::as_array)

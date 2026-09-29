@@ -9,15 +9,18 @@ use crate::operator::error::OperatorError;
 use crate::operator::journal::read_run_events;
 use crate::operator::run_id::resolve_run_id;
 
-/// The OTLP/JSON trace for `run` (full ULID or unique suffix), pretty-printed.
+/// The OTLP/JSON trace for `run` (full ULID or unique suffix), as a JSON
+/// value; adapters choose how to render it.
 ///
 /// # Errors
 /// Returns [`OperatorError`] if the run cannot be resolved or its event log
 /// read.
-pub async fn compile_trace(storage: &Arc<Storage>, run: &str) -> Result<String, OperatorError> {
+pub async fn compile_trace(
+    storage: &Arc<Storage>,
+    run: &str,
+) -> Result<serde_json::Value, OperatorError> {
     let (run_id, events) = load_events(storage, run).await?;
-    let trace = surge_core::run_trace::to_otlp_json(run_id, &events);
-    serde_json::to_string_pretty(&trace).map_err(OperatorError::RenderTrace)
+    Ok(surge_core::run_trace::to_otlp_json(run_id, &events))
 }
 
 /// Compile the Run Report for `run` (full ULID or unique short suffix) from

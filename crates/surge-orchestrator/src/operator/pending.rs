@@ -164,7 +164,7 @@ pub async fn inspect_pending(
         .open_run_reader(run_id)
         .await
         .map_err(|source| OperatorError::OpenRun { run_id, source })?;
-    let state = fold_run_state(&reader, run_id).await?;
+    let state = fold_run_state(&reader).await?;
 
     let RunState::Pipeline {
         graph,
