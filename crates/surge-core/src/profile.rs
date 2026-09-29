@@ -83,6 +83,15 @@ pub struct Role {
     pub display_name: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Accent colour as `#RRGGBB`, used to tell roles apart in the flow
+    /// diagram and the fleet views.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Lowest reasoning effort this role should run with (an ACP
+    /// `thought_level` value such as `"medium"`). A node override may raise
+    /// it but the engine never lowers it below this floor.
+    #[serde(default)]
+    pub min_effort: Option<String>,
     pub category: RoleCategory,
     pub description: String,
     pub when_to_use: String,
@@ -242,6 +251,8 @@ mod tests {
                 version: semver::Version::parse("1.0.0").unwrap(),
                 display_name: "Implementer".into(),
                 icon: None,
+                color: None,
+                min_effort: None,
                 category: RoleCategory::Agents,
                 description: "Writes code.".into(),
                 when_to_use: "Standard implementation work.".into(),

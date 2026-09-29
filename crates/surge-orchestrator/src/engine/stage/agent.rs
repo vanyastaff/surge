@@ -679,7 +679,12 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         env: agent_env,
         // Per-step model / reasoning level chosen by the operator; applied
         // through the agent's standard ACP session options.
-        config_selections: node_config_selections(p.agent_config),
+        config_selections: node_config_selections(
+            p.agent_config,
+            resolved_profile
+                .as_ref()
+                .and_then(|resolved| resolved.profile.role.min_effort.as_deref()),
+        ),
     };
 
     let stage_context = surge_core::stage_tool::StageToolContext {
@@ -2499,14 +2504,41 @@ fn canonical_runtime_id_for(
     )
 }
 
-/// Session options a node asks for (model, reasoning level).
+/// Rank of a reasoning-effort level, lowest first. `None` for a value this
+/// ranking does not know, which is then left exactly as the operator set it.
+fn effort_rank(level: &str) -> Option<usize> {
+    ["minimal", "low", "medium", "high", "xhigh", "max"]
+        .iter()
+        .position(|known| known.eq_ignore_ascii_case(level))
+}
+
+/// The reasoning level a node runs with: its own choice, raised to the
+/// profile's `min_effort` floor when it is lower (or absent). Unranked values
+/// on either side are never rewritten.
+fn effective_effort<'a>(node_effort: Option<&'a str>, floor: Option<&'a str>) -> Option<&'a str> {
+    match (node_effort, floor) {
+        (Some(node), Some(floor)) => match (effort_rank(node), effort_rank(floor)) {
+            (Some(n), Some(f)) if n < f => Some(floor),
+            _ => Some(node),
+        },
+        (None, floor) => floor,
+        (node, None) => node,
+    }
+}
+
+/// Session options a node asks for (model, reasoning level). `min_effort` is
+/// the resolved profile's reasoning floor.
 fn node_config_selections(
     agent_config: &AgentConfig,
+    min_effort: Option<&str>,
 ) -> Vec<surge_acp::bridge::session::ConfigSelection> {
     use surge_acp::bridge::session::{ConfigCategory, ConfigSelection};
     [
         (ConfigCategory::Model, agent_config.model_override()),
-        (ConfigCategory::ThoughtLevel, agent_config.effort_override()),
+        (
+            ConfigCategory::ThoughtLevel,
+            effective_effort(agent_config.effort_override(), min_effort),
+        ),
     ]
     .into_iter()
     .filter_map(|(category, value)| {
@@ -2862,6 +2894,25 @@ fn warn_if_unconstrained_mcp(server: &str, effective: surge_core::sandbox::Sandb
 }
 
 #[cfg(test)]
+mod effort_floor_tests {
+    use super::effective_effort;
+
+    #[test]
+    fn floor_raises_a_lower_node_effort_and_fills_a_missing_one() {
+        assert_eq!(effective_effort(Some("low"), Some("high")), Some("high"));
+        assert_eq!(effective_effort(None, Some("medium")), Some("medium"));
+    }
+
+    #[test]
+    fn floor_never_lowers_or_rewrites_unranked_values() {
+        assert_eq!(effective_effort(Some("max"), Some("high")), Some("max"));
+        assert_eq!(effective_effort(Some("turbo"), Some("high")), Some("turbo"));
+        assert_eq!(effective_effort(Some("low"), None), Some("low"));
+        assert_eq!(effective_effort(None, None), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use surge_core::profile::VerificationCfg;
@@ -3100,6 +3151,8 @@ mod tests {
                     version: semver::Version::new(1, 0, 0),
                     display_name: "Implementer".into(),
                     icon: None,
+                    color: None,
+                    min_effort: None,
                     category: RoleCategory::Agents,
                     description: "Implements".into(),
                     when_to_use: "Tests".into(),

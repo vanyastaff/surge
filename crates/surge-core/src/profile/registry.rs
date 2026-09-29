@@ -408,6 +408,8 @@ mod tests {
                 version: semver::Version::new(1, 0, 0),
                 display_name: name.into(),
                 icon: None,
+                color: None,
+                min_effort: None,
                 category: RoleCategory::Agents,
                 description: format!("desc {name}"),
                 when_to_use: format!("when {name}"),
