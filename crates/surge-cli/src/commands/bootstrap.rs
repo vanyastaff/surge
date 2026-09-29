@@ -171,6 +171,7 @@ async fn start_followup_run(
 ) -> Result<()> {
     let followup_run_id = RunId::new();
     println!("followup_run_id={followup_run_id}");
+    let seed_artifacts = bootstrap_seeds(&materialized, &worktree).await?;
     let events = engine.subscribe_tap();
     let handle = engine
         .start_run(
@@ -180,6 +181,7 @@ async fn start_followup_run(
             surge_orchestrator::project_context::with_project_context_seed(
                 EngineRunConfig {
                     bootstrap_parent: Some(materialized.bootstrap_run_id),
+                    seed_artifacts,
                     ..EngineRunConfig::default()
                 },
                 &project_root,
@@ -192,6 +194,39 @@ async fn start_followup_run(
     })
     .await?;
     super::run_lifecycle::require_completed(followup_run_id, outcome)
+}
+
+/// The approved description, roadmap and flow as run seeds for the follow-up
+/// run. A `multi-milestone` flow iterates the seeded `roadmap`, so without
+/// these it fails validation before its first step (the daemon and desktop
+/// app seed the same three artifacts).
+async fn bootstrap_seeds(
+    materialized: &MaterializedRun,
+    worktree: &Path,
+) -> Result<Vec<surge_orchestrator::engine::config::RunSeedArtifact>> {
+    use surge_orchestrator::engine::config::RunSeedArtifact;
+    use surge_persistence::artifacts::ArtifactStore;
+
+    let store = ArtifactStore::new(surge_home_dir()?.join("runs"));
+    let mut seeds = Vec::new();
+    for artifact in &materialized.artifacts {
+        let bytes = store
+            .open_ref(materialized.bootstrap_run_id, artifact, worktree)
+            .await
+            .with_context(|| format!("read approved {} artifact", artifact.name))?;
+        let text = String::from_utf8(bytes)
+            .with_context(|| format!("{} artifact is not UTF-8", artifact.name))?;
+        let path = match artifact.name.as_str() {
+            "flow" => "flow.toml".to_string(),
+            "roadmap" if toml::from_str::<toml::Value>(&text).is_ok() => "roadmap.toml".to_string(),
+            name => format!("{name}.md"),
+        };
+        seeds.push(
+            RunSeedArtifact::new(&artifact.name, path, &text, "bootstrap_parent")
+                .map_err(|e| anyhow!("seed {}: {e}", artifact.name))?,
+        );
+    }
+    Ok(seeds)
 }
 
 async fn drive_run_handle<D>(

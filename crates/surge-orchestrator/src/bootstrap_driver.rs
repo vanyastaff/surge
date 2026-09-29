@@ -245,6 +245,11 @@ fn latest_bootstrap_artifacts(events: &[ReadEvent]) -> Result<Vec<ArtifactRef>, 
         .collect()
 }
 
+/// Whether `name` is one of the machine-readable roadmap aliases.
+pub(crate) fn is_roadmap_toml_alias(name: &str) -> bool {
+    matches!(name, "roadmap.toml" | "roadmap-toml" | "roadmap_toml")
+}
+
 /// Resolve only the bootstrap roadmap aliases; competing aliases are never guessed.
 pub(crate) fn canonical_roadmap_ref<'a>(
     artifacts: impl IntoIterator<Item = &'a ArtifactRef>,

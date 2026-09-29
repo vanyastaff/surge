@@ -660,7 +660,9 @@ impl Engine {
                     path,
                     name,
                     ..
-                } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str()) => {
+                } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str())
+                    || crate::bootstrap_driver::is_roadmap_toml_alias(&name) =>
+                {
                     artifacts.insert(
                         name.clone(),
                         ArtifactRef {
@@ -674,6 +676,20 @@ impl Engine {
                 },
                 _ => {},
             }
+        }
+
+        // The roadmap planner emits the roadmap under an alias (`roadmap_toml`);
+        // inherit it as `roadmap`, refusing competing aliases rather than guessing.
+        if let Some(roadmap) =
+            crate::bootstrap_driver::canonical_roadmap_ref(artifacts.values(), "roadmap")
+                .map_err(|()| {
+                    EngineError::Internal(format!(
+                        "bootstrap parent {parent_run_id} has competing roadmap artifacts"
+                    ))
+                })?
+                .cloned()
+        {
+            artifacts.insert("roadmap".to_owned(), roadmap);
         }
 
         let parent_worktree = parent_worktree.ok_or_else(|| {
