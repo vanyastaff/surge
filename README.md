@@ -6,43 +6,72 @@
 
 Surge is a Rust workspace for running long AI coding work as explicit, event-sourced workflow graphs. A run is not one giant prompt and not a swarm of agents negotiating with each other. A run is a `flow.toml`: typed nodes, declared outcomes, and edges. Agents do the work inside bounded stages; the graph decides where execution goes next.
 
-The target experience:
+The experience:
 
 ```text
-initialize project → describe work → approve roadmap/flow → walk away → return to a PR
+describe an idea → review the documents Surge writes → approve a roadmap it sized itself
+   → parallel, verified execution in isolated worktrees → a working result you can inspect
 ```
 
-## Status
+You write what you want. Surge drafts a description, a roadmap and a flow, and stops at each one for you to
+**approve, ask for changes, or reject**. The planner decides how many stages and milestones the work needs: a small
+timer app gets one stage, not a forced MVP → beta → prod ladder. Then each task runs its own flow — spec, implement,
+exercise the running app, verify — and "done" is only what an independent verifier certified.
 
-Surge is **pre-release software**. Treat it as an active development workspace, not a stable end-user product. Current implementation by crate:
+## What works today
 
-- `surge-core` — graph, profile, event, sandbox, approval, and validation types.
-- `surge-acp` — Agent Client Protocol (ACP) client / pool / bridge, agent registry, discovery, health, mock ACP agent.
-- `surge-orchestrator` — graph engine (`engine/`), bootstrap chain, project-context helper, roadmap-amendment surfaces.
-- `surge-persistence` — SQLite-backed run storage, event logs, views, memory, analytics.
-- `surge-daemon` — long-running local engine host over Unix sockets / Windows named pipes.
-- `surge-cli` — agents, profiles, git worktrees, graph engine, daemon, registry, memory, insights, analytics, legacy-spec auto-translator (`surge migrate-spec`).
-- `surge-notify` — desktop, webhook, Slack, email, and Telegram delivery backends.
-- `surge-mcp` — stdio MCP server lifecycle and tool delegation, currently wired at the library / engine level rather than through a user-facing config file.
-- `surge-ui` — GPUI desktop shell under development.
+A recorded, unattended run from one sentence ("a small command-line pomodoro timer in Rust") to a program that builds,
+passes its tests and prints the expected output — with every task and milestone carrying verification evidence — is in
+[`docs/recorded-e2e.md`](docs/recorded-e2e.md), including the failures that run found and fixed. It is one project on
+one runtime; read the limits there.
 
 ## Key Features
 
-- **Agent-agnostic via ACP** — works with any ACP-conformant agent: Claude Code, Codex, Gemini, Cursor, Copilot, OpenCode, and more. See [ADR-0006](docs/adr/0006-acp-only-transport.md) for the rationale.
-- **Source-agnostic** — CLI, Telegram, UI, GitHub Issues, and Linear normalize through one intake path.
-- **Sandbox-delegated** — surge configures the agent runtime's native sandbox; no custom OS isolation.
-- **Declarative `flow.toml` graphs** — closed `NodeKind` enum, typed outcomes, deterministic routing.
-- **Event-sourced** — append-only per-run SQLite log; replay, fork-from-here, and crash recovery are folds.
-- **Telegram-first approvals** — desktop / email / Slack / webhook fallbacks in `surge-notify`.
+- **Human-approved plan before code** — description, roadmap and flow each stop at an approve / edit / reject gate.
+- **Roadmap with real structure** — optional release stages, missions with validation contracts, milestones, tasks
+  with priority, dependencies and explicit parallel groups; the planner sizes it and justifies the stage count.
+- **Verification the implementer cannot write** — a sealed read-only verifier owns `verified`; an **App Tester**
+  starts the built program and reports evidence; an optional **cross-vendor verifier** runs on a different runtime;
+  flow-load warnings flag unverified, same-runtime and end-only verification.
+- **Agent-agnostic via ACP** — Claude Code, Codex, Gemini, Cursor, Copilot, OpenCode, Goose, DeepSeek Harness,
+  Ollama. See [ADR-0006](docs/adr/0006-acp-only-transport.md).
+- **A main agent can drive Surge** — `surge mcp serve` exposes inbox, run status, ledger, run report and (with
+  `--allow-write`) steer / resolve / start-bootstrap over MCP; Surge also supervises MCP servers for its agents.
+- **Profiles with identity** — each role has a name, icon, colour and a reasoning-effort floor; the flow diagram
+  shows them.
+- **Event-sourced runs** — append-only per-run SQLite log; replay, fork-from-here, steer and crash recovery are folds.
+- **Safe by default** — sandbox delegated to each runtime; third-party ticket text is fenced as untrusted data;
+  hash-pinned skills; provider rate limits park a run instead of failing it; budgets freeze and resume.
+- **Thirteen archetypes** — `feature`, `bug-fix`, `refactor`, `security`, `docs`, `migration`, `performance`,
+  `spike`, `linear-3`, `linear-with-review`, `multi-milestone`, `single-task`, and `code-review` for judging an
+  existing change. `surge engine run --template <name> --prompt "<what you want>"` runs one directly.
+- **Desktop app** — Fleet, Roadmap, Missions, Flow, Inbox, Backlog, Agents, Memory and Settings on real run data.
+- **Source-agnostic intake** — CLI, Telegram, UI, GitHub Issues and Linear share one path.
 - **One git worktree per run** — managed via `git2`; merged or discarded on terminal outcome.
+
+## Status
+
+Surge is **pre-release software**. What is not there yet: hosted or mobile clients, semantic merge-conflict
+resolution, a kanban queue, OpenTelemetry export. See
+[`docs/competitive-comparison-2026-09-29.md`](docs/competitive-comparison-2026-09-29.md) for a sourced comparison with
+Factory, Aperant and Agentlas, including where they are ahead. No head-to-head benchmark exists.
+
+Crates: `surge-core` (graph, profile, roadmap, event, validation types), `surge-acp` (ACP client / bridge / registry),
+`surge-orchestrator` (engine, bootstrap, roadmap amendment), `surge-persistence` (SQLite runs, memory, analytics),
+`surge-daemon` (local engine host), `surge-cli`, `surge-notify`, `surge-intake`, `surge-telegram`, `surge-mcp`
+(supervised MCP client), `surge-git`, `surge-ui` (GPUI desktop app).
 
 ## Quick Start
 
 ```bash
-# Build the core workspace (excludes the optional GPUI desktop shell)
-cargo build --workspace --exclude surge-ui
+# Build everything, including the desktop app
+cargo build --workspace
 
-# Run the smallest possible flow (terminal node only — no agent needed)
+# From an idea to a plan you approve (needs an authenticated agent runtime, e.g. Claude Code)
+cd your-project && surge init --default
+surge bootstrap "a small command-line pomodoro timer in Rust"
+
+# Or run the smallest possible flow — no agent needed
 cargo run -p surge-cli --bin surge -- engine run examples/flow_terminal_only.toml --watch
 ```
 
