@@ -20,6 +20,7 @@ use crate::id::RunId;
 use crate::run_event::{EventPayload, RunEvent};
 
 /// OTLP status codes (`Status.StatusCode`).
+const STATUS_UNSET: u8 = 0;
 const STATUS_OK: u8 = 1;
 const STATUS_ERROR: u8 = 2;
 
@@ -46,7 +47,7 @@ pub fn to_otlp_json(run_id: RunId, events: &[RunEvent]) -> Value {
                 open = Some(StageSpan::new(&run, event.seq, node.as_str(), *attempt, at));
             },
             EventPayload::StageCompleted { node, outcome } => {
-                if let Some(mut stage) = open.take().filter(|s| s.node == node.as_str()) {
+                if let Some(mut stage) = take_if_node(&mut open, node.as_str()) {
                     stage.attr("surge.outcome", outcome.as_str());
                     spans.push(stage.finish(&trace_id, &root_id, at, Some(true)));
                 }
@@ -56,7 +57,7 @@ pub fn to_otlp_json(run_id: RunId, events: &[RunEvent]) -> Value {
                 reason,
                 retry_available,
             } => {
-                if let Some(mut stage) = open.take().filter(|s| s.node == node.as_str()) {
+                if let Some(mut stage) = take_if_node(&mut open, node.as_str()) {
                     stage.attr("surge.retry_available", *retry_available);
                     stage.error = Some(reason.clone());
                     spans.push(stage.finish(&trace_id, &root_id, at, Some(false)));
@@ -106,6 +107,18 @@ pub fn to_otlp_json(run_id: RunId, events: &[RunEvent]) -> Value {
             }],
         }],
     })
+}
+
+/// Take the open span only when it belongs to `node`.
+///
+/// A completion naming a different node (an interleaved or replayed log) must
+/// leave the open span alone, not silently discard it.
+fn take_if_node(open: &mut Option<StageSpan>, node: &str) -> Option<StageSpan> {
+    if open.as_ref().is_some_and(|stage| stage.node == node) {
+        open.take()
+    } else {
+        None
+    }
 }
 
 /// One stage attempt while its span is still open.
@@ -209,7 +222,7 @@ impl StageSpan {
         let (status, message) = match succeeded {
             Some(true) => (STATUS_OK, None),
             Some(false) => (STATUS_ERROR, self.error),
-            None => (0, None),
+            None => (STATUS_UNSET, None),
         };
         span_json(
             trace_id,
@@ -246,7 +259,7 @@ fn run_outcome(events: &[RunEvent]) -> (u8, Option<String>, Vec<Value>) {
             _ => {},
         }
     }
-    (0, None, vec![attr("surge.in_progress", true)])
+    (STATUS_UNSET, None, vec![attr("surge.in_progress", true)])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -494,6 +507,40 @@ mod tests {
         assert_eq!(spans[0]["status"]["code"], 0);
         assert_eq!(spans[1]["status"]["code"], 0);
         assert_eq!(spans[1]["attributes"][1]["value"]["intValue"], "2");
+    }
+
+    #[test]
+    fn a_completion_for_another_node_does_not_discard_the_open_span() {
+        let run = RunId::new();
+        let events = vec![
+            ev(
+                run,
+                1,
+                0,
+                EventPayload::StageEntered {
+                    node: node("impl"),
+                    attempt: 1,
+                },
+            ),
+            ev(
+                run,
+                2,
+                5,
+                EventPayload::StageCompleted {
+                    node: node("other"),
+                    outcome: outcome("done"),
+                },
+            ),
+        ];
+        let trace = to_otlp_json(run, &events);
+        let spans = spans(&trace);
+        assert_eq!(
+            spans.len(),
+            2,
+            "the impl span must still be exported: {spans:?}"
+        );
+        assert_eq!(spans[1]["name"], "stage impl");
+        assert_eq!(spans[1]["status"]["code"], 0, "never finished, so unset");
     }
 
     #[test]
