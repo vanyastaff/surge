@@ -137,41 +137,85 @@ go to stderr.
 
 | Tool | Kind | Backed by | Needs daemon |
 |---|---|---|---|
-| `surge_inbox` | read | `surge inbox` | no |
+| `surge_inbox(include_done?, limit?)` | read | `surge inbox` | no |
 | `surge_run_status(run_id)` | read | inbox classifier + `surge resolve` inspect mode | no |
-| `surge_ready_tasks` | read | `surge ready` | no |
-| `surge_ledger(run_id?)` | read | `surge ledger` | no |
-| `surge_run_report(run_id)` | read | `surge run report` | no |
-| `surge_memory_search(query)` | read | `surge memory search` | no |
+| `surge_ready_tasks(status?, discovered?, run_id?, limit?)` | read | `surge ready` | no |
+| `surge_ledger(run_id?, limit?)` | read | `surge ledger` | no |
+| `surge_run_report(run_id, format?)` | read | `surge run report` | no |
+| `surge_memory_search(query, tags?, limit?)` | read | `surge memory search` | no |
 | `surge_steer(run_id, message)` | write | `surge steer` | yes |
-| `surge_resolve(run_id, decision, note?)` | write | `surge resolve` | yes |
+| `surge_resolve(run_id, expected_node, decision, note?)` | write | `surge resolve` | yes |
 | `surge_bootstrap_start(idea)` | write | daemon durable bootstrap (as the desktop app) | yes |
 
-Each result carries a short text summary plus structured JSON. Failures are
-MCP tool errors (`isError: true`) whose structured content is
-`{"error": {"kind", "message"}}` with `kind` one of `write_disabled`,
-`daemon_not_running`, `rejected`, `failed`. A daemon-dependent tool with no
-daemon reports `daemon not running — start it with surge daemon start`.
+Each result carries a short prose summary plus structured JSON.
+**`structuredContent` is the machine-readable form; the text is for humans.**
+`surge_run_report`'s `format` (`summary`, the default, or `markdown`) only
+changes the text; the full report is always in `structuredContent`.
 `surge_ledger` covers all projects, like `surge ledger`; per-project scoping
 lands when runs record their origin repo.
+
+**Limits.** `limit` is validated, never clamped: a value outside `1..=5000`
+(`1..=50` for `surge_memory_search`, per category) is an `invalid_argument`
+error, and the JSON schema carries the same `minimum`/`maximum`. Listings
+report `count` (rows returned), `total` (rows matching, before the limit) and
+`truncated` (`total > count`); `surge_inbox` reports them under `done` and
+omits `done.runs` unless `include_done` is set. `total` saturates at one
+million.
+
+**`surge_run_status`** returns `run`, `registry_status` and `pending_input`:
+`null` when the run is not blocked, otherwise a value tagged by `kind`:
+
+| `kind` | Extra fields | Can `surge_resolve` answer it? |
+|---|---|---|
+| `gate` | `node`, `prompt`, `options: [{outcome, label}]` | yes, `decision` is an `outcome` key; `note` optional |
+| `tool_call` | `node`, `prompt` | yes, `decision` is the free-form answer text; `note` is rejected |
+| `bootstrap_approval` | `node`, `prompt` when known | never: `human_only_gate` |
+
+A storage or parse failure while reading the pending request is reported as
+`failed`, never as a `bootstrap_approval`.
+
+**`surge_resolve`** requires `expected_node` (the `pending_input.node` you were
+shown) and echoes the accepted decision as
+`decision: {kind: "outcome" | "free_form", value}` next to `run_id` and `node`.
+
+## Errors
+
+Failures are MCP tool errors (`isError: true`) whose structured content is
+`{"error": {"kind", "message", "data"?}}`. `kind` is a stable code:
+
+| `kind` | Meaning | `data` |
+|---|---|---|
+| `write_disabled` | mutating tool on a server started without `--allow-write` | |
+| `daemon_not_running` | the tool needs the daemon (`surge daemon start`) and none is reachable | |
+| `invalid_run_id` | run id malformed, shorter than 6 characters, or matches several runs | |
+| `run_not_found` | well-formed run id, no such run | |
+| `invalid_argument` | blank or out-of-range argument (empty message/idea/query/decision, `limit` outside its range, `note` on a `tool_call` answer, unknown `status` filter) | |
+| `not_awaiting_input` | `surge_resolve` on a run outside the inbox's `needs_input` group | |
+| `human_only_gate` | the run waits at a bootstrap approval (description / roadmap / flow) | |
+| `stale_gate` | the run is blocked at a different node than `expected_node` | `expected_node`, `current_node` |
+| `invalid_decision` | `decision` is not an outcome the gate declares (or it declares none) | `valid_decisions` |
+| `rejected` | the daemon or bootstrap supervisor declined a well-formed request (run not active, no supervisor) | |
+| `failed` | internal fault: storage, IO, serialization | |
 
 **Safety rules**
 
 - Write tools are always listed but refused unless the server runs with
-  `--allow-write`.
+  `--allow-write`. Every one starts with a single guard that checks the flag
+  and returns the audit handle, so none can skip either step.
 - Every accepted mutation is logged via `tracing` (target
   `surge::mcp_serve::audit`) with the client name from the MCP `initialize`
-  request (self-reported, not authenticated). Steer text is logged by length
-  only.
+  request (self-reported, not authenticated). Steer text and free-form
+  answers are logged by length or placeholder only.
 - `surge_resolve` answers only a run that is in the inbox's `needs_input`
-  group *at call time*, only with an outcome the pending gate declares
-  (`surge_run_status` lists them), and accepts an optional `expected_node` so a
-  stale decision cannot land on a newer gate. It never answers a
-  bootstrap-mode gate: description, roadmap and flow approvals stay human
-  decisions (desktop app, Telegram, `surge bootstrap`).
+  group *at call time*, only at the node named by `expected_node`, and only
+  with an outcome the pending gate declares (`surge_run_status` lists them).
+  It never answers a bootstrap-mode gate: description, roadmap and flow
+  approvals stay human decisions (desktop app, Telegram, `surge bootstrap`).
+  The policy is one pure function (`authorize_resolution`) with a unit test
+  per gate.
 - `surge_bootstrap_start` hands the idea to the daemon's durable bootstrap
-  supervisor, which stops at each approval gate; the returned `planning_run`
-  can be followed with `surge_run_status`.
+  supervisor, which stops at each approval gate (a human answers those); the
+  returned `planning_run` can be followed with `surge_run_status`.
 
 ## Deferred
 

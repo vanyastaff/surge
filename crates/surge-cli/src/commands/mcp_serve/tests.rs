@@ -24,7 +24,11 @@ use surge_core::run_event::{BootstrapStage, EventPayload, RunConfig, VersionedEv
 use surge_core::sandbox::SandboxMode;
 use surge_persistence::runs::Storage;
 
-use super::{ServeOptions, serve};
+use super::{
+    Answer, AttentionGroup, PendingState, ResolveRequest, ServeOptions, SurgeMcpServer, TOOLS,
+    ToolError, authorize_resolution, serve,
+};
+use crate::commands::resolve::PendingInput;
 
 const ALL_TOOLS: [&str; 9] = [
     "surge_inbox",
@@ -84,6 +88,14 @@ fn text(result: &CallToolResult) -> String {
             _ => None,
         })
         .collect()
+}
+
+fn server(home: &Path, allow_write: bool) -> SurgeMcpServer {
+    SurgeMcpServer::new(ServeOptions {
+        home: home.to_path_buf(),
+        project_root: home.to_path_buf(),
+        allow_write,
+    })
 }
 
 /// Assert `result` is an MCP tool error of `kind` and return its message.
@@ -244,11 +256,28 @@ async fn unknown_run_is_a_tool_error_not_a_protocol_error() {
     let missing = RunId::new().to_string();
 
     let status = call(&client, "surge_run_status", json!({"run_id": missing})).await;
-    let message = expect_error(&status, "rejected");
+    let message = expect_error(&status, "run_not_found");
     assert!(message.contains("no run"), "{message}");
 
     let report = call(&client, "surge_run_report", json!({"run_id": missing})).await;
-    assert_eq!(report.is_error, Some(true), "{report:?}");
+    expect_error(&report, "run_not_found");
+
+    let ready = call(&client, "surge_ready_tasks", json!({"run_id": missing})).await;
+    expect_error(&ready, "run_not_found");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_and_unmatched_run_ids_are_caller_errors_not_faults() {
+    let home = tempfile::tempdir().unwrap();
+    seed_working_run(home.path()).await;
+    let client = connect(home.path(), false).await;
+
+    let too_short = call(&client, "surge_run_status", json!({"run_id": "abc"})).await;
+    let message = expect_error(&too_short, "invalid_run_id");
+    assert!(message.contains("too short"), "{message}");
+
+    let unmatched = call(&client, "surge_run_status", json!({"run_id": "ZZZZZZZZ"})).await;
+    expect_error(&unmatched, "run_not_found");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -257,14 +286,26 @@ async fn read_only_server_refuses_every_mutating_tool() {
     let client = connect(home.path(), false).await;
     let run_id = RunId::new().to_string();
 
-    for (tool, args) in [
+    let cases = [
         ("surge_steer", json!({"run_id": run_id, "message": "hi"})),
         (
             "surge_resolve",
-            json!({"run_id": run_id, "decision": "approve"}),
+            json!({"run_id": run_id, "decision": "approve", "expected_node": "plan_gate"}),
         ),
         ("surge_bootstrap_start", json!({"idea": "build a thing"})),
-    ] {
+    ];
+    // The e2e cases must cover exactly the tools the table marks mutating.
+    let mut covered: Vec<&str> = cases.iter().map(|(tool, _)| *tool).collect();
+    let mut mutating: Vec<&str> = TOOLS
+        .iter()
+        .filter(|t| t.mutating)
+        .map(|t| t.name)
+        .collect();
+    covered.sort_unstable();
+    mutating.sort_unstable();
+    assert_eq!(covered, mutating);
+
+    for (tool, args) in cases {
         let result = call(&client, tool, args).await;
         let message = expect_error(&result, "write_disabled");
         assert!(message.contains("--allow-write"), "{tool}: {message}");
@@ -316,6 +357,8 @@ async fn blocked_run_is_surfaced_with_prompt_and_valid_decisions() {
     let pending = &structured(&status)["pending_input"];
     assert_eq!(pending["node"], "plan_gate");
     assert_eq!(pending["kind"], "gate");
+    assert_eq!(pending["prompt"], "Approve the plan?");
+    assert!(structured(&status).get("note").is_none());
     let outcomes: Vec<&str> = pending["options"]
         .as_array()
         .unwrap()
@@ -334,10 +377,10 @@ async fn resolve_refuses_a_run_the_inbox_did_not_surface() {
     let result = call(
         &client,
         "surge_resolve",
-        json!({"run_id": run.to_string(), "decision": "approve"}),
+        json!({"run_id": run.to_string(), "decision": "approve", "expected_node": "plan_gate"}),
     )
     .await;
-    let message = expect_error(&result, "rejected");
+    let message = expect_error(&result, "not_awaiting_input");
     assert!(message.contains("needs_input"), "{message}");
 }
 
@@ -351,11 +394,15 @@ async fn resolve_validates_the_decision_before_touching_the_daemon() {
     let bogus = call(
         &client,
         "surge_resolve",
-        json!({"run_id": run_id, "decision": "ship-it"}),
+        json!({"run_id": run_id, "decision": "ship-it", "expected_node": "plan_gate"}),
     )
     .await;
-    let message = expect_error(&bogus, "rejected");
+    let message = expect_error(&bogus, "invalid_decision");
     assert!(message.contains("not valid"), "{message}");
+    assert_eq!(
+        structured(&bogus)["error"]["data"]["valid_decisions"],
+        json!(["approve", "reject"])
+    );
 
     let stale = call(
         &client,
@@ -363,15 +410,19 @@ async fn resolve_validates_the_decision_before_touching_the_daemon() {
         json!({"run_id": run_id, "decision": "approve", "expected_node": "other_gate"}),
     )
     .await;
-    let message = expect_error(&stale, "rejected");
+    let message = expect_error(&stale, "stale_gate");
     assert!(message.contains("plan_gate"), "{message}");
+    assert_eq!(
+        structured(&stale)["error"]["data"],
+        json!({"expected_node": "other_gate", "current_node": "plan_gate"})
+    );
 
     // Every gate passed: only the (absent) daemon stands between the decision
     // and delivery, which proves the request reached the delivery step.
     let accepted = call(
         &client,
         "surge_resolve",
-        json!({"run_id": run_id, "decision": "approve", "note": "lgtm"}),
+        json!({"run_id": run_id, "decision": "approve", "note": "lgtm", "expected_node": "plan_gate"}),
     )
     .await;
     expect_error(&accepted, "daemon_not_running");
@@ -392,10 +443,10 @@ async fn resolve_never_answers_a_bootstrap_approval_gate() {
     let result = call(
         &client,
         "surge_resolve",
-        json!({"run_id": run.to_string(), "decision": "approve"}),
+        json!({"run_id": run.to_string(), "decision": "approve", "expected_node": "plan_gate"}),
     )
     .await;
-    let message = expect_error(&result, "rejected");
+    let message = expect_error(&result, "human_only_gate");
     assert!(message.contains("bootstrap approval"), "{message}");
 }
 
@@ -416,4 +467,354 @@ async fn run_report_compiles_for_a_seeded_run() {
     let reported = structured(&report)["report"]["run_id"].as_str().unwrap();
     assert!(run.to_string().ends_with(reported), "{reported}");
     assert!(text(&report).contains("incomplete"), "{}", text(&report));
+    let one_line = text(&report);
+
+    // `markdown` changes only the text; the structured report is the same.
+    let markdown = call(
+        &client,
+        "surge_run_report",
+        json!({"run_id": run.to_string(), "format": "markdown"}),
+    )
+    .await;
+    assert_eq!(markdown.is_error, Some(false), "{markdown:?}");
+    assert!(text(&markdown).len() > one_line.len());
+    assert_eq!(structured(&markdown), structured(&report));
+
+    // The old `json` / `md` spellings are gone.
+    let old = client
+        .call_tool(
+            CallToolRequestParams::new("surge_run_report").with_arguments(
+                json!({"run_id": run.to_string(), "format": "md"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await;
+    assert!(old.is_err(), "{old:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_pending_input_is_null_when_not_blocked_and_tagged_when_blocked() {
+    let home = tempfile::tempdir().unwrap();
+    let working = seed_working_run(home.path()).await;
+    let bootstrap_gate = seed_gate_run(
+        home.path(),
+        HumanGateMode::Bootstrap {
+            stage: BootstrapStage::Flow,
+        },
+    )
+    .await;
+    let client = connect(home.path(), false).await;
+
+    let status = call(
+        &client,
+        "surge_run_status",
+        json!({"run_id": working.to_string()}),
+    )
+    .await;
+    assert!(structured(&status)["pending_input"].is_null(), "{status:?}");
+
+    let status = call(
+        &client,
+        "surge_run_status",
+        json!({"run_id": bootstrap_gate.to_string()}),
+    )
+    .await;
+    let pending = &structured(&status)["pending_input"];
+    assert_eq!(pending["kind"], "bootstrap_approval");
+    assert_eq!(pending["node"], "plan_gate");
+    assert!(pending.get("options").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resolve_requires_expected_node() {
+    let home = tempfile::tempdir().unwrap();
+    let client = connect(home.path(), true).await;
+    let arguments = json!({"run_id": RunId::new().to_string(), "decision": "approve"})
+        .as_object()
+        .cloned()
+        .unwrap();
+    let result = client
+        .call_tool(CallToolRequestParams::new("surge_resolve").with_arguments(arguments))
+        .await;
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn out_of_range_limits_are_invalid_arguments_not_clamped() {
+    let home = tempfile::tempdir().unwrap();
+    let client = connect(home.path(), false).await;
+
+    for (tool, args) in [
+        ("surge_inbox", json!({"limit": 0})),
+        ("surge_inbox", json!({"limit": 5001})),
+        ("surge_ready_tasks", json!({"limit": -1})),
+        ("surge_ledger", json!({"limit": 0})),
+        ("surge_memory_search", json!({"query": "x", "limit": 51})),
+    ] {
+        let result = call(&client, tool, args.clone()).await;
+        let message = expect_error(&result, "invalid_argument");
+        assert!(message.contains("limit"), "{tool} {args}: {message}");
+    }
+
+    // The boundaries themselves are accepted.
+    let inbox = call(&client, "surge_inbox", json!({"limit": 5000})).await;
+    assert_eq!(inbox.is_error, Some(false), "{inbox:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn limit_schema_bounds_match_the_enforced_bounds() {
+    let home = tempfile::tempdir().unwrap();
+    let client = connect(home.path(), false).await;
+    let tools = client.list_all_tools().await.unwrap();
+    for (tool, max) in [
+        ("surge_inbox", super::MAX_ROW_LIMIT),
+        ("surge_ready_tasks", super::MAX_ROW_LIMIT),
+        ("surge_ledger", super::MAX_ROW_LIMIT),
+        ("surge_memory_search", super::MAX_MEMORY_LIMIT),
+    ] {
+        let schema = &tools.iter().find(|t| t.name == tool).unwrap().input_schema;
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["minimum"], 1, "{tool}: {limit}");
+        assert_eq!(limit["maximum"], max, "{tool}: {limit}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn listings_report_total_and_truncation() {
+    let home = tempfile::tempdir().unwrap();
+    for _ in 0..3 {
+        seed_working_run(home.path()).await;
+    }
+    let client = connect(home.path(), false).await;
+
+    let inbox = call(&client, "surge_inbox", json!({})).await;
+    let done = &structured(&inbox)["done"];
+    assert_eq!(done["total"], 0);
+    assert_eq!(done["truncated"], false);
+    assert!(
+        done.get("runs").is_none(),
+        "runs omitted without include_done"
+    );
+
+    let inbox = call(&client, "surge_inbox", json!({"include_done": true})).await;
+    assert_eq!(structured(&inbox)["done"]["runs"], json!([]));
+
+    let ready = call(&client, "surge_ready_tasks", json!({})).await;
+    let ready = structured(&ready);
+    assert_eq!(ready["count"], 0);
+    assert_eq!(ready["total"], 0);
+    assert_eq!(ready["truncated"], false);
+
+    let memory = call(&client, "surge_memory_search", json!({"query": "x"})).await;
+    let memory = structured(&memory);
+    assert_eq!(
+        (memory["count"].clone(), memory["truncated"].clone()),
+        (json!(0), json!(false))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blank_arguments_are_invalid_arguments() {
+    let home = tempfile::tempdir().unwrap();
+    let run = seed_working_run(home.path()).await;
+    let client = connect(home.path(), true).await;
+
+    let steer = call(
+        &client,
+        "surge_steer",
+        json!({"run_id": run.to_string(), "message": "  "}),
+    )
+    .await;
+    expect_error(&steer, "invalid_argument");
+
+    let bootstrap = call(&client, "surge_bootstrap_start", json!({"idea": " "})).await;
+    expect_error(&bootstrap, "invalid_argument");
+
+    let memory = call(&client, "surge_memory_search", json!({"query": ""})).await;
+    expect_error(&memory, "invalid_argument");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_mutating_tool_is_refused_by_the_write_guard() {
+    let home = tempfile::tempdir().unwrap();
+    let read_only = server(home.path(), false);
+    let writable = server(home.path(), true);
+    for spec in TOOLS.iter().filter(|spec| spec.mutating) {
+        let refused = read_only.begin_mutation(spec.name, "test").err();
+        assert!(
+            matches!(refused, Some(ToolError::WriteDisabled(tool)) if tool == spec.name),
+            "{}: {refused:?}",
+            spec.name
+        );
+        assert!(writable.begin_mutation(spec.name, "test").is_ok());
+    }
+}
+
+#[test]
+fn tool_table_matches_the_registered_router() {
+    let home = tempfile::tempdir().unwrap();
+    let registered = server(home.path(), false).tool_router.list_all();
+    assert_eq!(registered.len(), TOOLS.len());
+    for spec in TOOLS.iter() {
+        let tool = registered
+            .iter()
+            .find(|tool| tool.name == spec.name)
+            .unwrap_or_else(|| panic!("{} is not registered", spec.name));
+        let read_only = tool
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.read_only_hint);
+        assert_eq!(read_only, Some(!spec.mutating), "{}", spec.name);
+    }
+}
+
+fn pending_input(is_tool_call: bool, is_bootstrap_gate: bool, options: &[&str]) -> PendingState {
+    PendingState::Input(PendingInput {
+        node: NodeKey::try_from("plan_gate").unwrap(),
+        call_id: None,
+        prompt: "Approve?".into(),
+        gate_options: options
+            .iter()
+            .map(|key| ((*key).to_owned(), key.to_uppercase()))
+            .collect(),
+        is_tool_call,
+        is_bootstrap_gate,
+    })
+}
+
+fn request<'a>(
+    expected_node: &'a str,
+    decision: &'a str,
+    note: Option<&'a str>,
+) -> ResolveRequest<'a> {
+    ResolveRequest {
+        expected_node,
+        decision,
+        note,
+    }
+}
+
+#[test]
+fn authorize_requires_the_run_to_be_in_needs_input() {
+    let pending = pending_input(false, false, &["approve"]);
+    for attention in [
+        AttentionGroup::Working,
+        AttentionGroup::Waiting,
+        AttentionGroup::Done,
+    ] {
+        let refused =
+            authorize_resolution(attention, &pending, &request("plan_gate", "approve", None));
+        assert!(
+            matches!(refused, Err(ToolError::NotAwaitingInput(_))),
+            "{attention:?}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn authorize_never_answers_a_bootstrap_approval() {
+    for pending in [
+        pending_input(false, true, &["approve"]),
+        PendingState::BootstrapApproval,
+    ] {
+        let refused = authorize_resolution(
+            AttentionGroup::NeedsInput,
+            &pending,
+            &request("plan_gate", "approve", None),
+        );
+        assert!(
+            matches!(refused, Err(ToolError::HumanOnlyGate(_))),
+            "{pending:?}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn authorize_refuses_a_stale_node_and_names_the_current_one() {
+    let pending = pending_input(false, false, &["approve"]);
+    let refused = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &pending,
+        &request("older_gate", "approve", None),
+    );
+    match refused {
+        Err(ToolError::StaleGate {
+            expected_node,
+            current_node,
+        }) => assert_eq!(
+            (expected_node.as_str(), current_node.as_str()),
+            ("older_gate", "plan_gate")
+        ),
+        other => panic!("expected StaleGate, got {other:?}"),
+    }
+}
+
+#[test]
+fn authorize_only_accepts_a_declared_decision() {
+    let pending = pending_input(false, false, &["approve", "reject"]);
+    let refused = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &pending,
+        &request("plan_gate", "ship-it", None),
+    );
+    match refused {
+        Err(ToolError::InvalidDecision {
+            valid_decisions, ..
+        }) => assert_eq!(valid_decisions, ["approve", "reject"]),
+        other => panic!("expected InvalidDecision, got {other:?}"),
+    }
+
+    let no_options = pending_input(false, false, &[]);
+    let refused = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &no_options,
+        &request("plan_gate", "approve", None),
+    );
+    assert!(
+        matches!(refused, Err(ToolError::InvalidDecision { .. })),
+        "{refused:?}"
+    );
+
+    let accepted = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &pending,
+        &request("plan_gate", " reject ", Some("no")),
+    )
+    .unwrap();
+    assert_eq!(accepted.answer, Answer::Outcome("reject".into()));
+    assert_eq!(accepted.note, Some("no"));
+}
+
+#[test]
+fn authorize_takes_free_form_answers_for_tool_calls_and_rejects_a_note() {
+    let pending = pending_input(true, false, &[]);
+    let accepted = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &pending,
+        &request("plan_gate", "use postgres", None),
+    )
+    .unwrap();
+    assert_eq!(accepted.answer, Answer::FreeForm("use postgres".into()));
+
+    let with_note = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &pending,
+        &request("plan_gate", "use postgres", Some("fyi")),
+    );
+    assert!(
+        matches!(with_note, Err(ToolError::InvalidArgument(_))),
+        "{with_note:?}"
+    );
+
+    let blank = authorize_resolution(
+        AttentionGroup::NeedsInput,
+        &pending,
+        &request("plan_gate", "  ", None),
+    );
+    assert!(
+        matches!(blank, Err(ToolError::InvalidArgument(_))),
+        "{blank:?}"
+    );
 }

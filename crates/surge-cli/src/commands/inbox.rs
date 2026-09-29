@@ -60,13 +60,40 @@ pub struct InboxArgs {
     pub json: bool,
 }
 
+/// The inbox group a run belongs to. Serializes as the snake_case label
+/// (`needs_input` | `working` | `waiting` | `done`) `--json` has always used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AttentionGroup {
+    /// Blocked on an operator answer.
+    NeedsInput,
+    /// Making progress.
+    Working,
+    /// Parked until a wake time (provider rate limit).
+    Waiting,
+    /// Reached a terminal state.
+    Done,
+}
+
+impl AttentionGroup {
+    /// The stable snake_case label.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NeedsInput => "needs_input",
+            Self::Working => "working",
+            Self::Waiting => "waiting",
+            Self::Done => "done",
+        }
+    }
+}
+
 /// One classified run for the inbox.
 #[derive(Debug, Serialize)]
 pub(crate) struct InboxEntry {
     run_id: String,
     project_path: PathBuf,
     /// `needs_input` | `working` | `done`.
-    attention: &'static str,
+    attention: AttentionGroup,
     /// Terminal reason when done (`completed` / `failed` / `aborted`), else null.
     #[serde(skip_serializing_if = "Option::is_none")]
     done_reason: Option<&'static str>,
@@ -113,15 +140,8 @@ pub(crate) struct InboxEntry {
 }
 
 impl InboxEntry {
-    /// Whether the run sits in the inbox's NEEDS INPUT group — the only group
-    /// whose blocking question an operator (or an MCP client acting for one)
-    /// has been shown and may answer.
-    pub(crate) fn is_needs_input(&self) -> bool {
-        self.attention == "needs_input"
-    }
-
-    /// The attention group label: `needs_input` | `working` | `waiting` | `done`.
-    pub(crate) fn attention(&self) -> &'static str {
+    /// The inbox group this run sits in.
+    pub(crate) fn attention(&self) -> AttentionGroup {
         self.attention
     }
 }
@@ -180,10 +200,10 @@ pub(crate) async fn collect_entries(
     }
     // Bound only the settled/Done tail: keep every NEEDS INPUT / WORKING entry,
     // cap Done at `limit` (Done is a count/`--all` view anyway).
-    entries.sort_by_key(|e| e.attention == "done");
+    entries.sort_by_key(|e| e.attention == AttentionGroup::Done);
     let done_start = entries
         .iter()
-        .position(|e| e.attention == "done")
+        .position(|e| e.attention == AttentionGroup::Done)
         .unwrap_or(entries.len());
     entries.truncate(done_start.saturating_add(limit));
     Ok(entries)
@@ -233,7 +253,7 @@ pub(crate) async fn classify(
     storage: &std::sync::Arc<Storage>,
     summary: &RunSummary,
 ) -> Result<InboxEntry> {
-    let base = |attention: &'static str, done_reason, active_node, prompt, capacity| InboxEntry {
+    let base = |attention: AttentionGroup, done_reason, active_node, prompt, capacity| InboxEntry {
         run_id: summary.id.to_string(),
         project_path: summary.project_path.clone(),
         attention,
@@ -265,7 +285,7 @@ pub(crate) async fn classify(
             return Ok(InboxEntry {
                 evidence_backed,
                 ..base(
-                    "done",
+                    AttentionGroup::Done,
                     Some(terminal_label(summary.status)),
                     None,
                     None,
@@ -274,7 +294,7 @@ pub(crate) async fn classify(
             });
         }
         return Ok(base(
-            "done",
+            AttentionGroup::Done,
             Some(terminal_label(summary.status)),
             None,
             None,
@@ -306,13 +326,13 @@ pub(crate) async fn classify(
     };
     Ok(match attention {
         Attention::NeedsInput => base(
-            "needs_input",
+            AttentionGroup::NeedsInput,
             None,
             active_node,
             state.pending_prompt().map(ToOwned::to_owned),
             capacity,
         ),
-        Attention::Working => base("working", None, active_node, None, capacity),
+        Attention::Working => base(AttentionGroup::Working, None, active_node, None, capacity),
         // Task 12 M5: the wake time and its basis (observed provider reset
         // vs. a policy-backoff guess) ride along on the entry itself, typed,
         // rather than only being visible as the "waiting" label — see
@@ -320,7 +340,7 @@ pub(crate) async fn classify(
         Attention::Waiting { until, basis, .. } => InboxEntry {
             wake_at: Some(until),
             wake_basis: Some(basis),
-            ..base("waiting", None, active_node, None, capacity)
+            ..base(AttentionGroup::Waiting, None, active_node, None, capacity)
         },
         // A run whose registry status has not yet caught up to a
         // `RunCompleted`/`RunFailed`/`RunAborted` its own log already
@@ -341,7 +361,13 @@ pub(crate) async fn classify(
             };
             InboxEntry {
                 evidence_backed,
-                ..base("done", Some(reason_label(reason)), None, None, capacity)
+                ..base(
+                    AttentionGroup::Done,
+                    Some(reason_label(reason)),
+                    None,
+                    None,
+                    capacity,
+                )
             }
         },
     })
@@ -476,11 +502,11 @@ fn print_inbox(entries: &[InboxEntry], show_done: bool) {
 fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_done: bool) {
     let needs: Vec<&InboxEntry> = entries
         .iter()
-        .filter(|e| e.attention == "needs_input")
+        .filter(|e| e.attention == AttentionGroup::NeedsInput)
         .collect();
     let working: Vec<&InboxEntry> = entries
         .iter()
-        .filter(|e| e.attention == "working")
+        .filter(|e| e.attention == AttentionGroup::Working)
         .collect();
     // `Attention::Waiting` (parked on a provider rate limit) gets its own
     // group rather than falling through unfiltered by any of the three
@@ -494,9 +520,12 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
     // fails` below.
     let waiting: Vec<&InboxEntry> = entries
         .iter()
-        .filter(|e| e.attention == "waiting")
+        .filter(|e| e.attention == AttentionGroup::Waiting)
         .collect();
-    let done: Vec<&InboxEntry> = entries.iter().filter(|e| e.attention == "done").collect();
+    let done: Vec<&InboxEntry> = entries
+        .iter()
+        .filter(|e| e.attention == AttentionGroup::Done)
+        .collect();
 
     // Blocked-first: the "needs me right now" group leads.
     let _ = writeln!(out, "⚑ NEEDS INPUT ({})", needs.len());
@@ -777,14 +806,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {id}"))
         };
         let b = find(blocked);
-        assert_eq!(b.attention, "needs_input");
+        assert_eq!(b.attention, AttentionGroup::NeedsInput);
         assert_eq!(b.prompt.as_deref(), Some("Approve the plan?"));
         assert_eq!(b.active_node.as_deref(), Some("plan"));
 
-        assert_eq!(find(working).attention, "working");
+        assert_eq!(find(working).attention, AttentionGroup::Working);
 
         let d = find(done);
-        assert_eq!(d.attention, "done");
+        assert_eq!(d.attention, AttentionGroup::Done);
         assert_eq!(d.done_reason, Some("completed"));
         // Spec §10/R30: a completed run that never ran a verifier reads
         // `Some(false)`, never `None` — "success without proof" is a known
@@ -1005,7 +1034,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == run_id.to_string())
             .unwrap_or_else(|| panic!("missing {run_id}"));
-        assert_eq!(entry.attention, "done");
+        assert_eq!(entry.attention, AttentionGroup::Done);
         assert_eq!(
             entry.evidence_backed,
             Some(false),
@@ -1053,7 +1082,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == parked.to_string())
             .expect("parked run present");
-        assert_eq!(entry.attention, "waiting");
+        assert_eq!(entry.attention, AttentionGroup::Waiting);
         // Task 12 M5: the wake time and its basis must ride along on the
         // entry itself — an operator (or a `--json` consumer) must be able
         // to answer "when does this come back, and why" without re-deriving
@@ -1125,7 +1154,7 @@ mod tests {
         let entry = InboxEntry {
             run_id: "01ABCDEFPARKEDRUNID12345".into(),
             project_path: PathBuf::from("/proj"),
-            attention: "waiting",
+            attention: AttentionGroup::Waiting,
             done_reason: None,
             active_node: Some("plan".into()),
             prompt: None,
@@ -1158,7 +1187,7 @@ mod tests {
         InboxEntry {
             run_id: run_id.into(),
             project_path: PathBuf::from("/proj"),
-            attention: "done",
+            attention: AttentionGroup::Done,
             done_reason: Some("completed"),
             active_node: None,
             prompt: None,
@@ -1262,7 +1291,8 @@ mod tests {
             .find(|e| e.run_id == run.to_string())
             .expect("run present");
         assert_eq!(
-            entry.attention, "working",
+            entry.attention,
+            AttentionGroup::Working,
             "RunWokeFromPark must clear the parked state — a resumed run must not still show \
              as \"waiting\" in the inbox"
         );
@@ -1319,7 +1349,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == run.to_string())
             .expect("run present");
-        assert_eq!(entry.attention, "waiting");
+        assert_eq!(entry.attention, AttentionGroup::Waiting);
         let window = entry.capacity.window().expect(
             "the registry's observation must surface even though this run's own \
                      journal carries no StageFailed at all",
@@ -1458,7 +1488,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == run.to_string())
             .expect("run present");
-        assert_eq!(entry.attention, "waiting");
+        assert_eq!(entry.attention, AttentionGroup::Waiting);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
     }
 
@@ -1522,7 +1552,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == run.to_string())
             .expect("run present");
-        assert_eq!(entry.attention, "done");
+        assert_eq!(entry.attention, AttentionGroup::Done);
         assert_eq!(
             entry.capacity,
             CapacityStatus::NeverObserved,
@@ -1568,7 +1598,7 @@ mod tests {
             .iter()
             .find(|e| e.run_id == run.to_string())
             .expect("run present");
-        assert_eq!(entry.attention, "working");
+        assert_eq!(entry.attention, AttentionGroup::Working);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
     }
 

@@ -13,19 +13,23 @@
 //! - Read tools (`surge_inbox`, `surge_run_status`, `surge_ready_tasks`,
 //!   `surge_ledger`, `surge_run_report`, `surge_memory_search`) are always
 //!   available and never need the daemon.
-//! - Mutating tools (`surge_steer`, `surge_resolve`, `surge_bootstrap_start`)
-//!   are refused unless the server was started with `--allow-write`, and every
-//!   accepted mutation is logged (to stderr, target
-//!   `surge::mcp_serve::audit`) with the client name the caller announced in
-//!   its MCP `initialize` request.
-//! - `surge_resolve` only answers a run that currently sits in the inbox's
-//!   NEEDS INPUT group, only with a decision the pending gate declares, and
-//!   never answers a bootstrap-mode gate (description / roadmap / flow
-//!   approval): those stay human decisions.
+//! - Mutating tools (`surge_steer`, `surge_resolve`, `surge_bootstrap_start`;
+//!   the [`TOOLS`] table is the single list) all start with
+//!   [`SurgeMcpServer::begin_mutation`]: it refuses the call unless the server
+//!   was started with `--allow-write` and hands back an [`Audit`] whose
+//!   `record` writes the audit line (stderr, target `surge::mcp_serve::audit`,
+//!   with the client name announced in the MCP `initialize` request). A new
+//!   mutating tool cannot forget either step without skipping that one call.
+//! - `surge_resolve`'s whole policy lives in the pure [`authorize_resolution`]:
+//!   the run must sit in the inbox's NEEDS INPUT group, a bootstrap-mode gate
+//!   (description / roadmap / flow approval) is never answered, the caller must
+//!   name the node it was shown, and the decision must be one the pending gate
+//!   declares.
 //! - stdout carries the MCP protocol only; diagnostics go to stderr.
 //!
 //! Failures are reported as MCP tool errors (`isError: true`), never panics.
 
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -37,29 +41,36 @@ use rmcp::service::{Peer, RoleServer};
 use rmcp::{ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use surge_core::RunId;
 use surge_core::bootstrap_operation::BootstrapIntent;
+use surge_core::{RunId, RunState};
 use surge_orchestrator::engine::daemon_facade::{BootstrapClientError, DaemonEngineFacade};
 use surge_persistence::memory::MemoryStore;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::registry::RunSummary;
 use surge_persistence::task_ledger::TaskLedgerIndexRecord;
 use tokio::sync::OnceCell;
 
 use crate::commands::common::{connect_daemon_at, project_root, resolve_run_id};
+use crate::commands::inbox::AttentionGroup;
 use crate::commands::ledger::{LedgerArgs, query_records as query_ledger};
 use crate::commands::ready::{ReadyArgs, query_records as query_ready};
 use crate::commands::resolve::{PendingInput, build_answer, deliver_answer, inspect_pending};
+use crate::commands::run_fold::fold_run_state;
 use crate::commands::{bootstrap, inbox, memory, run, steer};
 
 /// Default row cap for the inbox's Done tail and the ready backlog.
 const DEFAULT_ROW_LIMIT: usize = 200;
 /// Default row cap for `surge_ledger` (matches `surge ledger`).
 const DEFAULT_LEDGER_LIMIT: usize = 500;
-/// Hard ceiling on any caller-supplied row limit.
+/// Largest accepted caller-supplied row limit. Mirrored by the `range` in the
+/// params' JSON schema (attributes take literals); a test keeps them equal.
 const MAX_ROW_LIMIT: usize = 5000;
-/// Default and ceiling for `surge_memory_search` results per category.
+/// Default and largest accepted `surge_memory_search` results per category.
 const DEFAULT_MEMORY_LIMIT: usize = 10;
 const MAX_MEMORY_LIMIT: usize = 50;
+/// How many rows a listing fetches before applying the caller's `limit`, so
+/// `total` can be reported truthfully; beyond it `total` saturates.
+const SCAN_CEILING: usize = 1_000_000;
 /// Client name recorded when the peer never announced one.
 const UNKNOWN_CLIENT: &str = "unknown";
 
@@ -127,7 +138,57 @@ where
     Ok(())
 }
 
-/// A tool call's failure, reported to the client as an MCP tool error.
+/// One tool of this server and whether it mutates run state.
+struct ToolSpec {
+    name: &'static str,
+    mutating: bool,
+}
+
+/// Every tool this server exposes. `mutating` drives the `--allow-write` guard
+/// ([`SurgeMcpServer::begin_mutation`]); a test checks the table against the
+/// registered router (names and `read_only_hint`), so a tool cannot be added
+/// to one and not the other.
+const TOOLS: [ToolSpec; 9] = [
+    ToolSpec {
+        name: "surge_inbox",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_run_status",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_ready_tasks",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_ledger",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_run_report",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_steer",
+        mutating: true,
+    },
+    ToolSpec {
+        name: "surge_resolve",
+        mutating: true,
+    },
+    ToolSpec {
+        name: "surge_bootstrap_start",
+        mutating: true,
+    },
+    ToolSpec {
+        name: "surge_memory_search",
+        mutating: false,
+    },
+];
+
+/// A tool call's failure, reported to the client as an MCP tool error whose
+/// structured `error.kind` is a stable, documented code (see `docs/mcp.md`).
 #[derive(Debug, thiserror::Error)]
 enum ToolError {
     /// A mutating tool was called on a read-only server.
@@ -138,27 +199,79 @@ enum ToolError {
     /// The tool needs the daemon and none is reachable.
     #[error("daemon not running — start it with `surge daemon start` ({0})")]
     DaemonNotRunning(String),
-    /// The request is understood but refused (bad state, invalid decision).
+    /// The run id is well formed but names no run.
+    #[error("{0}")]
+    RunNotFound(String),
+    /// The run id is malformed, too short, or matches several runs.
+    #[error("{0}")]
+    InvalidRunId(String),
+    /// An argument is blank or out of range.
+    #[error("{0}")]
+    InvalidArgument(String),
+    /// The run is not blocked on an answer this server may give.
+    #[error("{0}")]
+    NotAwaitingInput(String),
+    /// The pending gate is a bootstrap approval: a human decision.
+    #[error("{0}")]
+    HumanOnlyGate(String),
+    /// The run is blocked at a different node than the caller was shown.
+    #[error(
+        "run is now blocked at @{current_node}, not @{expected_node}; re-read `surge_run_status`"
+    )]
+    StaleGate {
+        expected_node: String,
+        current_node: String,
+    },
+    /// The decision is not one the pending gate declares.
+    #[error("{message}")]
+    InvalidDecision {
+        message: String,
+        valid_decisions: Vec<String>,
+    },
+    /// The daemon (or the bootstrap supervisor) declined a well-formed request.
     #[error("{0}")]
     Rejected(String),
-    /// Anything else (storage, IO, malformed identifiers).
+    /// An internal fault: storage, IO, serialization.
     #[error("{0:#}")]
     Failed(#[from] anyhow::Error),
 }
 
 impl ToolError {
+    /// The stable machine-readable code.
     fn kind(&self) -> &'static str {
         match self {
             Self::WriteDisabled(_) => "write_disabled",
             Self::DaemonNotRunning(_) => "daemon_not_running",
+            Self::RunNotFound(_) => "run_not_found",
+            Self::InvalidRunId(_) => "invalid_run_id",
+            Self::InvalidArgument(_) => "invalid_argument",
+            Self::NotAwaitingInput(_) => "not_awaiting_input",
+            Self::HumanOnlyGate(_) => "human_only_gate",
+            Self::StaleGate { .. } => "stale_gate",
+            Self::InvalidDecision { .. } => "invalid_decision",
             Self::Rejected(_) => "rejected",
             Self::Failed(_) => "failed",
+        }
+    }
+
+    /// Machine-readable detail a caller can act on without parsing the message.
+    fn data(&self) -> Option<Value> {
+        match self {
+            Self::StaleGate {
+                expected_node,
+                current_node,
+            } => Some(json!({ "expected_node": expected_node, "current_node": current_node })),
+            Self::InvalidDecision {
+                valid_decisions, ..
+            } => Some(json!({ "valid_decisions": valid_decisions })),
+            _ => None,
         }
     }
 }
 
 /// A successful tool result: a short human summary plus structured JSON
-/// (always a JSON object, as MCP requires of `structuredContent`).
+/// (always a JSON object, as MCP requires of `structuredContent`). The
+/// structured form is the machine-readable one; the summary is prose.
 struct ToolOutput {
     summary: String,
     data: Value,
@@ -175,12 +288,39 @@ fn into_call_result(result: ToolResult) -> CallToolResult {
         },
         Err(error) => {
             let message = error.to_string();
-            let mut call = CallToolResult::error(vec![Content::text(message.clone())]);
-            call.structured_content = Some(json!({
-                "error": { "kind": error.kind(), "message": message }
-            }));
+            let mut body = json!({ "kind": error.kind(), "message": message });
+            if let Some(data) = error.data() {
+                body["data"] = data;
+            }
+            let mut call = CallToolResult::error(vec![Content::text(message)]);
+            call.structured_content = Some(json!({ "error": body }));
             call
         },
+    }
+}
+
+/// Handle returned by [`SurgeMcpServer::begin_mutation`]; proof the write guard
+/// passed. Consuming it with [`Audit::record`] writes the audit line, so the
+/// two steps of a mutation stay together.
+#[must_use = "call `record` right before the mutation is carried out"]
+struct Audit {
+    client: String,
+    tool: &'static str,
+}
+
+impl Audit {
+    /// Log the accepted mutation (stderr, target `surge::mcp_serve::audit`).
+    /// `subject` is the run / operation acted on; `detail` must not carry
+    /// sensitive text (log lengths, not content).
+    fn record(self, subject: impl Display, detail: impl Display) {
+        tracing::info!(
+            target: "surge::mcp_serve::audit",
+            client = ?self.client,
+            tool = self.tool,
+            %subject,
+            %detail,
+            "MCP mutation"
+        );
     }
 }
 
@@ -195,10 +335,11 @@ pub struct InboxParams {
     /// List the Done group in full (default: only its count).
     #[serde(default)]
     pub include_done: bool,
-    /// Maximum Done runs considered (default 200); NEEDS INPUT / WORKING /
-    /// WAITING runs are never truncated.
+    /// Maximum Done runs listed (1-5000, default 200); NEEDS INPUT / WORKING /
+    /// WAITING runs are never truncated. Out-of-range values are rejected.
     #[serde(default)]
-    pub limit: Option<usize>,
+    #[schemars(range(min = 1, max = 5000))]
+    pub limit: Option<i64>,
 }
 
 /// Arguments of `surge_run_status`.
@@ -222,9 +363,10 @@ pub struct ReadyParams {
     /// Only tasks belonging to this run.
     #[serde(default)]
     pub run_id: Option<String>,
-    /// Maximum rows (default 200).
+    /// Maximum rows (1-5000, default 200). Out-of-range values are rejected.
     #[serde(default)]
-    pub limit: Option<usize>,
+    #[schemars(range(min = 1, max = 5000))]
+    pub limit: Option<i64>,
 }
 
 /// Arguments of `surge_ledger`.
@@ -234,20 +376,22 @@ pub struct LedgerParams {
     /// is not available yet — same as `surge ledger`).
     #[serde(default)]
     pub run_id: Option<String>,
-    /// Maximum rows (default 500).
+    /// Maximum rows (1-5000, default 500). Out-of-range values are rejected.
     #[serde(default)]
-    pub limit: Option<usize>,
+    #[schemars(range(min = 1, max = 5000))]
+    pub limit: Option<i64>,
 }
 
-/// Text rendering `surge_run_report` returns alongside the structured report.
-#[derive(Debug, Default, Clone, Copy, Deserialize, schemars::JsonSchema)]
+/// Text rendering `surge_run_report` returns. The full report is always in
+/// `structuredContent`, whatever the format.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ReportFormat {
-    /// One-line summary as text (default); the full report is structured.
+    /// One-line prose summary as text (default).
     #[default]
-    Json,
+    Summary,
     /// The full Markdown report as text.
-    Md,
+    Markdown,
 }
 
 /// Arguments of `surge_run_report`.
@@ -255,7 +399,8 @@ pub enum ReportFormat {
 pub struct RunReportParams {
     /// Run id (full ULID or unique suffix).
     pub run_id: String,
-    /// Text rendering to return next to the structured report.
+    /// Text rendering of the result. `structuredContent` always carries the
+    /// full machine-readable report regardless.
     #[serde(default)]
     pub format: ReportFormat,
 }
@@ -277,17 +422,18 @@ pub struct ResolveParams {
     /// Run id (full ULID or unique suffix). Must be in `surge_inbox`'s
     /// `needs_input` group.
     pub run_id: String,
-    /// For a HumanGate: one of the outcome keys listed in the run's
-    /// `pending_input.options` (see `surge_run_status`). For a free-form
-    /// tool-driven question: the answer text.
+    /// What the run is blocked on decides what this is (`pending_input.kind`
+    /// in `surge_run_status`): for `gate`, one of the outcome keys in
+    /// `pending_input.options`; for `tool_call`, the free-form answer text.
+    /// A `bootstrap_approval` is never accepted.
     pub decision: String,
-    /// Optional operator comment attached to a HumanGate decision.
+    /// Optional operator comment. Only a `gate` decision carries one; it is
+    /// rejected for a `tool_call` answer, where it would be ignored.
     #[serde(default)]
     pub note: Option<String>,
-    /// Optional guard: the gate node you were shown. The call is refused if
-    /// the run has since moved to a different pending node.
-    #[serde(default)]
-    pub expected_node: Option<String>,
+    /// The `pending_input.node` you were shown by `surge_run_status`. The call
+    /// is refused (`stale_gate`) if the run is blocked at a different node now.
+    pub expected_node: String,
 }
 
 /// Arguments of `surge_bootstrap_start`.
@@ -306,9 +452,11 @@ pub struct MemorySearchParams {
     /// Keep only entries carrying at least one of these tags.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Maximum results per category (default 10, max 50).
+    /// Maximum results per category (1-50, default 10). Out-of-range values
+    /// are rejected.
     #[serde(default)]
-    pub limit: Option<usize>,
+    #[schemars(range(min = 1, max = 50))]
+    pub limit: Option<i64>,
 }
 
 /// Shared, immutable server state.
@@ -357,109 +505,143 @@ impl SurgeMcpServer {
             .map_err(|e| ToolError::DaemonNotRunning(e.to_string()))
     }
 
-    fn require_write(&self, tool: &'static str) -> Result<(), ToolError> {
-        if self.inner.options.allow_write {
-            Ok(())
-        } else {
-            Err(ToolError::WriteDisabled(tool))
+    /// The single entry to every mutating tool: refuse unless `--allow-write`,
+    /// then hand back the [`Audit`] that must record the mutation. Every tool
+    /// with `mutating: true` in [`TOOLS`] starts here.
+    fn begin_mutation(&self, tool: &'static str, client: &str) -> Result<Audit, ToolError> {
+        debug_assert!(
+            TOOLS.iter().any(|spec| spec.name == tool && spec.mutating),
+            "`{tool}` is not registered as mutating in TOOLS"
+        );
+        if !self.inner.options.allow_write {
+            return Err(ToolError::WriteDisabled(tool));
         }
+        Ok(Audit {
+            client: client.to_owned(),
+            tool,
+        })
     }
 
-    /// Resolve `value` (full ULID or unique suffix) and require the run to
-    /// exist in the registry.
-    async fn existing_run(&self, value: &str) -> Result<RunId, ToolError> {
+    /// Resolve `value` (full ULID or unique suffix) and load the run's registry
+    /// row, telling a malformed/ambiguous id from a missing run from a fault.
+    async fn load_run(&self, value: &str) -> Result<RunSummary, ToolError> {
         let storage = self.storage().await?;
-        let run_id = resolve_run_id(storage, value).await?;
+        let run_id = resolve_run_id(storage, value)
+            .await
+            .map_err(classify_run_id_error)?;
         match storage.get_run(&run_id).await {
-            Ok(Some(_)) => Ok(run_id),
-            Ok(None) => Err(ToolError::Rejected(format!("no run {run_id}"))),
+            Ok(Some(summary)) => Ok(summary),
+            Ok(None) => Err(ToolError::RunNotFound(format!("no run {run_id}"))),
             Err(e) => Err(ToolError::Failed(
                 anyhow::Error::new(e).context("read run registry"),
             )),
         }
     }
 
-    async fn inbox_impl(&self, params: InboxParams) -> ToolResult {
-        let storage = self.storage().await?;
-        let limit = clamp_limit(params.limit, DEFAULT_ROW_LIMIT);
-        let entries = inbox::collect_entries(storage, None, limit).await?;
+    async fn existing_run(&self, value: &str) -> Result<RunId, ToolError> {
+        Ok(self.load_run(value).await?.id)
+    }
 
-        let mut groups: [Vec<Value>; 4] = Default::default();
-        for entry in &entries {
-            let slot = match entry.attention() {
-                "needs_input" => 0,
-                "working" => 1,
-                "waiting" => 2,
-                _ => 3,
-            };
-            groups[slot].push(to_json(entry)?);
+    /// What the run is blocked on. [`PendingState::Nothing`] unless the run is
+    /// in the inbox's NEEDS INPUT group; real read failures are propagated, not
+    /// reported as a bootstrap approval.
+    async fn load_pending(
+        &self,
+        run_id: RunId,
+        attention: AttentionGroup,
+    ) -> Result<PendingState, ToolError> {
+        if attention != AttentionGroup::NeedsInput {
+            return Ok(PendingState::Nothing);
         }
-        let [needs_input, working, waiting, done] = groups;
+        let storage = self.storage().await?;
+        let inspect_error = match inspect_pending(storage, run_id).await {
+            Ok(pending) => return Ok(PendingState::Input(pending)),
+            Err(e) => e,
+        };
+        // `inspect_pending` fails both for a run blocked outside a pipeline
+        // gate and for a genuine read failure; re-fold to tell them apart.
+        let reader = storage
+            .open_run_reader(run_id)
+            .await
+            .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("open run")))?;
+        match fold_run_state(&reader, run_id).await? {
+            RunState::Bootstrapping { .. } => Ok(PendingState::BootstrapApproval),
+            _ => Err(ToolError::Failed(inspect_error)),
+        }
+    }
+
+    async fn inbox_impl(&self, params: InboxParams) -> ToolResult {
+        let limit = validated_limit(params.limit, DEFAULT_ROW_LIMIT, MAX_ROW_LIMIT)?;
+        let storage = self.storage().await?;
+        // Every run is classified anyway; cap the Done listing here so its
+        // `total` is real.
+        let entries = inbox::collect_entries(storage, None, usize::MAX).await?;
+
+        let mut needs_input = Vec::new();
+        let mut working = Vec::new();
+        let mut waiting = Vec::new();
+        let mut done = Vec::new();
+        let mut done_total = 0_usize;
+        for entry in &entries {
+            match entry.attention() {
+                AttentionGroup::NeedsInput => needs_input.push(to_json(entry)?),
+                AttentionGroup::Working => working.push(to_json(entry)?),
+                AttentionGroup::Waiting => waiting.push(to_json(entry)?),
+                AttentionGroup::Done => {
+                    done_total += 1;
+                    if params.include_done && done.len() < limit {
+                        done.push(to_json(entry)?);
+                    }
+                },
+            }
+        }
         let summary = format!(
-            "{} need input, {} working, {} waiting, {} done",
+            "{} need input, {} working, {} waiting, {done_total} done",
             needs_input.len(),
             working.len(),
             waiting.len(),
-            done.len()
         );
-        let done_count = done.len();
+        let mut done_group = json!({
+            "count": done.len(),
+            "total": done_total,
+            "truncated": params.include_done && done_total > done.len(),
+        });
+        if params.include_done {
+            done_group["runs"] = Value::Array(done);
+        }
         Ok(ToolOutput {
             summary,
             data: json!({
                 "needs_input": needs_input,
                 "working": working,
                 "waiting": waiting,
-                "done": {
-                    "count": done_count,
-                    "runs": if params.include_done { done } else { Vec::new() },
-                },
+                "done": done_group,
             }),
         })
     }
 
     async fn run_status_impl(&self, params: RunIdParams) -> ToolResult {
-        let run_id = self.existing_run(&params.run_id).await?;
+        let summary = self.load_run(&params.run_id).await?;
+        let run_id = summary.id;
         let storage = self.storage().await?;
-        let summary = storage
-            .get_run(&run_id)
-            .await
-            .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("read run registry")))?
-            .ok_or_else(|| ToolError::Rejected(format!("no run {run_id}")))?;
         let entry = inbox::classify(storage, &summary).await?;
-
-        let mut pending_input = Value::Null;
-        let mut note = Value::Null;
-        if entry.is_needs_input() {
-            match inspect_pending(storage, run_id).await {
-                Ok(pending) => pending_input = pending_to_json(&pending),
-                Err(_) => {
-                    note = json!(
-                        "the run awaits an approval that is not a pipeline gate (bootstrap \
-                         approval); answer it in the desktop app, Telegram, or `surge bootstrap`"
-                    );
-                },
-            }
-        }
-        let text = format!(
-            "run {run_id}: {} ({})",
-            entry.attention(),
-            serde_json::to_value(summary.status)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_default()
-        );
+        let pending = self.load_pending(run_id, entry.attention()).await?;
         Ok(ToolOutput {
-            summary: text,
+            summary: format!(
+                "run {run_id}: {} ({})",
+                entry.attention().as_str(),
+                summary.status.as_str()
+            ),
             data: json!({
                 "run": to_json(&entry)?,
                 "registry_status": to_json(&summary.status)?,
-                "pending_input": pending_input,
-                "note": note,
+                "pending_input": pending_input_json(&pending),
             }),
         })
     }
 
     async fn ready_impl(&self, params: ReadyParams) -> ToolResult {
+        let limit = validated_limit(params.limit, DEFAULT_ROW_LIMIT, MAX_ROW_LIMIT)?;
         let storage = self.storage().await?;
         let run_id = self.optional_run_id(params.run_id.as_deref()).await?;
         let args = ReadyArgs {
@@ -467,32 +649,43 @@ impl SurgeMcpServer {
             discovered: params.discovered,
             run_id,
             all_projects: false,
-            limit: clamp_limit(params.limit, DEFAULT_ROW_LIMIT),
+            limit: SCAN_CEILING,
             json: true,
         };
-        let records = query_ready(storage, &args)?;
-        let tasks = normalized(records);
+        let mut tasks = normalized(query_ready(storage, &args).map_err(ready_query_error)?);
+        let total = tasks.len();
+        tasks.truncate(limit);
         Ok(ToolOutput {
-            summary: format!("{} actionable task(s)", tasks.len()),
-            data: json!({ "count": tasks.len(), "tasks": to_json(&tasks)? }),
+            summary: format!("{} of {total} actionable task(s)", tasks.len()),
+            data: json!({
+                "count": tasks.len(),
+                "total": total,
+                "truncated": total > tasks.len(),
+                "tasks": to_json(&tasks)?,
+            }),
         })
     }
 
     async fn ledger_impl(&self, params: LedgerParams) -> ToolResult {
+        let limit = validated_limit(params.limit, DEFAULT_LEDGER_LIMIT, MAX_ROW_LIMIT)?;
         let storage = self.storage().await?;
         let run_id = self.optional_run_id(params.run_id.as_deref()).await?;
         let args = LedgerArgs {
             run_id,
             all_projects: false,
-            limit: clamp_limit(params.limit, DEFAULT_LEDGER_LIMIT),
+            limit: SCAN_CEILING,
             json: true,
         };
-        let tasks = normalized(query_ledger(storage, &args)?);
+        let mut tasks = normalized(query_ledger(storage, &args)?);
+        let total = tasks.len();
+        tasks.truncate(limit);
         let verified = tasks.iter().filter(|t| t.is_evidence_backed()).count();
         Ok(ToolOutput {
-            summary: format!("{} task(s), {verified} verified", tasks.len()),
+            summary: format!("{} of {total} task(s), {verified} verified", tasks.len()),
             data: json!({
                 "count": tasks.len(),
+                "total": total,
+                "truncated": total > tasks.len(),
                 "verified": verified,
                 "tasks": to_json(&tasks)?,
             }),
@@ -509,8 +702,9 @@ impl SurgeMcpServer {
     }
 
     async fn run_report_impl(&self, params: RunReportParams) -> ToolResult {
+        let run_id = self.existing_run(&params.run_id).await?;
         let storage = self.storage().await?;
-        let report = run::compile_report(storage, &params.run_id).await?;
+        let report = run::compile_report(storage, &run_id.to_string()).await?;
         let completion = to_json(&report.completion)?;
         let one_line = format!(
             "run {}: {} — {} node(s), {} verdict(s), evidence_backed={}",
@@ -526,8 +720,8 @@ impl SurgeMcpServer {
                 .map_or_else(|| "n/a".to_owned(), |v| v.to_string()),
         );
         let summary = match params.format {
-            ReportFormat::Json => one_line,
-            ReportFormat::Md => surge_core::run_report::render_markdown(&report),
+            ReportFormat::Summary => one_line,
+            ReportFormat::Markdown => surge_core::run_report::render_markdown(&report),
         };
         Ok(ToolOutput {
             summary,
@@ -536,24 +730,22 @@ impl SurgeMcpServer {
     }
 
     async fn steer_impl(&self, client: &str, params: SteerParams) -> ToolResult {
-        self.require_write("surge_steer")?;
+        let audit = self.begin_mutation("surge_steer", client)?;
         let run_id = self.existing_run(&params.run_id).await?;
         if params.message.trim().is_empty() {
-            return Err(ToolError::Rejected(
+            return Err(ToolError::InvalidArgument(
                 "steer message must not be blank".into(),
             ));
         }
         let daemon = self.daemon().await?;
         // The message itself is not logged: it may carry sensitive guidance.
-        tracing::info!(
-            target: "surge::mcp_serve::audit",
-            client = ?client,
-            tool = "surge_steer",
-            %run_id,
-            message_len = params.message.len(),
-            "MCP mutation: queueing steer"
+        audit.record(
+            run_id,
+            format_args!("queueing steer, message_len={}", params.message.len()),
         );
-        let steer_id = steer::queue_steer(&daemon, run_id, &params.message).await?;
+        let steer_id = steer::queue_steer(&daemon, run_id, &params.message)
+            .await
+            .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
         Ok(ToolOutput {
             summary: format!("steer {steer_id} queued for run {run_id}; applies at the next stage"),
             data: json!({ "run_id": run_id.to_string(), "steer_id": steer_id }),
@@ -561,102 +753,76 @@ impl SurgeMcpServer {
     }
 
     async fn resolve_impl(&self, client: &str, params: ResolveParams) -> ToolResult {
-        self.require_write("surge_resolve")?;
-        let run_id = self.existing_run(&params.run_id).await?;
+        let audit = self.begin_mutation("surge_resolve", client)?;
+        let summary = self.load_run(&params.run_id).await?;
+        let run_id = summary.id;
         let storage = self.storage().await?;
+        // The very classifier `surge inbox` uses decides whether the run was
+        // surfaced to an operator at all.
+        let attention = inbox::classify(storage, &summary).await?.attention();
+        let pending = self.load_pending(run_id, attention).await?;
 
-        // Gate 1: only what the inbox surfaces. The run must be in NEEDS INPUT
-        // right now, judged by the very classifier `surge inbox` uses.
-        let summary = storage
-            .get_run(&run_id)
-            .await
-            .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("read run registry")))?
-            .ok_or_else(|| ToolError::Rejected(format!("no run {run_id}")))?;
-        let entry = inbox::classify(storage, &summary).await?;
-        if !entry.is_needs_input() {
-            return Err(ToolError::Rejected(format!(
-                "run {run_id} is not in the inbox's needs_input group (it is {}); only a gate \
-                 surfaced by `surge_inbox` can be resolved",
-                entry.attention()
-            )));
-        }
-        let pending = inspect_pending(storage, run_id)
-            .await
-            .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
-
-        // Gate 2: bootstrap approvals are human decisions, never an agent's.
-        if pending.is_bootstrap_gate {
-            return Err(ToolError::Rejected(format!(
-                "run {run_id} is blocked at a bootstrap approval (@{}); description, roadmap and \
-                 flow approvals must be given by a human in the desktop app, Telegram, or \
-                 `surge bootstrap`",
-                pending.node
-            )));
-        }
-        // Gate 3: the caller must be answering the gate it was shown.
-        if let Some(expected) = params.expected_node.as_deref()
-            && expected != pending.node.as_ref() as &str
-        {
-            return Err(ToolError::Rejected(format!(
-                "run {run_id} is now blocked at @{}, not @{expected}; re-read `surge_run_status`",
-                pending.node
-            )));
-        }
-        // Gate 4: a HumanGate must declare its options so the decision can be
-        // validated; refusing beats forwarding an unchecked outcome.
-        if !pending.is_tool_call && pending.gate_options.is_empty() {
-            return Err(ToolError::Rejected(format!(
-                "the gate at @{} declares no outcome options, so a decision cannot be validated",
-                pending.node
-            )));
-        }
-
-        let decision = params.decision.trim();
-        let (_, response) = if pending.is_tool_call {
-            build_answer(
+        let authorized = authorize_resolution(
+            attention,
+            &pending,
+            &ResolveRequest {
+                expected_node: &params.expected_node,
+                decision: &params.decision,
+                note: params.note.as_deref(),
+            },
+        )?;
+        let (_, response) = match &authorized.answer {
+            Answer::FreeForm(text) => build_answer(
                 true,
-                pending.call_id.clone(),
-                &pending.gate_options,
+                authorized.pending.call_id.clone(),
+                &authorized.pending.gate_options,
                 None,
                 None,
-                Some(decision),
+                Some(text),
                 None,
-            )
-        } else {
-            build_answer(
+            ),
+            Answer::Outcome(outcome) => build_answer(
                 false,
-                pending.call_id.clone(),
-                &pending.gate_options,
-                Some(decision),
-                params.note.as_deref(),
+                authorized.pending.call_id.clone(),
+                &authorized.pending.gate_options,
+                Some(outcome),
+                authorized.note,
                 None,
                 None,
-            )
+            ),
         }
-        .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
+        .map_err(|e| ToolError::Failed(e.context("build answer for an authorized resolution")))?;
 
         let daemon = self.daemon().await?;
-        tracing::info!(
-            target: "surge::mcp_serve::audit",
-            client = ?client,
-            tool = "surge_resolve",
-            %run_id,
-            node = %pending.node,
-            decision = if pending.is_tool_call { "<free-form answer>" } else { decision },
-            "MCP mutation: resolving human input"
+        let node = authorized.pending.node.to_string();
+        audit.record(
+            run_id,
+            format_args!(
+                "resolving @{node} with {}",
+                match &authorized.answer {
+                    Answer::Outcome(outcome) => outcome.as_str(),
+                    Answer::FreeForm(_) => "<free-form answer>",
+                }
+            ),
         );
-        deliver_answer(&daemon, run_id, &pending, response).await?;
+        deliver_answer(&daemon, run_id, authorized.pending, response)
+            .await
+            .map_err(|e| ToolError::Rejected(format!("{e:#}")))?;
         Ok(ToolOutput {
-            summary: format!("resolved run {run_id} at @{}", pending.node),
-            data: json!({ "run_id": run_id.to_string(), "node": pending.node.to_string() }),
+            summary: format!("resolved run {run_id} at @{node}"),
+            data: json!({
+                "run_id": run_id.to_string(),
+                "node": node,
+                "decision": authorized.answer.to_json(),
+            }),
         })
     }
 
     async fn bootstrap_start_impl(&self, client: &str, params: BootstrapStartParams) -> ToolResult {
-        self.require_write("surge_bootstrap_start")?;
+        let audit = self.begin_mutation("surge_bootstrap_start", client)?;
         let idea = params.idea.trim();
         if idea.is_empty() {
-            return Err(ToolError::Rejected("idea must not be blank".into()));
+            return Err(ToolError::InvalidArgument("idea must not be blank".into()));
         }
         let daemon = self.daemon().await?;
         let project_root = self.inner.options.project_root.clone();
@@ -666,17 +832,16 @@ impl SurgeMcpServer {
             idea.to_owned(),
             config.analytics.budget_guard(),
         )
-        .map_err(|e| ToolError::Rejected(e.to_string()))?;
+        .map_err(|e| ToolError::InvalidArgument(e.to_string()))?;
 
         let operation_id = RunId::new();
-        tracing::info!(
-            target: "surge::mcp_serve::audit",
-            client = ?client,
-            tool = "surge_bootstrap_start",
-            %operation_id,
-            project = %project_root.display(),
-            idea_len = idea.len(),
-            "MCP mutation: starting bootstrap"
+        audit.record(
+            operation_id,
+            format_args!(
+                "starting bootstrap, project={}, idea_len={}",
+                project_root.display(),
+                idea.len()
+            ),
         );
         let status = daemon
             .start_bootstrap(operation_id, intent)
@@ -698,49 +863,95 @@ impl SurgeMcpServer {
                 "planning_run": status.planning_run.to_string(),
                 "implementation_run": status.implementation_run.to_string(),
                 "status": to_json(&status)?,
-                "human_gates": "description, roadmap and flow approvals are answered by a human \
-                                (desktop app, Telegram, `surge bootstrap`); this server cannot \
-                                approve them",
             }),
         })
     }
 
     async fn memory_search_impl(&self, params: MemorySearchParams) -> ToolResult {
+        let limit = validated_limit(params.limit, DEFAULT_MEMORY_LIMIT, MAX_MEMORY_LIMIT)?;
         let query = params.query.trim().to_owned();
         if query.is_empty() {
-            return Err(ToolError::Rejected("query must not be blank".into()));
+            return Err(ToolError::InvalidArgument("query must not be blank".into()));
         }
         let store_path = MemoryStore::path_in(&self.inner.options.home);
         if !store_path.exists() {
             return Ok(ToolOutput {
                 summary: "no project memory recorded yet".into(),
                 data: json!({
+                    "count": 0,
                     "total": 0,
+                    "truncated": false,
                     "results": { "discoveries": [], "patterns": [], "gotchas": [], "file_contexts": [] },
                 }),
             });
         }
-        let limit = params
-            .limit
-            .unwrap_or(DEFAULT_MEMORY_LIMIT)
-            .clamp(1, MAX_MEMORY_LIMIT);
         let tags = params.tags;
-        // rusqlite is synchronous; keep it off the async workers.
-        let results = tokio::task::spawn_blocking(move || {
+        // rusqlite is synchronous; keep it off the async workers. Fetch past
+        // the caller's limit so `total` is real and the tag filter sees every
+        // hit, then cut each category down to `limit`.
+        let mut results = tokio::task::spawn_blocking(move || {
             let store = MemoryStore::open(&store_path)?;
-            memory::query_memory(&store, &query, None, &tags, limit)
+            memory::query_memory(&store, &query, None, &tags, SCAN_CEILING)
         })
         .await
         .map_err(|e| ToolError::Failed(anyhow::Error::new(e).context("memory search task")))??;
+        let total = results.total_count();
+        results.discoveries.truncate(limit);
+        results.patterns.truncate(limit);
+        results.gotchas.truncate(limit);
+        results.file_contexts.truncate(limit);
+        let count = results.total_count();
         Ok(ToolOutput {
-            summary: format!("{} memory result(s)", results.total_count()),
-            data: json!({ "total": results.total_count(), "results": to_json(&results)? }),
+            summary: format!("{count} of {total} memory result(s)"),
+            data: json!({
+                "count": count,
+                "total": total,
+                "truncated": total > count,
+                "results": to_json(&results)?,
+            }),
         })
     }
 }
 
-fn clamp_limit(requested: Option<usize>, default: usize) -> usize {
-    requested.unwrap_or(default).clamp(1, MAX_ROW_LIMIT)
+/// Validate a caller-supplied row limit: `1..=max`, else `invalid_argument`.
+/// Never clamps silently.
+fn validated_limit(requested: Option<i64>, default: usize, max: usize) -> Result<usize, ToolError> {
+    let Some(requested) = requested else {
+        return Ok(default);
+    };
+    usize::try_from(requested)
+        .ok()
+        .filter(|limit| (1..=max).contains(limit))
+        .ok_or_else(|| {
+            ToolError::InvalidArgument(format!(
+                "limit must be between 1 and {max}, got {requested}"
+            ))
+        })
+}
+
+/// Map `resolve_run_id`'s untyped failure onto the stable codes. Its caller
+/// errors are bare messages while a storage failure carries added context, so
+/// the chain length separates a fault from a bad id; `no run matching` is its
+/// own not-found wording. Coupled to `commands::common::resolve_run_id`.
+fn classify_run_id_error(error: anyhow::Error) -> ToolError {
+    if error.chain().count() > 1 {
+        ToolError::Failed(error)
+    } else if error.to_string().starts_with("no run matching") {
+        ToolError::RunNotFound(error.to_string())
+    } else {
+        ToolError::InvalidRunId(error.to_string())
+    }
+}
+
+/// `query_ready` parses `status` and `run_id` and queries the index; a parse
+/// failure is the caller's argument, everything else a fault. Its parse errors
+/// are the ones carrying the `parse --status` context.
+fn ready_query_error(error: anyhow::Error) -> ToolError {
+    if error.to_string().starts_with("parse --status") {
+        ToolError::InvalidArgument(format!("{error:#}"))
+    } else {
+        ToolError::Failed(error)
+    }
 }
 
 /// Apply spec §10/R30's single "evidence-backed" rule to the JSON `verified`
@@ -752,17 +963,173 @@ fn normalized(records: Vec<TaskLedgerIndexRecord>) -> Vec<TaskLedgerIndexRecord>
         .collect()
 }
 
-fn pending_to_json(pending: &PendingInput) -> Value {
-    json!({
-        "node": pending.node.to_string(),
-        "prompt": pending.prompt.trim(),
-        "kind": if pending.is_tool_call { "tool_call" } else { "gate" },
-        "options": pending
-            .gate_options
-            .iter()
-            .map(|(outcome, label)| json!({ "outcome": outcome, "label": label }))
-            .collect::<Vec<_>>(),
-        "bootstrap_gate": pending.is_bootstrap_gate,
+/// What a run is blocked on, as far as this server may act on it.
+#[derive(Debug)]
+enum PendingState {
+    /// The run is not in the inbox's NEEDS INPUT group.
+    Nothing,
+    /// A bootstrap-stage approval outside any pipeline gate (no node to name).
+    BootstrapApproval,
+    /// A pipeline `HumanGate` or tool-driven question.
+    Input(PendingInput),
+}
+
+/// `surge_run_status`'s `pending_input`: null when the run is not blocked,
+/// else a value tagged by `kind`.
+fn pending_input_json(state: &PendingState) -> Value {
+    match state {
+        PendingState::Nothing => Value::Null,
+        PendingState::BootstrapApproval => json!({ "kind": "bootstrap_approval" }),
+        PendingState::Input(pending) if pending.is_bootstrap_gate => json!({
+            "kind": "bootstrap_approval",
+            "node": pending.node.to_string(),
+            "prompt": pending.prompt.trim(),
+        }),
+        PendingState::Input(pending) if pending.is_tool_call => json!({
+            "kind": "tool_call",
+            "node": pending.node.to_string(),
+            "prompt": pending.prompt.trim(),
+        }),
+        PendingState::Input(pending) => json!({
+            "kind": "gate",
+            "node": pending.node.to_string(),
+            "prompt": pending.prompt.trim(),
+            "options": pending
+                .gate_options
+                .iter()
+                .map(|(outcome, label)| json!({ "outcome": outcome, "label": label }))
+                .collect::<Vec<_>>(),
+        }),
+    }
+}
+
+/// What the caller of `surge_resolve` asks for.
+struct ResolveRequest<'a> {
+    expected_node: &'a str,
+    decision: &'a str,
+    note: Option<&'a str>,
+}
+
+/// The accepted answer.
+#[derive(Debug, PartialEq, Eq)]
+enum Answer {
+    /// A `gate` outcome key.
+    Outcome(String),
+    /// A `tool_call` free-form answer.
+    FreeForm(String),
+}
+
+impl Answer {
+    fn to_json(&self) -> Value {
+        match self {
+            Self::Outcome(outcome) => json!({ "kind": "outcome", "value": outcome }),
+            Self::FreeForm(text) => json!({ "kind": "free_form", "value": text }),
+        }
+    }
+}
+
+/// A resolution that passed every gate of [`authorize_resolution`].
+#[derive(Debug)]
+struct Authorized<'a> {
+    pending: &'a PendingInput,
+    answer: Answer,
+    /// The operator comment (gate decisions only).
+    note: Option<&'a str>,
+}
+
+/// The whole safety policy of `surge_resolve`, pure and decided in this order:
+///
+/// 1. the run must be in the inbox's NEEDS INPUT group (`not_awaiting_input`);
+/// 2. a bootstrap approval is a human decision (`human_only_gate`);
+/// 3. the caller must be answering the node it was shown (`stale_gate`);
+/// 4. the decision must be one the pending request accepts
+///    (`invalid_decision` / `invalid_argument`).
+fn authorize_resolution<'a>(
+    attention: AttentionGroup,
+    pending: &'a PendingState,
+    request: &ResolveRequest<'a>,
+) -> Result<Authorized<'a>, ToolError> {
+    if attention != AttentionGroup::NeedsInput {
+        return Err(ToolError::NotAwaitingInput(format!(
+            "run is not in the inbox's needs_input group (it is {}); only a request surfaced by \
+             `surge_inbox` can be resolved",
+            attention.as_str()
+        )));
+    }
+    let human_only = |node: Option<&str>| {
+        ToolError::HumanOnlyGate(format!(
+            "run is blocked at a bootstrap approval{}; description, roadmap and flow approvals \
+             must be given by a human in the desktop app, Telegram, or `surge bootstrap`",
+            node.map_or_else(String::new, |node| format!(" (@{node})"))
+        ))
+    };
+    let pending = match pending {
+        PendingState::Nothing => {
+            return Err(ToolError::Failed(anyhow::anyhow!(
+                "run is in needs_input but no pending request could be found"
+            )));
+        },
+        PendingState::BootstrapApproval => return Err(human_only(None)),
+        PendingState::Input(pending) if pending.is_bootstrap_gate => {
+            return Err(human_only(Some(pending.node.as_ref())));
+        },
+        PendingState::Input(pending) => pending,
+    };
+    if request.expected_node != pending.node.as_ref() as &str {
+        return Err(ToolError::StaleGate {
+            expected_node: request.expected_node.to_owned(),
+            current_node: pending.node.to_string(),
+        });
+    }
+
+    let decision = request.decision.trim();
+    if decision.is_empty() {
+        return Err(ToolError::InvalidArgument(
+            "decision must not be blank".into(),
+        ));
+    }
+    if pending.is_tool_call {
+        if request.note.is_some() {
+            return Err(ToolError::InvalidArgument(
+                "`note` is only accepted for a gate decision; a tool_call answer is the \
+                 `decision` text alone"
+                    .into(),
+            ));
+        }
+        return Ok(Authorized {
+            pending,
+            answer: Answer::FreeForm(decision.to_owned()),
+            note: None,
+        });
+    }
+    let valid_decisions: Vec<String> = pending
+        .gate_options
+        .iter()
+        .map(|(outcome, _)| outcome.clone())
+        .collect();
+    if valid_decisions.is_empty() {
+        return Err(ToolError::InvalidDecision {
+            message: format!(
+                "the gate at @{} declares no outcome options, so a decision cannot be validated",
+                pending.node
+            ),
+            valid_decisions,
+        });
+    }
+    if !valid_decisions.iter().any(|valid| valid == decision) {
+        return Err(ToolError::InvalidDecision {
+            message: format!(
+                "decision {decision:?} is not valid for the gate at @{}; valid: {}",
+                pending.node,
+                valid_decisions.join(", ")
+            ),
+            valid_decisions,
+        });
+    }
+    Ok(Authorized {
+        pending,
+        answer: Answer::Outcome(decision.to_owned()),
+        note: request.note,
     })
 }
 
