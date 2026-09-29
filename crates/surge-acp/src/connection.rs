@@ -787,10 +787,14 @@ mod tests {
                     #[cfg(windows)]
                     {
                         if let Some(pid) = process.id() {
-                            let output = tokio::process::Command::new("taskkill")
-                                .args(["/F", "/T", "/PID", &pid.to_string()])
-                                .output()
-                                .await;
+                            let output = tokio::time::timeout(
+                                std::time::Duration::from_secs(2),
+                                tokio::process::Command::new("taskkill")
+                                    .kill_on_drop(true)
+                                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                                    .output(),
+                            )
+                            .await;
 
                             match output {
                                 Ok(Ok(out)) if out.status.success() => {},

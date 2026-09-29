@@ -76,7 +76,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev
+          sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev libfontconfig1-dev
 
       # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
       # in its own process by default, which avoids parallel SQLite/WAL races
@@ -153,6 +153,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-clippy-
             ${{ runner.os }}-target-
+
+      # The permissive workspace pass below builds surge-ui (GPUI), which needs the
+      # same Linux system libraries as the test job (fontconfig via the text stack).
+      - name: Install surge-ui system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev libfontconfig1-dev
 
       # Strict: M1's surge-core crate must be warning-free.
       - name: Run clippy (strict on surge-core)
