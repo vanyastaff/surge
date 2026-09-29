@@ -25,6 +25,10 @@ is_terminal = false
 [nodes.security_audit.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.security_audit.config.bindings]]
+target = "spec"
+[nodes.security_audit.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -51,6 +55,10 @@ is_terminal = false
 [nodes.implement_fixes.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.implement_fixes.config.bindings]]
+target = "spec"
+[nodes.implement_fixes.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -77,6 +85,10 @@ is_terminal = false
 [nodes.security_tests.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.security_tests.config.bindings]]
+target = "spec"
+[nodes.security_tests.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 

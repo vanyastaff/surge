@@ -25,6 +25,10 @@ is_terminal = false
 [nodes.design_plan.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.design_plan.config.bindings]]
+target = "spec"
+[nodes.design_plan.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -51,6 +55,10 @@ is_terminal = false
 [nodes.implement_core.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.implement_core.config.bindings]]
+target = "spec"
+[nodes.implement_core.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -77,6 +85,10 @@ is_terminal = false
 [nodes.integrate_verify.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.integrate_verify.config.bindings]]
+target = "spec"
+[nodes.integrate_verify.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 

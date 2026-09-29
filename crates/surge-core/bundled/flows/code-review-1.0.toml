@@ -4,13 +4,51 @@
 # finding reaches the report on the reviewer's word alone.
 
 schema_version = 1
-start = "review_scope"
+start = "review_brief"
 
 [metadata]
 name = "code-review"
 created_at = "2026-09-29T00:00:00Z"
 [metadata.archetype]
 name = "code-review"
+
+[nodes.review_brief]
+id = "review_brief"
+
+[nodes.review_brief.position]
+x = -200
+y = 0
+
+[[nodes.review_brief.declared_outcomes]]
+id = "drafted"
+description = "The change under review is captured as changes.patch, with a spec of what it claims to do"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.review_brief.declared_outcomes]]
+id = "needs_clarification"
+description = "There is no change to review, or its target is ambiguous"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.review_brief.config]
+node_kind = "agent"
+profile = "spec-author@1.0"
+[[nodes.review_brief.config.bindings]]
+target = "milestone"
+[nodes.review_brief.config.bindings.source]
+type = "initial_prompt"
+hooks = []
+
+[nodes.review_brief.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.review_brief.config.custom_fields]
+
+[nodes.review_brief.config.prompt_overrides]
+append_system = "You are preparing a code review, not a feature. Find the change to review: uncommitted work first, otherwise the current branch against its base (`git diff`, `git log`). Write changes.patch with the full diff (include newly created files, not only tracked changes) and include changes.patch in artifacts_produced. Then write the spec artifacts describing what the change claims to do and the observable checks a reviewer should confirm. If there is nothing to review or the target is ambiguous, report needs_clarification."
 
 [nodes.review_scope]
 id = "review_scope"
@@ -28,8 +66,21 @@ is_terminal = false
 [nodes.review_scope.config]
 node_kind = "agent"
 profile = "reviewer@1.0"
-bindings = []
 hooks = []
+
+[[nodes.review_scope.config.bindings]]
+target = "diff"
+[nodes.review_scope.config.bindings.source]
+type = "node_output"
+node = "review_brief"
+artifact = "changes"
+
+[[nodes.review_scope.config.bindings]]
+target = "spec"
+[nodes.review_scope.config.bindings.source]
+type = "node_output"
+node = "review_brief"
+artifact = "spec_toml"
 
 [nodes.review_scope.config.limits]
 timeout_seconds = 900
@@ -62,8 +113,14 @@ ledger_effect = "failed_verification"
 [nodes.verify_review.config]
 node_kind = "agent"
 profile = "cross-verifier@1.0"
-bindings = []
 hooks = []
+
+[[nodes.verify_review.config.bindings]]
+target = "spec"
+[nodes.verify_review.config.bindings.source]
+type = "node_output"
+node = "review_brief"
+artifact = "spec_toml"
 
 [nodes.verify_review.config.limits]
 timeout_seconds = 900
@@ -88,8 +145,21 @@ is_terminal = false
 [nodes.security_pass.config]
 node_kind = "agent"
 profile = "security-reviewer@1.0"
-bindings = []
 hooks = []
+
+[[nodes.security_pass.config.bindings]]
+target = "diff"
+[nodes.security_pass.config.bindings.source]
+type = "node_output"
+node = "review_brief"
+artifact = "changes"
+
+[[nodes.security_pass.config.bindings]]
+target = "spec"
+[nodes.security_pass.config.bindings.source]
+type = "node_output"
+node = "review_brief"
+artifact = "spec_toml"
 
 [nodes.security_pass.config.limits]
 timeout_seconds = 900
@@ -122,8 +192,14 @@ ledger_effect = "failed_verification"
 [nodes.verify_security.config]
 node_kind = "agent"
 profile = "cross-verifier@1.0"
-bindings = []
 hooks = []
+
+[[nodes.verify_security.config.bindings]]
+target = "spec"
+[nodes.verify_security.config.bindings.source]
+type = "node_output"
+node = "review_brief"
+artifact = "spec_toml"
 
 [nodes.verify_security.config.limits]
 timeout_seconds = 900
@@ -229,6 +305,30 @@ kind = "forward"
 [edges.from]
 node = "verify_security"
 outcome = "failed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_brief_done"
+to = "review_scope"
+kind = "forward"
+
+[edges.from]
+node = "review_brief"
+outcome = "drafted"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_brief_unclear"
+to = "failure"
+kind = "forward"
+
+[edges.from]
+node = "review_brief"
+outcome = "needs_clarification"
 
 [edges.policy]
 on_max_exceeded = "escalate"

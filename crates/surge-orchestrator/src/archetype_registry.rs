@@ -287,4 +287,26 @@ mod tests {
             assert_eq!(resolved.provenance, ArchetypeProvenance::Bundled);
         }
     }
+
+    #[test]
+    fn every_bundled_archetype_satisfies_its_profiles_required_bindings() {
+        // `validate_for_m6` checks structure without a profile registry, so a
+        // flow whose agent node omits a binding its profile requires (the
+        // `code-review` flow once did) passed every unit test and failed on the
+        // first real run. Resolve each profile and check its required inputs.
+        let tmp = tempfile::tempdir().unwrap();
+        let disk = crate::profile_loader::DiskProfileSet::scan(tmp.path()).unwrap();
+        let profiles = crate::profile_loader::ProfileRegistry::new(disk);
+        let registry = ArchetypeRegistry::from_dir(Path::new("definitely-missing")).unwrap();
+        let mut broken = Vec::new();
+        for archetype in surge_core::ArchetypeName::ALL {
+            let resolved = registry.resolve(archetype.as_str()).unwrap();
+            if let Err(e) =
+                crate::engine::validate::validate_profile_inputs(&resolved.graph, &profiles)
+            {
+                broken.push(format!("{}: {e}", archetype.as_str()));
+            }
+        }
+        assert!(broken.is_empty(), "archetypes that cannot start:\n{}", broken.join("\n"));
+    }
 }

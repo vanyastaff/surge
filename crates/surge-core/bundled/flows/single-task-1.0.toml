@@ -35,6 +35,10 @@ is_terminal = false
 [nodes.impl_1.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.impl_1.config.bindings]]
+target = "spec"
+[nodes.impl_1.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 

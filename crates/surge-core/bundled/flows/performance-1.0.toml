@@ -25,6 +25,10 @@ is_terminal = false
 [nodes.profile_baseline.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.profile_baseline.config.bindings]]
+target = "spec"
+[nodes.profile_baseline.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -51,6 +55,10 @@ is_terminal = false
 [nodes.optimize_hot_paths.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.optimize_hot_paths.config.bindings]]
+target = "spec"
+[nodes.optimize_hot_paths.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -77,6 +85,10 @@ is_terminal = false
 [nodes.benchmark_validate.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.benchmark_validate.config.bindings]]
+target = "spec"
+[nodes.benchmark_validate.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 

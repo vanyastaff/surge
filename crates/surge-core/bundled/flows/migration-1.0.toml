@@ -25,6 +25,10 @@ is_terminal = false
 [nodes.migration_plan.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.migration_plan.config.bindings]]
+target = "spec"
+[nodes.migration_plan.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -51,6 +55,10 @@ is_terminal = false
 [nodes.implement_migration.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.implement_migration.config.bindings]]
+target = "spec"
+[nodes.implement_migration.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -77,6 +85,10 @@ is_terminal = false
 [nodes.validate_rollback.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.validate_rollback.config.bindings]]
+target = "spec"
+[nodes.validate_rollback.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 

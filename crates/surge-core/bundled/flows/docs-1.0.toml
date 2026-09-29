@@ -25,6 +25,10 @@ is_terminal = false
 [nodes.research_outline.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.research_outline.config.bindings]]
+target = "spec"
+[nodes.research_outline.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -51,6 +55,10 @@ is_terminal = false
 [nodes.write_docs.config]
 node_kind = "agent"
 profile = "implementer@1.0"
+[[nodes.write_docs.config.bindings]]
+target = "spec"
+[nodes.write_docs.config.bindings.source]
+type = "initial_prompt"
 bindings = []
 hooks = []
 
@@ -77,6 +85,11 @@ is_terminal = false
 [nodes.review_publish.config]
 node_kind = "agent"
 profile = "reviewer@1.0"
+[[nodes.review_publish.config.bindings]]
+target = "diff"
+[nodes.review_publish.config.bindings.source]
+type = "static"
+content = "No separate patch artifact exists for this step. Inspect the change directly: `git status`, then `git diff` against the base branch (and read any new untracked files)."
 bindings = []
 hooks = []
 
