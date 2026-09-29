@@ -424,17 +424,29 @@ impl RoadmapPatchApplyContext {
         self.roadmap.milestones.insert(insert_at, milestone);
     }
 
-    /// Put `new_id` into the mission that owns `anchor_id`, next to it.
-    /// No-op when the roadmap declares no missions or the anchor has none.
+    /// Put `new_id` into the mission and the stage that own `anchor_id`, next
+    /// to it. No-op for a grouping the roadmap does not declare or whose
+    /// lists do not contain the anchor.
     fn join_mission_of(&mut self, anchor_id: &str, new_id: &str, side: InsertSide) {
-        for mission in &mut self.roadmap.missions {
-            if let Some(position) = mission.milestones.iter().position(|id| id == anchor_id) {
+        let groups = self
+            .roadmap
+            .missions
+            .iter_mut()
+            .map(|mission| &mut mission.milestones)
+            .chain(
+                self.roadmap
+                    .stages
+                    .iter_mut()
+                    .map(|stage| &mut stage.milestones),
+            );
+        // A milestone joins the anchor's mission and the anchor's stage.
+        for milestones in groups {
+            if let Some(position) = milestones.iter().position(|id| id == anchor_id) {
                 let at = match side {
                     InsertSide::Before => position,
                     InsertSide::After => position + 1,
                 };
-                mission.milestones.insert(at, new_id.to_owned());
-                return;
+                milestones.insert(at, new_id.to_owned());
             }
         }
     }
@@ -584,7 +596,14 @@ impl RoadmapPatchApplyContext {
                 .roadmap
                 .missions
                 .iter_mut()
-                .flat_map(|mission| mission.milestones.iter_mut())
+                .map(|mission| &mut mission.milestones)
+                .chain(
+                    self.roadmap
+                        .stages
+                        .iter_mut()
+                        .map(|stage| &mut stage.milestones),
+                )
+                .flat_map(|milestones| milestones.iter_mut())
                 .filter(|id| *id == milestone_id)
             {
                 id.clone_from(&replacement.id);
@@ -1705,6 +1724,22 @@ mod tests {
         let result = patch.apply_to_roadmap(&mission_roadmap()).unwrap();
 
         assert_eq!(result.roadmap.missions[0].milestones, ["m1", "m2"]);
+    }
+
+    #[test]
+    fn appended_milestone_joins_the_last_stage() {
+        let mut roadmap = base_roadmap();
+        let mut stage = crate::roadmap::RoadmapStage::new("stage-1", "MVP", "Ship it");
+        stage.milestones = vec!["m1".into()];
+        roadmap.stages.push(stage);
+        let patch = patch(vec![RoadmapPatchOperation::AddMilestone {
+            milestone: RoadmapMilestone::new("m2", "Approval flow"),
+            insertion: Some(InsertionPoint::AppendToRoadmap),
+        }]);
+
+        let result = patch.apply_to_roadmap(&roadmap).unwrap();
+
+        assert_eq!(result.roadmap.stages[0].milestones, ["m1", "m2"]);
     }
 
     #[test]

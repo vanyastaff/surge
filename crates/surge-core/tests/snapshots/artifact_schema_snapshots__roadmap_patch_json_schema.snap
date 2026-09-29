@@ -1,5 +1,6 @@
 ---
 source: crates/surge-core/tests/artifact_schema_snapshots.rs
+assertion_line: 29
 expression: schema
 ---
 {
@@ -278,6 +279,17 @@ expression: schema
           "description": "Current execution status for amendment safety checks.",
           "$ref": "#/$defs/RoadmapStatus"
         },
+        "priority": {
+          "description": "Optional scheduling priority; `p0` is the most urgent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskPriority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tasks": {
           "description": "Ordered tasks within this milestone.",
           "type": "array",
@@ -334,6 +346,31 @@ expression: schema
           "description": "Skipped (dependency failed or user cancelled).",
           "type": "string",
           "const": "skipped"
+        }
+      ]
+    },
+    "TaskPriority": {
+      "description": "Scheduling priority of a roadmap milestone or task.\n\nDistinct from the legacy [`Priority`] used by [`RoadmapItem`]. Ordering\nfollows urgency: `P0 < P1 < P2 < P3`, so sorting ascending puts the most\nurgent work first.",
+      "oneOf": [
+        {
+          "description": "Must ship; blocks the release.",
+          "type": "string",
+          "const": "p0"
+        },
+        {
+          "description": "Important; should ship in this release.",
+          "type": "string",
+          "const": "p1"
+        },
+        {
+          "description": "Normal.",
+          "type": "string",
+          "const": "p2"
+        },
+        {
+          "description": "Nice to have; first to be cut.",
+          "type": "string",
+          "const": "p3"
         }
       ]
     },
@@ -403,6 +440,24 @@ expression: schema
           "items": {
             "type": "string"
           }
+        },
+        "priority": {
+          "description": "Optional scheduling priority; `p0` is the most urgent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskPriority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parallel_group": {
+          "description": "Explicit parallelism marker.\n\nTasks sharing a group name may run concurrently, so no member may\ndepend (directly or transitively) on another member of the same group.\nTasks with no group are scheduled purely by `depends_on`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

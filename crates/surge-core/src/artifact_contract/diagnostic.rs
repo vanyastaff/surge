@@ -57,6 +57,10 @@ pub enum ArtifactDiagnosticCode {
     DependencyCycle,
     /// Missions do not partition the roadmap's milestones in order.
     MissionStructure,
+    /// Stages do not partition the roadmap's milestones in order.
+    StageStructure,
+    /// A parallel group is blank or contains a dependency between its members.
+    ParallelGroupConflict,
     /// A mission's validation contract is not claimed exactly once by its tasks.
     ValidationContractCoverage,
 }
@@ -84,6 +88,8 @@ impl ArtifactDiagnosticCode {
             Self::DuplicateIdentifier => "duplicate_identifier",
             Self::DependencyCycle => "dependency_cycle",
             Self::MissionStructure => "mission_structure",
+            Self::StageStructure => "stage_structure",
+            Self::ParallelGroupConflict => "parallel_group_conflict",
             Self::ValidationContractCoverage => "validation_contract_coverage",
         }
     }

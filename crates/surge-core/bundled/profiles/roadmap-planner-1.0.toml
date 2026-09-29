@@ -106,9 +106,12 @@ Turn `description.md` into Roadmap contract artifacts:
 - `[[risks]]` uses `description` and optional `mitigation`.
 - Optional `[[missions]]` (see "Choosing the scale"): `id` (e.g. `"mission-1"`), `title`, `goal` (one or two sentences on the outcome), `milestones = ["m1", "m2"]`, and `[[missions.validation_contract]]` entries with `id` (area-prefixed, e.g. `"VAL-AUTH-001"`), `title`, `pass_condition` (observable behaviour that passes or fails) and optional `evidence = [...]` (what a verifier must capture: test output, screenshot, HTTP exchange).
 - Tasks inside a mission may carry `fulfills = ["VAL-AUTH-001"]`: the assertion ids that task makes fully testable.
+- Optional `[[stages]]` (see "Release stages"): `id` (e.g. `"stage-1"`), free-form `title`, `goal`, `milestones = ["m1", "m2"]` and `exit_criteria = [...]` (observable conditions that must hold before the stage is done). One stage is valid. Top-level `stages_rationale = "<one sentence>"` justifies the stage count.
+- Optional `priority = "p0"` (`p0` most urgent ... `p3` nice to have) on a milestone or a task.
+- Optional `parallel_group = "<name>"` on a task: tasks sharing a name run concurrently, so none of them may depend, directly or through other tasks, on another member of the same group.
 
 `roadmap.md` compatibility sections:
-- `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope.
+- `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope. When stages are declared, put each stage as a top-level `# Stage <id>: <title>` heading with its milestones under it.
 - `## Dependencies` — explicit edges between milestones when one must finish before another can start.
 - `## Risks` — short bulleted list of what could break the plan.
 
@@ -128,6 +131,20 @@ When you declare missions:
 4. Every milestone belongs to exactly one mission, and missions list their milestones in the same order as `[[milestones]]`.
 
 Do not declare missions for a single-milestone roadmap; the milestone's acceptance criteria are enough.
+
+# Release stages, priority and parallelism
+
+Choose the smallest structure that fits the approved description. There is no fixed MVP/beta/prod ladder; you decide how many stages and milestones the project needs:
+- A small or simple project (a timer app, a script, a single feature) needs ONE stage (or no `[[stages]]` at all) and a couple of milestones. Do not pad it with beta or production stages.
+- Add a further stage only at a real release boundary: something usable or shippable exists when the previous stage is done, and the next stage genuinely changes what users get. Name stages plainly in `title` ("MVP", "Public beta", "Launch" — free-form); order is the order you declare them.
+- Never emit an empty or ceremonial stage. Every stage lists at least one milestone and two or three checkable `exit_criteria`; validation rejects a stage with no milestones.
+- Every milestone belongs to exactly one stage, and stages list their milestones in the same order as `[[milestones]]`.
+- Justify the count in one sentence in `stages_rationale` (for example "One stage: the timer ships as a single usable release." or "Two stages: a usable core first, then hardening for real users").
+- The human reviews the plan and either approves it or sends it back for rework, so state the structure plainly instead of hedging.
+
+Set `priority` on milestones and tasks when the order of work is not obvious from dependencies: `p0` blocks the release, `p1` should ship in it, `p2` is normal, `p3` is first to cut. Leave it off when everything is equal.
+
+Mark real parallelism with `parallel_group`: give the same name to tasks that can be built at the same time because they touch different areas and none depends on another. Never put tasks in one group when one needs the other's output; express that with `depends_on` instead. Leave `parallel_group` off for tasks that must run alone.
 
 Rules:
 - Incorporate `edit_feedback` when it is non-empty; do not mention that feedback when it is empty.

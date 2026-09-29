@@ -113,6 +113,66 @@ The daemon control socket is owner-only (Unix mode `0600`; Windows named-pipe
 DACL restricted to the creating user) — `surge mcp logs` exposes captured
 stderr only to the daemon's OS user.
 
+## Surge as an MCP server
+
+Everything above is Surge as an MCP *client* (it spawns servers for its
+agents). `surge mcp serve` is the reverse: Surge itself becomes an MCP server
+over stdio, so a "main agent" (Claude Code, Codex, any MCP client) can watch
+and drive Surge runs.
+
+```bash
+claude mcp add surge -- surge mcp serve                 # read-only
+claude mcp add surge -- surge mcp serve --allow-write   # + steer / resolve / bootstrap
+```
+
+Other clients take the same command in their MCP config:
+
+```json
+{ "mcpServers": { "surge": { "command": "surge", "args": ["mcp", "serve"] } } }
+```
+
+The server honors `SURGE_HOME` and resolves the project from its working
+directory (the enclosing repository). stdout carries the protocol only; logs
+go to stderr.
+
+| Tool | Kind | Backed by | Needs daemon |
+|---|---|---|---|
+| `surge_inbox` | read | `surge inbox` | no |
+| `surge_run_status(run_id)` | read | inbox classifier + `surge resolve` inspect mode | no |
+| `surge_ready_tasks` | read | `surge ready` | no |
+| `surge_ledger(run_id?)` | read | `surge ledger` | no |
+| `surge_run_report(run_id)` | read | `surge run report` | no |
+| `surge_memory_search(query)` | read | `surge memory search` | no |
+| `surge_steer(run_id, message)` | write | `surge steer` | yes |
+| `surge_resolve(run_id, decision, note?)` | write | `surge resolve` | yes |
+| `surge_bootstrap_start(idea)` | write | daemon durable bootstrap (as the desktop app) | yes |
+
+Each result carries a short text summary plus structured JSON. Failures are
+MCP tool errors (`isError: true`) whose structured content is
+`{"error": {"kind", "message"}}` with `kind` one of `write_disabled`,
+`daemon_not_running`, `rejected`, `failed`. A daemon-dependent tool with no
+daemon reports `daemon not running — start it with surge daemon start`.
+`surge_ledger` covers all projects, like `surge ledger`; per-project scoping
+lands when runs record their origin repo.
+
+**Safety rules**
+
+- Write tools are always listed but refused unless the server runs with
+  `--allow-write`.
+- Every accepted mutation is logged via `tracing` (target
+  `surge::mcp_serve::audit`) with the client name from the MCP `initialize`
+  request (self-reported, not authenticated). Steer text is logged by length
+  only.
+- `surge_resolve` answers only a run that is in the inbox's `needs_input`
+  group *at call time*, only with an outcome the pending gate declares
+  (`surge_run_status` lists them), and accepts an optional `expected_node` so a
+  stale decision cannot land on a newer gate. It never answers a
+  bootstrap-mode gate: description, roadmap and flow approvals stay human
+  decisions (desktop app, Telegram, `surge bootstrap`).
+- `surge_bootstrap_start` hands the idea to the daemon's durable bootstrap
+  supervisor, which stops at each approval gate; the returned `planning_run`
+  can be followed with `surge_run_status`.
+
 ## Deferred
 
 - Persistent cross-run shared servers (`McpServerRef::isolation = Shared`).

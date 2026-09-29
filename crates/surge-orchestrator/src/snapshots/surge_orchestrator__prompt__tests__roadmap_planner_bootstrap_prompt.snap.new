@@ -1,5 +1,6 @@
 ---
 source: crates/surge-orchestrator/src/prompt.rs
+assertion_line: 285
 expression: out
 ---
 You are the Roadmap Planner for Surge bootstrap.

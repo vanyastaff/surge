@@ -23,12 +23,25 @@ const SIZE_REQUIRED_FROM_VERSION: u32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(
     title = "RoadmapArtifact",
-    description = "Surge `roadmap.toml` artifact: optional missions with validation contracts, ordered milestones, cross-milestone dependencies, and tracked risks."
+    description = "Surge `roadmap.toml` artifact: optional release stages, optional missions with validation contracts, ordered milestones, cross-milestone dependencies, and tracked risks."
 )]
 pub struct RoadmapArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]
     pub schema_version: u32,
+    /// Release stages, in delivery order.
+    ///
+    /// Optional, and one stage is as valid as several: the planner picks the
+    /// smallest structure that fits the work. When present, the stages
+    /// partition [`Self::milestones`] the same way missions do: every
+    /// milestone belongs to exactly one stage and concatenating the stages'
+    /// milestone lists reproduces the milestone order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<RoadmapStage>,
+    /// One sentence justifying the number of stages (or why there is only
+    /// one). Informational; never validated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages_rationale: Option<String>,
     /// Missions grouping the milestones, in execution order.
     ///
     /// Optional. When present, the missions partition [`Self::milestones`]:
@@ -54,6 +67,8 @@ impl RoadmapArtifact {
     pub fn new(milestones: Vec<RoadmapMilestone>) -> Self {
         Self {
             schema_version: ROADMAP_SCHEMA_VERSION,
+            stages: Vec::new(),
+            stages_rationale: None,
             missions: Vec::new(),
             milestones,
             dependencies: Vec::new(),
@@ -89,37 +104,44 @@ impl RoadmapArtifact {
                 out.push('\n');
             }
         }
-        for milestone in &self.milestones {
-            out.push_str(&format!("## {}: {}\n", milestone.id, milestone.title));
-            if milestone.status != RoadmapStatus::Pending {
-                out.push_str(&format!("Status: {}\n", milestone.status));
+        if self.stages.is_empty() {
+            for milestone in &self.milestones {
+                push_milestone_markdown(&mut out, milestone);
             }
-            if milestone.tasks.is_empty() {
+        } else {
+            if let Some(rationale) = self
+                .stages_rationale
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+            {
+                out.push_str(&format!("Stages: {rationale}\n\n"));
+            }
+            let mut rendered: HashSet<&str> = HashSet::new();
+            for stage in &self.stages {
+                out.push_str(&format!("# Stage {}: {}\n", stage.id, stage.title));
+                if !stage.goal.trim().is_empty() {
+                    out.push_str(&format!("Goal: {}\n", stage.goal));
+                }
+                for criterion in &stage.exit_criteria {
+                    out.push_str(&format!("- Exit: {criterion}\n"));
+                }
                 out.push('\n');
-                continue;
-            }
-            for task in &milestone.tasks {
-                out.push_str(&format!(
-                    "- [{}] {}: {}",
-                    markdown_checkbox(task.status),
-                    task.id,
-                    task.title
-                ));
-                if task.status != RoadmapStatus::Pending {
-                    out.push_str(&format!(" ({})", task.status));
-                }
-                out.push('\n');
-                if let Some(description) = &task.description {
-                    out.push_str(&format!("  - {}\n", description));
-                }
-                for criterion in &task.acceptance_criteria {
-                    out.push_str(&format!("  - AC: {criterion}\n"));
-                }
-                if !task.fulfills.is_empty() {
-                    out.push_str(&format!("  - Fulfills: {}\n", task.fulfills.join(", ")));
+                for id in &stage.milestones {
+                    let found = self.milestones.iter().find(|milestone| milestone.id == *id);
+                    if let Some(milestone) = found
+                        && rendered.insert(milestone.id.as_str())
+                    {
+                        push_milestone_markdown(&mut out, milestone);
+                    }
                 }
             }
-            out.push('\n');
+            // Milestones a malformed roadmap left outside every stage still
+            // show up, so the rendering never hides work.
+            for milestone in &self.milestones {
+                if !rendered.contains(milestone.id.as_str()) {
+                    push_milestone_markdown(&mut out, milestone);
+                }
+            }
         }
         if !self.dependencies.is_empty() {
             out.push_str("## Dependencies\n");
@@ -144,6 +166,49 @@ impl RoadmapArtifact {
         }
         out
     }
+}
+
+fn push_milestone_markdown(out: &mut String, milestone: &RoadmapMilestone) {
+    out.push_str(&format!("## {}: {}", milestone.id, milestone.title));
+    if let Some(priority) = milestone.priority {
+        out.push_str(&format!(" [{priority}]"));
+    }
+    out.push('\n');
+    if milestone.status != RoadmapStatus::Pending {
+        out.push_str(&format!("Status: {}\n", milestone.status));
+    }
+    if milestone.tasks.is_empty() {
+        out.push('\n');
+        return;
+    }
+    for task in &milestone.tasks {
+        out.push_str(&format!(
+            "- [{}] {}: {}",
+            markdown_checkbox(task.status),
+            task.id,
+            task.title
+        ));
+        if task.status != RoadmapStatus::Pending {
+            out.push_str(&format!(" ({})", task.status));
+        }
+        if let Some(priority) = task.priority {
+            out.push_str(&format!(" [{priority}]"));
+        }
+        if let Some(group) = &task.parallel_group {
+            out.push_str(&format!(" [parallel: {group}]"));
+        }
+        out.push('\n');
+        if let Some(description) = &task.description {
+            out.push_str(&format!("  - {}\n", description));
+        }
+        for criterion in &task.acceptance_criteria {
+            out.push_str(&format!("  - AC: {criterion}\n"));
+        }
+        if !task.fulfills.is_empty() {
+            out.push_str(&format!("  - Fulfills: {}\n", task.fulfills.join(", ")));
+        }
+    }
+    out.push('\n');
 }
 
 impl RoadmapArtifact {
@@ -227,6 +292,8 @@ impl RoadmapArtifact {
         }
 
         self.validate_missions(&milestone_ids, &mut issues);
+        self.validate_stages(&milestone_ids, &mut issues);
+        self.validate_parallel_groups(&mut issues);
 
         // Cycle detection is unreliable when duplicate task ids exist (the
         // HashMap in find_task_cycle uses last-write-wins, which can mask
@@ -382,6 +449,190 @@ impl RoadmapArtifact {
                 }
             }
         }
+    }
+
+    /// Stage-level invariants; a no-op when no stages are declared.
+    ///
+    /// Unique stage ids, every stage non-empty (no ceremonial stages) and
+    /// naming existing milestones, each milestone in exactly one stage, and
+    /// the concatenated stage milestone lists reproducing the roadmap
+    /// milestone order. The number of stages is never constrained: one is
+    /// valid.
+    fn validate_stages(&self, milestone_ids: &HashSet<&str>, issues: &mut Vec<RoadmapLedgerIssue>) {
+        if self.stages.is_empty() {
+            return;
+        }
+        let mut stage_ids: HashSet<&str> = HashSet::new();
+        let mut owner: HashSet<&str> = HashSet::new();
+        let mut structure_ok = true;
+        for stage in &self.stages {
+            if !stage_ids.insert(stage.id.as_str()) {
+                issues.push(RoadmapLedgerIssue::DuplicateStageId {
+                    stage: stage.id.clone(),
+                });
+            }
+            if stage.milestones.is_empty() {
+                structure_ok = false;
+                issues.push(RoadmapLedgerIssue::EmptyStage {
+                    stage: stage.id.clone(),
+                });
+            }
+            for milestone in &stage.milestones {
+                if !milestone_ids.contains(milestone.as_str()) {
+                    structure_ok = false;
+                    issues.push(RoadmapLedgerIssue::UnknownStageMilestone {
+                        stage: stage.id.clone(),
+                        milestone: milestone.clone(),
+                    });
+                } else if !owner.insert(milestone.as_str()) {
+                    structure_ok = false;
+                    issues.push(RoadmapLedgerIssue::MilestoneInSeveralStages {
+                        milestone: milestone.clone(),
+                    });
+                }
+            }
+        }
+        for milestone in &self.milestones {
+            if !owner.contains(milestone.id.as_str()) {
+                structure_ok = false;
+                issues.push(RoadmapLedgerIssue::MilestoneWithoutStage {
+                    milestone: milestone.id.clone(),
+                });
+            }
+        }
+        // Order only means something once membership is a clean partition.
+        if structure_ok {
+            let mismatch = self
+                .stages
+                .iter()
+                .flat_map(|stage| stage.milestones.iter())
+                .zip(&self.milestones)
+                .find(|(declared, actual)| **declared != actual.id);
+            if let Some((_, actual)) = mismatch {
+                issues.push(RoadmapLedgerIssue::StageOrderMismatch {
+                    milestone: actual.id.clone(),
+                });
+            }
+        }
+    }
+
+    /// Reject blank group names and groups whose members depend on each other.
+    ///
+    /// A dependency counts whether direct or transitive (through tasks in any
+    /// group), because either way the two members cannot run concurrently.
+    fn validate_parallel_groups(&self, issues: &mut Vec<RoadmapLedgerIssue>) {
+        let dependencies: HashMap<&str, &[String]> = self
+            .tasks()
+            .map(|task| (task.id.as_str(), task.depends_on.as_slice()))
+            .collect();
+        let group_of: HashMap<&str, &str> = self
+            .tasks()
+            .filter_map(|task| Some((task.id.as_str(), task.parallel_group.as_deref()?)))
+            .collect();
+
+        for task in self.tasks() {
+            let Some(group) = task.parallel_group.as_deref() else {
+                continue;
+            };
+            if group.trim().is_empty() {
+                issues.push(RoadmapLedgerIssue::EmptyParallelGroup {
+                    task: task.id.clone(),
+                });
+                continue;
+            }
+            let mut visited: HashSet<&str> = HashSet::new();
+            let mut pending: Vec<&str> = task.depends_on.iter().map(String::as_str).collect();
+            while let Some(candidate) = pending.pop() {
+                if !visited.insert(candidate) {
+                    continue;
+                }
+                if candidate != task.id && group_of.get(candidate) == Some(&group) {
+                    issues.push(RoadmapLedgerIssue::ParallelGroupDependency {
+                        group: group.to_owned(),
+                        task: task.id.clone(),
+                        depends_on: candidate.to_owned(),
+                    });
+                }
+                if let Some(next) = dependencies.get(candidate) {
+                    pending.extend(next.iter().map(String::as_str));
+                }
+            }
+        }
+    }
+
+    /// Group tasks into dependency-respecting waves for concurrent execution.
+    ///
+    /// Wave `n` holds every task whose `depends_on` tasks all sit in waves
+    /// `< n`, so the tasks inside one wave can run in parallel. Within a wave
+    /// tasks are ordered by priority (`p0` first, unprioritised last), then by
+    /// their milestone's priority, then by declaration order. Unknown
+    /// dependency ids are ignored; tasks on a dependency cycle never become
+    /// ready and are omitted (they are reported by [`Self::validate_ledger`]).
+    /// The plan covers every task regardless of status.
+    #[must_use]
+    pub fn ready_batches(&self) -> Vec<Vec<&RoadmapTask>> {
+        fn placed_before(entries: &[Entry<'_>], index: usize, wave: usize) -> bool {
+            entries[index].wave.is_some_and(|placed| placed < wave)
+        }
+        struct Entry<'a> {
+            task: &'a RoadmapTask,
+            milestone_priority: Option<TaskPriority>,
+            wave: Option<usize>,
+        }
+        let mut entries: Vec<Entry<'_>> = self
+            .milestones
+            .iter()
+            .flat_map(|milestone| {
+                milestone.tasks.iter().map(|task| Entry {
+                    task,
+                    milestone_priority: milestone.priority,
+                    wave: None,
+                })
+            })
+            .collect();
+        let mut index_of: HashMap<&str, usize> = HashMap::with_capacity(entries.len());
+        for (index, entry) in entries.iter().enumerate() {
+            index_of.entry(entry.task.id.as_str()).or_insert(index);
+        }
+
+        let mut batches: Vec<Vec<&RoadmapTask>> = Vec::new();
+        loop {
+            let wave = batches.len();
+            // A dependency is settled when it is unknown or already placed in
+            // an earlier wave; a self edge never settles.
+            let is_settled = |index: usize, dependency: &String| {
+                index_of
+                    .get(dependency.as_str())
+                    .is_none_or(|&target| target != index && placed_before(&entries, target, wave))
+            };
+            let ready: Vec<usize> = (0..entries.len())
+                .filter(|&index| entries[index].wave.is_none())
+                .filter(|&index| {
+                    let dependencies = &entries[index].task.depends_on;
+                    dependencies
+                        .iter()
+                        .all(|dependency| is_settled(index, dependency))
+                })
+                .collect();
+            if ready.is_empty() {
+                break;
+            }
+            for &index in &ready {
+                entries[index].wave = Some(wave);
+            }
+            let mut batch: Vec<usize> = ready;
+            // Stable sort keeps declaration order among equal priorities.
+            batch.sort_by_key(|&index| {
+                (
+                    entries[index].task.priority.map_or(u8::MAX, |p| p as u8),
+                    entries[index]
+                        .milestone_priority
+                        .map_or(u8::MAX, |p| p as u8),
+                )
+            });
+            batches.push(batch.into_iter().map(|index| entries[index].task).collect());
+        }
+        batches
     }
 
     /// Iterate every task across all milestones in declaration order.
@@ -624,6 +875,54 @@ pub enum RoadmapLedgerIssue {
         /// Every task claiming it.
         tasks: Vec<String>,
     },
+    /// Two stages share the same id.
+    DuplicateStageId {
+        /// The duplicated stage id.
+        stage: String,
+    },
+    /// A stage lists no milestones; empty stages are ceremony, not structure.
+    EmptyStage {
+        /// The stage id.
+        stage: String,
+    },
+    /// A stage lists a milestone id that does not exist.
+    UnknownStageMilestone {
+        /// The stage id.
+        stage: String,
+        /// The missing milestone id.
+        milestone: String,
+    },
+    /// A milestone is listed by more than one stage.
+    MilestoneInSeveralStages {
+        /// The milestone id.
+        milestone: String,
+    },
+    /// Stages are declared but this milestone belongs to none of them.
+    MilestoneWithoutStage {
+        /// The milestone id.
+        milestone: String,
+    },
+    /// Concatenated stage milestone lists diverge from the milestone order at
+    /// this milestone.
+    StageOrderMismatch {
+        /// First milestone found out of stage order.
+        milestone: String,
+    },
+    /// A task's `parallel_group` is blank.
+    EmptyParallelGroup {
+        /// The task id.
+        task: String,
+    },
+    /// A task depends (directly or transitively) on another member of its
+    /// own `parallel_group`, so the two cannot run concurrently.
+    ParallelGroupDependency {
+        /// The group name.
+        group: String,
+        /// The dependent task.
+        task: String,
+        /// The group member it depends on.
+        depends_on: String,
+    },
 }
 
 impl std::fmt::Display for RoadmapLedgerIssue {
@@ -711,6 +1010,38 @@ impl std::fmt::Display for RoadmapLedgerIssue {
                 "assertion {assertion:?} is fulfilled by several tasks ({}); exactly one leaf task must claim it",
                 tasks.join(", ")
             ),
+            Self::DuplicateStageId { stage } => write!(formatter, "duplicate stage id {stage:?}"),
+            Self::EmptyStage { stage } => write!(
+                formatter,
+                "stage {stage:?} lists no milestones; drop it or give it work (a stage marks a real release boundary)"
+            ),
+            Self::UnknownStageMilestone { stage, milestone } => write!(
+                formatter,
+                "stage {stage:?} lists unknown milestone {milestone:?}"
+            ),
+            Self::MilestoneInSeveralStages { milestone } => write!(
+                formatter,
+                "milestone {milestone:?} is listed by more than one stage"
+            ),
+            Self::MilestoneWithoutStage { milestone } => write!(
+                formatter,
+                "milestone {milestone:?} belongs to no stage; when stages are declared every milestone needs one"
+            ),
+            Self::StageOrderMismatch { milestone } => write!(
+                formatter,
+                "milestone {milestone:?} is out of stage order; list stages and their milestones in roadmap order"
+            ),
+            Self::EmptyParallelGroup { task } => {
+                write!(formatter, "task {task:?} has a blank parallel_group")
+            },
+            Self::ParallelGroupDependency {
+                group,
+                task,
+                depends_on,
+            } => write!(
+                formatter,
+                "task {task:?} depends on {depends_on:?} but both are in parallel group {group:?}; tasks in one group must be independent"
+            ),
         }
     }
 }
@@ -786,6 +1117,9 @@ pub struct RoadmapMilestone {
     /// Current execution status for amendment safety checks.
     #[serde(default, skip_serializing_if = "RoadmapStatus::is_pending")]
     pub status: RoadmapStatus,
+    /// Optional scheduling priority; `p0` is the most urgent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<TaskPriority>,
     /// Ordered tasks within this milestone.
     #[serde(default)]
     pub tasks: Vec<RoadmapTask>,
@@ -799,6 +1133,7 @@ impl RoadmapMilestone {
             id: id.into(),
             title: title.into(),
             status: RoadmapStatus::Pending,
+            priority: None,
             tasks: Vec::new(),
         }
     }
@@ -848,6 +1183,16 @@ pub struct RoadmapTask {
     /// infrastructure tasks leave this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fulfills: Vec<String>,
+    /// Optional scheduling priority; `p0` is the most urgent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<TaskPriority>,
+    /// Explicit parallelism marker.
+    ///
+    /// Tasks sharing a group name may run concurrently, so no member may
+    /// depend (directly or transitively) on another member of the same group.
+    /// Tasks with no group are scheduled purely by `depends_on`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_group: Option<String>,
 }
 
 impl RoadmapTask {
@@ -865,6 +1210,75 @@ impl RoadmapTask {
             size: None,
             verified: false,
             fulfills: Vec::new(),
+            priority: None,
+            parallel_group: None,
+        }
+    }
+}
+
+/// Scheduling priority of a roadmap milestone or task.
+///
+/// Distinct from the legacy [`Priority`] used by [`RoadmapItem`]. Ordering
+/// follows urgency: `P0 < P1 < P2 < P3`, so sorting ascending puts the most
+/// urgent work first.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskPriority {
+    /// Must ship; blocks the release.
+    P0,
+    /// Important; should ship in this release.
+    P1,
+    /// Normal.
+    P2,
+    /// Nice to have; first to be cut.
+    P3,
+}
+
+impl std::fmt::Display for TaskPriority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::P0 => "p0",
+            Self::P1 => "p1",
+            Self::P2 => "p2",
+            Self::P3 => "p3",
+        })
+    }
+}
+
+/// One release stage grouping milestones.
+///
+/// A stage marks a real release boundary: something usable or shippable
+/// exists once it is done. The title is free-form ("MVP", "Public beta",
+/// "Launch") and stage order is declaration order; nothing requires a fixed
+/// ladder, and a roadmap may have a single stage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RoadmapStage {
+    /// Stable identifier, for example `stage-1`.
+    pub id: String,
+    /// Human-readable stage title.
+    pub title: String,
+    /// The outcome this release delivers, in one or two sentences.
+    #[serde(default)]
+    pub goal: String,
+    /// Ids of the milestones this stage owns, in execution order.
+    pub milestones: Vec<String>,
+    /// Observable conditions that must hold before the stage is done.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exit_criteria: Vec<String>,
+}
+
+impl RoadmapStage {
+    /// Create a stage with no milestones or exit criteria.
+    #[must_use]
+    pub fn new(id: impl Into<String>, title: impl Into<String>, goal: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            goal: goal.into(),
+            milestones: Vec::new(),
+            exit_criteria: Vec::new(),
         }
     }
 }
@@ -1928,5 +2342,237 @@ title = "Old task"
             markdown.contains("  - Fulfills: VAL-AUTH-001"),
             "{markdown}"
         );
+    }
+
+    fn milestone_with(id: &str, tasks: Vec<RoadmapTask>) -> RoadmapMilestone {
+        let mut milestone = RoadmapMilestone::new(id, id);
+        milestone.tasks = tasks;
+        milestone
+    }
+
+    fn stage_roadmap() -> RoadmapArtifact {
+        let mut roadmap = RoadmapArtifact::new(vec![
+            milestone_with("m1", vec![sized_task("m1-t1", &[])]),
+            milestone_with("m2", vec![sized_task("m2-t1", &[])]),
+            milestone_with("m3", vec![sized_task("m3-t1", &[])]),
+        ]);
+        let mut first = RoadmapStage::new("stage-1", "MVP", "Usable core");
+        first.milestones = vec!["m1".into(), "m2".into()];
+        first.exit_criteria = vec!["Core flow demoable".into()];
+        let mut second = RoadmapStage::new("stage-2", "Public beta", "");
+        second.milestones = vec!["m3".into()];
+        roadmap.stages = vec![first, second];
+        roadmap
+    }
+
+    #[test]
+    fn single_stage_roadmap_is_valid() {
+        let mut roadmap = stage_roadmap();
+        roadmap.stages.truncate(1);
+        roadmap.stages[0].milestones = vec!["m1".into(), "m2".into(), "m3".into()];
+        roadmap.stages_rationale = Some("A timer ships in one release.".into());
+        assert_eq!(roadmap.validate_ledger(), Vec::new());
+        assert!(
+            roadmap
+                .to_markdown()
+                .contains("Stages: A timer ships in one release."),
+        );
+    }
+
+    #[test]
+    fn roadmap_without_stages_is_valid() {
+        let mut roadmap = stage_roadmap();
+        roadmap.stages.clear();
+        assert_eq!(roadmap.validate_ledger(), Vec::new());
+        assert!(!roadmap.to_markdown().contains("# Stage"));
+    }
+
+    #[test]
+    fn ceremonial_empty_stage_is_rejected() {
+        let mut roadmap = stage_roadmap();
+        roadmap
+            .stages
+            .push(RoadmapStage::new("stage-3", "Production", "Launch"));
+        assert!(
+            roadmap
+                .validate_ledger()
+                .contains(&RoadmapLedgerIssue::EmptyStage {
+                    stage: "stage-3".into()
+                })
+        );
+    }
+
+    #[test]
+    fn well_formed_stages_validate_and_render_as_headings() {
+        let roadmap = stage_roadmap();
+        assert_eq!(roadmap.validate_ledger(), Vec::new());
+        let markdown = roadmap.to_markdown();
+        let first = markdown.find("# Stage stage-1: MVP").expect("first stage");
+        let m2 = markdown.find("## m2: m2").expect("m2");
+        let second = markdown
+            .find("# Stage stage-2: Public beta")
+            .expect("second stage");
+        assert!(first < m2 && m2 < second, "{markdown}");
+        assert!(
+            markdown.contains("- Exit: Core flow demoable"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn stage_partition_violations_are_reported() {
+        let mut roadmap = stage_roadmap();
+        roadmap.stages[1].milestones = vec!["m2".into(), "ghost".into()];
+        let issues = roadmap.validate_ledger();
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::MilestoneInSeveralStages {
+                milestone: "m2".into()
+            })
+        );
+        assert!(issues.contains(&RoadmapLedgerIssue::UnknownStageMilestone {
+            stage: "stage-2".into(),
+            milestone: "ghost".into()
+        }));
+        assert!(issues.contains(&RoadmapLedgerIssue::MilestoneWithoutStage {
+            milestone: "m3".into()
+        }));
+    }
+
+    #[test]
+    fn stage_ids_and_milestone_order_are_enforced() {
+        let mut roadmap = stage_roadmap();
+        roadmap.stages[1].id = "stage-1".into();
+        assert!(
+            roadmap
+                .validate_ledger()
+                .contains(&RoadmapLedgerIssue::DuplicateStageId {
+                    stage: "stage-1".into()
+                })
+        );
+
+        let mut roadmap = stage_roadmap();
+        roadmap.stages[0].milestones = vec!["m2".into(), "m1".into()];
+        assert!(
+            roadmap
+                .validate_ledger()
+                .contains(&RoadmapLedgerIssue::StageOrderMismatch {
+                    milestone: "m1".into()
+                })
+        );
+    }
+
+    #[test]
+    fn legacy_roadmap_without_stages_or_priorities_still_parses() {
+        let roadmap: RoadmapArtifact = toml::from_str(
+            "schema_version = 1\n[[milestones]]\nid = \"m1\"\ntitle = \"M\"\n[[milestones.tasks]]\nid = \"t1\"\ntitle = \"T\"\n",
+        )
+        .expect("legacy roadmap parses");
+        assert!(roadmap.stages.is_empty());
+        assert_eq!(roadmap.milestones[0].priority, None);
+        assert_eq!(roadmap.milestones[0].tasks[0].parallel_group, None);
+        let serialized = toml::to_string(&roadmap).expect("serialize");
+        assert!(!serialized.contains("stages"), "{serialized}");
+        assert!(!serialized.contains("priority"), "{serialized}");
+    }
+
+    #[test]
+    fn priority_and_parallel_group_round_trip() {
+        let mut task = sized_task("t1", &[]);
+        task.priority = Some(TaskPriority::P0);
+        task.parallel_group = Some("api".into());
+        let roadmap = RoadmapArtifact::new(vec![milestone_with("m1", vec![task])]);
+        let serialized = toml::to_string(&roadmap).expect("serialize");
+        assert!(serialized.contains("priority = \"p0\""), "{serialized}");
+        let parsed: RoadmapArtifact = toml::from_str(&serialized).expect("parse");
+        assert_eq!(parsed, roadmap);
+        assert!(
+            roadmap
+                .to_markdown()
+                .contains("- [ ] t1: t1 [p0] [parallel: api]"),
+            "{}",
+            roadmap.to_markdown()
+        );
+    }
+
+    #[test]
+    fn parallel_group_rejects_direct_and_transitive_dependencies() {
+        let mut a = sized_task("a", &[]);
+        let mut b = sized_task("b", &["a"]);
+        let mut c = sized_task("c", &["b"]);
+        let mut outsider = sized_task("x", &[]);
+        for task in [&mut a, &mut b, &mut c] {
+            task.parallel_group = Some("g".into());
+        }
+        outsider.parallel_group = Some("h".into());
+        let roadmap = RoadmapArtifact::new(vec![milestone_with("m1", vec![a, b, c, outsider])]);
+        let issues = roadmap.validate_ledger();
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::ParallelGroupDependency {
+                group: "g".into(),
+                task: "b".into(),
+                depends_on: "a".into()
+            })
+        );
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::ParallelGroupDependency {
+                group: "g".into(),
+                task: "c".into(),
+                depends_on: "a".into()
+            })
+        );
+        assert_eq!(issues.len(), 3, "{issues:?}");
+    }
+
+    #[test]
+    fn independent_group_members_and_blank_groups() {
+        let mut a = sized_task("a", &[]);
+        let mut b = sized_task("b", &[]);
+        a.parallel_group = Some("g".into());
+        b.parallel_group = Some("  ".into());
+        let roadmap = RoadmapArtifact::new(vec![milestone_with("m1", vec![a, b])]);
+        assert_eq!(
+            roadmap.validate_ledger(),
+            vec![RoadmapLedgerIssue::EmptyParallelGroup { task: "b".into() }]
+        );
+    }
+
+    #[test]
+    fn ready_batches_are_dependency_waves_ordered_by_priority() {
+        let mut low = sized_task("low", &[]);
+        low.priority = Some(TaskPriority::P3);
+        let mut urgent = sized_task("urgent", &[]);
+        urgent.priority = Some(TaskPriority::P0);
+        let unranked = sized_task("unranked", &[]);
+        let after = sized_task("after", &["low", "urgent"]);
+        let mut second_milestone_urgent = sized_task("late", &["ghost"]);
+        second_milestone_urgent.priority = Some(TaskPriority::P0);
+        let roadmap = RoadmapArtifact::new(vec![
+            milestone_with("m1", vec![low, unranked, urgent, after]),
+            milestone_with("m2", vec![second_milestone_urgent]),
+        ]);
+        let ids: Vec<Vec<&str>> = roadmap
+            .ready_batches()
+            .iter()
+            .map(|batch| batch.iter().map(|task| task.id.as_str()).collect())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![vec!["urgent", "late", "low", "unranked"], vec!["after"]]
+        );
+    }
+
+    #[test]
+    fn ready_batches_omit_cycles() {
+        let roadmap = RoadmapArtifact::new(vec![milestone_with(
+            "m1",
+            vec![
+                sized_task("a", &["b"]),
+                sized_task("b", &["a"]),
+                sized_task("c", &[]),
+            ],
+        )]);
+        let batches = roadmap.ready_batches();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0][0].id, "c");
     }
 }

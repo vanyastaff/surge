@@ -93,6 +93,88 @@ depends_on = ["user-schema"]
 fulfills = ["VAL-AUTH-001"]
 ```
 
+## Release stages, priority and parallelism
+
+All of these are optional and additive; `schema_version` stays `2` and older
+roadmaps parse unchanged.
+
+**Stages.** `[[stages]]` group milestones into releases, in declared order.
+There is no fixed MVP/beta/prod ladder: the planner picks the smallest
+structure that fits the approved description. A trivial app needs one stage
+(or none) and a couple of milestones; add a stage only at a real release
+boundary, where something usable exists before the next stage starts. Never
+emit an empty or ceremonial stage, and justify the count in one sentence in
+the top-level `stages_rationale`. The human approves the plan or sends it back
+for rework.
+
+- `id`, `title`, `goal` — identity and the outcome of the release; `title` is
+  free-form ("MVP", "Public beta", "Launch").
+- `milestones` — ids of the milestones the stage owns, in order.
+- `exit_criteria` — observable conditions that must hold before the stage is done.
+
+Stages partition the milestones exactly like missions do: when stages are
+declared, every milestone is in exactly one stage, no stage is empty, and the
+stage lists concatenated reproduce the `[[milestones]]` order. The number of
+stages is never constrained (one is valid) and validation does not reward more.
+Stages and
+missions are independent groupings and may both be present. Roadmap patches
+keep both partitions (an inserted milestone joins its anchor's stage).
+Violations report the `stage_structure` code (or `invalid_reference` /
+`duplicate_identifier` for unknown or repeated ids).
+
+**Priority.** `priority = "p0" | "p1" | "p2" | "p3"` on a milestone or a task;
+`p0` is the most urgent. Absent means unprioritised and sorts last.
+
+**Parallel groups.** `parallel_group = "<name>"` on a task. Tasks that share a
+name may run concurrently, so validation rejects a group in which one member
+depends, directly or through other tasks, on another member
+(`parallel_group_conflict`), and a blank group name. Use `depends_on` for
+ordering; use a group only to state real independence.
+
+`RoadmapArtifact::ready_batches()` turns `depends_on` into dependency-respecting
+waves (each wave can run concurrently), ordered inside a wave by task priority,
+then milestone priority, then declaration order. Tasks on a cycle are omitted.
+
+```toml
+stages_rationale = "One stage: sign-in ships as a single usable release."
+
+[[stages]]
+id = "stage-1"
+title = "MVP"
+goal = "A user can sign in and see their dashboard."
+milestones = ["accounts"]
+exit_criteria = ["Sign-in works end to end"]
+
+[[milestones]]
+id = "accounts"
+title = "Accounts"
+priority = "p0"
+
+[[milestones.tasks]]
+id = "user-schema"
+title = "User table"
+size = "s"
+priority = "p0"
+
+[[milestones.tasks]]
+id = "sign-in-ui"
+title = "Sign-in form"
+size = "m"
+depends_on = ["user-schema"]
+parallel_group = "sign-in"
+
+[[milestones.tasks]]
+id = "sign-in-api"
+title = "Sign-in endpoint"
+size = "m"
+depends_on = ["user-schema"]
+parallel_group = "sign-in"
+```
+
+`to_markdown` renders each stage as a top-level `# Stage <id>: <title>`
+heading with its milestones beneath, and tags tasks with `[p0]` and
+`[parallel: <group>]`.
+
 ## Minimal Valid TOML
 
 ```toml
@@ -159,6 +241,9 @@ mitigation = "Keep profile prompts linked to this convention."
 - **With missions:** every milestone is in exactly one mission, in order; every
   mission has a non-empty `validation_contract`; every assertion is claimed by
   exactly one task of its own mission.
+- **With stages:** as few as the work needs (one is fine), none empty; every
+  milestone is in exactly one stage, in order.
+- Tasks in one `parallel_group` do not depend on each other.
 
 ## Roadmap Patch Artifacts
 

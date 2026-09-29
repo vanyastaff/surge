@@ -122,6 +122,18 @@ const fn ledger_issue_code(issue: &RoadmapLedgerIssue) -> ArtifactDiagnosticCode
         | RoadmapLedgerIssue::AssertionClaimedTwice { .. } => {
             ArtifactDiagnosticCode::ValidationContractCoverage
         },
+        RoadmapLedgerIssue::DuplicateStageId { .. } => ArtifactDiagnosticCode::DuplicateIdentifier,
+        RoadmapLedgerIssue::UnknownStageMilestone { .. } => {
+            ArtifactDiagnosticCode::InvalidReference
+        },
+        RoadmapLedgerIssue::EmptyStage { .. }
+        | RoadmapLedgerIssue::MilestoneInSeveralStages { .. }
+        | RoadmapLedgerIssue::MilestoneWithoutStage { .. }
+        | RoadmapLedgerIssue::StageOrderMismatch { .. } => ArtifactDiagnosticCode::StageStructure,
+        RoadmapLedgerIssue::EmptyParallelGroup { .. }
+        | RoadmapLedgerIssue::ParallelGroupDependency { .. } => {
+            ArtifactDiagnosticCode::ParallelGroupConflict
+        },
     }
 }
 
@@ -154,6 +166,18 @@ fn ledger_issue_location(issue: &RoadmapLedgerIssue) -> Option<String> {
         RoadmapLedgerIssue::UnknownFulfills { task, .. }
         | RoadmapLedgerIssue::FulfillsOutsideMission { task, .. } => {
             Some(format!("{task}.fulfills"))
+        },
+        RoadmapLedgerIssue::DuplicateStageId { stage }
+        | RoadmapLedgerIssue::EmptyStage { stage } => Some(stage.clone()),
+        RoadmapLedgerIssue::UnknownStageMilestone { stage, .. } => {
+            Some(format!("{stage}.milestones"))
+        },
+        RoadmapLedgerIssue::MilestoneInSeveralStages { milestone }
+        | RoadmapLedgerIssue::MilestoneWithoutStage { milestone }
+        | RoadmapLedgerIssue::StageOrderMismatch { milestone } => Some(milestone.clone()),
+        RoadmapLedgerIssue::EmptyParallelGroup { task }
+        | RoadmapLedgerIssue::ParallelGroupDependency { task, .. } => {
+            Some(format!("{task}.parallel_group"))
         },
     }
 }

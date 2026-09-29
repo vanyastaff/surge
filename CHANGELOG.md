@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — roadmap release stages, priority and parallel groups
+
+- `RoadmapArtifact::stages` (`RoadmapStage`, `StageKind` mvp/beta/prod): an
+  optional release-stage partition of the milestones, validated like
+  missions; `TaskPriority` (`p0`..`p3`) on milestones and tasks;
+  `RoadmapTask::parallel_group` with a no-internal-dependency check; and the
+  pure `RoadmapArtifact::ready_batches()` wave planner. New
+  `RoadmapLedgerIssue` variants and diagnostic codes `stage_structure` /
+  `parallel_group_conflict`. `schema_version` stays 2; old roadmaps parse
+  unchanged. Convention: `docs/conventions/roadmap.md`.
+
 ### Added — providers are registry data (Ollama included)
 
 - **One unified agent catalog.** The engine now resolves a profile's
