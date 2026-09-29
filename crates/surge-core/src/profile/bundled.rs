@@ -190,7 +190,7 @@ mod tests {
             "the tester reports evidence; a sealed verifier certifies"
         );
         let outcomes: Vec<&str> = tester.outcomes.iter().map(|o| o.id.as_ref()).collect();
-        assert_eq!(outcomes, ["exercised", "cannot_run"]);
+        assert_eq!(outcomes, ["passed", "failed", "cannot_run"]);
     }
 
     #[test]

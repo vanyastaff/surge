@@ -45,3 +45,26 @@ fn bundled_profiles_have_valid_icon_color_and_effort_floor() {
         "expected the bundled profile set, found {checked}"
     );
 }
+
+#[test]
+fn an_app_test_report_uses_the_verification_report_contract() {
+    use surge_core::artifact_contract::{ArtifactKind, validate_artifact_text};
+
+    let report = r#"
+schema_version = 1
+task_id = "t2"
+outcome = "passed"
+summary = "Started the timer, both notices printed, exit code 0."
+
+[[checks]]
+command = "POMODORO_FAST=1 cargo run"
+result = "passed"
+note = "Work complete! / Break complete!"
+"#;
+    assert!(validate_artifact_text(ArtifactKind::VerificationReport, report).is_valid());
+
+    // The stage outcome and the file's outcome are different vocabularies once
+    // they drift apart; the contract rejects the stage-only word.
+    let drifted = report.replace(r#"outcome = "passed""#, r#"outcome = "exercised""#);
+    assert!(!validate_artifact_text(ArtifactKind::VerificationReport, &drifted).is_valid());
+}
