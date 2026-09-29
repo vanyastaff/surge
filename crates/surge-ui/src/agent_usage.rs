@@ -38,7 +38,11 @@ pub fn fold(events: &[(i64, EventPayload)], into: &mut HashMap<String, Usage>) {
     let mut session_agent: HashMap<String, String> = HashMap::new();
     for (at, event) in events {
         match event {
-            EventPayload::SessionOpened { session, agent_id: Some(runtime), .. } => {
+            EventPayload::SessionOpened {
+                session,
+                agent_id: Some(runtime),
+                ..
+            } => {
                 session_agent.insert(session.to_string(), runtime.clone());
                 let usage = into.entry(runtime.clone()).or_default();
                 usage.sessions += 1;
@@ -73,7 +77,10 @@ pub fn fold(events: &[(i64, EventPayload)], into: &mut HashMap<String, Usage>) {
 /// Usage across `runs` and readiness for `agents` (`(id, env)` pairs).
 pub async fn load(
     runs: Vec<RunId>,
-    agents: Vec<(String, std::collections::BTreeMap<String, surge_core::config::AgentEnvValue>)>,
+    agents: Vec<(
+        String,
+        std::collections::BTreeMap<String, surge_core::config::AgentEnvValue>,
+    )>,
 ) -> (HashMap<String, Usage>, HashMap<String, Readiness>) {
     let mut usage = HashMap::new();
     let mut readiness = HashMap::new();
@@ -88,8 +95,10 @@ pub async fn load(
         if let Ok(events) =
             surge_persistence::runs::Storage::inspect_existing_run_events(root.clone(), run).await
         {
-            let events: Vec<(i64, EventPayload)> =
-                events.into_iter().map(|e| (e.timestamp_ms, e.payload.payload)).collect();
+            let events: Vec<(i64, EventPayload)> = events
+                .into_iter()
+                .map(|e| (e.timestamp_ms, e.payload.payload))
+                .collect();
             fold(&events, &mut usage);
         }
     }
@@ -167,7 +176,10 @@ mod tests {
         let mut usage = HashMap::new();
         fold(&events, &mut usage);
         let claude = &usage["claude-acp"];
-        assert_eq!((claude.sessions, claude.tokens_in, claude.tokens_out), (1, 100, 20));
+        assert_eq!(
+            (claude.sessions, claude.tokens_in, claude.tokens_out),
+            (1, 100, 20)
+        );
         assert_eq!(claude.cost_usd, Some(0.5));
         assert!(claude.models.contains("opus"));
         let codex = &usage["codex-acp"];

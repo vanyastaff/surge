@@ -40,15 +40,19 @@ fn value_of(change: &Change) -> Option<Value> {
 /// Apply `changes` to TOML `source`, returning the new text and the
 /// validated config it describes.
 pub fn apply_to_str(source: &str, changes: &Changes) -> Result<(String, SurgeConfig), String> {
-    let mut doc: DocumentMut = source
-        .parse()
-        .map_err(|e| format!("surge.toml has a syntax error, so nothing was saved — fix it first ({e})"))?;
+    let mut doc: DocumentMut = source.parse().map_err(|e| {
+        format!("surge.toml has a syntax error, so nothing was saved — fix it first ({e})")
+    })?;
     for (path, change) in changes {
         let parts: Vec<&str> = path.split('.').collect();
-        let Some((key, tables)) = parts.split_last() else { continue };
+        let Some((key, tables)) = parts.split_last() else {
+            continue;
+        };
         let mut table: &mut Table = doc.as_table_mut();
         for name in tables {
-            let entry = table.entry(name).or_insert_with(|| Item::Table(Table::new()));
+            let entry = table
+                .entry(name)
+                .or_insert_with(|| Item::Table(Table::new()));
             table = entry
                 .as_table_mut()
                 .ok_or_else(|| format!("surge.toml: `{name}` is not a table, cannot set {path}"))?;
@@ -73,8 +77,8 @@ pub fn apply_to_str(source: &str, changes: &Changes) -> Result<(String, SurgeCon
         }
     }
     let text = doc.to_string();
-    let config: SurgeConfig =
-        toml::from_str(&text).map_err(|e| format!("These settings would make surge.toml invalid: {e}"))?;
+    let config: SurgeConfig = toml::from_str(&text)
+        .map_err(|e| format!("These settings would make surge.toml invalid: {e}"))?;
     config.validate().map_err(|e| e.to_string())?;
     Ok((text, config))
 }
@@ -110,13 +114,19 @@ max_qa_iterations = 10
 "#;
 
     fn changes(items: &[(&str, Change)]) -> Changes {
-        items.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect()
+        items
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
     fn only_touched_keys_change_and_comments_survive() {
-        let (text, config) =
-            apply_to_str(SOURCE, &changes(&[("pipeline.max_parallel", Change::Int(4))])).unwrap();
+        let (text, config) = apply_to_str(
+            SOURCE,
+            &changes(&[("pipeline.max_parallel", Change::Int(4))]),
+        )
+        .unwrap();
         assert!(text.contains("# my project"));
         assert!(text.contains("# keep this low on a laptop"));
         assert!(text.contains("max_parallel = 4 # cores are scarce"));
@@ -144,15 +154,25 @@ max_qa_iterations = 10
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("surge.toml");
         std::fs::write(&path, "[pipeline\nmax_parallel = 2").unwrap();
-        let err = apply(&path, &changes(&[("pipeline.max_parallel", Change::Int(3))])).unwrap_err();
+        let err = apply(
+            &path,
+            &changes(&[("pipeline.max_parallel", Change::Int(3))]),
+        )
+        .unwrap_err();
         assert!(err.contains("syntax error"), "{err}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[pipeline\nmax_parallel = 2");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[pipeline\nmax_parallel = 2"
+        );
     }
 
     #[test]
     fn an_invalid_result_is_rejected_before_writing() {
-        let err = apply_to_str(SOURCE, &changes(&[("pipeline.max_qa_iterations", Change::Int(0))]))
-            .unwrap_err();
+        let err = apply_to_str(
+            SOURCE,
+            &changes(&[("pipeline.max_qa_iterations", Change::Int(0))]),
+        )
+        .unwrap_err();
         assert!(err.contains("max_qa_iterations"), "{err}");
     }
 }

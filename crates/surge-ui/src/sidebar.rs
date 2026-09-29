@@ -1,6 +1,6 @@
 use gpui_kit::component::Icon;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::StyledExt;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -147,7 +147,6 @@ impl AppSidebar {
                         .child(n.to_string()),
                 );
             }
-
         }
 
         row
@@ -186,11 +185,13 @@ impl AppSidebar {
                     .hover(|s: StyleRefinement| s.bg(theme::surface()))
                     .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(StartDaemon)))
             })
-            .child(if matches!(state.daemon_state, ConnectionState::Connected(_)) {
-                ui::live_dot(dot)
-            } else {
-                ui::status_dot(dot)
-            })
+            .child(
+                if matches!(state.daemon_state, ConnectionState::Connected(_)) {
+                    ui::live_dot(dot)
+                } else {
+                    ui::status_dot(dot)
+                },
+            )
             .when(!collapsed, |el| {
                 el.child(
                     div()

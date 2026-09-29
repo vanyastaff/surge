@@ -18,7 +18,9 @@ const PROJECT: &str = "/tmp/surge-ui-planning-fixture";
 #[test]
 fn project_switcher_opens_native_picker_and_preserves_project_on_cancel() {
     let (mut cx, app, _, _) = fixture();
-    app.update(&mut cx, |app, cx| app.install_top_bar("fixture", std::path::Path::new(PROJECT), cx));
+    app.update(&mut cx, |app, cx| {
+        app.install_top_bar("fixture", std::path::Path::new(PROJECT), cx)
+    });
     let bar = cx.update(|cx| app.read(cx).top_bar.clone().unwrap());
     assert!(!cx.did_prompt_for_paths());
     bar.update(&mut cx, |_, cx| {

@@ -104,7 +104,9 @@ impl MarkdownRenderer {
     }
 
     fn is_link(&self) -> bool {
-        self.format_stack.iter().any(|f| matches!(f, FormatTag::Link(_)))
+        self.format_stack
+            .iter()
+            .any(|f| matches!(f, FormatTag::Link(_)))
     }
 
     fn is_strikethrough(&self) -> bool {

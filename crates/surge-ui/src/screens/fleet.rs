@@ -405,7 +405,11 @@ impl FleetScreen {
                 theme::text_muted(),
             ))
             .when(failed > 0, |el| {
-                el.child(chip(theme::error(), format!("{failed} failed"), theme::text_muted()))
+                el.child(chip(
+                    theme::error(),
+                    format!("{failed} failed"),
+                    theme::text_muted(),
+                ))
             })
             .when(!live, |el| {
                 el.child(
@@ -482,17 +486,10 @@ impl FleetScreen {
             .child(primary)
     }
 
-    fn render_command_bar(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn render_command_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if self.command_input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder(
-                    "Describe what to build next…",
-                )
-            });
+            let input = cx
+                .new(|cx| InputState::new(window, cx).placeholder("Describe what to build next…"));
             cx.subscribe_in(
                 &input,
                 window,

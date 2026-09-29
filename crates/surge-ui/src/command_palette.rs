@@ -80,7 +80,11 @@ fn all_commands() -> Vec<Command> {
         Command::nav("Worktrees", Screen::Worktrees, None),
         Command::app("Open project…", PaletteCommand::OpenProject, Some("Ctrl+O")),
         Command::app("New app…", PaletteCommand::NewApp, None),
-        Command::app("Toggle sidebar", PaletteCommand::ToggleSidebar, Some("Ctrl+B")),
+        Command::app(
+            "Toggle sidebar",
+            PaletteCommand::ToggleSidebar,
+            Some("Ctrl+B"),
+        ),
     ]
 }
 
@@ -124,7 +128,8 @@ impl CommandPalette {
         if let Some(input) = &self.input {
             return input.clone();
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search screens and commands…"));
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search screens and commands…"));
         cx.subscribe_in(
             &input,
             window,

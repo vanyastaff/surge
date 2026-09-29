@@ -95,7 +95,10 @@ fn restart_prompt(task: &BacklogTask) -> String {
             prompt.push_str(&format!("- {criterion}\n"));
         }
     }
-    prompt.push_str(&format!("\n(Picked up from the backlog of: {})", task.mission));
+    prompt.push_str(&format!(
+        "\n(Picked up from the backlog of: {})",
+        task.mission
+    ));
     prompt
 }
 
@@ -113,8 +116,10 @@ pub struct BacklogScreen {
 
 impl BacklogScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |this: &mut Self, _state, cx| this.reload_if_changed(cx))
-            .detach();
+        cx.observe(&state, |this: &mut Self, _state, cx| {
+            this.reload_if_changed(cx)
+        })
+        .detach();
         let mut this = Self {
             state,
             tasks: Vec::new(),
@@ -172,7 +177,10 @@ impl BacklogScreen {
         let key = (task.implementation_run, task.id.clone());
         let open = self.open.contains(&key);
         let toggle = key.clone();
-        let color = if column == Column::Done && !task.verified && task.status == RoadmapStatus::Completed {
+        let color = if column == Column::Done
+            && !task.verified
+            && task.status == RoadmapStatus::Completed
+        {
             theme::slate()
         } else {
             column.role().color()
@@ -190,7 +198,10 @@ impl BacklogScreen {
         let prompt = restart_prompt(task);
 
         let head = div()
-            .id(SharedString::from(format!("backlog-{}-{}", task.implementation_run, task.id)))
+            .id(SharedString::from(format!(
+                "backlog-{}-{}",
+                task.implementation_run, task.id
+            )))
             .role(Role::Button)
             .aria_label(task.title.clone())
             .v_flex()
@@ -257,10 +268,13 @@ impl BacklogScreen {
                                 .child("verified"),
                         )
                     })
-                    .when(task.status == RoadmapStatus::Completed && !task.verified, |el| {
-                        el.child(ui::role_badge("unverified", Semantic::External))
+                    .when(
+                        task.status == RoadmapStatus::Completed && !task.verified,
+                        |el| el.child(ui::role_badge("unverified", Semantic::External)),
+                    )
+                    .when_some(status_label, |el, label| {
+                        el.child(ui::pill(label, color, theme::tint(color)))
                     })
-                    .when_some(status_label, |el, label| el.child(ui::pill(label, color, theme::tint(color))))
                     .when(!task.blocked_by.is_empty(), |el| {
                         el.child(ui::role_badge(
                             format!("blocked by {}", task.blocked_by.join(", ")),
@@ -270,14 +284,20 @@ impl BacklogScreen {
                     .when_some(task.discovered_from.clone(), |el, from| {
                         el.child(ui::role_badge(format!("found in {from}"), Semantic::Loop))
                     })
-                    .when(restartable, |el| el.child(ui::role_badge("left over", Semantic::You))),
+                    .when(restartable, |el| {
+                        el.child(ui::role_badge("left over", Semantic::You))
+                    }),
             );
 
         ui::panel()
             .flex_none()
             .rounded(px(ui::R_CONTROL + 2.0))
             .overflow_hidden()
-            .border_color(if open { theme::hairline_strong() } else { theme::hairline() })
+            .border_color(if open {
+                theme::hairline_strong()
+            } else {
+                theme::hairline()
+            })
             .child(head)
             .when(open, |el| {
                 el.child(
@@ -318,26 +338,36 @@ impl BacklogScreen {
                                 .gap(px(6.0))
                                 .pt(px(4.0))
                                 .child(
-                                    Button::new(SharedString::from(format!("backlog-open-{run}-{}", task.id)))
-                                        .ghost()
-                                        .small()
-                                        .icon(Lucide::Activity)
-                                        .label("Open mission")
-                                        .on_click(cx.listener(move |_this, _e, _w, cx| {
-                                            cx.emit(BacklogAction::OpenMission(run));
-                                        })),
+                                    Button::new(SharedString::from(format!(
+                                        "backlog-open-{run}-{}",
+                                        task.id
+                                    )))
+                                    .ghost()
+                                    .small()
+                                    .icon(Lucide::Activity)
+                                    .label("Open mission")
+                                    .on_click(cx.listener(move |_this, _e, _w, cx| {
+                                        cx.emit(BacklogAction::OpenMission(run));
+                                    })),
                                 )
                                 .when(restartable, |el| {
                                     el.child(
-                                        Button::new(SharedString::from(format!("backlog-start-{run}-{}", task.id)))
-                                            .primary()
-                                            .small()
-                                            .icon(IconName::Play)
-                                            .label("Start as a mission")
-                                            .tooltip("Plan and build just this task as a new mission")
-                                            .on_click(cx.listener(move |_this, _e, _w, cx| {
-                                                cx.emit(BacklogAction::Dispatch { prompt: prompt.clone() });
-                                            })),
+                                        Button::new(SharedString::from(format!(
+                                            "backlog-start-{run}-{}",
+                                            task.id
+                                        )))
+                                        .primary()
+                                        .small()
+                                        .icon(IconName::Play)
+                                        .label("Start as a mission")
+                                        .tooltip("Plan and build just this task as a new mission")
+                                        .on_click(
+                                            cx.listener(move |_this, _e, _w, cx| {
+                                                cx.emit(BacklogAction::Dispatch {
+                                                    prompt: prompt.clone(),
+                                                });
+                                            }),
+                                        ),
                                     )
                                 }),
                         ),
@@ -367,11 +397,18 @@ impl BacklogScreen {
                             .text_color(theme::text_primary())
                             .child(column.title()),
                     )
-                    .child(ui::pill(tasks.len().to_string(), theme::text_muted(), theme::panel_deep())),
+                    .child(ui::pill(
+                        tasks.len().to_string(),
+                        theme::text_muted(),
+                        theme::panel_deep(),
+                    )),
             )
             .child(
                 div()
-                    .id(SharedString::from(format!("backlog-col-{}", column.title())))
+                    .id(SharedString::from(format!(
+                        "backlog-col-{}",
+                        column.title()
+                    )))
                     .flex_1()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
@@ -402,7 +439,10 @@ impl BacklogScreen {
     fn render_mission_filter(&self, cx: &mut Context<Self>) -> Div {
         let mut missions: Vec<(RunId, String, usize)> = Vec::new();
         for task in &self.tasks {
-            match missions.iter_mut().find(|(run, _, _)| *run == task.implementation_run) {
+            match missions
+                .iter_mut()
+                .find(|(run, _, _)| *run == task.implementation_run)
+            {
                 Some((_, _, open)) => *open += usize::from(Column::of(task.status) != Column::Done),
                 None => missions.push((
                     task.implementation_run,
@@ -423,14 +463,29 @@ impl BacklogScreen {
                 .py(px(5.0))
                 .rounded(px(999.0))
                 .border_1()
-                .border_color(if active { theme::stroke(theme::accent()) } else { theme::hairline() })
-                .bg(if active { theme::tint(theme::accent()) } else { theme::panel_raised() })
+                .border_color(if active {
+                    theme::stroke(theme::accent())
+                } else {
+                    theme::hairline()
+                })
+                .bg(if active {
+                    theme::tint(theme::accent())
+                } else {
+                    theme::panel_raised()
+                })
                 .text_size(px(11.0))
-                .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                .text_color(if active {
+                    theme::text_primary()
+                } else {
+                    theme::text_muted()
+                })
                 .cursor_pointer()
                 .child(div().truncate().child(label))
                 .children(count.filter(|n| *n > 0).map(|n| {
-                    div().text_size(px(10.0)).text_color(theme::text_dim()).child(format!("{n} open"))
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(theme::text_dim())
+                        .child(format!("{n} open"))
                 }))
         };
         let started: std::collections::HashMap<RunId, String> = self
@@ -441,16 +496,24 @@ impl BacklogScreen {
             .map(|r| {
                 (
                     r.run_id,
-                    r.started_at.with_timezone(&chrono::Local).format("%b %d %H:%M").to_string(),
+                    r.started_at
+                        .with_timezone(&chrono::Local)
+                        .format("%b %d %H:%M")
+                        .to_string(),
                 )
             })
             .collect();
         let mut row = div().h_flex().flex_wrap().gap(px(6.0)).child(
-            chip("backlog-mission-all".into(), "All missions".into(), None, self.mission_filter.is_none())
-                .on_click(cx.listener(|this, _e, _w, cx| {
-                    this.mission_filter = None;
-                    cx.notify();
-                })),
+            chip(
+                "backlog-mission-all".into(),
+                "All missions".into(),
+                None,
+                self.mission_filter.is_none(),
+            )
+            .on_click(cx.listener(|this, _e, _w, cx| {
+                this.mission_filter = None;
+                cx.notify();
+            })),
         );
         for (run, title, open) in missions {
             row = row.child(
@@ -478,7 +541,10 @@ impl Render for BacklogScreen {
         let all_tasks = self.tasks.clone();
         let tasks: Vec<BacklogTask> = all_tasks
             .iter()
-            .filter(|t| self.mission_filter.is_none_or(|run| t.implementation_run == run))
+            .filter(|t| {
+                self.mission_filter
+                    .is_none_or(|run| t.implementation_run == run)
+            })
             .cloned()
             .collect();
         let mut by_column: Vec<(Column, Vec<&BacklogTask>)> =
@@ -557,7 +623,9 @@ impl Render for BacklogScreen {
             .pt(px(22.0))
             .pb(px(20.0))
             .child(header)
-            .when(!all_tasks.is_empty(), |el| el.child(self.render_mission_filter(cx)))
+            .when(!all_tasks.is_empty(), |el| {
+                el.child(self.render_mission_filter(cx))
+            })
             .child(body)
     }
 }
@@ -572,8 +640,14 @@ mod tests {
     #[test]
     fn columns_follow_the_ledger_status() {
         assert_eq!(Column::of(RoadmapStatus::Pending), Column::Todo);
-        assert_eq!(Column::of(RoadmapStatus::ReadyForVerification), Column::InProgress);
-        assert_eq!(Column::of(RoadmapStatus::FailedVerification), Column::NeedsYou);
+        assert_eq!(
+            Column::of(RoadmapStatus::ReadyForVerification),
+            Column::InProgress
+        );
+        assert_eq!(
+            Column::of(RoadmapStatus::FailedVerification),
+            Column::NeedsYou
+        );
         assert_eq!(Column::of(RoadmapStatus::Skipped), Column::Done);
     }
 

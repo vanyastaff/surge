@@ -93,7 +93,10 @@ fn verdict(result: &str) -> Verdict {
 /// The report says "passed" while one of its own checks says "failed".
 fn contradiction(report: &VerificationReportArtifact) -> bool {
     report.outcome == VerificationReportOutcome::Passed
-        && report.checks.iter().any(|check| verdict(&check.result) == Verdict::Failed)
+        && report
+            .checks
+            .iter()
+            .any(|check| verdict(&check.result) == Verdict::Failed)
 }
 
 /// Where a saved report came from.
@@ -242,7 +245,13 @@ impl ChecksView {
             ("Verifier reported: failed", Semantic::Failure)
         };
         let color = role.color();
-        let counts = |v: Verdict| report.checks.iter().filter(|c| verdict(&c.result) == v).count();
+        let counts = |v: Verdict| {
+            report
+                .checks
+                .iter()
+                .filter(|c| verdict(&c.result) == v)
+                .count()
+        };
 
         let banner = ui::node_card(color)
             .h_flex()
@@ -342,7 +351,11 @@ impl ChecksView {
                                     .child(format!("Check {}", index + 1)),
                             )
                             .child(div().flex_1())
-                            .child(ui::pill(check.result.trim().to_string(), tone, theme::tint(tone))),
+                            .child(ui::pill(
+                                check.result.trim().to_string(),
+                                tone,
+                                theme::tint(tone),
+                            )),
                     )
                     .child(
                         div()
@@ -371,7 +384,9 @@ impl ChecksView {
                 div()
                     .v_flex()
                     .gap(px(4.0))
-                    .child(ui::section_label("Evidence the verifier points to (not opened here)"))
+                    .child(ui::section_label(
+                        "Evidence the verifier points to (not opened here)",
+                    ))
                     .children(report.evidence.iter().map(|e| {
                         div()
                             .text_size(px(11.0))
@@ -403,8 +418,12 @@ impl ChecksView {
                             cx.notify();
                         }))
                         .child(
-                            Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
-                                .size(px(11.0)),
+                            Icon::new(if open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(11.0)),
                         )
                         .child("Where this report came from"),
                 )
@@ -412,7 +431,10 @@ impl ChecksView {
                     let producer = p.producer.as_ref().map_or_else(
                         || "producer session not recorded".to_string(),
                         |(profile, runtime)| {
-                            format!("{profile} on {}", runtime.as_deref().unwrap_or("unrecorded runtime"))
+                            format!(
+                                "{profile} on {}",
+                                runtime.as_deref().unwrap_or("unrecorded runtime")
+                            )
                         },
                     );
                     el.child(
@@ -423,7 +445,10 @@ impl ChecksView {
                             .text_size(px(10.5))
                             .text_color(theme::text_muted())
                             .child(format!("Task {}", report.task_id))
-                            .child(format!("Node {} · event {} · {}", p.node, p.seq, p.recorded))
+                            .child(format!(
+                                "Node {} · event {} · {}",
+                                p.node, p.seq, p.recorded
+                            ))
                             .child(format!("Producer {producer}"))
                             .child(format!("Content {}", p.hash)),
                     )
@@ -440,8 +465,9 @@ impl Render for ChecksView {
                 .text_color(theme::text_muted())
                 .child("Loading the saved verification report…")
                 .into_any_element(),
-            Loaded::Unavailable(reason) => ui::empty_state("◌", "Checks are unverified", reason.clone())
-                .into_any_element(),
+            Loaded::Unavailable(reason) => {
+                ui::empty_state("◌", "Checks are unverified", reason.clone()).into_any_element()
+            },
             Loaded::Ready(saved) => {
                 let saved = (**saved).clone();
                 self.render_report(&saved, cx).into_any_element()
@@ -611,7 +637,10 @@ mod tests {
     fn checks_require_schema_and_show_reported_failure_without_execution_claim() {
         let report = super::parse_report(FAILED.as_bytes()).unwrap();
         assert_eq!(report.checks[0].command, "npm test");
-        assert_eq!(super::verdict(&report.checks[0].result), super::Verdict::Failed);
+        assert_eq!(
+            super::verdict(&report.checks[0].result),
+            super::Verdict::Failed
+        );
         assert!(
             super::parse_report(FAILED.replace("schema_version = 1\n", "").as_bytes()).is_err()
         );
@@ -635,7 +664,10 @@ mod tests {
         .unwrap();
         // An unknown result is kept as unverified, never rounded to a pass.
         assert_eq!(report.checks[0].result, "unverified");
-        assert_eq!(super::verdict(&report.checks[0].result), super::Verdict::Unverified);
+        assert_eq!(
+            super::verdict(&report.checks[0].result),
+            super::Verdict::Unverified
+        );
         assert!(!super::contradiction(&report));
     }
 }

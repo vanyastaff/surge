@@ -21,7 +21,9 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Disableable, Icon, IconName, Selectable, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use surge_core::roadmap::{RoadmapArtifact, RoadmapMilestone, RoadmapStatus, RoadmapTask, TaskSize};
+use surge_core::roadmap::{
+    RoadmapArtifact, RoadmapMilestone, RoadmapStatus, RoadmapTask, TaskSize,
+};
 
 use crate::app_state::AppState;
 use crate::roadmap_source::{self, LoadedRoadmap, RoadmapOrigin};
@@ -141,9 +143,8 @@ fn summary_of(markdown: &str) -> Option<String> {
             in_fence = !in_fence;
             continue;
         }
-        let decoration = trimmed.starts_with('<')
-            || trimmed.starts_with("![")
-            || trimmed.starts_with("[![");
+        let decoration =
+            trimmed.starts_with('<') || trimmed.starts_with("![") || trimmed.starts_with("[![");
         if in_fence
             || decoration
             || trimmed.starts_with('#')
@@ -161,7 +162,10 @@ fn summary_of(markdown: &str) -> Option<String> {
             }
             break;
         }
-        let text = trimmed.trim_start_matches(['-', '*', ' ']).replace("**", "").replace('`', "");
+        let text = trimmed
+            .trim_start_matches(['-', '*', ' '])
+            .replace("**", "")
+            .replace('`', "");
         paragraph.push(text);
     }
     let joined = paragraph.join(" ");
@@ -225,8 +229,10 @@ pub struct RoadmapScreen {
 
 impl RoadmapScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |this: &mut Self, _state, cx| this.reload_if_changed(cx))
-            .detach();
+        cx.observe(&state, |this: &mut Self, _state, cx| {
+            this.reload_if_changed(cx)
+        })
+        .detach();
         let mut this = Self {
             state,
             roadmap: None,
@@ -268,10 +274,10 @@ impl RoadmapScreen {
     fn project_md_path(&self, cx: &Context<Self>) -> Option<PathBuf> {
         let state = self.state.read(cx);
         let root = state.project_path.clone()?;
-        let configured = state
-            .config
-            .as_ref()
-            .map_or_else(|| PathBuf::from("project.md"), |c| c.init.project_context_path.clone());
+        let configured = state.config.as_ref().map_or_else(
+            || PathBuf::from("project.md"),
+            |c| c.init.project_context_path.clone(),
+        );
         Some(if configured.is_absolute() {
             configured
         } else {
@@ -331,9 +337,10 @@ impl RoadmapScreen {
 
     /// Write `project.md` with the deterministic scanner, off the UI thread.
     fn describe_project(&mut self, cx: &mut Context<Self>) {
-        let (Some(root), Some(output)) =
-            (self.state.read(cx).project_path.clone(), self.project_md_path(cx))
-        else {
+        let (Some(root), Some(output)) = (
+            self.state.read(cx).project_path.clone(),
+            self.project_md_path(cx),
+        ) else {
             return;
         };
         self.describing = true;
@@ -352,7 +359,10 @@ impl RoadmapScreen {
                     screen.describing = false;
                     match result {
                         Ok(outcome) => {
-                            tracing::info!(status = outcome.status.as_str(), "project.md described from the UI");
+                            tracing::info!(
+                                status = outcome.status.as_str(),
+                                "project.md described from the UI"
+                            );
                             screen.facts = std::fs::read_to_string(&outcome.output_path)
                                 .ok()
                                 .map(|md| facts_of(&md));
@@ -383,15 +393,18 @@ impl RoadmapScreen {
         for filter in [Filter::All, Filter::Open, Filter::Done] {
             let active = self.filter == filter;
             row = row.child(
-                Button::new(SharedString::from(format!("roadmap-filter-{}", filter.label())))
-                    .ghost()
-                    .small()
-                    .selected(active)
-                    .label(filter.label())
-                    .on_click(cx.listener(move |this, _e, _w, cx| {
-                        this.filter = filter;
-                        cx.notify();
-                    })),
+                Button::new(SharedString::from(format!(
+                    "roadmap-filter-{}",
+                    filter.label()
+                )))
+                .ghost()
+                .small()
+                .selected(active)
+                .label(filter.label())
+                .on_click(cx.listener(move |this, _e, _w, cx| {
+                    this.filter = filter;
+                    cx.notify();
+                })),
             );
         }
         row
@@ -419,7 +432,12 @@ impl RoadmapScreen {
                         .text_color(color)
                         .child(value),
                 )
-                .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child(note))
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(theme::text_dim())
+                        .child(note),
+                )
         };
         div()
             .flex()
@@ -551,7 +569,10 @@ impl RoadmapScreen {
         let done_unverified = task.status == RoadmapStatus::Completed && !task.verified;
 
         let row = div()
-            .id(SharedString::from(format!("task-{milestone_id}-{}", task.id)))
+            .id(SharedString::from(format!(
+                "task-{milestone_id}-{}",
+                task.id
+            )))
             .role(Role::Button)
             .aria_label(task.title.clone())
             .h_flex()
@@ -571,7 +592,11 @@ impl RoadmapScreen {
                 };
                 cx.notify();
             }))
-            .child(ui::status_dot(if done_unverified { theme::slate() } else { color }))
+            .child(ui::status_dot(if done_unverified {
+                theme::slate()
+            } else {
+                color
+            }))
             .child(
                 div()
                     .flex_1()
@@ -603,12 +628,19 @@ impl RoadmapScreen {
                 ui::pill(label, color, theme::tint(color))
             })
             .child(
-                Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
-                    .size(px(12.0))
-                    .text_color(theme::text_dim()),
+                Icon::new(if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .size(px(12.0))
+                .text_color(theme::text_dim()),
             );
 
-        div().v_flex().child(row).when(open, |el| el.child(render_task_details(task)))
+        div()
+            .v_flex()
+            .child(row)
+            .when(open, |el| el.child(render_task_details(task)))
     }
 
     fn render_milestone(
@@ -623,7 +655,11 @@ impl RoadmapScreen {
         let total = milestone.tasks.len();
         let done = milestone.tasks.iter().filter(|t| is_done(t.status)).count();
         let verified = milestone.tasks.iter().filter(|t| t.verified).count();
-        let pct = if total == 0 { 0.0 } else { done as f32 / total as f32 };
+        let pct = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
         let expanded = self.expanded.contains(&milestone.id);
         let id = milestone.id.clone();
         let tasks: Vec<Div> = if expanded {
@@ -664,7 +700,13 @@ impl RoadmapScreen {
                     }),
             )
             .when(!last, |el| {
-                el.child(div().w(px(1.0)).flex_1().min_h(px(16.0)).bg(theme::hairline_strong()))
+                el.child(
+                    div()
+                        .w(px(1.0))
+                        .flex_1()
+                        .min_h(px(16.0))
+                        .bg(theme::hairline_strong()),
+                )
             });
 
         let header = div()
@@ -719,9 +761,13 @@ impl RoadmapScreen {
                     ),
             )
             .child(
-                Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
-                    .size(px(14.0))
-                    .text_color(theme::text_muted()),
+                Icon::new(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .size(px(14.0))
+                .text_color(theme::text_muted()),
             );
 
         div()
@@ -880,9 +926,17 @@ fn render_task_details(task: &RoadmapTask) -> Div {
                         .gap(px(8.0))
                         .items_start()
                         .child(
-                            Icon::new(if done { Lucide::CircleCheck } else { Lucide::CircleDot })
-                                .size(px(12.0))
-                                .text_color(if done { theme::success() } else { theme::text_dim() }),
+                            Icon::new(if done {
+                                Lucide::CircleCheck
+                            } else {
+                                Lucide::CircleDot
+                            })
+                            .size(px(12.0))
+                            .text_color(if done {
+                                theme::success()
+                            } else {
+                                theme::text_dim()
+                            }),
                         )
                         .child(
                             div()
@@ -966,7 +1020,9 @@ impl Render for RoadmapScreen {
             },
             None if self.loading => {},
             None => {
-                content = content.child(self.render_about(cx)).child(self.render_empty(cx));
+                content = content
+                    .child(self.render_about(cx))
+                    .child(self.render_empty(cx));
             },
         }
 
@@ -1002,7 +1058,10 @@ mod tests {
     #[test]
     fn summary_takes_the_first_prose_paragraph() {
         let md = "---\ntitle: x\n---\n# Pomodoro\n\n```sh\nnpm i\n```\n\nA **small** timer app\nfor `focus` sessions.\n\nSecond paragraph.";
-        assert_eq!(summary_of(md).as_deref(), Some("A small timer app for focus sessions."));
+        assert_eq!(
+            summary_of(md).as_deref(),
+            Some("A small timer app for focus sessions.")
+        );
         assert_eq!(summary_of("# Only a title\n"), None);
     }
 
@@ -1019,7 +1078,10 @@ mod tests {
             super::facts_of(md),
             vec![
                 ("Primary language".to_string(), "Rust".to_string()),
-                ("Build commands".to_string(), "cargo build, cargo test".to_string()),
+                (
+                    "Build commands".to_string(),
+                    "cargo build, cargo test".to_string()
+                ),
             ]
         );
     }

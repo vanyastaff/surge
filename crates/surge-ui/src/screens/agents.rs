@@ -56,10 +56,22 @@ fn readiness_look(r: Option<&Readiness>) -> (&'static str, Semantic) {
 
 fn mode_label(mode: SandboxMode) -> (&'static str, &'static str) {
     match mode {
-        SandboxMode::ReadOnly => ("Read only", "Reads files; cannot change anything or go online."),
-        SandboxMode::WorkspaceWrite => ("Edit the project", "Reads and writes files in the project; no shell, no network."),
-        SandboxMode::WorkspaceNetwork => ("Edit + web", "Writes project files and may fetch from the web."),
-        SandboxMode::FullAccess => ("Full access", "No restrictions — the agent's own runtime decides."),
+        SandboxMode::ReadOnly => (
+            "Read only",
+            "Reads files; cannot change anything or go online.",
+        ),
+        SandboxMode::WorkspaceWrite => (
+            "Edit the project",
+            "Reads and writes files in the project; no shell, no network.",
+        ),
+        SandboxMode::WorkspaceNetwork => (
+            "Edit + web",
+            "Writes project files and may fetch from the web.",
+        ),
+        SandboxMode::FullAccess => (
+            "Full access",
+            "No restrictions — the agent's own runtime decides.",
+        ),
         _ => ("Other", ""),
     }
 }
@@ -73,9 +85,11 @@ fn missing_env(agent: &DetectedAgent) -> Vec<String> {
         .env
         .values()
         .filter_map(|value| match value {
-            AgentEnvValue::Inject { from, default: None, required: true } if std::env::var_os(from).is_none() => {
-                Some(from.clone())
-            },
+            AgentEnvValue::Inject {
+                from,
+                default: None,
+                required: true,
+            } if std::env::var_os(from).is_none() => Some(from.clone()),
             _ => None,
         })
         .collect();
@@ -133,7 +147,10 @@ impl AgentsScreen {
                     ids.push(op.planning_run);
                 }
             }
-            let mut key: Vec<String> = runs.iter().map(|r| format!("{}:{:?}", r.run_id, r.status)).collect();
+            let mut key: Vec<String> = runs
+                .iter()
+                .map(|r| format!("{}:{:?}", r.run_id, r.status))
+                .collect();
             key.extend(state.installed_agents.iter().map(|a| a.entry.id.clone()));
             let agents: Vec<_> = state
                 .installed_agents
@@ -160,7 +177,11 @@ impl AgentsScreen {
     }
 
     fn default_agent(&self, cx: &Context<Self>) -> Option<String> {
-        self.state.read(cx).config.as_ref().map(|c| c.default_agent.clone())
+        self.state
+            .read(cx)
+            .config
+            .as_ref()
+            .map(|c| c.default_agent.clone())
     }
 
     fn make_default(&mut self, agent: &DetectedAgent, cx: &mut Context<Self>) {
@@ -177,14 +198,23 @@ impl AgentsScreen {
             result
         });
         self.note = Some(match result {
-            Ok(()) => format!("{} is now the default for new missions.", entry.display_name),
+            Ok(()) => format!(
+                "{} is now the default for new missions.",
+                entry.display_name
+            ),
             Err(error) => format!("Could not save surge.toml: {error}"),
         });
         tracing::info!(agent = %entry.id, ok = self.note.as_deref().is_some_and(|n| !n.starts_with("Could")), "default agent changed from the UI");
         cx.notify();
     }
 
-    fn render_row(&self, agent: &DetectedAgent, selected: bool, is_default: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_row(
+        &self,
+        agent: &DetectedAgent,
+        selected: bool,
+        is_default: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let id = agent.entry.id.clone();
         let (label, role) = readiness_look(self.readiness.get(&agent.entry.id));
         let color = role.color();
@@ -207,7 +237,11 @@ impl AgentsScreen {
             .py(px(9.0))
             .rounded(px(ui::R_CONTROL + 2.0))
             .border_1()
-            .border_color(if selected { theme::hairline_strong() } else { transparent_black() })
+            .border_color(if selected {
+                theme::hairline_strong()
+            } else {
+                transparent_black()
+            })
             .when(selected, |el| el.bg(theme::surface()))
             .cursor_pointer()
             .hover(|s: StyleRefinement| s.bg(theme::surface()))
@@ -251,9 +285,17 @@ impl AgentsScreen {
                                     .truncate()
                                     .child(agent.entry.display_name.clone()),
                             )
-                            .when(is_default, |el| el.child(ui::role_badge("default", Semantic::Agent))),
+                            .when(is_default, |el| {
+                                el.child(ui::role_badge("default", Semantic::Agent))
+                            }),
                     )
-                    .child(div().text_size(px(10.5)).text_color(theme::text_dim()).truncate().child(summary)),
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme::text_dim())
+                            .truncate()
+                            .child(summary),
+                    ),
             )
             .child(
                 div()
@@ -299,7 +341,11 @@ impl AgentsScreen {
                 .items_start()
                 .px(px(14.0))
                 .py(px(11.0))
-                .child(Icon::new(IconName::TriangleAlert).size(px(15.0)).text_color(color))
+                .child(
+                    Icon::new(IconName::TriangleAlert)
+                        .size(px(15.0))
+                        .text_color(color),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -313,8 +359,18 @@ impl AgentsScreen {
                                 .text_color(theme::text_primary())
                                 .child(headline),
                         )
-                        .child(div().text_size(px(11.5)).text_color(theme::text_primary()).child(fix))
-                        .child(div().text_size(px(10.5)).text_color(theme::text_muted()).child(detail)),
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme::text_primary())
+                                .child(fix),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(theme::text_muted())
+                                .child(detail),
+                        ),
                 ),
         )
     }
@@ -337,12 +393,21 @@ impl AgentsScreen {
                         .text_color(theme::text_primary())
                         .child(value),
                 )
-                .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child(note))
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(theme::text_dim())
+                        .child(note),
+                )
         };
         let last = usage
             .last_used_ms
             .and_then(chrono::DateTime::from_timestamp_millis)
-            .map(|t| t.with_timezone(&chrono::Local).format("last %b %d %H:%M").to_string())
+            .map(|t| {
+                t.with_timezone(&chrono::Local)
+                    .format("last %b %d %H:%M")
+                    .to_string()
+            })
             .unwrap_or_else(|| "never".into());
         div()
             .v_flex()
@@ -369,12 +434,18 @@ impl AgentsScreen {
                         tile(
                             "Tokens",
                             fmt_tokens(usage.tokens_in + usage.tokens_out),
-                            format!("{} in · {} out", fmt_tokens(usage.tokens_in), fmt_tokens(usage.tokens_out)),
+                            format!(
+                                "{} in · {} out",
+                                fmt_tokens(usage.tokens_in),
+                                fmt_tokens(usage.tokens_out)
+                            ),
                         )
                     })
                     .child(tile(
                         "Cost",
-                        usage.cost_usd.map_or_else(|| "—".into(), |c| format!("${c:.2}")),
+                        usage
+                            .cost_usd
+                            .map_or_else(|| "—".into(), |c| format!("${c:.2}")),
                         if usage.cost_usd.is_some() {
                             "as reported by the agent".into()
                         } else if usage.sessions > 0 {
@@ -391,20 +462,39 @@ impl AgentsScreen {
                         .flex_wrap()
                         .gap(px(6.0))
                         .items_center()
-                        .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child("Models used"))
-                        .children(usage.models.iter().map(|m| ui::pill(m.clone(), theme::text_muted(), theme::panel_deep()))),
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(theme::text_dim())
+                                .child("Models used"),
+                        )
+                        .children(usage.models.iter().map(|m| {
+                            ui::pill(m.clone(), theme::text_muted(), theme::panel_deep())
+                        })),
                 )
             })
     }
 
     fn render_permissions(&self, agent: &DetectedAgent, cx: &Context<Self>) -> Div {
-        let project_mode = self.state.read(cx).config.as_ref().map(|c| c.init.sandbox_default);
+        let project_mode = self
+            .state
+            .read(cx)
+            .config
+            .as_ref()
+            .map(|c| c.init.sandbox_default);
         let mut body = div().v_flex();
         match agent.entry.runtime {
             Some(runtime) => {
-                let rows: Vec<_> = self.matrix.rows().iter().filter(|r| r.runtime == runtime).collect();
+                let rows: Vec<_> = self
+                    .matrix
+                    .rows()
+                    .iter()
+                    .filter(|r| r.runtime == runtime)
+                    .collect();
                 if rows.is_empty() {
-                    body = body.child(ui::meta("No permission modes are declared for this agent yet."));
+                    body = body.child(ui::meta(
+                        "No permission modes are declared for this agent yet.",
+                    ));
                 }
                 for row in rows {
                     let (name, plain) = mode_label(row.mode);
@@ -428,7 +518,9 @@ impl AgentsScreen {
                                             .text_color(theme::text_primary())
                                             .child(name),
                                     )
-                                    .when(is_project, |el| el.child(ui::role_badge("this project", Semantic::Agent)))
+                                    .when(is_project, |el| {
+                                        el.child(ui::role_badge("this project", Semantic::Agent))
+                                    })
                                     .child(div().flex_1())
                                     .child(if row.verified {
                                         ui::role_badge("verified", Semantic::Verified)
@@ -436,7 +528,12 @@ impl AgentsScreen {
                                         ui::role_badge("unverified", Semantic::You)
                                     }),
                             )
-                            .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(plain))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme::text_muted())
+                                    .child(plain),
+                            )
                             .when(!row.flags.is_empty(), |el| {
                                 el.child(
                                     div()
@@ -464,15 +561,32 @@ impl AgentsScreen {
 
     fn render_setup(&self, agent: &DetectedAgent) -> Div {
         let entry = &agent.entry;
-        let command = agent.command_path.clone().unwrap_or_else(|| entry.command.clone());
+        let command = agent
+            .command_path
+            .clone()
+            .unwrap_or_else(|| entry.command.clone());
         let kv = |k: &'static str, v: String| {
             div()
                 .h_flex()
                 .gap(px(10.0))
                 .items_start()
                 .py(px(5.0))
-                .child(div().w(px(80.0)).flex_shrink_0().text_size(px(10.5)).text_color(theme::text_dim()).child(k))
-                .child(div().flex_1().min_w_0().text_size(px(11.0)).text_color(theme::text_primary()).child(v))
+                .child(
+                    div()
+                        .w(px(80.0))
+                        .flex_shrink_0()
+                        .text_size(px(10.5))
+                        .text_color(theme::text_dim())
+                        .child(k),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(11.0))
+                        .text_color(theme::text_primary())
+                        .child(v),
+                )
         };
         ui::panel()
             .v_flex()
@@ -480,22 +594,37 @@ impl AgentsScreen {
             .child(ui::section_label("Setup"))
             .child(kv("id", entry.id.clone()))
             .child(kv("command", command))
-            .when(!entry.default_args.is_empty(), |el| el.child(kv("args", entry.default_args.join(" "))))
+            .when(!entry.default_args.is_empty(), |el| {
+                el.child(kv("args", entry.default_args.join(" ")))
+            })
             .child(kv("transport", format!("{:?}", entry.transport)))
             .when(!entry.env.is_empty(), |el| {
-                el.child(kv("needs", entry.env.keys().cloned().collect::<Vec<_>>().join(", ")))
+                el.child(kv(
+                    "needs",
+                    entry.env.keys().cloned().collect::<Vec<_>>().join(", "),
+                ))
             })
-            .when(!entry.models.is_empty(), |el| el.child(kv("models", entry.models.join(", "))))
+            .when(!entry.models.is_empty(), |el| {
+                el.child(kv("models", entry.models.join(", ")))
+            })
             .child(kv("license", entry.license.clone()))
             .when_some(entry.website.clone(), |el, w| el.child(kv("website", w)))
     }
 
-    fn render_detail(&self, agent: &DetectedAgent, is_default: bool, cx: &mut Context<Self>) -> Div {
+    fn render_detail(
+        &self,
+        agent: &DetectedAgent,
+        is_default: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let (label, role) = readiness_look(self.readiness.get(&agent.entry.id));
         let color = role.color();
         let id_for_chat = agent.entry.id.clone();
         let agent_for_default = agent.clone();
-        let version = agent.detected_version.clone().unwrap_or_else(|| agent.entry.version.clone());
+        let version = agent
+            .detected_version
+            .clone()
+            .unwrap_or_else(|| agent.entry.version.clone());
         div()
             .flex_1()
             .min_w(px(0.0))
@@ -632,7 +761,11 @@ impl Render for AgentsScreen {
                 .selected
                 .as_ref()
                 .and_then(|id| agents.iter().find(|a| &a.entry.id == id))
-                .or_else(|| default.as_ref().and_then(|d| agents.iter().find(|a| &a.entry.id == d)))
+                .or_else(|| {
+                    default
+                        .as_ref()
+                        .and_then(|d| agents.iter().find(|a| &a.entry.id == d))
+                })
                 .or_else(|| agents.first())
                 .cloned();
             let selected_id = selected.as_ref().map(|a| a.entry.id.clone());
@@ -651,7 +784,15 @@ impl Render for AgentsScreen {
                 .flex()
                 .gap(px(20.0))
                 .items_start()
-                .child(ui::panel().w(px(320.0)).flex_none().v_flex().gap(px(2.0)).p(px(6.0)).children(rows))
+                .child(
+                    ui::panel()
+                        .w(px(320.0))
+                        .flex_none()
+                        .v_flex()
+                        .gap(px(2.0))
+                        .p(px(6.0))
+                        .children(rows),
+                )
                 .children(selected.map(|a| {
                     let is_default = default.as_deref() == Some(a.entry.id.as_str());
                     self.render_detail(&a, is_default, cx)
@@ -680,7 +821,10 @@ mod tests {
     #[test]
     fn readiness_is_never_optimistic_before_it_is_known() {
         assert_eq!(readiness_look(None), ("checking…", Semantic::External));
-        assert_eq!(readiness_look(Some(&Readiness::NotConfigured("x".into()))).0, "needs setup");
+        assert_eq!(
+            readiness_look(Some(&Readiness::NotConfigured("x".into()))).0,
+            "needs setup"
+        );
         assert_eq!(readiness_look(Some(&Readiness::Ready)).0, "ready");
     }
 

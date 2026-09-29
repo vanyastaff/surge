@@ -58,7 +58,11 @@ pub fn slugify(title: &str) -> String {
 }
 
 fn parse_stamp(line: &str) -> Option<Stamp> {
-    let inner = line.trim().strip_prefix("<!--")?.strip_suffix("-->")?.trim();
+    let inner = line
+        .trim()
+        .strip_prefix("<!--")?
+        .strip_suffix("-->")?
+        .trim();
     let rest = inner.strip_prefix("surge:memory")?;
     let mut run = None;
     let mut node = None;
@@ -69,7 +73,10 @@ fn parse_stamp(line: &str) -> Option<Stamp> {
             node = Some(v.to_string());
         }
     }
-    Some(Stamp { run: run?, node: node.unwrap_or_default() })
+    Some(Stamp {
+        run: run?,
+        node: node.unwrap_or_default(),
+    })
 }
 
 /// Link targets in a line: `[[target]]`, `[[target|alias]]`, `[x](target.md)`.
@@ -92,7 +99,10 @@ fn links_in(line: &str, out: &mut Vec<String>) {
         let target = &after[..end];
         let is_note = target.ends_with(".md") && !target.contains("://");
         if is_note {
-            let stem = Path::new(target).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            let stem = Path::new(target)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
             let slug = slugify(stem);
             if !slug.is_empty() {
                 out.push(slug);
@@ -104,7 +114,9 @@ fn links_in(line: &str, out: &mut Vec<String>) {
 
 fn tags_in(line: &str, out: &mut Vec<String>) {
     for word in line.split_whitespace() {
-        let Some(tag) = word.strip_prefix('#') else { continue };
+        let Some(tag) = word.strip_prefix('#') else {
+            continue;
+        };
         let tag: String = tag
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '/')
@@ -117,7 +129,10 @@ fn tags_in(line: &str, out: &mut Vec<String>) {
 
 /// Parse a note from its file name and contents.
 pub fn parse_note(file: &str, raw: &str) -> Note {
-    let stem = Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or(file);
+    let stem = Path::new(file)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file);
     let mut stamp = None;
     let mut title = None;
     let mut body_lines = Vec::new();
@@ -193,7 +208,11 @@ pub fn load(project_root: &Path) -> Vec<Note> {
             Some(note)
         })
         .collect();
-    notes.sort_by(|a, b| b.is_index.cmp(&a.is_index).then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase())));
+    notes.sort_by(|a, b| {
+        b.is_index
+            .cmp(&a.is_index)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    });
     notes
 }
 
@@ -201,7 +220,10 @@ pub fn load(project_root: &Path) -> Vec<Note> {
 pub fn compose(title: &str, body: &str, stamp: Option<&Stamp>) -> String {
     let mut out = String::new();
     if let Some(s) = stamp {
-        out.push_str(&format!("<!-- surge:memory run={} node={} -->\n", s.run, s.node));
+        out.push_str(&format!(
+            "<!-- surge:memory run={} node={} -->\n",
+            s.run, s.node
+        ));
     }
     out.push_str(&format!("# {}\n\n{}\n", title.trim(), body.trim()));
     out
@@ -229,7 +251,9 @@ pub fn wikilinks_to_markdown(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
     while let Some(start) = rest.find("[[") {
-        let Some(end) = rest[start + 2..].find("]]") else { break };
+        let Some(end) = rest[start + 2..].find("]]") else {
+            break;
+        };
         let inner = &rest[start + 2..start + 2 + end];
         let (target, label) = inner.split_once('|').unwrap_or((inner, inner));
         out.push_str(&rest[..start]);
@@ -346,7 +370,9 @@ pub fn layout(count: usize, edges: &[(usize, usize, EdgeKind)], w: f32, h: f32) 
             // Gentle gravity keeps loose notes on screen.
             force[i].0 += (cx - p.0) * 0.05;
             force[i].1 += (cy - p.1) * 0.05;
-            let len = (force[i].0 * force[i].0 + force[i].1 * force[i].1).sqrt().max(0.001);
+            let len = (force[i].0 * force[i].0 + force[i].1 * force[i].1)
+                .sqrt()
+                .max(0.001);
             let step_len = len.min(temp);
             // Room for the 140px label centred on the dot.
             p.0 = (p.0 + force[i].0 / len * step_len).clamp(80.0, w - 80.0);
@@ -369,7 +395,10 @@ mod tests {
         assert_eq!(note.slug, "auth");
         assert_eq!(
             note.stamp,
-            Some(Stamp { run: "run-01ABC".into(), node: "impl_task".into() })
+            Some(Stamp {
+                run: "run-01ABC".into(),
+                node: "impl_task".into()
+            })
         );
         assert_eq!(note.links, ["migrations", "keys"]);
         assert_eq!(note.tags, ["security", "auth"]);
@@ -388,7 +417,11 @@ mod tests {
     fn compose_round_trips_and_keeps_the_stamp_first() {
         let note = parse_note("auth.md", AUTH);
         let text = compose(&note.title, &note.body, note.stamp.as_ref());
-        assert!(text.starts_with("<!-- surge:memory run=run-01ABC node=impl_task -->\n# Auth invariant\n"));
+        assert!(
+            text.starts_with(
+                "<!-- surge:memory run=run-01ABC node=impl_task -->\n# Auth invariant\n"
+            )
+        );
         assert_eq!(parse_note("auth.md", &text).links, note.links);
     }
 
@@ -396,12 +429,18 @@ mod tests {
     fn edges_prefer_links_and_backlinks_find_the_source() {
         let notes = vec![
             parse_note("auth.md", AUTH),
-            parse_note("migrations.md", "# Migrations\nAlways reversible.\n#security"),
+            parse_note(
+                "migrations.md",
+                "# Migrations\nAlways reversible.\n#security",
+            ),
             parse_note("ui.md", "# UI\n#design"),
         ];
         let edges = edges(&notes);
         assert_eq!(edges, [(0, 1, EdgeKind::Link)]);
-        let back: Vec<&str> = backlinks(&notes, "migrations").iter().map(|n| n.slug.as_str()).collect();
+        let back: Vec<&str> = backlinks(&notes, "migrations")
+            .iter()
+            .map(|n| n.slug.as_str())
+            .collect();
         assert_eq!(back, ["auth"]);
     }
 
@@ -414,8 +453,14 @@ mod tests {
     #[test]
     fn links_resolve_by_file_name_or_title() {
         let notes = vec![
-            parse_note("timer-ticks.md", "# Timer ticks once per second\nSee [[phase-banner]]."),
-            parse_note("phase-banner.md", "# Phase banner\nSee [[Timer ticks once per second]]."),
+            parse_note(
+                "timer-ticks.md",
+                "# Timer ticks once per second\nSee [[phase-banner]].",
+            ),
+            parse_note(
+                "phase-banner.md",
+                "# Phase banner\nSee [[Timer ticks once per second]].",
+            ),
         ];
         assert_eq!(resolve(&notes, "timer-ticks-once-per-second"), Some(0));
         assert_eq!(edges(&notes), [(0, 1, EdgeKind::Link)]);

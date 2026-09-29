@@ -61,7 +61,10 @@ pub fn project_file(root: &Path) -> Option<LoadedRoadmap> {
 /// Read a named artifact of `run_id` straight from the content-addressed
 /// store layout (`runs/<run>/artifacts/index.json` → `<hex>`).
 pub fn read_run_artifact(surge_home: &Path, run_id: RunId, name: &str) -> Option<Vec<u8>> {
-    let dir = surge_home.join("runs").join(run_id.to_string()).join("artifacts");
+    let dir = surge_home
+        .join("runs")
+        .join(run_id.to_string())
+        .join("artifacts");
     let index: HashMap<String, String> =
         serde_json::from_slice(&std::fs::read(dir.join("index.json")).ok()?).ok()?;
     let hash: ContentHash = index.get(name)?.parse().ok()?;
@@ -72,7 +75,10 @@ pub fn read_run_artifact(surge_home: &Path, run_id: RunId, name: &str) -> Option
 
 /// Overlay ledger rows (`task_id → (status, verified)`) onto the plan.
 /// Tasks the ledger never touched keep their planned status.
-pub fn apply_ledger(artifact: &mut RoadmapArtifact, ledger: &HashMap<String, (RoadmapStatus, bool)>) {
+pub fn apply_ledger(
+    artifact: &mut RoadmapArtifact,
+    ledger: &HashMap<String, (RoadmapStatus, bool)>,
+) {
     for milestone in &mut artifact.milestones {
         for task in &mut milestone.tasks {
             if let Some(&(status, verified)) = ledger.get(&task.id) {
@@ -133,7 +139,8 @@ pub async fn operations(project_root: &Path, surge_home: &Path) -> Vec<Operation
         .filter_map(|record| match &record.payload {
             BootstrapStoredPayload::V1 { intent, .. } => {
                 let path = intent.project_path();
-                let same = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()) == root;
+                let same =
+                    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()) == root;
                 same.then(|| {
                     (
                         record.status.queue_sequence,
@@ -253,7 +260,11 @@ status = "pending"
     fn run_artifact_is_read_through_its_index_and_hash_checked() {
         let home = tempfile::tempdir().unwrap();
         let run = RunId::new();
-        let dir = home.path().join("runs").join(run.to_string()).join("artifacts");
+        let dir = home
+            .path()
+            .join("runs")
+            .join(run.to_string())
+            .join("artifacts");
         std::fs::create_dir_all(&dir).unwrap();
         let hash = ContentHash::compute(PLAN.as_bytes());
         std::fs::write(dir.join(hash.to_hex()), PLAN).unwrap();

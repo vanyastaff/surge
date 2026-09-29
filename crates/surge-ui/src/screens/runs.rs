@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::id::RunId;
@@ -90,7 +90,13 @@ enum LogFilter {
 }
 
 impl LogFilter {
-    const ALL: [LogFilter; 5] = [Self::All, Self::Flow, Self::Agent, Self::You, Self::Problems];
+    const ALL: [LogFilter; 5] = [
+        Self::All,
+        Self::Flow,
+        Self::Agent,
+        Self::You,
+        Self::Problems,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -526,13 +532,15 @@ impl RunsScreen {
             .collect();
         // One idea is one entry: a planning run whose build run is listed is
         // shown through that build run (Overview shows both).
-        let listed: std::collections::HashSet<RunId> = rows.iter().filter_map(|r| r.run_id).collect();
+        let listed: std::collections::HashSet<RunId> =
+            rows.iter().filter_map(|r| r.run_id).collect();
         rows.retain(|r| {
             let Some(id) = r.run_id else { return true };
-            !state
-                .bootstrap_operations
-                .values()
-                .any(|op| op.planning_run == id && op.implementation_run != id && listed.contains(&op.implementation_run))
+            !state.bootstrap_operations.values().any(|op| {
+                op.planning_run == id
+                    && op.implementation_run != id
+                    && listed.contains(&op.implementation_run)
+            })
         });
         rows.sort_by_key(|r| r.rank);
         let sel = self
@@ -709,7 +717,9 @@ impl RunsScreen {
                 })
                 .cursor_pointer()
                 .when(is_sel, |el| el.bg(theme::surface()))
-                .when(!is_sel, |el| el.hover(|s: StyleRefinement| s.bg(theme::surface().opacity(0.6))))
+                .when(!is_sel, |el| {
+                    el.hover(|s: StyleRefinement| s.bg(theme::surface().opacity(0.6)))
+                })
                 .on_click(cx.listener(move |this, _e, _w, cx| {
                     this.clear_preview(cx);
                     this.selected = run_id;
@@ -745,9 +755,17 @@ impl RunsScreen {
                         .pl(px(15.0))
                         .text_size(px(10.0))
                         .child(div().text_color(row.color).child(row.status_label))
-                        .child(div().text_color(theme::text_dim()).child(row.id_label.clone()))
+                        .child(
+                            div()
+                                .text_color(theme::text_dim())
+                                .child(row.id_label.clone()),
+                        )
                         .child(div().flex_1())
-                        .child(div().text_color(theme::text_dim()).child(format!("{} ago", row.age))),
+                        .child(
+                            div()
+                                .text_color(theme::text_dim())
+                                .child(format!("{} ago", row.age)),
+                        ),
                 );
             list = list.child(item);
         }
@@ -769,9 +787,14 @@ impl RunsScreen {
                     .pb(px(10.0))
                     .child(ui::section_label(format!("Missions · {}", rows.len())).flex_1())
                     .when(needs > 0, |el| {
-                        el.child(ui::role_badge(format!("{needs} need you"), theme::Semantic::You))
+                        el.child(ui::role_badge(
+                            format!("{needs} need you"),
+                            theme::Semantic::You,
+                        ))
                     })
-                    .when(!live, |el| el.child(ui::role_badge("offline", theme::Semantic::External))),
+                    .when(!live, |el| {
+                        el.child(ui::role_badge("offline", theme::Semantic::External))
+                    }),
             )
             .child(list)
     }
@@ -780,7 +803,10 @@ impl RunsScreen {
         &self,
         row: &RunRow,
         cx: &Context<Self>,
-    ) -> Option<(RunId, surge_core::bootstrap_operation::BootstrapOperationStatus)> {
+    ) -> Option<(
+        RunId,
+        surge_core::bootstrap_operation::BootstrapOperationStatus,
+    )> {
         let id = row.run_id?;
         self.state
             .read(cx)
@@ -831,7 +857,11 @@ impl RunsScreen {
             format!("{} events", row.events),
         ];
         if let Some((tokens_in, tokens_out, cost)) = row.usage {
-            facts.push(format!("{} in · {} out tokens", fmt_tokens(tokens_in), fmt_tokens(tokens_out)));
+            facts.push(format!(
+                "{} in · {} out tokens",
+                fmt_tokens(tokens_in),
+                fmt_tokens(tokens_out)
+            ));
             facts.push(format!("${cost:.2}"));
         }
 
@@ -862,15 +892,18 @@ impl RunsScreen {
         }
         if let Some((operation_id, _)) = bootstrap.as_ref().filter(|_| cancellable) {
             let operation_id = *operation_id;
-            actions = actions.child(
-                Button::new("cancel-bootstrap")
-                    .outline()
-                    .small()
-                    .danger()
-                    .label("Cancel build")
-                    .accessibility_id("cancel-bootstrap")
-                    .on_click(cx.listener(move |this, _e, _w, cx| this.cancel_bootstrap(operation_id, cx))),
-            );
+            actions =
+                actions.child(
+                    Button::new("cancel-bootstrap")
+                        .outline()
+                        .small()
+                        .danger()
+                        .label("Cancel build")
+                        .accessibility_id("cancel-bootstrap")
+                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                            this.cancel_bootstrap(operation_id, cx)
+                        })),
+                );
         } else if live
             && row.active
             && let Some(run_id) = row.run_id
@@ -916,7 +949,11 @@ impl RunsScreen {
                                     .truncate()
                                     .child(row.title.clone()),
                             )
-                            .child(ui::pill(status_text, status_color, theme::tint(status_color))),
+                            .child(ui::pill(
+                                status_text,
+                                status_color,
+                                theme::tint(status_color),
+                            )),
                     )
                     .child(
                         div()
@@ -947,7 +984,11 @@ impl RunsScreen {
                 .items_center()
                 .px(px(14.0))
                 .py(px(10.0))
-                .child(Icon::new(IconName::TriangleAlert).size(px(15.0)).text_color(theme::warning()))
+                .child(
+                    Icon::new(IconName::TriangleAlert)
+                        .size(px(15.0))
+                        .text_color(theme::warning()),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -961,7 +1002,12 @@ impl RunsScreen {
                                 .text_color(theme::text_primary())
                                 .child(format!("Stopped while {} — {what}", phase_label(phase))),
                         )
-                        .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(fix)),
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme::text_muted())
+                                .child(fix),
+                        ),
                 )
                 .when(!status.cancel_requested, |el| {
                     el.child(
@@ -1074,7 +1120,11 @@ impl RunsScreen {
                     .px(px(10.0))
                     .h(px(36.0))
                     .border_b_2()
-                    .border_color(if active { theme::accent() } else { transparent_black() })
+                    .border_color(if active {
+                        theme::accent()
+                    } else {
+                        transparent_black()
+                    })
                     .text_size(px(12.0))
                     .text_color(if active {
                         theme::text_primary()
@@ -1114,7 +1164,9 @@ impl RunsScreen {
         };
 
         let chip = match stage.state {
-            StageState::Queued | StageState::Unfinished => ui::panel().rounded(px(ui::R_CONTROL + 2.0)),
+            StageState::Queued | StageState::Unfinished => {
+                ui::panel().rounded(px(ui::R_CONTROL + 2.0))
+            },
             _ => ui::node_card(color),
         }
         .h_flex()
@@ -1131,11 +1183,13 @@ impl RunsScreen {
                     div()
                         .text_size(px(11.5))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(if matches!(stage.state, StageState::Queued | StageState::Unfinished) {
-                            theme::text_muted()
-                        } else {
-                            theme::text_primary()
-                        })
+                        .text_color(
+                            if matches!(stage.state, StageState::Queued | StageState::Unfinished) {
+                                theme::text_muted()
+                            } else {
+                                theme::text_primary()
+                            },
+                        )
                         .whitespace_nowrap()
                         .child(stage.label.replace('_', " ")),
                 )
@@ -1150,11 +1204,13 @@ impl RunsScreen {
 
         let mut cell = div().h_flex().flex_none().items_center().child(chip);
         if !last {
-            cell = cell.child(div().w(px(22.0)).h(px(1.0)).bg(if stage.state == StageState::Done {
-                theme::stroke(theme::success())
-            } else {
-                theme::graph_line()
-            }));
+            cell = cell.child(div().w(px(22.0)).h(px(1.0)).bg(
+                if stage.state == StageState::Done {
+                    theme::stroke(theme::success())
+                } else {
+                    theme::graph_line()
+                },
+            ));
         }
         cell
     }
@@ -1169,7 +1225,11 @@ impl RunsScreen {
             .enumerate()
             .map(|(i, s)| self.render_stage_chip(s, i + 1 == n))
             .collect();
-        let done = row.stages.iter().filter(|s| s.state == StageState::Done).count();
+        let done = row
+            .stages
+            .iter()
+            .filter(|s| s.state == StageState::Done)
+            .count();
 
         div()
             .relative()
@@ -1199,7 +1259,14 @@ impl RunsScreen {
                     .bottom_0()
                     .overflow_x_scroll()
                     .track_scroll(&self.steps_scroll)
-                    .child(div().h_flex().items_center().h_full().px(px(20.0)).children(chips)),
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .h_full()
+                            .px(px(20.0))
+                            .children(chips),
+                    ),
             )
     }
 
@@ -1217,7 +1284,11 @@ impl RunsScreen {
         if row.event_rows.is_empty() {
             body = body.child(ui::empty_state(
                 "≡",
-                if row.live_stream { "Waiting for the first event" } else { "No events recorded" },
+                if row.live_stream {
+                    "Waiting for the first event"
+                } else {
+                    "No events recorded"
+                },
                 if row.live_stream {
                     "Events appear here as the run emits them."
                 } else {
@@ -1290,7 +1361,9 @@ impl RunsScreen {
                     .rounded(px(ui::R_CONTROL))
                     .text_size(px(10.5))
                     .cursor_pointer()
-                    .when(active, |el| el.bg(theme::surface()).text_color(theme::text_primary()))
+                    .when(active, |el| {
+                        el.bg(theme::surface()).text_color(theme::text_primary())
+                    })
                     .when(!active, |el| {
                         el.text_color(theme::text_muted())
                             .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
@@ -1457,7 +1530,8 @@ impl Render for RunsScreen {
                             .as_ref()
                             .is_none_or(|panel| panel.read(cx).runs() != runs);
                         if stale {
-                            self.mission = Some(cx.new(|cx| run_mission::MissionPanel::new(runs, cx)));
+                            self.mission =
+                                Some(cx.new(|cx| run_mission::MissionPanel::new(runs, cx)));
                         }
                         if let Some(panel) = &self.mission {
                             let seq = row.events.clone();
@@ -1499,7 +1573,9 @@ impl Render for RunsScreen {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .when(!rows.is_empty(), |el| el.child(self.render_rail(&rows, sel, live, cx)))
+                    .when(!rows.is_empty(), |el| {
+                        el.child(self.render_rail(&rows, sel, live, cx))
+                    })
                     .child(main),
             )
             .when(steerable, |el| el.child(self.render_steer_bar(window, cx)))

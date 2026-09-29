@@ -178,7 +178,9 @@ impl InboxScreen {
                 }
             }
             (
-                runs.iter().map(|r| format!("{}:{:?}", r.run_id, r.status)).collect(),
+                runs.iter()
+                    .map(|r| format!("{}:{:?}", r.run_id, r.status))
+                    .collect(),
                 ids,
             )
         };
@@ -272,7 +274,11 @@ impl InboxScreen {
                 badge_color,
                 title,
                 mission: state.run_prompt(&run_id).map(|p| ui::headline(p, 80)),
-                meta: format!("{} · r-{}", p.node.replace('_', " "), run_id.short().to_lowercase()),
+                meta: format!(
+                    "{} · r-{}",
+                    p.node.replace('_', " "),
+                    run_id.short().to_lowercase()
+                ),
                 age: p.time.clone(),
                 evidence,
                 source: Source::Live {
@@ -352,14 +358,20 @@ impl InboxScreen {
                     evidence.push(("What happened".to_string(), reason.clone()));
                 }
                 if !tail.is_empty() {
-                    evidence.push(("Last events".to_string(), format!("```text\n{}\n```", tail.join("\n"))));
+                    evidence.push((
+                        "Last events".to_string(),
+                        format!("```text\n{}\n```", tail.join("\n")),
+                    ));
                 }
             }
-            let headline = reason
-                .as_deref()
-                .map_or(if label == "failed" { "Stopped with an error" } else { "Stopped by request" }, |r| {
-                    crate::mission::failure_headline(r)
-                });
+            let headline = reason.as_deref().map_or(
+                if label == "failed" {
+                    "Stopped with an error"
+                } else {
+                    "Stopped by request"
+                },
+                |r| crate::mission::failure_headline(r),
+            );
             items.push(InboxItem {
                 rank: 7,
                 badge: label,
@@ -606,9 +618,14 @@ impl InboxScreen {
                             .text_color(theme::text_primary())
                             .child("Inbox"),
                     )
-                    .child(ui::role_badge(format!("{} waiting", items.len()), theme::Semantic::You))
+                    .child(ui::role_badge(
+                        format!("{} waiting", items.len()),
+                        theme::Semantic::You,
+                    ))
                     .child(div().flex_1())
-                    .when(!live, |el| el.child(ui::role_badge("offline", theme::Semantic::External)))
+                    .when(!live, |el| {
+                        el.child(ui::role_badge("offline", theme::Semantic::External))
+                    })
                     .child(div().h_flex().gap(px(4.0)).child(ui::kbd("↑↓"))),
             )
             .child(list)
@@ -627,7 +644,11 @@ impl InboxScreen {
             .take(if compact { 5 } else { 12 })
             .map(|d| {
                 let when = chrono::DateTime::from_timestamp_millis(d.at_ms)
-                    .map(|t| t.with_timezone(&chrono::Local).format("%b %d %H:%M").to_string())
+                    .map(|t| {
+                        t.with_timezone(&chrono::Local)
+                            .format("%b %d %H:%M")
+                            .to_string()
+                    })
                     .unwrap_or_default();
                 let color = d.role.color();
                 div()
@@ -663,7 +684,13 @@ impl InboxScreen {
                                     .child(format!("“{c}”"))
                             })),
                     )
-                    .child(div().flex_none().text_size(px(10.0)).text_color(theme::text_dim()).child(when))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.0))
+                            .text_color(theme::text_dim())
+                            .child(when),
+                    )
             })
             .collect();
         div()
@@ -674,7 +701,11 @@ impl InboxScreen {
             .py(px(12.0))
             .border_t_1()
             .border_color(theme::hairline())
-            .child(div().pb(px(4.0)).child(ui::section_label("Recently decided")))
+            .child(
+                div()
+                    .pb(px(4.0))
+                    .child(ui::section_label("Recently decided")),
+            )
             .children(state_rows)
     }
 

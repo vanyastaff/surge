@@ -14,7 +14,7 @@ use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
 use surge_core::{BootstrapStage, EventPayload, RunId};
 
 use crate::flow_diagram::Lane;
-use crate::mission::{self, Mission, MilestoneView, PlanState, RunEnd, Step, StepState, TaskView};
+use crate::mission::{self, MilestoneView, Mission, PlanState, RunEnd, Step, StepState, TaskView};
 use crate::theme::{self, Semantic};
 use crate::ui;
 
@@ -35,7 +35,8 @@ async fn events_of(root: std::path::PathBuf, run: RunId) -> Vec<EventPayload> {
 async fn load(runs: MissionRuns) -> Result<Mission, String> {
     // Storage reads run on the app's tokio runtime (entered in `main`);
     // without one (headless tests) say so instead of panicking.
-    tokio::runtime::Handle::try_current().map_err(|_| "Run storage is not available".to_string())?;
+    tokio::runtime::Handle::try_current()
+        .map_err(|_| "Run storage is not available".to_string())?;
     let home = surge_core::home::surge_home_dir().ok_or("Surge home unavailable")?;
     let root = home.join("runs");
     let planning = match runs.planning {
@@ -136,7 +137,10 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
         StepState::Unfinished => (Some(IconName::Minus), theme::slate()),
     };
     let tip = match &step.state {
-        StepState::Done(outcome) => step.summary.clone().unwrap_or_else(|| format!("finished · {outcome}")),
+        StepState::Done(outcome) => step
+            .summary
+            .clone()
+            .unwrap_or_else(|| format!("finished · {outcome}")),
         StepState::Failed(reason) => format!("failed · {reason}"),
         StepState::WaitingOnYou => "waiting for your answer".into(),
         StepState::Working => "working now".into(),
@@ -158,8 +162,16 @@ fn step_chip(id: String, step: &Step) -> Stateful<Div> {
         .px(px(8.0))
         .rounded(px(999.0))
         .border_1()
-        .border_color(if live { theme::stroke(tone) } else { theme::stroke(role).opacity(0.5) })
-        .bg(if live { theme::tint(tone) } else { theme::tint(role) })
+        .border_color(if live {
+            theme::stroke(tone)
+        } else {
+            theme::stroke(role).opacity(0.5)
+        })
+        .bg(if live {
+            theme::tint(tone)
+        } else {
+            theme::tint(role)
+        })
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .when(live, |el| el.child(ui::live_dot(tone)))
         .child(
@@ -204,14 +216,21 @@ impl MissionPanel {
             let (note, tone, icon) = match step.state {
                 PlanState::NotStarted => ("not started".to_string(), theme::slate(), None),
                 PlanState::Drafting { edits } => (
-                    if edits > 0 { format!("redrafting · {edits} edit") } else { "drafting".into() },
+                    if edits > 0 {
+                        format!("redrafting · {edits} edit")
+                    } else {
+                        "drafting".into()
+                    },
                     theme::accent(),
                     None,
                 ),
                 PlanState::AwaitingYou { .. } => ("waiting for you".into(), theme::warning(), None),
                 PlanState::Approved { edits } => (
                     if edits > 0 {
-                        format!("approved after {edits} edit{}", if edits == 1 { "" } else { "s" })
+                        format!(
+                            "approved after {edits} edit{}",
+                            if edits == 1 { "" } else { "s" }
+                        )
                     } else {
                         "approved by you".into()
                     },
@@ -256,8 +275,12 @@ impl MissionPanel {
         let (label, role) = match task.status {
             RoadmapStatus::Completed if task.verified => ("verified", Semantic::Verified),
             RoadmapStatus::Completed => ("done · unverified", Semantic::External),
-            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => ("in progress", Semantic::Agent),
-            RoadmapStatus::Failed | RoadmapStatus::FailedVerification => ("failed", Semantic::Failure),
+            RoadmapStatus::Running | RoadmapStatus::ReadyForVerification => {
+                ("in progress", Semantic::Agent)
+            },
+            RoadmapStatus::Failed | RoadmapStatus::FailedVerification => {
+                ("failed", Semantic::Failure)
+            },
             RoadmapStatus::Paused => ("paused", Semantic::You),
             RoadmapStatus::Skipped => ("skipped", Semantic::External),
             RoadmapStatus::Pending => ("planned", Semantic::External),
@@ -279,7 +302,11 @@ impl MissionPanel {
                     .h_flex()
                     .gap(px(10.0))
                     .items_center()
-                    .child(if live { ui::live_dot(color) } else { ui::status_dot(color) })
+                    .child(if live {
+                        ui::live_dot(color)
+                    } else {
+                        ui::status_dot(color)
+                    })
                     .child(
                         div()
                             .flex_1()
@@ -315,7 +342,11 @@ impl MissionPanel {
                     }),
             )
             .when(!task.steps.is_empty(), |el| {
-                el.child(div().pl(px(17.0)).child(step_row(&format!("t{m}-{t}"), &task.steps)))
+                el.child(
+                    div()
+                        .pl(px(17.0))
+                        .child(step_row(&format!("t{m}-{t}"), &task.steps)),
+                )
             })
     }
 
@@ -328,7 +359,9 @@ impl MissionPanel {
             .count();
         let verified = m.tasks.iter().filter(|t| t.verified).count();
         let (label, role) = match (&m.finished, m.started) {
-            (Some(outcome), _) if outcome == "completed" || outcome == "pass" => ("done", Semantic::Verified),
+            (Some(outcome), _) if outcome == "completed" || outcome == "pass" => {
+                ("done", Semantic::Verified)
+            },
             (Some(_), _) => ("ended", Semantic::Failure),
             (None, true) => ("in progress", Semantic::Agent),
             (None, false) => ("planned", Semantic::External),
@@ -408,7 +441,12 @@ impl MissionPanel {
                     .p(px(4.0))
                     .border_t_1()
                     .border_color(theme::hairline())
-                    .children(m.tasks.iter().enumerate().map(|(t, task)| self.render_task(index, t, task)))
+                    .children(
+                        m.tasks
+                            .iter()
+                            .enumerate()
+                            .map(|(t, task)| self.render_task(index, t, task)),
+                    )
                     .when(m.tasks.is_empty(), |el| {
                         el.child(
                             div()
@@ -424,7 +462,11 @@ impl MissionPanel {
 
     fn render_mission(&self, mission: &Mission) -> Div {
         let mut body = div().v_flex().gap(px(16.0));
-        if mission.plan.iter().any(|p| p.state != PlanState::NotStarted) {
+        if mission
+            .plan
+            .iter()
+            .any(|p| p.state != PlanState::NotStarted)
+        {
             body = body.child(self.render_plan(mission));
         }
         if let Some(now) = &mission.now {
@@ -446,9 +488,21 @@ impl MissionPanel {
         }
         if let Some(end) = &mission.end {
             let (headline, detail, role) = match end {
-                RunEnd::Completed => ("Finished — the flow reached its end.".to_string(), None, Semantic::Verified),
-                RunEnd::Failed(e) => (mission::failure_headline(e).to_string(), Some(e.clone()), Semantic::Failure),
-                RunEnd::Aborted(r) => ("Stopped by request".to_string(), Some(r.clone()), Semantic::External),
+                RunEnd::Completed => (
+                    "Finished — the flow reached its end.".to_string(),
+                    None,
+                    Semantic::Verified,
+                ),
+                RunEnd::Failed(e) => (
+                    mission::failure_headline(e).to_string(),
+                    Some(e.clone()),
+                    Semantic::Failure,
+                ),
+                RunEnd::Aborted(r) => (
+                    "Stopped by request".to_string(),
+                    Some(r.clone()),
+                    Semantic::External,
+                ),
             };
             let color = role.color();
             body = body.child(
@@ -475,7 +529,10 @@ impl MissionPanel {
         }
         if !mission.milestones.is_empty() {
             body = body
-                .child(ui::section_label(format!("Milestones · {}", mission.milestones.len())))
+                .child(ui::section_label(format!(
+                    "Milestones · {}",
+                    mission.milestones.len()
+                )))
                 .children(
                     mission
                         .milestones
@@ -508,7 +565,9 @@ impl Render for MissionPanel {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match (&self.mission, &self.error) {
             (Some(mission), _) => self.render_mission(mission).into_any_element(),
-            (None, Some(error)) => ui::empty_state("◌", "Could not read this run", error.clone()).into_any_element(),
+            (None, Some(error)) => {
+                ui::empty_state("◌", "Could not read this run", error.clone()).into_any_element()
+            },
             (None, None) => div()
                 .text_size(px(12.0))
                 .text_color(theme::text_muted())

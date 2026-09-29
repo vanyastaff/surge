@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
+use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::RunId;
@@ -572,11 +572,17 @@ impl Render for ChangesView {
                             cx.notify();
                         }))
                         .child(
-                            Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
-                                .size(px(11.0))
-                                .text_color(theme::text_dim()),
+                            Icon::new(if open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(11.0))
+                            .text_color(theme::text_dim()),
                         )
-                        .child(crate::ui::section_label(format!("Surge files · {working_count}"))),
+                        .child(crate::ui::section_label(format!(
+                            "Surge files · {working_count}"
+                        ))),
                 );
             }
             if file.working && !self.show_working {
@@ -615,8 +621,16 @@ impl Render for ChangesView {
                                         "{app_count} app file{}",
                                         if app_count == 1 { "" } else { "s" }
                                     ))
-                                    .child(div().text_color(theme::success()).child(format!("+{app_added}")))
-                                    .child(div().text_color(theme::error()).child(format!("−{app_removed}"))),
+                                    .child(
+                                        div()
+                                            .text_color(theme::success())
+                                            .child(format!("+{app_added}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(theme::error())
+                                            .child(format!("−{app_removed}")),
+                                    ),
                             )
                             .child(
                                 div()
@@ -663,7 +677,11 @@ impl Render for ChangesView {
                     } else {
                         "No changes"
                     },
-                    if self.loading { "" } else { "Nothing differs from the base this run started from." },
+                    if self.loading {
+                        ""
+                    } else {
+                        "Nothing differs from the base this run started from."
+                    },
                 )
                 .flex_1()
                 .into_any_element()
@@ -696,7 +714,12 @@ impl Render for ChangesView {
 }
 
 impl ChangesView {
-    fn render_file_row(&self, index: usize, file: &ChangedFile, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_file_row(
+        &self,
+        index: usize,
+        file: &ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let selected = index == self.selected;
         let (dir, name) = match file.path.rsplit_once('/') {
             Some((dir, name)) => (format!("{dir}/"), name.to_string()),
@@ -751,7 +774,13 @@ impl ChangesView {
                             .flex_none()
                             .child(name),
                     )
-                    .child(div().pl(px(6.0)).text_color(theme::text_dim()).truncate().child(dir)),
+                    .child(
+                        div()
+                            .pl(px(6.0))
+                            .text_color(theme::text_dim())
+                            .truncate()
+                            .child(dir),
+                    ),
             )
             .child(
                 div()
@@ -760,10 +789,18 @@ impl ChangesView {
                     .gap(px(4.0))
                     .text_size(px(10.0))
                     .when(file.added > 0, |el| {
-                        el.child(div().text_color(theme::success()).child(format!("+{}", file.added)))
+                        el.child(
+                            div()
+                                .text_color(theme::success())
+                                .child(format!("+{}", file.added)),
+                        )
                     })
                     .when(file.removed > 0, |el| {
-                        el.child(div().text_color(theme::error()).child(format!("−{}", file.removed)))
+                        el.child(
+                            div()
+                                .text_color(theme::error())
+                                .child(format!("−{}", file.removed)),
+                        )
                     }),
             )
     }
@@ -900,7 +937,10 @@ mod tests {
         let patch = "diff --git a/x b/x\nnew file mode 100644\n--- /dev/null\n+++ b/x\n@@ -0,0 +1,2 @@\n+one\n+two\n";
         assert_eq!(super::patch_stats(patch), (2, 0, super::FileChange::Added));
         let patch = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n context\n";
-        assert_eq!(super::patch_stats(patch), (1, 1, super::FileChange::Modified));
+        assert_eq!(
+            super::patch_stats(patch),
+            (1, 1, super::FileChange::Modified)
+        );
         assert_eq!(
             super::patch_stats("deleted file mode 100644\n--- a/x\n+++ /dev/null\n-gone\n").2,
             super::FileChange::Deleted

@@ -244,7 +244,6 @@ impl WelcomeScreen {
             .gap(px(10.0))
             .child(ui::section_label("How a run moves"))
             .child(row)
-
     }
 
     fn render_project_row(&self, project: &RecentProject, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -482,8 +481,7 @@ impl WelcomeScreen {
                                     theme::panel_deep(),
                                 ))
                             }),
-                    )
-
+                    ),
             )
             .child(
                 div()
@@ -516,7 +514,9 @@ impl WelcomeScreen {
                         .text_size(px(11.0))
                         .text_color(theme::text_muted())
                         .cursor_pointer()
-                        .hover(|s: StyleRefinement| s.bg(theme::surface()).text_color(theme::text_primary()))
+                        .hover(|s: StyleRefinement| {
+                            s.bg(theme::surface()).text_color(theme::text_primary())
+                        })
                         .on_click(cx.listener(|this, _event: &ClickEvent, _window, cx| {
                             this.show_all = !this.show_all;
                             cx.notify();

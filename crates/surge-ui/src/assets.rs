@@ -12,34 +12,37 @@ use std::borrow::Cow;
 use gpui_kit::assets::{Assets, icon_assets};
 use gpui_kit::{AssetSource, Result, SharedString};
 
-icon_assets!(SurgeIcons, [
-    Activity,
-    AppWindow,
-    ArrowRight,
-    Brain,
-    CircleDot,
-    Clock,
-    Command,
-    CornerDownLeft,
-    FolderPlus,
-    GitBranch,
-    GitCompare,
-    GitMerge,
-    Hourglass,
-    Kanban,
-    Pin,
-    PinOff,
-    Repeat,
-    ScrollText,
-    ShieldAlert,
-    ShieldCheck,
-    Sparkles,
-    UserCheck,
-    Waypoints,
-    Workflow,
-    X,
-    Zap,
-]);
+icon_assets!(
+    SurgeIcons,
+    [
+        Activity,
+        AppWindow,
+        ArrowRight,
+        Brain,
+        CircleDot,
+        Clock,
+        Command,
+        CornerDownLeft,
+        FolderPlus,
+        GitBranch,
+        GitCompare,
+        GitMerge,
+        Hourglass,
+        Kanban,
+        Pin,
+        PinOff,
+        Repeat,
+        ScrollText,
+        ShieldAlert,
+        ShieldCheck,
+        Sparkles,
+        UserCheck,
+        Waypoints,
+        Workflow,
+        X,
+        Zap,
+    ]
+);
 
 /// Surge's additions, then gpui-kit's default icons.
 #[derive(Clone, Copy, Debug, Default)]
@@ -69,7 +72,11 @@ mod tests {
 
     #[test]
     fn serves_surge_icons_and_component_defaults() {
-        for icon in [IconName::ShieldCheck, IconName::FolderPlus, IconName::Workflow] {
+        for icon in [
+            IconName::ShieldCheck,
+            IconName::FolderPlus,
+            IconName::Workflow,
+        ] {
             let path = icon.path();
             assert!(AppAssets.load(&path).unwrap().is_some(), "{path} missing");
         }

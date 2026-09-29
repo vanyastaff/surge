@@ -191,7 +191,14 @@ pub fn page_header(
                         .child(sub)
                 })),
         )
-        .child(div().flex().flex_row().gap(px(8.0)).items_center().child(actions))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(8.0))
+                .items_center()
+                .child(actions),
+        )
 }
 
 /// An honest empty state: what this place is for, and what fills it.
@@ -391,8 +398,14 @@ mod tests {
             .map(|d| d.as_secs())
             .unwrap_or_default();
         assert_eq!(relative_age(&now.to_string()).as_deref(), Some("just now"));
-        assert_eq!(relative_age(&(now - 7_200).to_string()).as_deref(), Some("2h ago"));
-        assert_eq!(relative_age(&(now - 3 * 86_400).to_string()).as_deref(), Some("3d ago"));
+        assert_eq!(
+            relative_age(&(now - 7_200).to_string()).as_deref(),
+            Some("2h ago")
+        );
+        assert_eq!(
+            relative_age(&(now - 3 * 86_400).to_string()).as_deref(),
+            Some("3d ago")
+        );
     }
 
     #[test]

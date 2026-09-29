@@ -76,7 +76,13 @@ impl TopBar {
         if self.switcher.is_some() {
             self.switcher = None;
         } else {
-            self.switcher = Some(RecentProjects::load().sorted().into_iter().cloned().collect());
+            self.switcher = Some(
+                RecentProjects::load()
+                    .sorted()
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            );
             cx.emit(TopBarEvent::ProjectSwitcherOpened);
         }
         cx.notify();
@@ -93,7 +99,12 @@ impl TopBar {
             .h_flex()
             .gap(px(8.0))
             .items_center()
-            .child(div().text_size(px(13.0)).text_color(theme::hairline_strong()).child("/"))
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .text_color(theme::hairline_strong())
+                    .child("/"),
+            )
             .child(
                 Icon::new(self.active_screen.icon())
                     .size(px(13.0))
@@ -178,9 +189,15 @@ impl TopBar {
                                     .child(ui::abbreviate_home(&p.path)),
                             ),
                     )
-                    .when(missing, |el| el.child(ui::role_badge("missing", theme::Semantic::Failure)))
+                    .when(missing, |el| {
+                        el.child(ui::role_badge("missing", theme::Semantic::Failure))
+                    })
                     .when(current, |el| {
-                        el.child(Icon::new(IconName::Check).size(px(13.0)).text_color(theme::accent()))
+                        el.child(
+                            Icon::new(IconName::Check)
+                                .size(px(13.0))
+                                .text_color(theme::accent()),
+                        )
                     })
             })
             .collect();
@@ -195,7 +212,13 @@ impl TopBar {
             .gap(px(1.0))
             .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _event, _window, cx| this.close_switcher(cx)))
-            .child(div().px(px(10.0)).pt(px(6.0)).pb(px(4.0)).child(ui::section_label("Recent projects")))
+            .child(
+                div()
+                    .px(px(10.0))
+                    .pt(px(6.0))
+                    .pb(px(4.0))
+                    .child(ui::section_label("Recent projects")),
+            )
             .child(
                 div()
                     .id("switcher-list")
@@ -207,11 +230,15 @@ impl TopBar {
             )
             .child(div().my(px(4.0)).h(px(1.0)).bg(theme::hairline()))
             .child(
-                Self::menu_item("switch-open-other", "Open project…", Some(ui::shortcut_label("Ctrl+O")))
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.switcher = None;
-                        cx.emit(TopBarEvent::OpenOther);
-                    })),
+                Self::menu_item(
+                    "switch-open-other",
+                    "Open project…",
+                    Some(ui::shortcut_label("Ctrl+O")),
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.switcher = None;
+                    cx.emit(TopBarEvent::OpenOther);
+                })),
             )
             .child(
                 Self::menu_item("switch-new-project", "New app…", None).on_click(cx.listener(
@@ -243,7 +270,8 @@ impl TopBar {
             .text_color(theme::text_dim())
             .cursor_pointer()
             .hover(|s: StyleRefinement| {
-                s.border_color(theme::hairline_strong()).text_color(theme::text_muted())
+                s.border_color(theme::hairline_strong())
+                    .text_color(theme::text_muted())
             })
             .on_click(cx.listener(|_this, _event, _window, cx| cx.emit(TopBarEvent::OpenPalette)))
             .child(Icon::new(IconName::Search).size(px(12.0)))
@@ -392,6 +420,9 @@ mod tests {
         repo.commit(Some("refs/heads/trunk"), &sig, &sig, "init", &tree, &[])
             .unwrap();
         repo.set_head("refs/heads/trunk").unwrap();
-        assert_eq!(crate::ui::current_branch(dir.path()).as_deref(), Some("trunk"));
+        assert_eq!(
+            crate::ui::current_branch(dir.path()).as_deref(),
+            Some("trunk")
+        );
     }
 }

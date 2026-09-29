@@ -43,17 +43,50 @@ fn archetype_blurb(name: &str) -> (&'static str, &'static str) {
     match name {
         "single-task" => ("Size", "A tiny, obvious change — one agent, then a check."),
         "linear-3" => ("Size", "One coherent change: spec → build → check."),
-        "linear-with-review" => ("Size", "One milestone of work, with a review before it ends."),
-        "multi-milestone" => ("Size", "Several milestones: a loop over milestones, each looping over its tasks."),
-        "feature" => ("Kind", "New behaviour: acceptance criteria first, then build and check."),
-        "bug-fix" => ("Kind", "A reproducible failure: reproduce it first, then fix and prove it."),
-        "refactor" => ("Kind", "No behaviour change: pin current behaviour, then refactor under review."),
-        "migration" => ("Kind", "Schema, data or API change: plan and rollback before the change."),
-        "performance" => ("Kind", "A number to beat: baseline first, then compare against it."),
-        "security" => ("Kind", "Vulnerabilities or secrets: audit, then fix each finding with a test."),
-        "docs" => ("Kind", "Documentation only: outline, write, check against the code."),
-        "spike" => ("Kind", "Unknown feasibility: a bounded experiment that answers a question."),
-        "bootstrap" => ("Planning", "Turns your idea into a description, a roadmap and a flow — each approved by you."),
+        "linear-with-review" => (
+            "Size",
+            "One milestone of work, with a review before it ends.",
+        ),
+        "multi-milestone" => (
+            "Size",
+            "Several milestones: a loop over milestones, each looping over its tasks.",
+        ),
+        "feature" => (
+            "Kind",
+            "New behaviour: acceptance criteria first, then build and check.",
+        ),
+        "bug-fix" => (
+            "Kind",
+            "A reproducible failure: reproduce it first, then fix and prove it.",
+        ),
+        "refactor" => (
+            "Kind",
+            "No behaviour change: pin current behaviour, then refactor under review.",
+        ),
+        "migration" => (
+            "Kind",
+            "Schema, data or API change: plan and rollback before the change.",
+        ),
+        "performance" => (
+            "Kind",
+            "A number to beat: baseline first, then compare against it.",
+        ),
+        "security" => (
+            "Kind",
+            "Vulnerabilities or secrets: audit, then fix each finding with a test.",
+        ),
+        "docs" => (
+            "Kind",
+            "Documentation only: outline, write, check against the code.",
+        ),
+        "spike" => (
+            "Kind",
+            "Unknown feasibility: a bounded experiment that answers a question.",
+        ),
+        "bootstrap" => (
+            "Planning",
+            "Turns your idea into a description, a roadmap and a flow — each approved by you.",
+        ),
         _ => ("Other", "A bundled flow."),
     }
 }
@@ -76,7 +109,11 @@ impl LevelPlans {
                     (level, prepared)
                 })
                 .collect(),
-            archetype: graph.metadata.archetype.as_ref().map(|a| a.name.as_str().to_string()),
+            archetype: graph
+                .metadata
+                .archetype
+                .as_ref()
+                .map(|a| a.name.as_str().to_string()),
             // The shape is shown as a badge; this is the planner's reason.
             rationale: graph
                 .metadata
@@ -136,7 +173,12 @@ impl FlowScreen {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         let mut library = BundledFlows::all();
         // Size shapes in order of scale, then kinds, then planning.
-        const SIZE_ORDER: [&str; 4] = ["single-task", "linear-3", "linear-with-review", "multi-milestone"];
+        const SIZE_ORDER: [&str; 4] = [
+            "single-task",
+            "linear-3",
+            "linear-with-review",
+            "multi-milestone",
+        ];
         library.sort_by_key(|f| {
             let (group, _) = archetype_blurb(&f.name);
             let rank = match group {
@@ -199,9 +241,10 @@ impl FlowScreen {
             if !path.is_file() {
                 return None;
             }
-            let headline = state
-                .run_prompt(&run.run_id)
-                .map_or_else(|| format!("run r-{}", run.run_id.short().to_lowercase()), |p| ui::headline(p, 90));
+            let headline = state.run_prompt(&run.run_id).map_or_else(
+                || format!("run r-{}", run.run_id.short().to_lowercase()),
+                |p| ui::headline(p, 90),
+            );
             Some((run.run_id, headline, path))
         })?;
         if self.live.as_ref().is_none_or(|(cached, _)| cached != &path) {
@@ -209,7 +252,14 @@ impl FlowScreen {
             let plans = toml::from_str::<Graph>(&source)
                 .map(|graph| LevelPlans::new(&graph))
                 .map_err(|error| error.to_string());
-            self.live = Some((path, ProjectPlan { run, headline, plans }));
+            self.live = Some((
+                path,
+                ProjectPlan {
+                    run,
+                    headline,
+                    plans,
+                },
+            ));
         }
         self.live.as_ref().map(|(_, plan)| plan.clone())
     }
@@ -238,14 +288,18 @@ impl FlowScreen {
                     Some(home) => {
                         let mut found = None;
                         for op in crate::roadmap_source::operations(&root, &home).await {
-                            let Some(bytes) =
-                                crate::roadmap_source::read_run_artifact(&home, op.planning_run, "flow")
-                            else {
+                            let Some(bytes) = crate::roadmap_source::read_run_artifact(
+                                &home,
+                                op.planning_run,
+                                "flow",
+                            ) else {
                                 continue;
                             };
                             let plans = String::from_utf8(bytes)
                                 .map_err(|e| e.to_string())
-                                .and_then(|text| toml::from_str::<Graph>(&text).map_err(|e| e.to_string()))
+                                .and_then(|text| {
+                                    toml::from_str::<Graph>(&text).map_err(|e| e.to_string())
+                                })
                                 .map(|graph| LevelPlans::new(&graph));
                             found = Some(ProjectPlan {
                                 run: op.planning_run,
@@ -780,7 +834,9 @@ impl FlowScreen {
                     .rounded(px(ui::R_CONTROL))
                     .text_size(px(11.5))
                     .cursor_pointer()
-                    .when(active, |el| el.bg(theme::surface()).text_color(theme::text_primary()))
+                    .when(active, |el| {
+                        el.bg(theme::surface()).text_color(theme::text_primary())
+                    })
                     .when(!active, |el| {
                         el.text_color(theme::text_muted())
                             .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
@@ -824,8 +880,16 @@ impl FlowScreen {
                     .py(px(8.0))
                     .rounded(px(ui::R_CONTROL + 2.0))
                     .border_1()
-                    .border_color(if active { theme::stroke(color) } else { theme::hairline() })
-                    .bg(if active { theme::tint(color) } else { theme::panel_raised() })
+                    .border_color(if active {
+                        theme::stroke(color)
+                    } else {
+                        theme::hairline()
+                    })
+                    .bg(if active {
+                        theme::tint(color)
+                    } else {
+                        theme::panel_raised()
+                    })
                     .cursor_pointer()
                     .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
                     .on_click(cx.listener(move |this, _e, _w, cx| {
@@ -849,7 +913,12 @@ impl FlowScreen {
                                     .child(level.title.clone()),
                             ),
                     )
-                    .child(div().text_size(px(10.5)).text_color(theme::text_muted()).child(note)),
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme::text_muted())
+                            .child(note),
+                    ),
             );
             if i + 1 < plans.levels.len() {
                 row = row.child(
@@ -910,24 +979,30 @@ impl FlowScreen {
                     .text_size(px(11.5))
                     .text_color(theme::text_muted())
                     .child(match level.depth {
-                        0 if plans.levels.len() > 1 => {
-                            "Runs once for the whole request. Click a repeating step to open its level.".to_string()
-                        },
-                        0 => "Runs once for the whole request.".to_string(),
-                        _ => format!("Runs for {} — its own flow.", level.title.to_lowercase()),
-                    }),
+                    0 if plans.levels.len() > 1 => {
+                        "Runs once for the whole request. Click a repeating step to open its level."
+                            .to_string()
+                    },
+                    0 => "Runs once for the whole request.".to_string(),
+                    _ => format!("Runs for {} — its own flow.", level.title.to_lowercase()),
+                }),
             )
             .child(
                 div()
                     .flex()
                     .gap(px(14.0))
                     .items_start()
-                    .child(div().flex_1().min_w_0().child(crate::flow_diagram::render_interactive(
-                        prepared,
-                        SharedString::from(format!("flow-level-diagram-{index}")),
-                        self.plan_selected.as_deref(),
-                        Some(on_select),
-                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(crate::flow_diagram::render_interactive(
+                                prepared,
+                                SharedString::from(format!("flow-level-diagram-{index}")),
+                                self.plan_selected.as_deref(),
+                                Some(on_select),
+                            )),
+                    )
                     .children(inspector),
             )
     }
@@ -965,7 +1040,11 @@ impl FlowScreen {
         self.plan_run = Some(plan.run);
         match &plan.plans {
             Err(error) => ui::panel()
-                .child(ui::empty_state("◌", "This plan could not be read", error.clone()))
+                .child(ui::empty_state(
+                    "◌",
+                    "This plan could not be read",
+                    error.clone(),
+                ))
                 .into_any_element(),
             Ok(plans) => {
                 let plans = plans.clone();
@@ -998,14 +1077,21 @@ impl FlowScreen {
     }
 
     fn render_library(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.library_selected.min(self.library.len().saturating_sub(1));
+        let selected = self
+            .library_selected
+            .min(self.library.len().saturating_sub(1));
         let mut list = div().v_flex().gap(px(2.0)).w(px(300.0)).flex_none();
         let mut last_group = "";
         for (i, flow) in self.library.iter().enumerate() {
             let (group, blurb) = archetype_blurb(&flow.name);
             if group != last_group {
                 last_group = group;
-                list = list.child(div().pt(px(if i == 0 { 0.0 } else { 10.0 })).pb(px(4.0)).child(ui::section_label(group)));
+                list = list.child(
+                    div()
+                        .pt(px(if i == 0 { 0.0 } else { 10.0 }))
+                        .pb(px(4.0))
+                        .child(ui::section_label(group)),
+                );
             }
             let active = i == selected;
             list = list.child(
@@ -1030,7 +1116,11 @@ impl FlowScreen {
                         div()
                             .text_size(px(12.5))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                            .text_color(if active {
+                                theme::text_primary()
+                            } else {
+                                theme::text_muted()
+                            })
                             .child(flow.name.replace('-', " ")),
                     )
                     .child(
@@ -1102,7 +1192,10 @@ impl Render for FlowScreen {
                     .gap(px(18.0))
                     .child(ui::page_header(
                         "Flow",
-                        Some("How the work is done — each level of the plan runs its own steps.".into()),
+                        Some(
+                            "How the work is done — each level of the plan runs its own steps."
+                                .into(),
+                        ),
                         self.render_mode_switch(cx),
                     ))
                     .child(body),

@@ -357,29 +357,55 @@ impl SettingsScreen {
     fn changes(&self) -> crate::config_edit::Changes {
         use crate::config_edit::Change;
         let mut out = crate::config_edit::Changes::new();
-        let Some(base) = &self.baseline else { return out };
+        let Some(base) = &self.baseline else {
+            return out;
+        };
         let now = self.snapshot();
         let mut put = |key: &str, changed: bool, change: Change| {
             if changed {
                 out.insert(key.to_string(), change);
             }
         };
-        put("pipeline.gates.after_spec", now.gate_after_spec != base.gate_after_spec, Change::Bool(now.gate_after_spec));
-        put("pipeline.gates.after_plan", now.gate_after_plan != base.gate_after_plan, Change::Bool(now.gate_after_plan));
+        put(
+            "pipeline.gates.after_spec",
+            now.gate_after_spec != base.gate_after_spec,
+            Change::Bool(now.gate_after_spec),
+        );
+        put(
+            "pipeline.gates.after_plan",
+            now.gate_after_plan != base.gate_after_plan,
+            Change::Bool(now.gate_after_plan),
+        );
         put(
             "pipeline.gates.after_each_subtask",
             now.gate_after_each_subtask != base.gate_after_each_subtask,
             Change::Bool(now.gate_after_each_subtask),
         );
-        put("pipeline.gates.after_qa", now.gate_after_qa != base.gate_after_qa, Change::Bool(now.gate_after_qa));
-        put("pipeline.max_parallel", now.max_parallel != base.max_parallel, Change::Int(now.max_parallel as i64));
+        put(
+            "pipeline.gates.after_qa",
+            now.gate_after_qa != base.gate_after_qa,
+            Change::Bool(now.gate_after_qa),
+        );
+        put(
+            "pipeline.max_parallel",
+            now.max_parallel != base.max_parallel,
+            Change::Int(now.max_parallel as i64),
+        );
         put(
             "pipeline.max_qa_iterations",
             now.max_qa_iterations != base.max_qa_iterations,
             Change::Int(i64::from(now.max_qa_iterations)),
         );
-        put("log.level", now.log_level != base.log_level, Change::Str(now.log_level.clone()));
-        put("log.max_size_mb", now.log_max_size_mb != base.log_max_size_mb, Change::Int(now.log_max_size_mb as i64));
+        put(
+            "log.level",
+            now.log_level != base.log_level,
+            Change::Str(now.log_level.clone()),
+        );
+        put(
+            "log.max_size_mb",
+            now.log_max_size_mb != base.log_max_size_mb,
+            Change::Int(now.log_max_size_mb as i64),
+        );
         put(
             "routing.strategy",
             now.routing_strategy != base.routing_strategy,
@@ -398,7 +424,8 @@ impl SettingsScreen {
         put(
             "analytics.budget_tokens",
             now.budget_tokens != base.budget_tokens,
-            now.budget_tokens.map_or(Change::Unset, |t| Change::Int(t as i64)),
+            now.budget_tokens
+                .map_or(Change::Unset, |t| Change::Int(t as i64)),
         );
         put(
             "analytics.budget_warn_threshold",
@@ -782,7 +809,6 @@ impl SettingsScreen {
                 SettingsPage::ContextMemory => self.render_context_memory(cx),
                 SettingsPage::Integrations => self.render_integrations(cx),
             })
-
     }
 
     fn render_page_header(&self, page: SettingsPage) -> Div {
@@ -848,7 +874,10 @@ impl SettingsScreen {
             (None, 0) => (theme::success(), "Saved to surge.toml".into()),
             (None, n) => (
                 theme::warning(),
-                format!("{n} unsaved change{} — only these keys are written; comments stay", if n == 1 { "" } else { "s" }),
+                format!(
+                    "{n} unsaved change{} — only these keys are written; comments stay",
+                    if n == 1 { "" } else { "s" }
+                ),
             ),
         };
         div()
@@ -867,7 +896,11 @@ impl SettingsScreen {
                     .flex_1()
                     .min_w(px(0.0))
                     .text_size(px(12.0))
-                    .text_color(if self.save_error.is_some() { theme::error() } else { theme::text_muted() })
+                    .text_color(if self.save_error.is_some() {
+                        theme::error()
+                    } else {
+                        theme::text_muted()
+                    })
                     .child(text),
             )
             .when(pending > 0, |el| {
@@ -880,7 +913,11 @@ impl SettingsScreen {
                 .child(
                     Button::new("settings-save")
                         .primary()
-                        .label(if self.save_error.is_some() { "Try again" } else { "Save" })
+                        .label(if self.save_error.is_some() {
+                            "Try again"
+                        } else {
+                            "Save"
+                        })
                         .on_click(cx.listener(|this, _event, _window, cx| this.save_config(cx))),
                 )
             })
@@ -1085,19 +1122,21 @@ impl SettingsScreen {
             .v_flex()
             .gap_3()
             .child(self.section_title("What the colors mean"))
-            .child(
-                div()
-                    .v_flex()
-                    .gap(px(6.0))
-                    .children(roles.into_iter().map(|(role, meaning)| {
-                        div()
-                            .h_flex()
-                            .gap(px(10.0))
-                            .items_center()
-                            .child(div().w(px(110.0)).child(crate::ui::legend_chip(role, None)))
-                            .child(div().text_size(px(11.5)).text_color(theme::text_muted()).child(meaning))
-                    })),
-            )
+            .child(div().v_flex().gap(px(6.0)).children(roles.into_iter().map(
+                |(role, meaning)| {
+                    div()
+                        .h_flex()
+                        .gap(px(10.0))
+                        .items_center()
+                        .child(div().w(px(110.0)).child(crate::ui::legend_chip(role, None)))
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme::text_muted())
+                                .child(meaning),
+                        )
+                },
+            )))
     }
 
     // ── Agents page ────────────────────────────────────────────────
@@ -1305,16 +1344,36 @@ impl SettingsScreen {
     fn render_sandbox_default(&self, cx: &mut Context<Self>) -> Div {
         use surge_core::sandbox::SandboxMode;
         let modes = [
-            (SandboxMode::ReadOnly, "Read only", "Reads files; changes nothing."),
-            (SandboxMode::WorkspaceWrite, "Edit the project", "Writes project files; no shell, no network."),
-            (SandboxMode::WorkspaceNetwork, "Edit + web", "Also fetches from the web."),
-            (SandboxMode::FullAccess, "Full access", "No restrictions — use with care."),
+            (
+                SandboxMode::ReadOnly,
+                "Read only",
+                "Reads files; changes nothing.",
+            ),
+            (
+                SandboxMode::WorkspaceWrite,
+                "Edit the project",
+                "Writes project files; no shell, no network.",
+            ),
+            (
+                SandboxMode::WorkspaceNetwork,
+                "Edit + web",
+                "Also fetches from the web.",
+            ),
+            (
+                SandboxMode::FullAccess,
+                "Full access",
+                "No restrictions — use with care.",
+            ),
         ];
         let cards: Vec<Stateful<Div>> = modes
             .into_iter()
             .map(|(mode, name, note)| {
                 let active = self.sandbox_default == mode;
-                let color = if mode == SandboxMode::FullAccess { theme::error() } else { theme::accent() };
+                let color = if mode == SandboxMode::FullAccess {
+                    theme::error()
+                } else {
+                    theme::accent()
+                };
                 div()
                     .id(SharedString::from(format!("sandbox-{name}")))
                     .role(Role::Button)
@@ -1326,16 +1385,35 @@ impl SettingsScreen {
                     .p(px(12.0))
                     .rounded(px(crate::ui::R_CONTROL + 2.0))
                     .border_1()
-                    .border_color(if active { theme::stroke(color) } else { theme::hairline() })
-                    .bg(if active { theme::tint(color) } else { theme::panel_raised() })
+                    .border_color(if active {
+                        theme::stroke(color)
+                    } else {
+                        theme::hairline()
+                    })
+                    .bg(if active {
+                        theme::tint(color)
+                    } else {
+                        theme::panel_raised()
+                    })
                     .cursor_pointer()
                     .hover(|st: StyleRefinement| st.border_color(theme::hairline_strong()))
                     .on_click(cx.listener(move |this, _e, _w, cx| {
                         this.sandbox_default = mode;
                         this.mark_dirty(cx);
                     }))
-                    .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text_primary()).child(name))
-                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(note))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text_primary())
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme::text_muted())
+                            .child(note),
+                    )
             })
             .collect();
         div()
@@ -1646,11 +1724,16 @@ impl SettingsScreen {
                 .as_ref()
                 .map(|c| {
                     let placement = match c.init.worktree_location {
-                        surge_core::config::WorktreeLocationConfig::Sibling => "Next to the project (.surge-worktrees)",
+                        surge_core::config::WorktreeLocationConfig::Sibling => {
+                            "Next to the project (.surge-worktrees)"
+                        },
                         surge_core::config::WorktreeLocationConfig::Central => "In ~/.surge/runs",
                         surge_core::config::WorktreeLocationConfig::Custom => "Custom folder",
                     };
-                    (placement.to_string(), crate::ui::abbreviate_home(&c.init.worktree_root))
+                    (
+                        placement.to_string(),
+                        crate::ui::abbreviate_home(&c.init.worktree_root),
+                    )
                 })
                 .unwrap_or_else(|| ("—".into(), "—".into()));
             (state.current_branch.clone(), placement, root)
@@ -2070,7 +2153,6 @@ impl SettingsScreen {
         div().h_flex().gap_1().items_center().children(badges)
     }
 
-
     /// A labelled −/+ control with a human-readable value; `apply` moves
     /// the value by `delta` steps (negative = down).
     #[allow(clippy::too_many_arguments)]
@@ -2122,8 +2204,18 @@ impl SettingsScreen {
                     .min_w(px(0.0))
                     .v_flex()
                     .gap(px(2.0))
-                    .child(div().text_size(px(12.5)).text_color(theme::text_primary()).child(label.to_string()))
-                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(description.to_string())),
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(theme::text_primary())
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme::text_muted())
+                            .child(description.to_string()),
+                    ),
             )
             .child(
                 div()
@@ -2217,7 +2309,8 @@ impl SettingsScreen {
                         self.connect_timeout_secs > 30,
                         self.connect_timeout_secs < 600,
                         |this, d| {
-                            this.connect_timeout_secs = (this.connect_timeout_secs as i64 + 30 * d).clamp(30, 600) as u64;
+                            this.connect_timeout_secs =
+                                (this.connect_timeout_secs as i64 + 30 * d).clamp(30, 600) as u64;
                         },
                         cx,
                     ))
@@ -2229,7 +2322,8 @@ impl SettingsScreen {
                         self.prompt_timeout_secs > 60,
                         self.prompt_timeout_secs < 3600,
                         |this, d| {
-                            this.prompt_timeout_secs = (this.prompt_timeout_secs as i64 + 60 * d).clamp(60, 3600) as u64;
+                            this.prompt_timeout_secs =
+                                (this.prompt_timeout_secs as i64 + 60 * d).clamp(60, 3600) as u64;
                         },
                         cx,
                     )),
@@ -2246,7 +2340,8 @@ impl SettingsScreen {
                         self.prompt_retries > 0,
                         self.prompt_retries < 10,
                         |this, d| {
-                            this.prompt_retries = (i64::from(this.prompt_retries) + d).clamp(0, 10) as u32;
+                            this.prompt_retries =
+                                (i64::from(this.prompt_retries) + d).clamp(0, 10) as u32;
                         },
                         cx,
                     ))
@@ -2669,7 +2764,12 @@ impl SettingsScreen {
                                             .text_color(theme::text_primary())
                                             .child(telegram_row.0),
                                     )
-                                    .child(div().text_size(px(11.0)).text_color(theme::text_muted()).child(telegram_row.1)),
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme::text_muted())
+                                            .child(telegram_row.1),
+                                    ),
                             ),
                     ),
             )
@@ -2732,9 +2832,10 @@ impl Render for SettingsScreen {
                     .h_full()
                     .v_flex()
                     .child(self.render_content(cx))
-                    .when(self.is_dirty() || self.save_error.is_some() || self.saved, |el| {
-                        el.child(self.render_save_bar(cx))
-                    }),
+                    .when(
+                        self.is_dirty() || self.save_error.is_some() || self.saved,
+                        |el| el.child(self.render_save_bar(cx)),
+                    ),
             )
     }
 }
@@ -2749,7 +2850,11 @@ mod save_tests {
     fn saving_writes_only_the_touched_key_and_keeps_comments() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("surge.toml");
-        std::fs::write(&path, "# team defaults\nschema_version = 1\n\n[pipeline]\nmax_parallel = 2 # laptop\n").unwrap();
+        std::fs::write(
+            &path,
+            "# team defaults\nschema_version = 1\n\n[pipeline]\nmax_parallel = 2 # laptop\n",
+        )
+        .unwrap();
         let mut cx = TestAppContext::single();
         cx.update(gpui_kit::init);
         crate::theme::init();
@@ -2766,12 +2871,18 @@ mod save_tests {
             assert_eq!(screen.changes().len(), 1);
             screen.save_config(cx);
             assert!(screen.save_error.is_none(), "{:?}", screen.save_error);
-            assert!(screen.changes().is_empty(), "saved edits are no longer pending");
+            assert!(
+                screen.changes().is_empty(),
+                "saved edits are no longer pending"
+            );
         });
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("# team defaults"));
         assert!(text.contains("max_parallel = 4 # laptop"));
-        assert!(!text.contains("max_qa_iterations"), "untouched defaults are not written out");
+        assert!(
+            !text.contains("max_qa_iterations"),
+            "untouched defaults are not written out"
+        );
     }
 
     #[test]
@@ -2794,7 +2905,12 @@ mod save_tests {
         screen.update(&mut cx, |screen, cx| {
             screen.max_parallel = 5;
             screen.save_config(cx);
-            assert!(screen.save_error.as_deref().is_some_and(|e| e.contains("syntax error")));
+            assert!(
+                screen
+                    .save_error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("syntax error"))
+            );
             assert_eq!(screen.changes().len(), 1, "the edit is kept for a retry");
         });
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[pipeline\n");

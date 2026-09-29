@@ -63,8 +63,14 @@ pub fn levels(graph: &Graph) -> Vec<FlowLevel> {
         queue.remove(0);
         for (node_key, node) in &nodes {
             let (key, title) = match &node.config {
-                NodeConfig::Loop(l) => (l.body.clone(), format!("Each {}", l.iteration_var_name.replace('_', " "))),
-                NodeConfig::Subgraph(s) => (s.inner.clone(), format!("Sub-flow · {}", s.inner.as_str().replace('_', " "))),
+                NodeConfig::Loop(l) => (
+                    l.body.clone(),
+                    format!("Each {}", l.iteration_var_name.replace('_', " ")),
+                ),
+                NodeConfig::Subgraph(s) => (
+                    s.inner.clone(),
+                    format!("Sub-flow · {}", s.inner.as_str().replace('_', " ")),
+                ),
                 _ => continue,
             };
             if !seen.insert(key.clone()) {
@@ -103,11 +109,15 @@ mod tests {
     #[test]
     fn nested_roadmap_flow_splits_into_its_three_levels() {
         let graph: surge_core::graph::Graph =
-            toml::from_str(include_str!("../testdata/nested_loops_flow.toml")).expect("fixture parses");
+            toml::from_str(include_str!("../testdata/nested_loops_flow.toml"))
+                .expect("fixture parses");
         let levels = levels(&graph);
         let titles: Vec<&str> = levels.iter().map(|l| l.title.as_str()).collect();
         assert_eq!(titles, ["Whole project", "Each milestone", "Each task"]);
-        assert_eq!(levels.iter().map(|l| l.depth).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(
+            levels.iter().map(|l| l.depth).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
         // No level carries nested bodies; each is drawn on its own.
         assert!(levels.iter().all(|l| l.graph.subgraphs.is_empty()));
         // The task level is where the building happens.
@@ -120,7 +130,8 @@ mod tests {
     #[test]
     fn a_flat_flow_is_one_level() {
         let graph: surge_core::graph::Graph =
-            toml::from_str(include_str!("../../../examples/flow_linear_3.toml")).expect("example parses");
+            toml::from_str(include_str!("../../../examples/flow_linear_3.toml"))
+                .expect("example parses");
         let levels = levels(&graph);
         assert_eq!(levels.len(), 1);
         assert_eq!(levels[0].work_steps, 3);

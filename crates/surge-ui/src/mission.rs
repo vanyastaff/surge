@@ -102,8 +102,15 @@ pub struct Mission {
 /// Loop scope while folding.
 #[derive(Clone, Debug)]
 enum Scope {
-    Milestone { loop_id: String, index: usize },
-    Task { loop_id: String, milestone: usize, index: usize },
+    Milestone {
+        loop_id: String,
+        index: usize,
+    },
+    Task {
+        loop_id: String,
+        milestone: usize,
+        index: usize,
+    },
 }
 
 /// Every node in the graph, subgraphs included.
@@ -156,7 +163,9 @@ fn humanize(id: &str) -> String {
 }
 
 fn item_str(item: &toml::Value, key: &str) -> Option<String> {
-    item.get(key).and_then(toml::Value::as_str).map(str::to_string)
+    item.get(key)
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
 }
 
 /// Seed milestones and tasks from the approved roadmap so work not yet
@@ -191,24 +200,34 @@ fn seed(roadmap: Option<&RoadmapArtifact>) -> Vec<MilestoneView> {
 }
 
 fn fold_plan(planning: &[EventPayload]) -> Vec<PlanStep> {
-    let mut plan: Vec<PlanStep> = [BootstrapStage::Description, BootstrapStage::Roadmap, BootstrapStage::Flow]
-        .into_iter()
-        .map(|stage| PlanStep {
-            stage,
-            state: PlanState::NotStarted,
-        })
-        .collect();
+    let mut plan: Vec<PlanStep> = [
+        BootstrapStage::Description,
+        BootstrapStage::Roadmap,
+        BootstrapStage::Flow,
+    ]
+    .into_iter()
+    .map(|stage| PlanStep {
+        stage,
+        state: PlanState::NotStarted,
+    })
+    .collect();
     let edits_of = |s: &PlanState| match s {
-        PlanState::Drafting { edits } | PlanState::AwaitingYou { edits } | PlanState::Approved { edits } => *edits,
+        PlanState::Drafting { edits }
+        | PlanState::AwaitingYou { edits }
+        | PlanState::Approved { edits } => *edits,
         _ => 0,
     };
     for event in planning {
         let (stage, next): (BootstrapStage, fn(u32) -> PlanState) = match event {
-            EventPayload::BootstrapStageStarted { stage } => (*stage, |e| PlanState::Drafting { edits: e }),
+            EventPayload::BootstrapStageStarted { stage } => {
+                (*stage, |e| PlanState::Drafting { edits: e })
+            },
             EventPayload::BootstrapApprovalRequested { stage, .. } => {
                 (*stage, |e| PlanState::AwaitingYou { edits: e })
             },
-            EventPayload::BootstrapApprovalDecided { stage, decision, .. } => match decision {
+            EventPayload::BootstrapApprovalDecided {
+                stage, decision, ..
+            } => match decision {
                 BootstrapDecision::Approve => (*stage, |e| PlanState::Approved { edits: e }),
                 BootstrapDecision::Reject => (*stage, |_| PlanState::Rejected),
                 BootstrapDecision::Edit => (*stage, |e| PlanState::Drafting { edits: e + 1 }),
@@ -230,7 +249,11 @@ pub fn fold(
 ) -> Mission {
     // A run started before bootstrap operations were recorded carries its
     // planning stages in its own log.
-    let plan_events = if planning.is_empty() { implementation } else { planning };
+    let plan_events = if planning.is_empty() {
+        implementation
+    } else {
+        planning
+    };
     let mut mission = Mission {
         plan: fold_plan(plan_events),
         milestones: seed(roadmap),
@@ -251,11 +274,17 @@ pub fn fold(
                 }
             },
             EventPayload::GraphRevisionAccepted { graph: g, .. } => graph = Some((**g).clone()),
-            EventPayload::LoopIterationStarted { loop_id, item, index } => {
+            EventPayload::LoopIterationStarted {
+                loop_id,
+                item,
+                index,
+            } => {
                 let loop_id = loop_id.as_str().to_string();
                 // Leaving a previous iteration of the same loop.
                 while scopes.last().is_some_and(|s| match s {
-                    Scope::Milestone { loop_id: l, .. } | Scope::Task { loop_id: l, .. } => *l == loop_id,
+                    Scope::Milestone { loop_id: l, .. } | Scope::Task { loop_id: l, .. } => {
+                        *l == loop_id
+                    },
                 }) {
                     scopes.pop();
                 }
@@ -320,13 +349,21 @@ pub fn fold(
                     if m.tasks[index].status == RoadmapStatus::Pending {
                         m.tasks[index].status = RoadmapStatus::Running;
                     }
-                    scopes.push(Scope::Task { loop_id, milestone, index });
+                    scopes.push(Scope::Task {
+                        loop_id,
+                        milestone,
+                        index,
+                    });
                 }
             },
-            EventPayload::LoopIterationCompleted { loop_id, outcome, .. } => {
+            EventPayload::LoopIterationCompleted {
+                loop_id, outcome, ..
+            } => {
                 let loop_id = loop_id.as_str();
                 if let Some(pos) = scopes.iter().rposition(|s| match s {
-                    Scope::Milestone { loop_id: l, .. } | Scope::Task { loop_id: l, .. } => l == loop_id,
+                    Scope::Milestone { loop_id: l, .. } | Scope::Task { loop_id: l, .. } => {
+                        l == loop_id
+                    },
                 }) {
                     if let Scope::Milestone { index, .. } = &scopes[pos] {
                         mission.milestones[*index].finished = Some(outcome.as_str().to_string());
@@ -337,7 +374,9 @@ pub fn fold(
             EventPayload::LoopCompleted { loop_id, .. } => {
                 let loop_id = loop_id.as_str();
                 if let Some(pos) = scopes.iter().position(|s| match s {
-                    Scope::Milestone { loop_id: l, .. } | Scope::Task { loop_id: l, .. } => l == loop_id,
+                    Scope::Milestone { loop_id: l, .. } | Scope::Task { loop_id: l, .. } => {
+                        l == loop_id
+                    },
                 }) {
                     scopes.truncate(pos);
                 }
@@ -372,10 +411,14 @@ pub fn fold(
                 placed.insert(id, scope);
             },
             EventPayload::HumanInputRequested { node, .. } => {
-                with_step(&mut mission, &placed, node.as_str(), |s| s.state = StepState::WaitingOnYou);
+                with_step(&mut mission, &placed, node.as_str(), |s| {
+                    s.state = StepState::WaitingOnYou
+                });
             },
             EventPayload::HumanInputResolved { node, .. } => {
-                with_step(&mut mission, &placed, node.as_str(), |s| s.state = StepState::Working);
+                with_step(&mut mission, &placed, node.as_str(), |s| {
+                    s.state = StepState::Working
+                });
             },
             EventPayload::OutcomeReported { node, summary, .. } => {
                 let summary = summary.trim().to_string();
@@ -387,11 +430,15 @@ pub fn fold(
             },
             EventPayload::StageCompleted { node, outcome } => {
                 let outcome = outcome.as_str().to_string();
-                with_step(&mut mission, &placed, node.as_str(), |s| s.state = StepState::Done(outcome.clone()));
+                with_step(&mut mission, &placed, node.as_str(), |s| {
+                    s.state = StepState::Done(outcome.clone())
+                });
             },
             EventPayload::StageFailed { node, reason, .. } => {
                 let reason = reason.clone();
-                with_step(&mut mission, &placed, node.as_str(), |s| s.state = StepState::Failed(reason.clone()));
+                with_step(&mut mission, &placed, node.as_str(), |s| {
+                    s.state = StepState::Failed(reason.clone())
+                });
             },
             EventPayload::TaskStatusChanged { task_id, to, .. } => {
                 if let Some(task) = task_mut(&mut mission, task_id) {
@@ -404,7 +451,11 @@ pub fn fold(
                     task.verified = true;
                 }
             },
-            EventPayload::TaskDiscovered { task_id, discovered_from, title } => {
+            EventPayload::TaskDiscovered {
+                task_id,
+                discovered_from,
+                title,
+            } => {
                 if task_mut(&mut mission, task_id).is_none() {
                     let milestone = mission
                         .milestones
@@ -425,7 +476,9 @@ pub fn fold(
             },
             EventPayload::RunCompleted { .. } => mission.end = Some(RunEnd::Completed),
             EventPayload::RunFailed { error } => mission.end = Some(RunEnd::Failed(error.clone())),
-            EventPayload::RunAborted { reason } => mission.end = Some(RunEnd::Aborted(reason.clone())),
+            EventPayload::RunAborted { reason } => {
+                mission.end = Some(RunEnd::Aborted(reason.clone()))
+            },
             _ => {},
         }
     }
@@ -453,7 +506,9 @@ fn steps_at<'a>(mission: &'a mut Mission, scope: Option<&Scope>) -> &'a mut Vec<
     match scope {
         None => &mut mission.steps,
         Some(Scope::Milestone { index, .. }) => &mut mission.milestones[*index].steps,
-        Some(Scope::Task { milestone, index, .. }) => &mut mission.milestones[*milestone].tasks[*index].steps,
+        Some(Scope::Task {
+            milestone, index, ..
+        }) => &mut mission.milestones[*milestone].tasks[*index].steps,
     }
 }
 
@@ -466,7 +521,11 @@ fn with_step(
     let Some(scope) = placed.get(node) else {
         return;
     };
-    if let Some(step) = steps_at(mission, scope.as_ref()).iter_mut().rev().find(|s| s.node == node) {
+    if let Some(step) = steps_at(mission, scope.as_ref())
+        .iter_mut()
+        .rev()
+        .find(|s| s.node == node)
+    {
         f(step);
     }
 }
@@ -511,7 +570,12 @@ fn now(mission: &Mission) -> Option<String> {
             return Some(format!("{} › {}", m.title, s.label));
         }
     }
-    mission.steps.iter().rev().find(|s| live(s)).map(|s| s.label.clone())
+    mission
+        .steps
+        .iter()
+        .rev()
+        .find(|s| live(s))
+        .map(|s| s.label.clone())
 }
 
 #[cfg(test)]
@@ -532,10 +596,16 @@ mod tests {
         s.try_into().unwrap()
     }
     fn enter(n: &str, attempt: u32) -> EventPayload {
-        EventPayload::StageEntered { node: key(n), attempt }
+        EventPayload::StageEntered {
+            node: key(n),
+            attempt,
+        }
     }
     fn done(n: &str, o: &str) -> EventPayload {
-        EventPayload::StageCompleted { node: key(n), outcome: out(o) }
+        EventPayload::StageCompleted {
+            node: key(n),
+            outcome: out(o),
+        }
     }
     fn iter(loop_id: &str, item: &str, index: u32) -> EventPayload {
         EventPayload::LoopIterationStarted {
@@ -554,7 +624,11 @@ mod tests {
                 graph_hash: ContentHash::compute(b"g"),
             },
             enter("milestone_loop", 1),
-            iter("milestone_loop", "id = 'm1'\ntitle = 'Timer core'\ntasks = []", 0),
+            iter(
+                "milestone_loop",
+                "id = 'm1'\ntitle = 'Timer core'\ntasks = []",
+                0,
+            ),
             enter("task_loop", 1),
             iter("task_loop", "id = 't1'\ntitle = 'Countdown'", 0),
             enter("spec_task", 1),
@@ -562,15 +636,31 @@ mod tests {
             enter("impl_task", 1),
             done("impl_task", "pass"),
             enter("verify_task", 1),
-            EventPayload::StageFailed { node: key("verify_task"), reason: "2 tests fail".into(), retry_available: true },
+            EventPayload::StageFailed {
+                node: key("verify_task"),
+                reason: "2 tests fail".into(),
+                retry_available: true,
+            },
             enter("impl_task", 2),
             done("impl_task", "pass"),
             enter("verify_task", 2),
             done("verify_task", "pass"),
-            EventPayload::TaskVerified { task_id: "t1".into(), node: key("verify_task"), evidence: ContentHash::compute(b"r") },
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: key("verify_task"),
+                evidence: ContentHash::compute(b"r"),
+            },
             enter("task_end", 1),
-            EventPayload::LoopIterationCompleted { loop_id: key("task_loop"), index: 0, outcome: out("completed") },
-            EventPayload::LoopIterationCompleted { loop_id: key("milestone_loop"), index: 0, outcome: out("completed") },
+            EventPayload::LoopIterationCompleted {
+                loop_id: key("task_loop"),
+                index: 0,
+                outcome: out("completed"),
+            },
+            EventPayload::LoopIterationCompleted {
+                loop_id: key("milestone_loop"),
+                index: 0,
+                outcome: out("completed"),
+            },
             enter("final_verify", 1),
         ];
         let mission = fold(&[], &events, None);
@@ -599,7 +689,9 @@ mod tests {
         let events = vec![
             iter("task_loop", "id = 't1'\ntitle = 'Only task'", 0),
             enter("impl_task", 1),
-            EventPayload::RunCompleted { terminal_node: key("end") },
+            EventPayload::RunCompleted {
+                terminal_node: key("end"),
+            },
         ];
         let mission = fold(&[], &events, None);
         assert_eq!(mission.end, Some(RunEnd::Completed));
@@ -611,13 +703,34 @@ mod tests {
     #[test]
     fn plan_stages_track_drafts_edits_and_your_approval() {
         let planning = vec![
-            EventPayload::BootstrapStageStarted { stage: BootstrapStage::Description },
-            EventPayload::BootstrapApprovalRequested { stage: BootstrapStage::Description, channel: surge_core::approvals::ApprovalChannel::Email { to_ref: "x".into() } },
-            EventPayload::BootstrapApprovalDecided { stage: BootstrapStage::Description, decision: BootstrapDecision::Edit, comment: None },
-            EventPayload::BootstrapApprovalRequested { stage: BootstrapStage::Description, channel: surge_core::approvals::ApprovalChannel::Email { to_ref: "x".into() } },
-            EventPayload::BootstrapApprovalDecided { stage: BootstrapStage::Description, decision: BootstrapDecision::Approve, comment: None },
-            EventPayload::BootstrapStageStarted { stage: BootstrapStage::Roadmap },
-            EventPayload::BootstrapApprovalRequested { stage: BootstrapStage::Roadmap, channel: surge_core::approvals::ApprovalChannel::Email { to_ref: "x".into() } },
+            EventPayload::BootstrapStageStarted {
+                stage: BootstrapStage::Description,
+            },
+            EventPayload::BootstrapApprovalRequested {
+                stage: BootstrapStage::Description,
+                channel: surge_core::approvals::ApprovalChannel::Email { to_ref: "x".into() },
+            },
+            EventPayload::BootstrapApprovalDecided {
+                stage: BootstrapStage::Description,
+                decision: BootstrapDecision::Edit,
+                comment: None,
+            },
+            EventPayload::BootstrapApprovalRequested {
+                stage: BootstrapStage::Description,
+                channel: surge_core::approvals::ApprovalChannel::Email { to_ref: "x".into() },
+            },
+            EventPayload::BootstrapApprovalDecided {
+                stage: BootstrapStage::Description,
+                decision: BootstrapDecision::Approve,
+                comment: None,
+            },
+            EventPayload::BootstrapStageStarted {
+                stage: BootstrapStage::Roadmap,
+            },
+            EventPayload::BootstrapApprovalRequested {
+                stage: BootstrapStage::Roadmap,
+                channel: surge_core::approvals::ApprovalChannel::Email { to_ref: "x".into() },
+            },
         ];
         let mission = fold(&planning, &[], None);
         assert_eq!(mission.plan[0].state, PlanState::Approved { edits: 1 });

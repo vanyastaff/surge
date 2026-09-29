@@ -58,7 +58,8 @@ pub fn assemble(
     if let Some(roadmap) = roadmap {
         for m in &roadmap.milestones {
             for t in &m.tasks {
-                let (status, verified) = ledger.get(&t.id).copied().unwrap_or((t.status, t.verified));
+                let (status, verified) =
+                    ledger.get(&t.id).copied().unwrap_or((t.status, t.verified));
                 depends.insert(t.id.clone(), t.depends_on.clone());
                 tasks.push(BacklogTask {
                     id: t.id.clone(),
@@ -81,8 +82,14 @@ pub fn assemble(
         if tasks.iter().any(|t| &t.id == id) {
             continue;
         }
-        let (status, verified) = ledger.get(id).copied().unwrap_or((RoadmapStatus::Pending, false));
-        let milestone = tasks.iter().find(|t| &t.id == from).and_then(|t| t.milestone.clone());
+        let (status, verified) = ledger
+            .get(id)
+            .copied()
+            .unwrap_or((RoadmapStatus::Pending, false));
+        let milestone = tasks
+            .iter()
+            .find(|t| &t.id == from)
+            .and_then(|t| t.milestone.clone());
         tasks.push(BacklogTask {
             id: id.clone(),
             title: title.clone(),
@@ -98,7 +105,10 @@ pub fn assemble(
             mission_ended,
         });
     }
-    let finished: HashMap<String, bool> = tasks.iter().map(|t| (t.id.clone(), done(t.status))).collect();
+    let finished: HashMap<String, bool> = tasks
+        .iter()
+        .map(|t| (t.id.clone(), done(t.status)))
+        .collect();
     for task in &mut tasks {
         if done(task.status) {
             continue;
@@ -122,7 +132,9 @@ pub async fn load(project_root: &Path, surge_home: &Path) -> Vec<BacklogTask> {
         return Vec::new();
     }
     let operations = crate::roadmap_source::operations(project_root, surge_home).await;
-    let storage = surge_persistence::runs::Storage::open(surge_home).await.ok();
+    let storage = surge_persistence::runs::Storage::open(surge_home)
+        .await
+        .ok();
     let root = surge_home.join("runs");
     let mut all = Vec::new();
     for op in operations {
@@ -148,23 +160,30 @@ pub async fn load(project_root: &Path, surge_home: &Path) -> Vec<BacklogTask> {
             .map(|row| (row.task_id, (row.status, row.verified)))
             .collect();
         let events: Vec<EventPayload> =
-            surge_persistence::runs::Storage::inspect_existing_run_events(root.clone(), op.implementation_run)
-                .await
-                .map(|e| e.into_iter().map(|e| e.payload.payload).collect())
-                .unwrap_or_default();
+            surge_persistence::runs::Storage::inspect_existing_run_events(
+                root.clone(),
+                op.implementation_run,
+            )
+            .await
+            .map(|e| e.into_iter().map(|e| e.payload.payload).collect())
+            .unwrap_or_default();
         let discovered: Vec<(String, String, String)> = events
             .iter()
             .filter_map(|e| match e {
-                EventPayload::TaskDiscovered { task_id, discovered_from, title } => {
-                    Some((task_id.clone(), title.clone(), discovered_from.clone()))
-                },
+                EventPayload::TaskDiscovered {
+                    task_id,
+                    discovered_from,
+                    title,
+                } => Some((task_id.clone(), title.clone(), discovered_from.clone())),
                 _ => None,
             })
             .collect();
         let ended = events.iter().any(|e| {
             matches!(
                 e,
-                EventPayload::RunCompleted { .. } | EventPayload::RunFailed { .. } | EventPayload::RunAborted { .. }
+                EventPayload::RunCompleted { .. }
+                    | EventPayload::RunFailed { .. }
+                    | EventPayload::RunAborted { .. }
             )
         });
         // A mission still planning has no build yet; its plan is not work
@@ -229,8 +248,19 @@ depends_on = ["a"]
     #[test]
     fn discovered_tasks_join_their_origin_milestone() {
         let run = RunId::new();
-        let discovered = vec![("c".to_string(), "Fix flaky timer".to_string(), "a".to_string())];
-        let tasks = assemble("idea", run, Some(&roadmap()), &Ledger::new(), &discovered, true);
+        let discovered = vec![(
+            "c".to_string(),
+            "Fix flaky timer".to_string(),
+            "a".to_string(),
+        )];
+        let tasks = assemble(
+            "idea",
+            run,
+            Some(&roadmap()),
+            &Ledger::new(),
+            &discovered,
+            true,
+        );
         let c = tasks.iter().find(|t| t.id == "c").unwrap();
         assert_eq!(c.discovered_from.as_deref(), Some("a"));
         assert_eq!(c.milestone.as_deref(), Some("Core"));

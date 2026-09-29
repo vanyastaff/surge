@@ -107,8 +107,17 @@ impl MemoryScreen {
         self.notes = root.as_deref().map(memory_vault::load).unwrap_or_default();
         self.edges = memory_vault::edges(&self.notes);
         self.graph = memory_vault::layout(self.notes.len(), &self.edges, GRAPH_W, GRAPH_H);
-        if self.selected.as_ref().is_none_or(|s| !self.notes.iter().any(|n| &n.slug == s)) {
-            self.selected = self.notes.iter().find(|n| !n.is_index).or(self.notes.first()).map(|n| n.slug.clone());
+        if self
+            .selected
+            .as_ref()
+            .is_none_or(|s| !self.notes.iter().any(|n| &n.slug == s))
+        {
+            self.selected = self
+                .notes
+                .iter()
+                .find(|n| !n.is_index)
+                .or(self.notes.first())
+                .map(|n| n.slug.clone());
         }
         cx.notify();
     }
@@ -151,7 +160,10 @@ impl MemoryScreen {
     }
 
     fn start_edit(&mut self, slug: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let (title, body) = match slug.as_ref().and_then(|s| self.notes.iter().find(|n| &n.slug == s)) {
+        let (title, body) = match slug
+            .as_ref()
+            .and_then(|s| self.notes.iter().find(|n| &n.slug == s))
+        {
             Some(n) => (n.title.clone(), n.body.clone()),
             None => (String::new(), String::new()),
         };
@@ -166,7 +178,9 @@ impl MemoryScreen {
 
     fn save_edit(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root(cx) else { return };
-        let Some((slug, title_input, editor)) = self.editing.clone() else { return };
+        let Some((slug, title_input, editor)) = self.editing.clone() else {
+            return;
+        };
         let title = title_input.read(cx).value().trim().to_string();
         let body = editor.read(cx).value().to_string();
         if title.is_empty() {
@@ -174,13 +188,22 @@ impl MemoryScreen {
             cx.notify();
             return;
         }
-        let existing = slug.as_ref().and_then(|s| self.notes.iter().find(|n| &n.slug == s)).cloned();
-        let file = existing
+        let existing = slug
             .as_ref()
-            .map_or_else(|| memory_vault::free_file_name(&root, &title), |n| n.file.clone());
+            .and_then(|s| self.notes.iter().find(|n| &n.slug == s))
+            .cloned();
+        let file = existing.as_ref().map_or_else(
+            || memory_vault::free_file_name(&root, &title),
+            |n| n.file.clone(),
+        );
         let dir = memory_vault::vault_dir(&root);
-        let content = memory_vault::compose(&title, &body, existing.as_ref().and_then(|n| n.stamp.as_ref()));
-        let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(&file), content));
+        let content = memory_vault::compose(
+            &title,
+            &body,
+            existing.as_ref().and_then(|n| n.stamp.as_ref()),
+        );
+        let result =
+            std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(&file), content));
         match result {
             Ok(()) => {
                 tracing::info!(file = %file, "memory note saved from the UI");
@@ -197,7 +220,9 @@ impl MemoryScreen {
     }
 
     fn delete_selected(&mut self, cx: &mut Context<Self>) {
-        let (Some(root), Some(note)) = (self.root(cx), self.selected_note().cloned()) else { return };
+        let (Some(root), Some(note)) = (self.root(cx), self.selected_note().cloned()) else {
+            return;
+        };
         let path = memory_vault::vault_dir(&root).join(&note.file);
         match std::fs::remove_file(&path) {
             Ok(()) => {
@@ -223,8 +248,9 @@ impl MemoryScreen {
             claim.text, claim.source, claim.confidence
         );
         let dir = memory_vault::vault_dir(&root);
-        let result = std::fs::create_dir_all(&dir)
-            .and_then(|()| std::fs::write(dir.join(&file), memory_vault::compose(&title, &body, None)));
+        let result = std::fs::create_dir_all(&dir).and_then(|()| {
+            std::fs::write(dir.join(&file), memory_vault::compose(&title, &body, None))
+        });
         match result {
             Ok(()) => {
                 self.selected = Some(memory_vault::parse_note(&file, "").slug);
@@ -265,7 +291,9 @@ impl MemoryScreen {
                     .rounded(px(ui::R_CONTROL))
                     .text_size(px(11.5))
                     .cursor_pointer()
-                    .when(active, |el| el.bg(theme::surface()).text_color(theme::text_primary()))
+                    .when(active, |el| {
+                        el.bg(theme::surface()).text_color(theme::text_primary())
+                    })
                     .when(!active, |el| {
                         el.text_color(theme::text_muted())
                             .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
@@ -324,16 +352,28 @@ impl MemoryScreen {
                     .hover(|s: StyleRefinement| s.bg(theme::surface()))
                     .on_click(cx.listener(move |this, _e, _w, cx| this.open_note(slug.clone(), cx)))
                     .child(
-                        Icon::new(if n.is_index { Lucide::Kanban } else { Lucide::FileText })
-                            .size(px(12.0))
-                            .text_color(if n.stamp.is_some() { theme::accent() } else { theme::text_dim() }),
+                        Icon::new(if n.is_index {
+                            Lucide::Kanban
+                        } else {
+                            Lucide::FileText
+                        })
+                        .size(px(12.0))
+                        .text_color(if n.stamp.is_some() {
+                            theme::accent()
+                        } else {
+                            theme::text_dim()
+                        }),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .text_size(px(12.0))
-                            .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                            .text_color(if active {
+                                theme::text_primary()
+                            } else {
+                                theme::text_muted()
+                            })
                             .truncate()
                             .child(n.title.clone()),
                     )
@@ -354,7 +394,11 @@ impl MemoryScreen {
                     .h(px(40.0))
                     .border_b_1()
                     .border_color(theme::hairline())
-                    .child(Icon::new(IconName::Search).size(px(12.0)).text_color(theme::text_dim()))
+                    .child(
+                        Icon::new(IconName::Search)
+                            .size(px(12.0))
+                            .text_color(theme::text_dim()),
+                    )
                     .child(
                         div().flex_1().child(
                             Input::new(self.search.as_ref().unwrap())
@@ -376,21 +420,35 @@ impl MemoryScreen {
                     .children(rows),
             )
             .child(
-                div().p(px(8.0)).border_t_1().border_color(theme::hairline()).child(
-                    Button::new("memory-new-note")
-                        .ghost()
-                        .small()
-                        .w_full()
-                        .icon(IconName::Plus)
-                        .label("New note")
-                        .on_click(cx.listener(|this, _e, window, cx| this.start_edit(None, window, cx))),
-                ),
+                div()
+                    .p(px(8.0))
+                    .border_t_1()
+                    .border_color(theme::hairline())
+                    .child(
+                        Button::new("memory-new-note")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .icon(IconName::Plus)
+                            .label("New note")
+                            .on_click(cx.listener(|this, _e, window, cx| {
+                                this.start_edit(None, window, cx)
+                            })),
+                    ),
             )
     }
 
     fn render_reader(&self, note: &Note, cx: &mut Context<Self>) -> Div {
-        let stamp_run = note.stamp.as_ref().and_then(|s| s.run.parse::<surge_core::RunId>().ok());
-        let mission = stamp_run.and_then(|run| self.state.read(cx).run_prompt(&run).map(|p| ui::headline(p, 60)));
+        let stamp_run = note
+            .stamp
+            .as_ref()
+            .and_then(|s| s.run.parse::<surge_core::RunId>().ok());
+        let mission = stamp_run.and_then(|run| {
+            self.state
+                .read(cx)
+                .run_prompt(&run)
+                .map(|p| ui::headline(p, 60))
+        });
         let slug = note.slug.clone();
         div()
             .v_flex()
@@ -419,20 +477,33 @@ impl MemoryScreen {
                                     .flex_wrap()
                                     .gap(px(6.0))
                                     .items_center()
-                                    .child(div().text_size(px(10.5)).text_color(theme::text_dim()).child(format!(".surge/memory/{}", note.file)))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .text_color(theme::text_dim())
+                                            .child(format!(".surge/memory/{}", note.file)),
+                                    )
                                     .when_some(note.stamp.clone(), |el, stamp| {
                                         let label = match &mission {
-                                            Some(m) => format!("written by “{m}” · {}", stamp.node.replace('_', " ")),
-                                            None => format!("written by a run · {}", stamp.node.replace('_', " ")),
+                                            Some(m) => format!(
+                                                "written by “{m}” · {}",
+                                                stamp.node.replace('_', " ")
+                                            ),
+                                            None => format!(
+                                                "written by a run · {}",
+                                                stamp.node.replace('_', " ")
+                                            ),
                                         };
                                         el.child(
                                             div()
                                                 .id("note-provenance")
                                                 .role(Role::Button)
                                                 .when_some(stamp_run, |el, run| {
-                                                    el.cursor_pointer().on_click(cx.listener(move |_this, _e, _w, cx| {
-                                                        cx.emit(MemoryAction::OpenRun(run));
-                                                    }))
+                                                    el.cursor_pointer().on_click(cx.listener(
+                                                        move |_this, _e, _w, cx| {
+                                                            cx.emit(MemoryAction::OpenRun(run));
+                                                        },
+                                                    ))
                                                 })
                                                 .child(ui::role_badge(label, Semantic::Agent)),
                                         )
@@ -440,7 +511,12 @@ impl MemoryScreen {
                                     .when(note.stamp.is_none() && !note.is_index, |el| {
                                         el.child(ui::role_badge("written by you", Semantic::You))
                                     })
-                                    .when(note.is_index, |el| el.child(ui::role_badge("index · not sent to runs", Semantic::External))),
+                                    .when(note.is_index, |el| {
+                                        el.child(ui::role_badge(
+                                            "index · not sent to runs",
+                                            Semantic::External,
+                                        ))
+                                    }),
                             ),
                     )
                     .child(
@@ -463,7 +539,9 @@ impl MemoryScreen {
                                     .danger()
                                     .small()
                                     .label("Delete for good")
-                                    .on_click(cx.listener(|this, _e, _w, cx| this.delete_selected(cx)))
+                                    .on_click(
+                                        cx.listener(|this, _e, _w, cx| this.delete_selected(cx)),
+                                    )
                             } else {
                                 Button::new("note-delete")
                                     .ghost()
@@ -482,12 +560,16 @@ impl MemoryScreen {
                     .text_size(px(12.5))
                     .line_height(px(20.0))
                     .text_color(theme::text_primary())
-                    .child(crate::markdown::render_markdown(&memory_vault::wikilinks_to_markdown(&note.body))),
+                    .child(crate::markdown::render_markdown(
+                        &memory_vault::wikilinks_to_markdown(&note.body),
+                    )),
             )
     }
 
     fn render_editor(&self, cx: &mut Context<Self>) -> Div {
-        let Some((slug, title, editor)) = &self.editing else { return div() };
+        let Some((slug, title, editor)) = &self.editing else {
+            return div();
+        };
         let is_new = slug.is_none();
         div()
             .v_flex()
@@ -548,7 +630,14 @@ impl MemoryScreen {
             )
     }
 
-    fn link_row(&self, id: String, title: String, slug: String, kind: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn link_row(
+        &self,
+        id: String,
+        title: String,
+        slug: String,
+        kind: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         div()
             .id(SharedString::from(id))
             .role(Role::Button)
@@ -561,9 +650,26 @@ impl MemoryScreen {
             .cursor_pointer()
             .hover(|s: StyleRefinement| s.bg(theme::surface()))
             .on_click(cx.listener(move |this, _e, _w, cx| this.open_note(slug.clone(), cx)))
-            .child(Icon::new(IconName::FileText).size(px(11.0)).text_color(theme::text_dim()))
-            .child(div().flex_1().min_w(px(0.0)).truncate().text_size(px(11.5)).text_color(theme::text_primary()).child(title))
-            .child(div().text_size(px(10.0)).text_color(theme::text_dim()).child(kind))
+            .child(
+                Icon::new(IconName::FileText)
+                    .size(px(11.0))
+                    .text_color(theme::text_dim()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_size(px(11.5))
+                    .text_color(theme::text_primary())
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme::text_dim())
+                    .child(kind),
+            )
     }
 
     fn render_links(&self, note: &Note, cx: &mut Context<Self>) -> Div {
@@ -571,7 +677,10 @@ impl MemoryScreen {
             .links
             .iter()
             .map(|l| match memory_vault::resolve(&self.notes, l) {
-                Some(i) => (self.notes[i].slug.clone(), Some(self.notes[i].title.clone())),
+                Some(i) => (
+                    self.notes[i].slug.clone(),
+                    Some(self.notes[i].title.clone()),
+                ),
                 None => (l.clone(), None),
             })
             .collect();
@@ -595,9 +704,18 @@ impl MemoryScreen {
             .collect();
 
         let mut panel = div().v_flex().gap(px(14.0));
-        let mut out = div().v_flex().gap(px(1.0)).child(ui::section_label(format!("Links · {}", outgoing.len())));
+        let mut out = div()
+            .v_flex()
+            .gap(px(1.0))
+            .child(ui::section_label(format!("Links · {}", outgoing.len())));
         if outgoing.is_empty() {
-            out = out.child(div().px(px(8.0)).text_size(px(11.0)).text_color(theme::text_dim()).child("No links. Use [[note name]]."));
+            out = out.child(
+                div()
+                    .px(px(8.0))
+                    .text_size(px(11.0))
+                    .text_color(theme::text_dim())
+                    .child("No links. Use [[note name]]."),
+            );
         }
         for (i, (slug, title)) in outgoing.into_iter().enumerate() {
             match title {
@@ -609,17 +727,40 @@ impl MemoryScreen {
                             .gap(px(8.0))
                             .px(px(8.0))
                             .py(px(5.0))
-                            .child(Icon::new(IconName::FileText).size(px(11.0)).text_color(theme::text_dim()))
-                            .child(div().text_size(px(11.5)).text_color(theme::text_dim()).child(slug))
-                            .child(div().text_size(px(10.0)).text_color(theme::warning()).child("not written yet")),
+                            .child(
+                                Icon::new(IconName::FileText)
+                                    .size(px(11.0))
+                                    .text_color(theme::text_dim()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(theme::text_dim())
+                                    .child(slug),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(theme::warning())
+                                    .child("not written yet"),
+                            ),
                     )
                 },
             }
         }
         panel = panel.child(out);
-        let mut backs = div().v_flex().gap(px(1.0)).child(ui::section_label(format!("Backlinks · {}", back.len())));
+        let mut backs = div()
+            .v_flex()
+            .gap(px(1.0))
+            .child(ui::section_label(format!("Backlinks · {}", back.len())));
         if back.is_empty() {
-            backs = backs.child(div().px(px(8.0)).text_size(px(11.0)).text_color(theme::text_dim()).child("Nothing links here yet."));
+            backs = backs.child(
+                div()
+                    .px(px(8.0))
+                    .text_size(px(11.0))
+                    .text_color(theme::text_dim())
+                    .child("Nothing links here yet."),
+            );
         }
         for (i, (slug, title)) in back.into_iter().enumerate() {
             backs = backs.child(self.link_row(format!("back-{i}"), title, slug, "", cx));
@@ -632,16 +773,19 @@ impl MemoryScreen {
                     .gap(px(6.0))
                     .child(ui::section_label("Tags"))
                     .child(
-                        div()
-                            .h_flex()
-                            .flex_wrap()
-                            .gap(px(5.0))
-                            .children(note.tags.iter().map(|t| ui::role_badge(format!("#{t}"), Semantic::Plan))),
+                        div().h_flex().flex_wrap().gap(px(5.0)).children(
+                            note.tags
+                                .iter()
+                                .map(|t| ui::role_badge(format!("#{t}"), Semantic::Plan)),
+                        ),
                     ),
             );
         }
         if !related.is_empty() {
-            let mut rel = div().v_flex().gap(px(1.0)).child(ui::section_label("Same tags"));
+            let mut rel = div()
+                .v_flex()
+                .gap(px(1.0))
+                .child(ui::section_label("Same tags"));
             for (i, (slug, title)) in related.into_iter().enumerate() {
                 rel = rel.child(self.link_row(format!("rel-{i}"), title, slug, "", cx));
             }
@@ -659,7 +803,12 @@ impl MemoryScreen {
                 .flex()
                 .gap(px(18.0))
                 .items_start()
-                .child(div().flex_1().min_w(px(0.0)).child(self.render_reader(&note, cx)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(self.render_reader(&note, cx)),
+                )
                 .child(
                     ui::panel()
                         .w(px(260.0))
@@ -700,7 +849,11 @@ impl MemoryScreen {
                     .h_full()
                     .overflow_y_scroll()
                     .children(self.note.clone().map(|n| {
-                        div().pb(px(10.0)).text_size(px(11.5)).text_color(theme::error()).child(n)
+                        div()
+                            .pb(px(10.0))
+                            .text_size(px(11.5))
+                            .text_color(theme::error())
+                            .child(n)
                     }))
                     .child(center),
             )
@@ -727,8 +880,11 @@ impl MemoryScreen {
             |_b, _w, _cx| {},
             move |bounds, _p, window, _cx| {
                 for &(a, b, kind) in &edges {
-                    let (Some(&(x1, y1)), Some(&(x2, y2))) = (pos.get(a), pos.get(b)) else { continue };
-                    let mut path = PathBuilder::stroke(px(if kind == EdgeKind::Link { 1.4 } else { 1.0 }));
+                    let (Some(&(x1, y1)), Some(&(x2, y2))) = (pos.get(a), pos.get(b)) else {
+                        continue;
+                    };
+                    let mut path =
+                        PathBuilder::stroke(px(if kind == EdgeKind::Link { 1.4 } else { 1.0 }));
                     path.move_to(point(bounds.origin.x + px(x1), bounds.origin.y + px(y1)));
                     path.line_to(point(bounds.origin.x + px(x2), bounds.origin.y + px(y2)));
                     if let Ok(p) = path.build() {
@@ -751,7 +907,11 @@ impl MemoryScreen {
                 let (x, y) = self.graph[i];
                 let r = 5.0 + (degree[i] as f32).min(6.0) * 1.5;
                 let active = selected.as_deref() == Some(note.slug.as_str());
-                let color = if note.stamp.is_some() { theme::accent() } else { theme::violet() };
+                let color = if note.stamp.is_some() {
+                    theme::accent()
+                } else {
+                    theme::violet()
+                };
                 let slug = note.slug.clone();
                 div()
                     .id(SharedString::from(format!("graph-note-{}", note.slug)))
@@ -772,7 +932,11 @@ impl MemoryScreen {
                             .rounded_full()
                             .bg(theme::tint(color))
                             .border_1()
-                            .border_color(if active { theme::text_primary() } else { theme::stroke(color) })
+                            .border_color(if active {
+                                theme::text_primary()
+                            } else {
+                                theme::stroke(color)
+                            })
                             .child(div().size_full().rounded_full().bg(color.opacity(0.55))),
                     )
                     .child(
@@ -780,7 +944,11 @@ impl MemoryScreen {
                             .max_w(px(140.0))
                             .truncate()
                             .text_size(px(10.5))
-                            .text_color(if active { theme::text_primary() } else { theme::text_muted() })
+                            .text_color(if active {
+                                theme::text_primary()
+                            } else {
+                                theme::text_muted()
+                            })
                             .child(note.title.clone()),
                     )
             })
@@ -796,12 +964,44 @@ impl MemoryScreen {
                     .py(px(10.0))
                     .border_b_1()
                     .border_color(theme::hairline())
-                    .child(ui::section_label(format!("{} notes · {} connections", self.notes.len(), self.edges.len())))
+                    .child(ui::section_label(format!(
+                        "{} notes · {} connections",
+                        self.notes.len(),
+                        self.edges.len()
+                    )))
                     .child(div().flex_1())
-                    .child(div().h_flex().gap(px(6.0)).items_center().child(div().w(px(16.0)).h(px(2.0)).bg(link)).child(ui::meta("link")))
-                    .child(div().h_flex().gap(px(6.0)).items_center().child(div().w(px(16.0)).h(px(1.0)).bg(tag)).child(ui::meta("same tag")))
-                    .child(div().h_flex().gap(px(6.0)).items_center().child(ui::status_dot(theme::accent())).child(ui::meta("written by a run")))
-                    .child(div().h_flex().gap(px(6.0)).items_center().child(ui::status_dot(theme::violet())).child(ui::meta("written by you"))),
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(6.0))
+                            .items_center()
+                            .child(div().w(px(16.0)).h(px(2.0)).bg(link))
+                            .child(ui::meta("link")),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(6.0))
+                            .items_center()
+                            .child(div().w(px(16.0)).h(px(1.0)).bg(tag))
+                            .child(ui::meta("same tag")),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(6.0))
+                            .items_center()
+                            .child(ui::status_dot(theme::accent()))
+                            .child(ui::meta("written by a run")),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(6.0))
+                            .items_center()
+                            .child(ui::status_dot(theme::violet()))
+                            .child(ui::meta("written by you")),
+                    ),
             )
             .child(
                 div()
@@ -904,12 +1104,24 @@ impl Render for MemoryScreen {
         let subtitle = Some(SharedString::from(if notes == 0 {
             "What every mission knows about this project before it starts.".to_string()
         } else {
-            format!("{notes} notes · {written_by_runs} written by missions · read by every new mission")
+            format!(
+                "{notes} notes · {written_by_runs} written by missions · read by every new mission"
+            )
         }));
         let body: AnyElement = match self.mode {
             Mode::Notes => self.render_notes(window, cx).into_any_element(),
-            Mode::Graph => div().id("memory-graph-scroll").flex_1().overflow_y_scroll().child(self.render_graph(cx)).into_any_element(),
-            Mode::Learned => div().id("memory-learned").flex_1().overflow_y_scroll().child(self.render_learned(cx)).into_any_element(),
+            Mode::Graph => div()
+                .id("memory-graph-scroll")
+                .flex_1()
+                .overflow_y_scroll()
+                .child(self.render_graph(cx))
+                .into_any_element(),
+            Mode::Learned => div()
+                .id("memory-learned")
+                .flex_1()
+                .overflow_y_scroll()
+                .child(self.render_learned(cx))
+                .into_any_element(),
         };
         div()
             .size_full()

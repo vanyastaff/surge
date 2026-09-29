@@ -30,7 +30,9 @@ fn stage_name(stage: BootstrapStage) -> &'static str {
 }
 
 fn non_empty(text: Option<&str>) -> Option<String> {
-    text.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
+    text.map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
 }
 
 /// Decisions recorded in one run's events (`(timestamp_ms, payload)`).
@@ -41,7 +43,11 @@ pub fn decisions_in(run: RunId, events: &[(i64, EventPayload)]) -> Vec<Decision>
     let mut out = Vec::new();
     for (at_ms, event) in events {
         match event {
-            EventPayload::BootstrapApprovalDecided { stage, decision, comment } => {
+            EventPayload::BootstrapApprovalDecided {
+                stage,
+                decision,
+                comment,
+            } => {
                 let (verb, role) = match decision {
                     BootstrapDecision::Approve => ("Approved", Semantic::Verified),
                     BootstrapDecision::Edit => ("Sent back", Semantic::You),
@@ -61,7 +67,9 @@ pub fn decisions_in(run: RunId, events: &[(i64, EventPayload)]) -> Vec<Decision>
                     .or_else(|| non_empty(response.as_str()));
                 let step = node.as_str().replace('_', " ");
                 let (what, role) = match outcome {
-                    Some(o) if o.contains("approve") || o == "pass" => (format!("Approved {step}"), Semantic::Verified),
+                    Some(o) if o.contains("approve") || o == "pass" => {
+                        (format!("Approved {step}"), Semantic::Verified)
+                    },
                     Some(o) if o.contains("reject") || o.contains("abort") => {
                         (format!("Rejected {step}"), Semantic::Failure)
                     },
@@ -98,8 +106,10 @@ pub async fn recent(runs: Vec<RunId>, limit: usize) -> Vec<Decision> {
         else {
             continue;
         };
-        let events: Vec<(i64, EventPayload)> =
-            events.into_iter().map(|e| (e.timestamp_ms, e.payload.payload)).collect();
+        let events: Vec<(i64, EventPayload)> = events
+            .into_iter()
+            .map(|e| (e.timestamp_ms, e.payload.payload))
+            .collect();
         all.extend(decisions_in(run, &events));
     }
     all.sort_by_key(|d| std::cmp::Reverse(d.at_ms));

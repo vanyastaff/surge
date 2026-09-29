@@ -204,13 +204,21 @@ mod tests {
         }
         recent.touch("keep", Path::new("/p/keep"));
 
-        let keep = recent.projects.iter().find(|p| p.path == Path::new("/p/keep"));
+        let keep = recent
+            .projects
+            .iter()
+            .find(|p| p.path == Path::new("/p/keep"));
         assert!(keep.is_some_and(|p| p.pinned), "re-opening must not unpin");
         let unpinned = recent.projects.iter().filter(|p| !p.pinned).count();
         assert_eq!(unpinned, RecentProjects::MAX_UNPINNED);
         // The newest unpinned entries survive; the oldest aged out.
         let last = RecentProjects::MAX_UNPINNED + 4;
-        assert!(recent.projects.iter().any(|p| p.path == Path::new(&format!("/p/{last}"))));
+        assert!(
+            recent
+                .projects
+                .iter()
+                .any(|p| p.path == Path::new(&format!("/p/{last}")))
+        );
         assert!(!recent.projects.iter().any(|p| p.path == Path::new("/p/0")));
     }
     use super::*;

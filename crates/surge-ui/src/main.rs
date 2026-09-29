@@ -9,8 +9,8 @@
 mod actions;
 mod agent_usage;
 mod app;
-mod assets;
 mod app_state;
+mod assets;
 mod backlog_source;
 mod command_palette;
 mod config_edit;

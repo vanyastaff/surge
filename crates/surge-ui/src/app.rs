@@ -963,7 +963,9 @@ impl SurgeApp {
         if !path.is_dir() {
             tracing::warn!(path = %path.display(), "project folder not found");
             self.pending_notifications
-                .push(SurgeNotification::project_missing(&path.display().to_string()));
+                .push(SurgeNotification::project_missing(
+                    &path.display().to_string(),
+                ));
             if let AppMode::Welcome(welcome) = &self.mode {
                 welcome.update(cx, |w, cx| w.reload(cx));
             }
@@ -1452,7 +1454,9 @@ impl SurgeApp {
                 this.close_palette(cx);
                 match *event {
                     PaletteEvent::Dismiss => {},
-                    PaletteEvent::Run(PaletteCommand::Navigate(screen)) => this.navigate(screen, cx),
+                    PaletteEvent::Run(PaletteCommand::Navigate(screen)) => {
+                        this.navigate(screen, cx)
+                    },
                     PaletteEvent::Run(PaletteCommand::ToggleSidebar) => this.toggle_sidebar(cx),
                     PaletteEvent::Run(PaletteCommand::OpenProject) => {
                         this.handle_welcome_event(WelcomeEvent::BrowseProject, cx);
@@ -1570,17 +1574,19 @@ impl SurgeApp {
             },
             Screen::Runs => {
                 let state = self.state.clone();
-                let s = self
-                    .runs_screen
-                    .get_or_insert_with(|| {
-                        let r = cx.new(|cx| RunsScreen::new(state, cx));
-                        cx.subscribe(&r, |this: &mut Self, _r, event: &RunsEvent, cx| match event {
-                            RunsEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                let s =
+                    self.runs_screen
+                        .get_or_insert_with(|| {
+                            let r = cx.new(|cx| RunsScreen::new(state, cx));
+                            cx.subscribe(&r, |this: &mut Self, _r, event: &RunsEvent, cx| {
+                                match event {
+                                    RunsEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                                }
+                            })
+                            .detach();
+                            r
                         })
-                        .detach();
-                        r
-                    })
-                    .clone();
+                        .clone();
                 // Apply a parked deep-link selection now that the screen
                 // entity is guaranteed to exist.
                 if let Some(run_id) = self.pending_run_selection.take() {
@@ -1592,9 +1598,14 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let s = self.memory.get_or_insert_with(|| {
                     let m = cx.new(|cx| MemoryScreen::new(state, cx));
-                    cx.subscribe(&m, |this: &mut Self, _m, event: &MemoryAction, cx| match event {
-                        MemoryAction::OpenRun(run_id) => this.open_run_cockpit(Some(*run_id), cx),
-                    })
+                    cx.subscribe(
+                        &m,
+                        |this: &mut Self, _m, event: &MemoryAction, cx| match event {
+                            MemoryAction::OpenRun(run_id) => {
+                                this.open_run_cockpit(Some(*run_id), cx)
+                            },
+                        },
+                    )
                     .detach();
                     m
                 });
@@ -1604,9 +1615,12 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let s = self.roadmap.get_or_insert_with(|| {
                     let r = cx.new(|cx| RoadmapScreen::new(state, cx));
-                    cx.subscribe(&r, |this: &mut Self, _r, event: &RoadmapEvent, cx| match event {
-                        RoadmapEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
-                    })
+                    cx.subscribe(
+                        &r,
+                        |this: &mut Self, _r, event: &RoadmapEvent, cx| match event {
+                            RoadmapEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                        },
+                    )
                     .detach();
                     r
                 });
