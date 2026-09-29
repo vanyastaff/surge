@@ -670,7 +670,7 @@ fn export_sessions(
 
 fn show_budget_status(format: OutputFormat) -> Result<()> {
     // Load config to get budget settings
-    let mut config = SurgeConfig::load_or_default()?;
+    let mut config = SurgeConfig::discover()?;
     config.apply_env_overrides();
 
     let daily_budget_usd = config.analytics.budget_usd;

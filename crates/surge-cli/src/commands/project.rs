@@ -112,7 +112,7 @@ fn load_config_for_root(project_root: &Path) -> Result<SurgeConfig> {
     if config_path.exists() {
         return SurgeConfig::load(&config_path).map_err(Into::into);
     }
-    SurgeConfig::load_or_default().map_err(Into::into)
+    SurgeConfig::discover().map_err(Into::into)
 }
 
 async fn describe_with_mode(

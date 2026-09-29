@@ -11,7 +11,7 @@ pub enum ConfigCommands {
 pub fn run(command: ConfigCommands) -> Result<()> {
     match command {
         ConfigCommands::Show => {
-            let mut config = SurgeConfig::load_or_default()?;
+            let mut config = SurgeConfig::discover()?;
             config.apply_env_overrides();
 
             println!("⚡ Surge Configuration\n");

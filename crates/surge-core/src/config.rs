@@ -1143,8 +1143,19 @@ impl SurgeConfig {
         let content = std::fs::read_to_string(path).map_err(|e| {
             crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display()))
         })?;
-        let config: Self = toml::from_str(&content).map_err(|_| {
-            crate::SurgeError::Config(format!("Failed to parse {}: invalid configuration; Telegram requires bot_token_env, never inline credentials", path.display()))
+        let config: Self = toml::from_str(&content).map_err(|e| {
+            // `toml`'s Display echoes source snippets, which could carry an inline
+            // credential; report only the message and position.
+            let (line, col) = e.span().map_or((0, 0), |sp| {
+                let before = &content[..sp.start.min(content.len())];
+                let line = before.matches('\n').count() + 1;
+                (line, before.len() - before.rfind('\n').map_or(0, |n| n + 1) + 1)
+            });
+            crate::SurgeError::Config(format!(
+                "Failed to parse {} at line {line}, column {col}: {} (credentials must be referenced via *_env, never inlined)",
+                path.display(),
+                e.message()
+            ))
         })?;
         config.validate()?;
         Ok(config)
@@ -1317,12 +1328,6 @@ impl SurgeConfig {
         Ok(())
     }
 
-    /// Load config by discovering surge.toml, or return default if not found.
-    /// This combines discovery and default fallback in a single convenient method.
-    pub fn load_or_default() -> Result<Self, crate::SurgeError> {
-        Self::discover()
-    }
-
     /// Find surge.toml by walking up from the given directory.
     fn find_config_file(start_dir: &Path) -> Result<PathBuf, crate::SurgeError> {
         let mut current = start_dir;
@@ -1455,7 +1460,7 @@ max_parallel = 2
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = SurgeConfig::load_or_default().unwrap();
+        let config = SurgeConfig::discover().unwrap();
         assert_eq!(config.default_agent, "custom-agent");
         assert_eq!(config.pipeline.max_qa_iterations, 5);
         assert_eq!(config.pipeline.max_parallel, 2);
@@ -1466,7 +1471,7 @@ max_parallel = 2
         fs::create_dir_all(&no_config_dir).unwrap();
         std::env::set_current_dir(&no_config_dir).unwrap();
 
-        let config = SurgeConfig::load_or_default().unwrap();
+        let config = SurgeConfig::discover().unwrap();
         assert_eq!(config.default_agent, "claude-acp");
         assert_eq!(config.pipeline.max_qa_iterations, 10);
         assert_eq!(config.pipeline.max_parallel, 3);

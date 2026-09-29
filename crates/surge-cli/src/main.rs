@@ -413,7 +413,7 @@ async fn run_command(command: Commands) -> Result<()> {
             std::process::exit(status);
         },
         Commands::Ping { agent } => {
-            let mut config = SurgeConfig::load_or_default()?;
+            let mut config = SurgeConfig::discover()?;
             config.apply_env_overrides();
 
             // The unified catalog: user `[agents.*]` over builtins, so a
@@ -463,7 +463,7 @@ async fn run_command(command: Commands) -> Result<()> {
         },
 
         Commands::Prompt { message, agent } => {
-            let mut config = SurgeConfig::load_or_default()?;
+            let mut config = SurgeConfig::discover()?;
             config.apply_env_overrides();
 
             // Same unified catalog as `ping`: builtin + user entries.
@@ -575,7 +575,7 @@ async fn run_command(command: Commands) -> Result<()> {
         },
 
         Commands::Tracker { cmd } => {
-            let config = SurgeConfig::load_or_default()?;
+            let config = SurgeConfig::discover()?;
             commands::tracker::run(cmd, config).await?;
         },
 

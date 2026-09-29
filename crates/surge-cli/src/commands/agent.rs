@@ -32,7 +32,7 @@ pub enum AgentCommands {
 pub async fn run(command: AgentCommands) -> Result<()> {
     match command {
         AgentCommands::List => {
-            let mut config = SurgeConfig::load_or_default()?;
+            let mut config = SurgeConfig::discover()?;
             config.apply_env_overrides();
 
             let registry = Registry::builtin();
@@ -152,7 +152,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             println!("  ✗ = missing");
         },
         AgentCommands::Test { name } => {
-            let mut config = SurgeConfig::load_or_default()?;
+            let mut config = SurgeConfig::discover()?;
             config.apply_env_overrides();
 
             // Unified catalog: a builtin provider is testable without first
@@ -199,7 +199,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             }
         },
         AgentCommands::Status => {
-            let mut config = SurgeConfig::load_or_default()?;
+            let mut config = SurgeConfig::discover()?;
             config.apply_env_overrides();
 
             // Show the unified catalog (builtins + user entries), not only

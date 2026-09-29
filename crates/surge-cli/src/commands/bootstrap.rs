@@ -474,7 +474,7 @@ fn load_project_config_for_current_repo() -> Result<(SurgeConfig, PathBuf)> {
         SurgeConfig::load(&config_path)
             .with_context(|| format!("load {}", config_path.display()))?
     } else {
-        SurgeConfig::load_or_default().context("load surge config")?
+        SurgeConfig::discover().context("load surge config")?
     };
     Ok((config, project_root))
 }
