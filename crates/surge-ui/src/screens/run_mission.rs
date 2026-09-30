@@ -1,15 +1,19 @@
 //! Overview tab: the mission level by level, each with its own flow.
 //!
 //! Plan (your approvals) → milestones (their own steps around the task
-//! loop) → tasks (their own steps, retries visible) → final steps → result.
+//! loop) → tasks → recorded subtasks (each with its own steps) → final steps → result.
 //! Folded by [`crate::mission::fold`] from the recorded events; reloaded
 //! when the run's event sequence moves.
 
+use std::collections::BTreeSet;
+
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use surge_core::roadmap::{MilestoneId, RoadmapTaskId};
 use surge_core::roadmap::{RoadmapArtifact, RoadmapStatus};
 use surge_core::{BootstrapStage, EventPayload, RunId};
 
@@ -56,6 +60,12 @@ async fn load(runs: MissionRuns) -> Result<Mission, String> {
     Ok(mission::fold(&planning, &implementation, roadmap.as_ref()))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct StepOccurrence {
+    scope: Vec<usize>,
+    index: usize,
+}
+
 pub(super) struct MissionPanel {
     runs: MissionRuns,
     mission: Option<Mission>,
@@ -63,16 +73,26 @@ pub(super) struct MissionPanel {
     generation: u64,
     /// Event count the current fold reflects.
     loaded_seq: Option<String>,
+    scope: Vec<usize>,
+    requested_task: Option<(MilestoneId, RoadmapTaskId)>,
+    expanded_steps: BTreeSet<StepOccurrence>,
 }
 
 impl MissionPanel {
-    pub(super) fn new(runs: MissionRuns, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        runs: MissionRuns,
+        requested_task: Option<(MilestoneId, RoadmapTaskId)>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut panel = Self {
             runs,
             mission: None,
             error: None,
             generation: 0,
             loaded_seq: None,
+            scope: Vec::new(),
+            requested_task,
+            expanded_steps: Default::default(),
         };
         panel.reload(cx);
         panel
@@ -103,6 +123,12 @@ impl MissionPanel {
                     }
                     match result {
                         Ok(m) => {
+                            if let Some((milestone, task)) = &panel.requested_task
+                                && let Some(path) = task_scope(&m, milestone, task)
+                            {
+                                panel.scope = path;
+                                panel.requested_task = None;
+                            }
                             panel.mission = Some(m);
                             panel.error = None;
                         },
@@ -271,6 +297,62 @@ impl MissionPanel {
             .child(row)
     }
 
+    fn render_subtask(task: &TaskView, path: &str) -> AnyElement {
+        let (state, color) = match &task.iteration {
+            mission::IterationState::Planned => ("Planned".to_string(), theme::text_muted()),
+            mission::IterationState::Running => ("Running".to_string(), theme::accent()),
+            mission::IterationState::Finished(outcome) => {
+                (format!("Process finished · {outcome}"), theme::text_muted())
+            },
+            mission::IterationState::Unfinished => {
+                ("No completion recorded".to_string(), theme::warning())
+            },
+        };
+        let ledger = match task.status {
+            RoadmapStatus::Pending => "Task status: pending",
+            RoadmapStatus::Running => "Task status: running",
+            RoadmapStatus::ReadyForVerification => "Task status: ready for verification",
+            RoadmapStatus::Completed => "Task status: completed",
+            RoadmapStatus::Failed => "Task status: failed",
+            RoadmapStatus::FailedVerification => "Task status: verification failed",
+            RoadmapStatus::Paused => "Task status: paused",
+            RoadmapStatus::Skipped => "Task status: skipped",
+        };
+        div()
+            .id(SharedString::from(path.to_string()))
+            .test_support()
+            .role(Role::Group)
+            .aria_label(format!("{}: {state}", task.title))
+            .v_flex()
+            .gap(px(8.0))
+            .p(px(12.0))
+            .rounded(px(ui::R_CONTROL))
+            .bg(theme::panel())
+            .border_l_2()
+            .border_color(color)
+            .child(
+                div()
+                    .text_size(px(14.0))
+                    .text_color(theme::text_primary())
+                    .child(task.title.clone()),
+            )
+            .child(ui::meta(state))
+            .child(ui::meta(ledger))
+            .when(task.verified, |item| {
+                item.child(ui::meta("Verification recorded"))
+            })
+            .when(!task.steps.is_empty(), |item| {
+                item.child(step_row(path, &task.steps))
+            })
+            .children(
+                task.subtasks
+                    .iter()
+                    .enumerate()
+                    .map(|(index, child)| Self::render_subtask(child, &format!("{path}-s{index}"))),
+            )
+            .into_any_element()
+    }
+
     fn render_task(&self, m: usize, t: usize, task: &TaskView) -> Div {
         let (label, role) = match task.status {
             RoadmapStatus::Completed if task.verified => ("verified", Semantic::Verified),
@@ -347,6 +429,12 @@ impl MissionPanel {
                         .pl(px(17.0))
                         .child(step_row(&format!("t{m}-{t}"), &task.steps)),
                 )
+            })
+            .when(!task.subtasks.is_empty(), |el| {
+                el.child(ui::meta("Subtasks"))
+                    .children(task.subtasks.iter().enumerate().map(|(index, child)| {
+                        Self::render_subtask(child, &format!("t{m}-{t}-s{index}"))
+                    }))
             })
     }
 
@@ -561,10 +649,288 @@ impl MissionPanel {
     }
 }
 
+/// Indices are qualified by every parent; repeated task IDs in other milestones
+/// cannot select the wrong occurrence.
+fn task_scope(
+    mission: &Mission,
+    milestone: &MilestoneId,
+    task: &RoadmapTaskId,
+) -> Option<Vec<usize>> {
+    let m = mission
+        .milestones
+        .iter()
+        .position(|item| &item.id == milestone)?;
+    let t = mission.milestones[m]
+        .tasks
+        .iter()
+        .position(|item| &item.id == task)?;
+    Some(vec![m, t])
+}
+
+fn scoped_task<'a>(mission: &'a Mission, path: &[usize]) -> Option<&'a TaskView> {
+    let mut task = mission
+        .milestones
+        .get(*path.first()?)?
+        .tasks
+        .get(*path.get(1)?)?;
+    for index in &path[2..] {
+        task = task.subtasks.get(*index)?;
+    }
+    Some(task)
+}
+
+fn process_evidence(id: String, text: String) -> impl IntoElement + use<> {
+    div()
+        .id(SharedString::from(id))
+        .test_support()
+        .role(Role::Group)
+        .aria_label(text.clone())
+        .text_size(px(13.0))
+        .text_color(theme::text_muted())
+        .child(text)
+}
+
+fn participant_text(step: &Step) -> String {
+    if step.lane == Lane::Approve {
+        return "Performed by you".into();
+    }
+    match &step.participant {
+        Some(participant) => {
+            let mut text = format!("Performed by {}", participant.profile);
+            if let Some(runtime) = &participant.runtime {
+                text.push_str(&format!(" · {runtime}"));
+            }
+            text
+        },
+        None => "Participant not recorded".into(),
+    }
+}
+
+fn session_text(step: &Step) -> String {
+    match &step.participant {
+        Some(participant) => format!(
+            "Runtime: {} · Session: {}",
+            participant.runtime.as_deref().unwrap_or("not recorded"),
+            participant.session
+        ),
+        None if step.lane == Lane::Approve => "Human decision · no agent session".into(),
+        None => "Agent session not recorded".into(),
+    }
+}
+
+fn work_details(index: usize, step: &Step) -> Div {
+    div()
+        .v_flex()
+        .gap(px(8.0))
+        .child(process_evidence(
+            format!("process-step-{index}-session"),
+            session_text(step),
+        ))
+        .child(process_evidence(
+            format!("process-step-{index}-inputs"),
+            inputs_text(step),
+        ))
+        .child(process_evidence(
+            format!("process-step-{index}-skills"),
+            skills_text(step),
+        ))
+        .child(ui::meta(format!(
+            "Recorded step: {} · attempt {}",
+            step.node, step.attempts
+        )))
+}
+
+fn inputs_text(step: &Step) -> String {
+    match &step.inputs {
+        Some(inputs) if inputs.is_empty() => "Resolved inputs: none".into(),
+        Some(inputs) => format!("Resolved inputs: {}", inputs.join(", ")),
+        None => "Resolved inputs not recorded".into(),
+    }
+}
+
+fn skills_text(step: &Step) -> String {
+    if step.skills.is_empty() {
+        "Bound skills not recorded".into()
+    } else {
+        format!("Bound skills: {}", step.skills.join(", "))
+    }
+}
+
+impl MissionPanel {
+    fn process_steps(&self, steps: &[Step], cx: &mut Context<Self>) -> Div {
+        let mut body = div().v_flex().gap(px(10.0));
+        if steps.is_empty() {
+            return body.child(ui::meta("No steps have been recorded at this level yet."));
+        }
+        for (index, step) in steps.iter().enumerate() {
+            let (status, color) = match &step.state {
+                StepState::Done(_) => ("Finished", theme::success()),
+                StepState::Failed(_) => ("Failed", theme::error()),
+                StepState::WaitingOnYou => ("Needs your decision", theme::warning()),
+                StepState::Working => ("Working", theme::accent()),
+                StepState::Unfinished => ("No completion recorded", theme::text_muted()),
+            };
+            let detail = match &step.state {
+                StepState::Failed(reason) => Some(reason.clone()),
+                _ => step.summary.clone(),
+            };
+            let occurrence = StepOccurrence {
+                scope: self.scope.clone(),
+                index,
+            };
+            let expanded = self.expanded_steps.contains(&occurrence);
+            let button_id = format!("work-details-{:?}-{index}", self.scope);
+            body = body.child(
+                ui::panel()
+                    .v_flex()
+                    .gap(px(8.0))
+                    .p(px(16.0))
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap(px(12.0))
+                            .items_center()
+                            .child(ui::meta(format!("{}", index + 1)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_size(px(16.0))
+                                    .child(step.label.clone()),
+                            )
+                            .child(ui::pill(status, color, theme::tint(color))),
+                    )
+                    .child(process_evidence(
+                        format!("process-step-{index}-participant"),
+                        participant_text(step),
+                    ))
+                    .children(detail.map(|text| div().text_size(px(14.0)).child(text)))
+                    .child(
+                        Button::new(SharedString::from(button_id.clone()))
+                            .accessibility_id(SharedString::from(button_id))
+                            .label(if expanded {
+                                "Hide work details"
+                            } else {
+                                "Work details"
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.expanded_steps.remove(&occurrence) {
+                                    this.expanded_steps.insert(occurrence.clone());
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .when(expanded, |card| card.child(work_details(index, step))),
+            );
+        }
+        body
+    }
+}
+
+impl MissionPanel {
+    fn scope_button(&self, label: String, path: Vec<usize>, cx: &mut Context<Self>) -> Button {
+        Button::new(SharedString::from(format!("process-scope-{path:?}")))
+            .label(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.scope = path.clone();
+                this.requested_task = None;
+                cx.notify();
+            }))
+    }
+
+    fn render_explorer(&self, mission: &Mission, cx: &mut Context<Self>) -> Div {
+        let mut body = div().v_flex().gap(px(16.0));
+        let mut crumbs = div()
+            .h_flex()
+            .flex_wrap()
+            .gap(px(8.0))
+            .child(self.scope_button("Mission".into(), Vec::new(), cx));
+        if let Some(&m) = self.scope.first() {
+            if let Some(milestone) = mission.milestones.get(m) {
+                crumbs = crumbs.child(self.scope_button(milestone.title.clone(), vec![m], cx));
+            }
+            for depth in 2..=self.scope.len() {
+                if let Some(task) = scoped_task(mission, &self.scope[..depth]) {
+                    crumbs = crumbs.child(self.scope_button(
+                        task.title.clone(),
+                        self.scope[..depth].to_vec(),
+                        cx,
+                    ));
+                }
+            }
+        }
+        body = body.child(crumbs);
+        if let Some((_, task)) = &self.requested_task {
+            return body
+                .child(ui::meta(format!(
+                    "This task ({task}) has no recorded execution in this mission yet."
+                )))
+                .child(self.render_mission(mission));
+        }
+        if self.scope.is_empty() {
+            let links = mission
+                .milestones
+                .iter()
+                .enumerate()
+                .map(|(index, milestone)| {
+                    self.scope_button(
+                        format!("Open milestone: {}", milestone.title),
+                        vec![index],
+                        cx,
+                    )
+                })
+                .collect::<Vec<_>>();
+            return body
+                .child(div().h_flex().flex_wrap().gap(px(8.0)).children(links))
+                .child(self.render_mission(mission));
+        }
+        let Some(milestone) = mission.milestones.get(self.scope[0]) else {
+            return body.child(ui::meta("This recorded occurrence is no longer available."));
+        };
+        let (title, steps, children) = if self.scope.len() == 1 {
+            (&milestone.title, &milestone.steps, &milestone.tasks)
+        } else if let Some(task) = scoped_task(mission, &self.scope) {
+            (&task.title, &task.steps, &task.subtasks)
+        } else {
+            return body.child(ui::meta("This recorded occurrence is no longer available."));
+        };
+        body = body
+            .child(
+                div()
+                    .text_size(px(22.0))
+                    .font_weight(FontWeight::BOLD)
+                    .child(title.clone()),
+            )
+            .child(ui::meta(
+                "Recorded process · states and reports from this execution",
+            ))
+            .child(self.process_steps(steps, cx));
+        if !children.is_empty() {
+            let links = children
+                .iter()
+                .enumerate()
+                .map(|(index, task)| {
+                    let mut path = self.scope.clone();
+                    path.push(index);
+                    self.scope_button(task.title.clone(), path, cx)
+                })
+                .collect::<Vec<_>>();
+            body = body
+                .child(ui::section_label(if self.scope.len() == 1 {
+                    "Tasks"
+                } else {
+                    "Subtasks"
+                }))
+                .child(div().v_flex().gap(px(8.0)).children(links));
+        }
+        body
+    }
+}
+
 impl Render for MissionPanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match (&self.mission, &self.error) {
-            (Some(mission), _) => self.render_mission(mission).into_any_element(),
+            (Some(mission), _) => self.render_explorer(mission, cx).into_any_element(),
             (None, Some(error)) => {
                 ui::empty_state("◌", "Could not read this run", error.clone()).into_any_element()
             },
@@ -582,5 +948,315 @@ impl Render for MissionPanel {
             .px(px(20.0))
             .py(px(16.0))
             .child(div().max_w(px(980.0)).child(content))
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_tests {
+    use super::{MissionPanel, MissionRuns};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use surge_core::keys::{NodeKey, SubgraphKey};
+    use surge_core::loop_config::IterableSource;
+    use surge_core::{ContentHash, EventPayload, RunId};
+
+    #[gpui_kit::test]
+    fn selected_mission_renders_full_subtask_title_and_recorded_state(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let key = |text: &str| text.parse::<NodeKey>().unwrap();
+        let mut graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../testdata/nested_loops_flow.toml")).unwrap();
+        let body: SubgraphKey = "task_body".parse().unwrap();
+        let child_body: SubgraphKey = "subtask_body".parse().unwrap();
+        graph
+            .subgraphs
+            .insert(child_body.clone(), graph.subgraphs[&body].clone());
+        let mut loop_node = graph.nodes[&key("milestone_loop")].clone();
+        loop_node.id = key("subtask_loop");
+        let surge_core::node::NodeConfig::Loop(config) = &mut loop_node.config else {
+            panic!("fixture outer node is a loop");
+        };
+        config.body = child_body;
+        config.iteration_var_name = "subtask".into();
+        config.iterates_over = IterableSource::Artifact {
+            node: key("spec_task"),
+            name: "spec".into(),
+            jsonpath: "spec.subtasks".into(),
+        };
+        graph
+            .subgraphs
+            .get_mut(&body)
+            .unwrap()
+            .nodes
+            .insert(loop_node.id.clone(), loop_node);
+        let title = "Create the complete keyboard interaction for the countdown timer";
+        let events = [
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(graph),
+                graph_hash: ContentHash::compute(b"subtask-ui"),
+            },
+            EventPayload::LoopIterationStarted {
+                loop_id: key("milestone_loop"),
+                item: toml::from_str("id = 'm1'\ntitle = 'Timer'\ntasks = []").unwrap(),
+                index: 0,
+            },
+            EventPayload::LoopIterationStarted {
+                loop_id: key("task_loop"),
+                item: toml::from_str("id = 't1'\ntitle = 'Build countdown'").unwrap(),
+                index: 0,
+            },
+            EventPayload::LoopIterationStarted {
+                loop_id: key("subtask_loop"),
+                item: toml::from_str(&format!("id = 'leaf'\ntitle = '{title}'")).unwrap(),
+                index: 0,
+            },
+            EventPayload::StageEntered {
+                node: key("impl_task"),
+                attempt: 1,
+            },
+        ];
+        let mut mission = crate::mission::fold(&[], &events, None);
+        let mut second = mission.milestones[0].clone();
+        second.id = "m2".into();
+        second.tasks[0].subtasks[0].title = "A different occurrence".into();
+        mission.milestones.push(second);
+        let path = super::task_scope(&mission, &"m2".into(), &"t1".into()).unwrap();
+        assert_eq!(path, vec![1, 0]);
+        assert_eq!(
+            super::scoped_task(&mission, &[1, 0, 0]).unwrap().title,
+            "A different occurrence"
+        );
+        assert_eq!(
+            super::scoped_task(&mission, &[0, 0, 0]).unwrap().title,
+            title
+        );
+        assert!(super::task_scope(&mission, &"missing".into(), &"t1".into()).is_none());
+        let panel = cx.new(|_| MissionPanel {
+            runs: MissionRuns {
+                planning: None,
+                implementation: RunId::new(),
+            },
+            mission: Some(mission),
+            error: None,
+            generation: 0,
+            loaded_seq: None,
+            scope: Vec::new(),
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("t0-0-s0").label(),
+                Some(format!("{title}: Running").as_str())
+            );
+        });
+    }
+    #[gpui_kit::test]
+    fn task_process_displays_recorded_participant_and_context(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let key = |text: &str| text.parse::<NodeKey>().unwrap();
+        let session = surge_core::SessionId::new();
+        let events = [
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(
+                    toml::from_str(include_str!("../../testdata/nested_loops_flow.toml")).unwrap(),
+                ),
+                graph_hash: ContentHash::compute(b"participant-ui"),
+            },
+            EventPayload::LoopIterationStarted {
+                loop_id: key("milestone_loop"),
+                item: toml::from_str("id = 'm1'\ntitle = 'Timer'\ntasks = []").unwrap(),
+                index: 0,
+            },
+            EventPayload::LoopIterationStarted {
+                loop_id: key("task_loop"),
+                item: toml::from_str("id = 't1'\ntitle = 'Build countdown'").unwrap(),
+                index: 0,
+            },
+            EventPayload::StageEntered {
+                node: key("impl_task"),
+                attempt: 1,
+            },
+            EventPayload::SessionOpened {
+                node: key("impl_task"),
+                session,
+                agent: "implementer@1.0".into(),
+                agent_id: Some("claude".into()),
+            },
+            EventPayload::StageInputsResolved {
+                node: key("impl_task"),
+                bindings: [(
+                    "architecture".into(),
+                    ContentHash::compute(b"secret content must not display"),
+                )]
+                .into(),
+            },
+            EventPayload::SkillBound {
+                node: key("impl_task"),
+                name: "rust-builder".into(),
+                provider: surge_core::skill::SkillProvider::ProjectDir,
+                hash: ContentHash::compute(b"skill"),
+                gate_enabled: true,
+            },
+        ];
+        let mut events = events.to_vec();
+        events.extend([
+            EventPayload::StageCompleted {
+                node: key("impl_task"),
+                outcome: "pass".parse().unwrap(),
+            },
+            EventPayload::LoopIterationCompleted {
+                loop_id: key("task_loop"),
+                index: 0,
+                outcome: "completed".parse().unwrap(),
+            },
+            EventPayload::LoopIterationStarted {
+                loop_id: key("task_loop"),
+                item: toml::from_str("id = 't2'\ntitle = 'Second task'").unwrap(),
+                index: 1,
+            },
+            EventPayload::StageEntered {
+                node: key("impl_task"),
+                attempt: 1,
+            },
+            EventPayload::SessionOpened {
+                node: key("impl_task"),
+                session: surge_core::SessionId::new(),
+                agent: "reviewer@1.0".into(),
+                agent_id: None,
+            },
+        ]);
+        let panel = cx.new(|_| MissionPanel {
+            runs: MissionRuns {
+                planning: None,
+                implementation: RunId::new(),
+            },
+            mission: Some(crate::mission::fold(&[], &events, None)),
+            error: None,
+            generation: 0,
+            loaded_seq: None,
+            scope: vec![0, 0],
+            requested_task: None,
+            expanded_steps: Default::default(),
+        });
+        let (_, window) =
+            cx.add_window_view(|window, cx| gpui_kit::component::Root::new(panel, window, cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("process-step-0-participant").label(),
+                Some("Performed by implementer@1.0 · claude")
+            );
+            window.click("work-details-[0, 0]-0", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("process-step-0-session").label(),
+                Some(format!("Runtime: claude · Session: {session}").as_str())
+            );
+            assert_eq!(
+                window.find("process-step-0-inputs").label(),
+                Some("Resolved inputs: architecture")
+            );
+            assert_eq!(
+                window.find("process-step-0-skills").label(),
+                Some("Bound skills: rust-builder")
+            );
+            window.click("work-details-[0, 0]-0", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("work-details-[0, 0]-0").label(),
+                Some("Work details")
+            );
+            window.click("work-details-[0, 0]-0", cx);
+            window.render_frame(cx);
+            window.click("process-scope-[0]", cx);
+            window.render_frame(cx);
+            window.click("process-scope-[0, 1]", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("process-step-0-participant").label(),
+                Some("Performed by reviewer@1.0")
+            );
+            assert_eq!(
+                window.find("work-details-[0, 1]-0").label(),
+                Some("Work details")
+            );
+            window.click("work-details-[0, 1]-0", cx);
+            window.render_frame(cx);
+            assert!(
+                window
+                    .find("process-step-0-session")
+                    .label()
+                    .unwrap()
+                    .starts_with("Runtime: not recorded · Session: ")
+            );
+            assert_eq!(
+                window.find("process-step-0-inputs").label(),
+                Some("Resolved inputs not recorded")
+            );
+            assert_eq!(
+                window.find("process-step-0-skills").label(),
+                Some("Bound skills not recorded")
+            );
+        });
+    }
+    #[test]
+    fn old_steps_and_human_gates_do_not_invent_agent_evidence() {
+        let key = |text: &str| text.parse::<NodeKey>().unwrap();
+        let old = crate::mission::fold(
+            &[],
+            &[EventPayload::StageEntered {
+                node: key("legacy_task"),
+                attempt: 1,
+            }],
+            None,
+        );
+        assert_eq!(
+            super::participant_text(&old.steps[0]),
+            "Participant not recorded"
+        );
+        assert_eq!(
+            super::session_text(&old.steps[0]),
+            "Agent session not recorded"
+        );
+        assert_eq!(
+            super::inputs_text(&old.steps[0]),
+            "Resolved inputs not recorded"
+        );
+        assert_eq!(
+            super::skills_text(&old.steps[0]),
+            "Bound skills not recorded"
+        );
+        let mut graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../testdata/nested_loops_flow.toml")).unwrap();
+        graph.nodes.get_mut(&key("final_spec")).unwrap().config = surge_core::node::NodeConfig::HumanGate(
+            toml::from_str("delivery_channels = []\noptions = []\nsummary = { title = 'Approve', body = 'Plan' }").unwrap());
+        let human = crate::mission::fold(
+            &[],
+            &[
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"human"),
+                },
+                EventPayload::StageEntered {
+                    node: key("final_spec"),
+                    attempt: 1,
+                },
+                EventPayload::StageInputsResolved {
+                    node: key("final_spec"),
+                    bindings: Default::default(),
+                },
+            ],
+            None,
+        );
+        assert_eq!(super::participant_text(&human.steps[0]), "Performed by you");
+        assert_eq!(
+            super::session_text(&human.steps[0]),
+            "Human decision · no agent session"
+        );
+        assert_eq!(super::inputs_text(&human.steps[0]), "Resolved inputs: none");
     }
 }

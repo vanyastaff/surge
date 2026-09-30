@@ -299,7 +299,7 @@ pub fn render_interactive(
                         .absolute()
                         .left(px(10.0))
                         .top(px(6.0))
-                        .text_size(px(9.5))
+                        .text_size(px(11.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::text_muted())
                         .child(band.title.clone()),
@@ -328,7 +328,7 @@ pub fn render_interactive(
                         .px(px(5.0))
                         .rounded_sm()
                         .bg(theme::panel_deep())
-                        .text_size(px(9.5))
+                        .text_size(px(11.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::warning())
                         .child(frame.title.clone()),
@@ -394,7 +394,7 @@ pub fn render_interactive(
                         .px(px(5.0))
                         .rounded_sm()
                         .bg(theme::panel_deep())
-                        .text_size(px(9.0))
+                        .text_size(px(10.5))
                         .text_color(wire.color)
                         .child(label.clone()),
                 )
@@ -425,10 +425,13 @@ pub fn render_interactive(
         .into_any_element()
 }
 
-fn node_box(node: Placed, selected: bool, on_select: Option<OnSelect>) -> Stateful<Div> {
+fn node_box(node: Placed, selected: bool, on_select: Option<OnSelect>) -> impl IntoElement {
     let key = node.key.clone();
+    let selector = format!("plan-node-{}", node.key);
     div()
-        .id(SharedString::from(format!("plan-node-{}", node.key)))
+        .id(SharedString::from(selector.clone()))
+        .test_support()
+        .debug_selector(move || selector.clone())
         .role(Role::Button)
         .aria_label(format!("Inspect step {}", node.title))
         .when_some(on_select, move |el, on_select| {
@@ -483,7 +486,7 @@ fn node_box(node: Placed, selected: bool, on_select: Option<OnSelect>) -> Statef
                     div()
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .text_size(px(11.5))
+                        .text_size(px(13.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme::text_primary())
                         .child(node.title),
@@ -492,7 +495,7 @@ fn node_box(node: Placed, selected: bool, on_select: Option<OnSelect>) -> Statef
                     div()
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .text_size(px(9.5))
+                        .text_size(px(11.0))
                         .text_color(theme::text_muted())
                         .child(node.subtitle),
                 ),

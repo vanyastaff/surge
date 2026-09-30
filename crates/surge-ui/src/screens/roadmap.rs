@@ -36,6 +36,12 @@ use crate::ui;
 pub enum RoadmapEvent {
     /// Go to Fleet to describe the app (empty state).
     DescribeApp,
+    /// Inspect this plan item in its owning implementation run.
+    OpenTask {
+        run: surge_core::RunId,
+        milestone: MilestoneId,
+        task: RoadmapTaskId,
+    },
 }
 
 impl EventEmitter<RoadmapEvent> for RoadmapScreen {}
@@ -645,10 +651,34 @@ impl RoadmapScreen {
                 .text_color(theme::text_dim()),
             );
 
-        div()
-            .v_flex()
-            .child(row)
-            .when(open, |el| el.child(render_task_details(task)))
+        div().v_flex().child(row).when(open, |el| {
+            let mut details = el;
+            if let Some(LoadedRoadmap {
+                origin:
+                    RoadmapOrigin::Planned {
+                        implementation_run, ..
+                    },
+                ..
+            }) = &self.roadmap
+            {
+                let event = RoadmapEvent::OpenTask {
+                    run: *implementation_run,
+                    milestone: milestone_id.clone(),
+                    task: task.id.clone(),
+                };
+                details = details.child(
+                    div().px(px(14.0)).pb(px(12.0)).child(
+                        Button::new(SharedString::from(format!(
+                            "process-{milestone_id}-{}",
+                            task.id
+                        )))
+                        .label("Open task process")
+                        .on_click(cx.listener(move |_, _, _, cx| cx.emit(event.clone()))),
+                    ),
+                );
+            }
+            details.child(render_task_details(task))
+        })
     }
 
     fn render_milestone(
@@ -1140,6 +1170,7 @@ impl Render for RoadmapScreen {
             .overflow_y_scroll()
             .bg(theme::background())
             .flex()
+            .items_start()
             .justify_center()
             .px(px(28.0))
             .pt(px(22.0))

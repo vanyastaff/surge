@@ -368,6 +368,16 @@ async fn append_loop_escalations(
 /// Returns [`StageError::Storage`] if event persistence fails.
 #[allow(clippy::too_many_lines)]
 pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
+    let mut targets = BTreeSet::new();
+    for binding in &p.agent_config.bindings {
+        if !targets.insert(&binding.target.0) {
+            return Err(StageError::Internal(format!(
+                "duplicate binding target: {}",
+                binding.target.0
+            )));
+        }
+    }
+
     // Phase 6.4: resolve bindings and prompt BEFORE building SessionConfig so
     // we can wire them into the config (not just the first message).
     let resolved_bindings =
@@ -687,6 +697,23 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 .and_then(|resolved| resolved.profile.role.min_effort.as_deref()),
         ),
     };
+
+    // Persist the complete resolved inputs, independently of the capped ACP echo.
+    // This proves resolution for this attempt, before a session can be opened.
+    p.writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::StageInputsResolved {
+                node: p.node.clone(),
+                bindings: resolved_bindings
+                    .iter()
+                    .map(|(target, content)| {
+                        (target.0.clone(), ContentHash::compute(content.as_bytes()))
+                    })
+                    .collect(),
+            },
+        ))
+        .await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
 
     let stage_context = surge_core::stage_tool::StageToolContext {
         run: p.run_id,

@@ -166,3 +166,58 @@ durable work recovery. Also avoid claims that local-first or ACP alone make Surg
 better: the same-task comparison still needs pinned versions, comparable model
 access, a shared spending ceiling, independent checks, and unsuccessful attempts
 included in the results.
+
+## Installed Factory App inspection — September 29, 2026
+
+The user installed Factory and requested direct product inspection. The installed
+`/Applications/Factory.app` reports **0.186.0** in its bundle metadata. The
+following observations add native-window evidence to the earlier documentation
+research; they do not establish execution reliability or a performance comparison.
+
+| Step | Observed in the installed app | Product implication for Surge |
+|---|---|---|
+| Session entry | A single request composer with execution target, folder, model, autonomy, interaction mode, attachments, connectors and skills. The installation had no displayed sessions. | Start with an outcome and expose detailed choices progressively. Task shape and authority are different controls. |
+| Mission Control | Mission list with All/Running/Paused/Completed filters; New Mission explains goal, approved plan, feature execution and milestone validation. The mission list was empty. | Missions should have a durable, identifiable lifecycle and an obvious entry point. Empty-state inspection does not prove the populated monitoring view. |
+| Mission setup | Continuing the introduction opens the same composer in Mission Mode. No request was submitted. | Keep entry coherent across task sizes; tell the user why a larger task needs planning and validation. |
+| Mission skills | The skill browser exposes mission-planning and define-mission-skills. Their visible instructions describe iterative investigation, worker procedures, dependency/validation readiness, milestone boundaries, and evidence handoffs. | Procedures can be inspected and grounded in an actual task. Reading these instructions is not proof the engine follows them. |
+| Mission defaults | Separate model/reasoning choices for orchestrator, worker and validator; Skip scrutiny and Skip user testing switches were both off. | Validation policy should be explicit and recorded. A setting being enabled is not evidence that its checks ran. |
+| Worktree settings | Managed worktree directory, retention limit, per-project local/shared setup profiles and a managed-worktree list. No managed worktrees were present. | Isolated execution needs a visible setup and lifecycle, not only branch creation. |
+
+The application displayed a no-paid-subscription banner with upgrade and own-API-key
+options. No purchase, credential change, provider request, worktree creation or
+mission execution was performed. Account configuration was not audited. The app
+was returned to its ordinary empty Normal Mode composer, with Auto Model and
+Autonomy Off. Settings and skills were inspected without saving changes. Native
+screens were viewed inline; no persistent screenshot set was created, so this is
+an inspection record rather than a completed screenshot audit.
+
+### What the shipped mission instructions add
+
+The inspected worker-design skill distinguishes a worker's implementation procedure
+from automatic milestone validation. It describes scrutiny and user-testing
+validators, evidence-bearing handoffs, and re-running failed validation after
+repairs. The planning skill requires executable dependency and validation readiness
+and treats a milestone as a coherent, testable vertical slice. These are bundled
+instructions, not observed completed runs.
+
+Current [Mission Control documentation](https://docs.factory.ai/missions/running-app)
+describes feature criteria and commits, worker inspection, progress and usage,
+role-specific models, and pause/replan/resume.
+[Planning and Validation](https://docs.factory.ai/missions/planning) emphasizes
+reproducible application startup and driving the real user surface.
+[Custom droids](https://docs.factory.ai/harness/subagents) documents a fresh context
+window with a dedicated prompt, model and tool policy for each invocation.
+
+### Comparison with the installed Agentlas
+
+The inspected Agentlas One surface organizes the entry experience around a
+standing team and ordinary-language delegation; Agentlas Work exposes its toolbox
+and automation setup. Factory's inspected entry and mission setup organize work
+around coding sessions and milestone delivery. This is an interface comparison,
+not proof that either product is more capable, cheaper or more reliable.
+
+For Surge, combine understandable outcome-first entry with explicit delivery
+checkpoints, parent-qualified work occurrences, scoped worker context, inspectable
+validation and steering. Adapt planning effort to task size. The roadmap/milestone/
+task/subtask flow explorer and changes to future work remain concrete acceptance
+requirements; these competitor observations do not retire them.

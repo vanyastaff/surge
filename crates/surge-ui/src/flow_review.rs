@@ -14,6 +14,8 @@ use surge_core::keys::{NodeKey, SubgraphKey};
 use surge_core::node::{Node, NodeConfig};
 use surge_core::terminal_config::TerminalKind;
 
+use crate::flow_levels::{MAX_FLOW_DEPTH, MAX_FLOW_OCCURRENCES, UnopenedReason};
+
 /// Markdown for the flow review pane: a step summary, then the source.
 pub fn flow_review_markdown(source: &str) -> String {
     let mut out = String::new();
@@ -32,6 +34,10 @@ pub fn flow_review_markdown(source: &str) -> String {
                 &graph.edges,
                 &graph.subgraphs,
                 0,
+                &mut Expansion {
+                    ancestors: Vec::new(),
+                    occurrences: 1,
+                },
             );
         },
         Err(error) => {
@@ -71,6 +77,11 @@ fn count_steps(graph: &Graph) -> StepCount {
     count
 }
 
+struct Expansion {
+    ancestors: Vec<SubgraphKey>,
+    occurrences: usize,
+}
+
 /// Walk from `start` in edge order (breadth-first) so the list reads in
 /// execution order; unreachable nodes are appended so nothing is hidden.
 fn write_steps(
@@ -80,6 +91,7 @@ fn write_steps(
     edges: &[Edge],
     subgraphs: &BTreeMap<SubgraphKey, Subgraph>,
     depth: usize,
+    expansion: &mut Expansion,
 ) {
     let mut order = Vec::new();
     let mut seen = HashSet::new();
@@ -112,31 +124,59 @@ fn write_steps(
         }
         number += 1;
         let _ = writeln!(out, "{indent}{number}. {}", describe(&key, node));
-        if let NodeConfig::Loop(l) = &node.config
-            && let Some(body) = subgraphs.get(&l.body)
-        {
-            write_steps(
-                out,
-                &body.start,
-                &body.nodes,
-                &body.edges,
-                subgraphs,
-                depth + 1,
-            );
-        }
-        if let NodeConfig::Subgraph(s) = &node.config
-            && let Some(inner) = subgraphs.get(&s.inner)
-        {
-            write_steps(
-                out,
-                &inner.start,
-                &inner.nodes,
-                &inner.edges,
-                subgraphs,
-                depth + 1,
-            );
+        let body_key = match &node.config {
+            NodeConfig::Loop(config) => Some(&config.body),
+            NodeConfig::Subgraph(config) => Some(&config.inner),
+            _ => None,
+        };
+        if let Some(key) = body_key {
+            write_body(out, key, subgraphs, depth, expansion);
         }
     }
+}
+
+fn write_body(
+    out: &mut String,
+    key: &SubgraphKey,
+    subgraphs: &BTreeMap<SubgraphKey, Subgraph>,
+    depth: usize,
+    expansion: &mut Expansion,
+) {
+    let reason = if expansion.ancestors.contains(key) {
+        Some(UnopenedReason::Recursive)
+    } else if !subgraphs.contains_key(key) {
+        Some(UnopenedReason::MissingBody)
+    } else if depth >= MAX_FLOW_DEPTH {
+        Some(UnopenedReason::DepthLimit)
+    } else if expansion.occurrences >= MAX_FLOW_OCCURRENCES {
+        Some(UnopenedReason::OccurrenceLimit)
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        let _ = writeln!(
+            out,
+            "{}- `{key}`: {}. Preview is incomplete.",
+            "   ".repeat(depth + 1),
+            reason.description()
+        );
+        return;
+    }
+    let Some(body) = subgraphs.get(key) else {
+        return;
+    };
+    expansion.occurrences += 1;
+    expansion.ancestors.push(key.clone());
+    write_steps(
+        out,
+        &body.start,
+        &body.nodes,
+        &body.edges,
+        subgraphs,
+        depth + 1,
+        expansion,
+    );
+    expansion.ancestors.pop();
 }
 
 fn describe(key: &NodeKey, node: &Node) -> String {
@@ -179,6 +219,37 @@ mod tests {
         // The comment banners of the raw file must not become headings.
         let summary = review.split("#### flow.toml").next().unwrap_or_default();
         assert!(!summary.contains("# "), "{summary}");
+    }
+
+    #[test]
+    fn recursive_link_is_reported_without_losing_reused_body_details() {
+        let mut graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../testdata/nested_loops_flow.toml")).unwrap();
+        let mut second =
+            graph.nodes[&surge_core::keys::NodeKey::try_from("milestone_loop").unwrap()].clone();
+        second.id = surge_core::keys::NodeKey::try_from("second_milestone_loop").unwrap();
+        graph.nodes.insert(second.id.clone(), second);
+        let body = graph
+            .subgraphs
+            .get_mut(&surge_core::keys::SubgraphKey::try_from("milestone_body").unwrap())
+            .unwrap();
+        let node = body
+            .nodes
+            .get_mut(&surge_core::keys::NodeKey::try_from("task_loop").unwrap())
+            .unwrap();
+        let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+            panic!("loop")
+        };
+        config.body = surge_core::keys::SubgraphKey::try_from("milestone_body").unwrap();
+        let source = toml::to_string(&graph).unwrap();
+        let review = flow_review_markdown(&source);
+        let summary = review.split("#### flow.toml").next().unwrap();
+        assert_eq!(summary.matches("**task_loop**").count(), 2);
+        assert_eq!(
+            summary.matches("recursive link; expansion stopped").count(),
+            2
+        );
+        assert!(summary.contains("Preview is incomplete"));
     }
 
     #[test]

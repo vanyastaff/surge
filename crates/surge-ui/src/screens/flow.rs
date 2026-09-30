@@ -11,9 +11,9 @@
 //! otherwise from its stored `flow` artifact — never a sample template
 //! presented as the project's plan.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
-use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::base::Selectable;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{Icon, IconName, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
@@ -104,6 +104,20 @@ struct LevelPlans {
 }
 
 impl LevelPlans {
+    fn ancestry(&self, index: usize) -> Vec<usize> {
+        let mut path = Vec::new();
+        let mut current = Some(index);
+        while let Some(index) = current {
+            let Some((level, _)) = self.levels.get(index) else {
+                break;
+            };
+            path.push(index);
+            current = level.parent;
+        }
+        path.reverse();
+        path
+    }
+
     fn new(graph: &Graph) -> Self {
         Self {
             levels: levels(graph)
@@ -144,30 +158,71 @@ enum Mode {
     Library,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct PlanTarget {
+    project: Option<PathBuf>,
+    run: surge_core::RunId,
+    decision_seq: Option<u64>,
+}
+
+impl PlanTarget {
+    fn editable(&self, state: &crate::app_state::AppState) -> bool {
+        self.project == state.project_path
+            && state.run_in_project(&self.run)
+            && state.pending_decisions().iter().any(|(run, decision)| {
+                *run == self.run
+                    && decision.node == "flow_gate"
+                    && self.decision_seq.is_none_or(|seq| seq == decision.seq)
+            })
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct LivePlanKey {
+    project: Option<PathBuf>,
+    run: surge_core::RunId,
+    path: PathBuf,
+    sequence: u64,
+    length: u64,
+    modified: Option<SystemTime>,
+}
+
+type StoredPlanKey = (Option<PathBuf>, usize, Option<PlanTarget>);
+
+#[cfg(test)]
+type ControlledStoredPlans =
+    std::rc::Rc<std::cell::RefCell<Vec<tokio::sync::oneshot::Sender<Option<ProjectPlan>>>>>;
+
 /// Flow screen.
 pub struct FlowScreen {
     /// Shared state; `None` only in isolated render tests.
     state: Option<Entity<crate::app_state::AppState>>,
     mode: Mode,
-    /// Live plan (from a stream) keyed by its artifact path.
-    live: Option<(std::path::PathBuf, ProjectPlan)>,
+    /// Live plan keyed by project, run, artifact path/revision and content hash.
+    live: Option<(LivePlanKey, surge_core::ContentHash, ProjectPlan)>,
+    requested: Option<PlanTarget>,
     /// Stored plan from the project's newest planning run.
     stored: Option<ProjectPlan>,
-    stored_for: Option<(Option<std::path::PathBuf>, usize)>,
+    stored_for: Option<StoredPlanKey>,
+    stored_generation: u64,
+    #[cfg(test)]
+    controlled_stored_plans: Option<ControlledStoredPlans>,
     level: usize,
     /// Step selected in the diagram (inspector subject).
     plan_selected: Option<String>,
     /// Run whose plan is shown (the planning run while its gate waits).
     plan_run: Option<surge_core::RunId>,
+    selection_run: Option<surge_core::RunId>,
     /// Why an installed provider cannot run a step right now (not
     /// configured / quota exhausted), loaded once in the background.
     provider_notes: Option<std::collections::HashMap<String, String>>,
     provider_notes_loading: bool,
     /// Model field of the step editor, and the step it currently edits.
     model_input: Option<Entity<InputState>>,
-    model_input_for: Option<String>,
-    /// Profile registry for the inspector's Agent section (loaded once).
-    profiles: Option<std::rc::Rc<surge_orchestrator::profile_loader::ProfileRegistry>>,
+    model_input_for: Option<(PlanTarget, String)>,
+    /// Profile defaults for the template inspector (loaded once, including errors).
+    profiles:
+        Option<Result<std::rc::Rc<surge_orchestrator::profile_loader::ProfileRegistry>, String>>,
     library: Vec<BundledFlow>,
     library_selected: usize,
     library_cache: HashMap<usize, LevelPlans>,
@@ -198,11 +253,16 @@ impl FlowScreen {
             state: None,
             mode: Mode::Project,
             live: None,
+            requested: None,
             stored: None,
             stored_for: None,
+            stored_generation: 0,
+            #[cfg(test)]
+            controlled_stored_plans: None,
             level: 0,
             plan_selected: None,
             plan_run: None,
+            selection_run: None,
             provider_notes: None,
             provider_notes_loading: false,
             model_input: None,
@@ -229,43 +289,159 @@ impl FlowScreen {
         this
     }
 
-    /// The plan a live planning stream is showing (while its gate waits).
+    #[cfg(test)]
+    pub(crate) fn displayed_plan_run(&self) -> Option<surge_core::RunId> {
+        self.plan_run
+    }
+
+    pub(crate) fn select_plan(
+        &mut self,
+        run: surge_core::RunId,
+        decision_seq: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        let target = PlanTarget {
+            project: self
+                .state
+                .as_ref()
+                .and_then(|state| state.read(cx).project_path.clone()),
+            run,
+            decision_seq,
+        };
+        if self.requested.as_ref() != Some(&target) {
+            self.reset_plan_selection();
+            self.live = None;
+            self.stored = None;
+            self.requested = Some(target);
+            self.reload_stored_if_changed(cx);
+        }
+        self.mode = Mode::Project;
+        cx.notify();
+    }
+
+    pub(crate) fn show_project_plan(&mut self, cx: &mut Context<Self>) {
+        if self.requested.take().is_some() {
+            self.reset_plan_selection();
+            self.live = None;
+            self.stored = None;
+            self.reload_stored_if_changed(cx);
+        }
+        cx.notify();
+    }
+
+    fn reset_plan_selection(&mut self) {
+        self.level = 0;
+        self.plan_selected = None;
+        self.plan_run = None;
+        self.selection_run = None;
+        self.model_input = None;
+        self.model_input_for = None;
+    }
+
+    fn unavailable(run: surge_core::RunId, message: impl Into<String>) -> ProjectPlan {
+        ProjectPlan {
+            run,
+            headline: format!("Requested plan · {}", run.short()),
+            plans: Err(message.into()),
+        }
+    }
+
+    /// The exact requested run, or the project's newest live plan in ordinary navigation.
     fn live_plan(&mut self, cx: &Context<Self>) -> Option<ProjectPlan> {
         let state = self.state.as_ref()?.read(cx);
-        let (run, headline, path) = state.project_runs().into_iter().find_map(|run| {
-            let stream = state.run_streams.get(&run.run_id)?;
+        if let Some(target) = &self.requested
+            && (target.project != state.project_path
+                || !state.run_in_project(&target.run)
+                || target.decision_seq.is_some() && !target.editable(state))
+        {
+            return Some(Self::unavailable(
+                target.run,
+                "The requested plan decision is no longer available in this project.",
+            ));
+        }
+        let runs = self.requested.as_ref().map_or_else(
+            || {
+                state
+                    .project_runs()
+                    .iter()
+                    .map(|run| run.run_id)
+                    .collect::<Vec<_>>()
+            },
+            |target| vec![target.run],
+        );
+        let (run, headline, path, sequence) = runs.into_iter().find_map(|run| {
+            let stream = state.run_streams.get(&run)?;
             let recorded = stream.artifacts.get("flow")?;
-            // Seeded artifacts (an implementation run inherits the approved
-            // plan) are recorded relative to the run's worktree.
             let path = if recorded.is_absolute() {
                 recorded.clone()
             } else {
                 stream.run_path.as_ref()?.join(recorded)
             };
-            if !path.is_file() {
+            if self.requested.is_none() && !path.is_file() {
                 return None;
             }
-            let headline = state.run_prompt(&run.run_id).map_or_else(
-                || format!("run r-{}", run.run_id.short().to_lowercase()),
-                |p| ui::headline(p, 90),
+            let headline = state.run_prompt(&run).map_or_else(
+                || format!("run r-{}", run.short().to_lowercase()),
+                |prompt| ui::headline(prompt, 90),
             );
-            Some((run.run_id, headline, path))
+            Some((run, headline, path, stream.last_seq))
         })?;
-        if self.live.as_ref().is_none_or(|(cached, _)| cached != &path) {
-            let source = std::fs::read_to_string(&path).ok()?;
-            let plans = toml::from_str::<Graph>(&source)
-                .map(|graph| LevelPlans::new(&graph))
-                .map_err(|error| error.to_string());
-            self.live = Some((
-                path,
-                ProjectPlan {
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => {
+                return Some(Self::unavailable(
                     run,
-                    headline,
-                    plans,
-                },
-            ));
+                    "The recorded plan artifact is unavailable. Refresh the run's artifact before opening it.",
+                ));
+            },
+        };
+        let key = LivePlanKey {
+            project: state.project_path.clone(),
+            run,
+            path: path.clone(),
+            sequence,
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+        };
+        if self
+            .live
+            .as_ref()
+            .is_some_and(|(cached, _, _)| cached == &key)
+        {
+            return self.live.as_ref().map(|(_, _, plan)| plan.clone());
         }
-        self.live.as_ref().map(|(_, plan)| plan.clone())
+        let source = match std::fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(_) => {
+                return Some(Self::unavailable(
+                    run,
+                    "The recorded plan artifact could not be read.",
+                ));
+            },
+        };
+        let fingerprint = surge_core::ContentHash::compute(source.as_bytes());
+        let plans = if let Some((cached, old_hash, plan)) = &self.live
+            && cached.project == key.project
+            && cached.run == run
+            && *old_hash == fingerprint
+        {
+            plan.plans.clone()
+        } else {
+            self.reset_plan_selection();
+            toml::from_str::<Graph>(&source)
+                .map(|graph| LevelPlans::new(&graph))
+                .map_err(|_| "The requested plan artifact is not a valid workflow.".into())
+        };
+        self.live = Some((
+            key,
+            fingerprint,
+            ProjectPlan {
+                run,
+                headline,
+                plans,
+            },
+        ));
+        self.live.as_ref().map(|(_, _, plan)| plan.clone())
     }
 
     /// Reload the stored plan when the project or its operations changed.
@@ -277,50 +453,82 @@ impl FlowScreen {
             let state = state.read(cx);
             (state.project_path.clone(), state.bootstrap_operations.len())
         };
-        let key = (root.clone(), ops);
+        let requested = self.requested.clone();
+        let key = (root.clone(), ops, requested.clone());
         if self.stored_for.as_ref() == Some(&key) {
             return;
         }
-        self.stored_for = Some(key);
+        self.stored = None;
+        self.stored_for = Some(key.clone());
+        self.stored_generation = self.stored_generation.saturating_add(1);
+        let generation = self.stored_generation;
         let Some(root) = root else {
             self.stored = None;
             return;
         };
+        #[cfg(test)]
+        let controlled = self.controlled_stored_plans.as_ref().map(|requests| {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            requests.borrow_mut().push(sender);
+            receiver
+        });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let found = if tokio::runtime::Handle::try_current().is_ok() {
-                match surge_core::home::surge_home_dir() {
-                    Some(home) => {
-                        let mut found = None;
-                        for op in crate::roadmap_source::operations(&root, &home).await {
-                            let Some(bytes) = crate::roadmap_source::read_run_artifact(
-                                &home,
-                                op.planning_run,
-                                "flow",
-                            ) else {
-                                continue;
-                            };
-                            let plans = String::from_utf8(bytes)
-                                .map_err(|e| e.to_string())
-                                .and_then(|text| {
-                                    toml::from_str::<Graph>(&text).map_err(|e| e.to_string())
-                                })
-                                .map(|graph| LevelPlans::new(&graph));
-                            found = Some(ProjectPlan {
-                                run: op.planning_run,
-                                headline: ui::headline(&op.prompt, 90),
-                                plans,
-                            });
-                            break;
-                        }
-                        found
-                    },
-                    None => None,
+            let load = async move {
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    match surge_core::home::surge_home_dir() {
+                        Some(home) => {
+                            let mut found = None;
+                            for op in crate::roadmap_source::operations(&root, &home).await {
+                                if requested
+                                    .as_ref()
+                                    .is_some_and(|target| target.run != op.planning_run)
+                                {
+                                    continue;
+                                }
+                                let Some(bytes) = crate::roadmap_source::read_run_artifact(
+                                    &home,
+                                    op.planning_run,
+                                    "flow",
+                                ) else {
+                                    continue;
+                                };
+                                let plans = String::from_utf8(bytes)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|text| {
+                                        toml::from_str::<Graph>(&text).map_err(|e| e.to_string())
+                                    })
+                                    .map(|graph| LevelPlans::new(&graph));
+                                found = Some(ProjectPlan {
+                                    run: op.planning_run,
+                                    headline: ui::headline(&op.prompt, 90),
+                                    plans,
+                                });
+                                break;
+                            }
+                            found
+                        },
+                        None => None,
+                    }
+                } else {
+                    None
                 }
-            } else {
-                None
             };
+            #[cfg(test)]
+            let found = if let Some(receiver) = controlled {
+                receiver.await.ok().flatten()
+            } else {
+                load.await
+            };
+            #[cfg(not(test))]
+            let found = load.await;
+
             cx.update(|cx| {
                 let _ = this.update(cx, |screen, cx| {
+                    if screen.stored_for.as_ref() != Some(&key)
+                        || screen.stored_generation != generation
+                    {
+                        return;
+                    }
                     screen.stored = found;
                     cx.notify();
                 });
@@ -340,21 +548,18 @@ impl FlowScreen {
         let profiles = self
             .profiles
             .get_or_insert_with(|| {
-                std::rc::Rc::new(
-                    surge_orchestrator::profile_loader::ProfileRegistry::load().unwrap_or_else(
-                        |_| {
-                            surge_orchestrator::profile_loader::ProfileRegistry::new(
-                                surge_orchestrator::profile_loader::DiskProfileSet::empty(),
-                            )
-                        },
-                    ),
-                )
+                surge_orchestrator::profile_loader::ProfileRegistry::load()
+                    .map(std::rc::Rc::new)
+                    .map_err(|error| error.to_string())
             })
             .clone();
-        let resolved = details.profile.as_deref().and_then(|profile| {
-            let key = surge_core::profile::keyref::parse_key_ref(profile).ok()?;
-            profiles.resolve(&key).ok()
+        let resolution = details.profile.as_deref().map(|profile| {
+            let registry = profiles.as_ref().map_err(Clone::clone)?;
+            let key = surge_core::profile::keyref::parse_key_ref(profile)
+                .map_err(|error| error.to_string())?;
+            registry.resolve(&key).map_err(|error| error.to_string())
         });
+        let resolved = resolution.as_ref().and_then(|result| result.as_ref().ok());
         let provider_editor = self.render_provider_editor(key, details, window, cx);
         let state = self.state.as_ref().map(|s| s.read(cx));
 
@@ -431,7 +636,7 @@ impl FlowScreen {
                     ),
             );
 
-        if let Some(resolved) = &resolved {
+        if let Some(resolved) = resolved {
             let profile = &resolved.profile;
             panel = panel.child(
                 div()
@@ -467,7 +672,7 @@ impl FlowScreen {
             skills.extend(details.node_skills.iter().cloned());
             let prompt: String = profile.prompt.system.chars().take(420).collect();
             panel = panel
-                .child(section("Agent"))
+                .child(section("Profile defaults and step overrides"))
                 .child(row("Profile", details.profile.clone().unwrap_or_default()))
                 .child(row("Role", profile.role.display_name.clone()))
                 .child(row("Provider", provider))
@@ -507,7 +712,7 @@ impl FlowScreen {
                     },
                 ))
                 .children(provider_editor)
-                .child(section("Prompt"))
+                .child(section("System template preview"))
                 .child(
                     div()
                         .p(px(8.0))
@@ -526,49 +731,17 @@ impl FlowScreen {
             }
         }
 
-        // Session: the newest project run that has executed this step.
-        // Only this plan's runs: the planning run and the implementation run
-        // that follows it — never an older run with a same-named step.
-        let plan_started = state.as_ref().and_then(|s| {
-            let plan_run = self.plan_run?;
-            s.runs
-                .iter()
-                .find(|r| r.run_id == plan_run)
-                .map(|r| r.started_at)
-        });
-        let session = state.as_ref().and_then(|s| {
-            s.project_runs()
-                .into_iter()
-                .filter(|run| plan_started.is_none_or(|start| run.started_at >= start))
-                .find_map(|run| {
-                    let stream = s.run_streams.get(&run.run_id)?;
-                    let stage = stream.stages.iter().rev().find(|st| st.node == key)?;
-                    Some((run.run_id, stage.clone()))
-                })
-        });
-        panel = panel.child(section("Session"));
-        panel = match session {
-            Some((run_id, stage)) => panel
-                .child(row("Run", format!("r-{}", run_id.short().to_lowercase())))
-                .child(row(
-                    "State",
-                    match stage.phase {
-                        crate::run_stream::StagePhase::Running => "running".into(),
-                        crate::run_stream::StagePhase::Done => "done".into(),
-                        crate::run_stream::StagePhase::Failed => "failed".into(),
-                    },
-                ))
-                .child(row("Attempt", stage.attempt.to_string()))
-                .child(row(
-                    "Detail",
-                    if stage.detail.is_empty() {
-                        "—".into()
-                    } else {
-                        stage.detail
-                    },
-                )),
-            None => panel.child(ui::meta("Not started yet.")),
-        };
+        if let Some(Err(error)) = resolution {
+            panel = panel.child(section("Profile unavailable")).child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme::error())
+                    .child(error),
+            );
+        }
+        panel = panel.child(section("Plan template")).child(ui::meta(
+            "Profile defaults and step overrides. No run or loop instance is selected.",
+        ));
         panel
     }
 
@@ -585,12 +758,17 @@ impl FlowScreen {
         details.profile.as_ref()?;
         let plan_run = self.plan_run?;
         let state_entity = self.state.clone()?;
-        let (awaiting, current, agents) = {
+        let (target, current, agents) = {
             let state = state_entity.read(cx);
-            let awaiting = state
-                .pending_decisions()
-                .iter()
-                .any(|(run, p)| *run == plan_run && p.node == "flow_gate");
+            let target = self.requested.clone().unwrap_or_else(|| PlanTarget {
+                project: state.project_path.clone(),
+                run: plan_run,
+                decision_seq: state
+                    .pending_decisions()
+                    .iter()
+                    .find(|(run, decision)| *run == plan_run && decision.node == "flow_gate")
+                    .map(|(_, decision)| decision.seq),
+            });
             let current = state
                 .plan_edits
                 .get(&plan_run)
@@ -602,16 +780,22 @@ impl FlowScreen {
                 .iter()
                 .map(|a| (a.entry.id.clone(), a.entry.display_name.clone()))
                 .collect();
-            (awaiting, current, agents)
+            (target, current, agents)
         };
-        if !awaiting {
+        if !target.editable(state_entity.read(cx)) {
             return None;
         }
         self.load_provider_notes(cx);
         let notes = self.provider_notes.clone().unwrap_or_default();
 
-        // Model input: one per inspector, re-targeted to the selected step.
+        // A fresh entity per step rejects queued input events from an old inspector.
+        let input_owner = (target.clone(), key.to_string());
+        if self.model_input_for.as_ref() != Some(&input_owner) {
+            self.model_input = None;
+        }
         if self.model_input.is_none() {
+            let owner = target.clone();
+            let node = key.to_string();
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder("Model, e.g. sonnet or haiku (agent default) — Enter to apply")
@@ -619,20 +803,20 @@ impl FlowScreen {
             cx.subscribe_in(
                 &input,
                 window,
-                |this: &mut Self, input, event: &InputEvent, _window, cx| {
-                    if !matches!(event, InputEvent::PressEnter { .. }) {
+                move |this: &mut Self, input, event: &InputEvent, _window, cx| {
+                    if !matches!(event, InputEvent::PressEnter { .. })
+                        || this.model_input.as_ref() != Some(input)
+                        || this.plan_run != Some(owner.run)
+                        || this.plan_selected.as_deref() != Some(node.as_str())
+                    {
                         return;
                     }
-                    let (Some(plan_run), Some(node), Some(state)) = (
-                        this.plan_run,
-                        this.plan_selected.clone(),
-                        this.state.clone(),
-                    ) else {
+                    let Some(state) = this.state.clone() else {
                         return;
                     };
                     let value = input.read(cx).value().trim().to_string();
                     state.update(cx, |state, cx| {
-                        edit_step(state, plan_run, &node, |edit| {
+                        edit_step(state, &owner, &node, |edit| {
                             edit.model = (!value.is_empty()).then_some(value);
                         });
                         cx.notify();
@@ -642,17 +826,20 @@ impl FlowScreen {
             .detach();
             self.model_input = Some(input);
         }
-        if self.model_input_for.as_deref() != Some(key) {
+        if self.model_input_for.as_ref() != Some(&input_owner) {
             let text = current.model.clone().unwrap_or_default();
             if let Some(input) = &self.model_input {
                 input.update(cx, |input, cx| input.set_value(text, window, cx));
             }
-            self.model_input_for = Some(key.to_string());
+            self.model_input_for = Some(input_owner);
         }
 
         let chip = |id: String, label: String, selected: bool| {
+            let selector = id.clone();
             div()
                 .id(SharedString::from(id))
+                .test_support()
+                .debug_selector(move || selector.clone())
                 .role(Role::Button)
                 .aria_label(label.clone())
                 .px(px(8.0))
@@ -691,16 +878,22 @@ impl FlowScreen {
             };
             let state = state_entity.clone();
             let node = key.to_string();
+            let owner = target.clone();
             providers = providers.child(
-                chip(format!("provider-{key}-{index}"), label, selected).on_click(
-                    move |_e, _w, cx| {
+                chip(format!("provider-{key}-{index}"), label, selected).on_click(cx.listener(
+                    move |this, _e, _w, cx| {
+                        if this.plan_run != Some(owner.run)
+                            || this.plan_selected.as_deref() != Some(node.as_str())
+                        {
+                            return;
+                        }
                         let agent_id = agent_id.clone();
                         state.update(cx, |state, cx| {
-                            edit_step(state, plan_run, &node, |edit| edit.agent_id = agent_id);
+                            edit_step(state, &owner, &node, |edit| edit.agent_id = agent_id);
                             cx.notify();
                         });
                     },
-                ),
+                )),
             );
         }
 
@@ -712,18 +905,24 @@ impl FlowScreen {
             let selected = current.effort.as_deref() == level;
             let state = state_entity.clone();
             let node = key.to_string();
+            let owner = target.clone();
             let label = level.unwrap_or("Default").to_string();
             efforts = efforts.child(
-                chip(format!("effort-{key}-{index}"), label, selected).on_click(
-                    move |_e, _w, cx| {
+                chip(format!("effort-{key}-{index}"), label, selected).on_click(cx.listener(
+                    move |this, _e, _w, cx| {
+                        if this.plan_run != Some(owner.run)
+                            || this.plan_selected.as_deref() != Some(node.as_str())
+                        {
+                            return;
+                        }
                         state.update(cx, |state, cx| {
-                            edit_step(state, plan_run, &node, |edit| {
+                            edit_step(state, &owner, &node, |edit| {
                                 edit.effort = level.map(str::to_string);
                             });
                             cx.notify();
                         });
                     },
-                ),
+                )),
             );
         }
 
@@ -857,82 +1056,62 @@ impl FlowScreen {
         row
     }
 
-    /// Level tabs: one per level of the flow, with what happens there.
+    /// Ancestor breadcrumbs and direct children, scoped to this occurrence.
     fn render_levels_bar(&self, plans: &LevelPlans, cx: &mut Context<Self>) -> Div {
-        let mut row = div().h_flex().gap(px(8.0)).flex_wrap();
-        for (i, (level, _)) in plans.levels.iter().enumerate() {
-            let active = i == self.level;
-            let color = match level.depth {
-                0 => Semantic::Plan.color(),
-                1 => Semantic::Loop.color(),
-                _ => Semantic::Agent.color(),
-            };
-            let note = if level.approvals > 0 {
-                format!("{} steps · {} by you", level.work_steps, level.approvals)
-            } else {
-                format!("{} steps", level.work_steps)
-            };
-            row = row.child(
-                div()
-                    .id(("flow-level", i))
-                    .role(Role::Tab)
-                    .aria_label(level.title.clone())
-                    .v_flex()
-                    .gap(px(2.0))
-                    .min_w(px(150.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(ui::R_CONTROL + 2.0))
-                    .border_1()
-                    .border_color(if active {
-                        theme::stroke(color)
-                    } else {
-                        theme::hairline()
-                    })
-                    .bg(if active {
-                        theme::tint(color)
-                    } else {
-                        theme::panel_raised()
-                    })
-                    .cursor_pointer()
-                    .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
-                    .on_click(cx.listener(move |this, _e, _w, cx| {
-                        this.level = i;
-                        this.plan_selected = None;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap(px(6.0))
-                            .items_center()
-                            .when(level.depth > 0, |el| {
-                                el.child(Icon::new(Lucide::Repeat).size(px(11.0)).text_color(color))
-                            })
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::text_primary())
-                                    .child(level.title.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(theme::text_muted())
-                            .child(note),
-                    ),
-            );
-            if i + 1 < plans.levels.len() {
-                row = row.child(
+        let index = self.level.min(plans.levels.len().saturating_sub(1));
+        let ancestors = plans.ancestry(index);
+        let mut breadcrumb = div().h_flex().gap(px(8.0)).flex_wrap();
+        for (position, i) in ancestors.iter().copied().enumerate() {
+            if position > 0 {
+                breadcrumb = breadcrumb.child(
                     Icon::new(IconName::ChevronRight)
                         .size(px(12.0))
                         .text_color(theme::text_dim()),
                 );
             }
+            breadcrumb = breadcrumb.child(self.level_button(plans, i, cx));
         }
-        row
+        let mut children = div().h_flex().gap(px(8.0)).flex_wrap();
+        for (i, (level, _)) in plans.levels.iter().enumerate() {
+            if level.parent == Some(index) {
+                children = children.child(self.level_button(plans, i, cx));
+            }
+        }
+        div()
+            .v_flex()
+            .gap(px(8.0))
+            .child(breadcrumb)
+            .child(children)
+    }
+
+    fn level_button(
+        &self,
+        plans: &LevelPlans,
+        i: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let level = &plans.levels[i].0;
+        let label = format!(
+            "{} · {} steps · {} approvals",
+            level.title, level.work_steps, level.approvals
+        );
+        div()
+            .id(("flow-level-region", i))
+            .test_support()
+            .debug_selector(move || format!("flow-level-{i}"))
+            .child(
+                gpui_kit::component::button::Button::new(SharedString::from(format!(
+                    "flow-level-{i}"
+                )))
+                .accessibility_id(SharedString::from(format!("flow-level-{i}")))
+                .label(label)
+                .selected(i == self.level)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.level = i;
+                    this.plan_selected = None;
+                    cx.notify();
+                })),
+            )
     }
 
     /// Diagram of the selected level + the step inspector.
@@ -962,6 +1141,7 @@ impl FlowScreen {
             .levels
             .iter()
             .enumerate()
+            .filter(|(_, (level, _))| level.parent == Some(index))
             .filter_map(|(i, (l, _))| l.opened_by.clone().map(|k| (k, i)))
             .collect();
         let on_select: crate::flow_diagram::OnSelect = std::rc::Rc::new(move |key, _w, cx| {
@@ -980,7 +1160,7 @@ impl FlowScreen {
             .gap(px(10.0))
             .child(
                 div()
-                    .text_size(px(11.5))
+                    .text_size(px(13.0))
                     .text_color(theme::text_muted())
                     .child(match level.depth {
                     0 if plans.levels.len() > 1 => {
@@ -991,6 +1171,17 @@ impl FlowScreen {
                     _ => format!("Runs for {} — its own flow.", level.title.to_lowercase()),
                 }),
             )
+            .children(level.unopened.iter().map(|link| {
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme::warning())
+                    .child(format!(
+                        "{} → {}: {}. Preview is incomplete.",
+                        link.opened_by,
+                        link.body,
+                        link.reason.description()
+                    ))
+            }))
             .child(
                 div()
                     .flex()
@@ -1031,7 +1222,8 @@ impl FlowScreen {
     }
 
     fn render_project(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let plan = self.live_plan(cx).or_else(|| self.stored.clone());
+        self.plan_run = None;
+        let plan = self.live_plan(cx).or_else(|| self.stored.clone()).or_else(|| self.requested.as_ref().map(|target| Self::unavailable(target.run, "The requested plan artifact is unavailable or still loading. No other run's plan is shown.")));
         let Some(plan) = plan else {
             return ui::panel()
                 .child(ui::empty_state(
@@ -1041,7 +1233,13 @@ impl FlowScreen {
                 ))
                 .into_any_element();
         };
-        self.plan_run = Some(plan.run);
+        if plan.plans.is_ok() {
+            if self.selection_run != Some(plan.run) {
+                self.reset_plan_selection();
+                self.selection_run = Some(plan.run);
+            }
+            self.plan_run = Some(plan.run);
+        }
         match &plan.plans {
             Err(error) => ui::panel()
                 .child(ui::empty_state(
@@ -1164,11 +1362,14 @@ impl FlowScreen {
 
 fn edit_step(
     state: &mut crate::app_state::AppState,
-    plan_run: surge_core::RunId,
+    target: &PlanTarget,
     node: &str,
     change: impl FnOnce(&mut surge_core::node_overrides::NodeOverride),
 ) {
-    let edits = state.plan_edits.entry(plan_run).or_default();
+    if !target.editable(state) {
+        return;
+    }
+    let edits = state.plan_edits.entry(target.run).or_default();
     let edit = edits.0.entry(node.to_string()).or_default();
     change(edit);
     if edit.agent_id.is_none() && edit.model.is_none() && edit.effort.is_none() {
@@ -1204,5 +1405,409 @@ impl Render for FlowScreen {
                     ))
                     .child(body),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FlowScreen, LevelPlans, Mode};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, SharedString, TestAppContext};
+
+    #[test]
+    fn same_path_plan_artifact_refreshes_on_new_stream_revision() {
+        let mut cx = TestAppContext::single();
+        let root = tempfile::tempdir().unwrap();
+        let run = surge_core::RunId::new();
+        let path = root.path().join("flow.toml");
+        let source = include_str!("../../testdata/four_level_flow.toml").replace(
+            "[metadata]",
+            "[metadata]\ndescription = \"Original rationale\"",
+        );
+        std::fs::write(&path, &source).unwrap();
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+            let mut stream = crate::run_stream::RunStreamState::default();
+            stream.artifacts.insert("flow".into(), path.clone());
+            state.run_streams.insert(run, stream);
+            state
+        });
+        let screen = cx.new(|cx| FlowScreen::with_state(state.clone(), cx));
+        screen.update(&mut cx, |screen, cx| {
+            assert_eq!(
+                screen
+                    .live_plan(cx)
+                    .unwrap()
+                    .plans
+                    .unwrap()
+                    .rationale
+                    .as_deref(),
+                Some("Original rationale")
+            )
+        });
+        std::fs::write(
+            &path,
+            source.replace("Original rationale", "Updated source rationale"),
+        )
+        .unwrap();
+        state.update(&mut cx, |state, _| {
+            state.run_streams.get_mut(&run).unwrap().last_seq = 2
+        });
+        screen.update(&mut cx, |screen, cx| {
+            assert_eq!(
+                screen
+                    .live_plan(cx)
+                    .unwrap()
+                    .plans
+                    .unwrap()
+                    .rationale
+                    .as_deref(),
+                Some("Updated source rationale")
+            )
+        });
+    }
+
+    #[test]
+    fn exact_target_refuses_missing_gate_artifact_and_other_project() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let root = tempfile::tempdir().unwrap();
+        let older = surge_core::RunId::new();
+        let newer = surge_core::RunId::new();
+        let path = root.path().join("flow.toml");
+        std::fs::write(&path, include_str!("../../testdata/four_level_flow.toml")).unwrap();
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            for (run, seq) in [(older, 1), (newer, 2)] {
+                state.runs.push(crate::app_state::UiRun {
+                    run_id: run,
+                    status: surge_orchestrator::engine::handle::RunStatus::Active,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: None,
+                });
+                let mut stream = crate::run_stream::RunStreamState::default();
+                stream.artifacts.insert("flow".into(), path.clone());
+                stream.pending.push(crate::run_stream::PendingDecision {
+                    seq,
+                    time: String::new(),
+                    node: "flow_gate".into(),
+                    kind: crate::run_stream::DecisionKind::HumanInput {
+                        call_id: None,
+                        prompt: "Plan".into(),
+                        schema: None,
+                    },
+                });
+                state.run_streams.insert(run, stream);
+            }
+            state
+        });
+        let screen = cx.new(|cx| FlowScreen::with_state(state.clone(), cx));
+        screen.update(&mut cx, |screen, cx| {
+            screen.select_plan(older, Some(1), cx);
+            assert_eq!(screen.live_plan(cx).unwrap().run, older);
+            screen.level = 2;
+            screen.plan_selected = Some("old-node".into());
+            screen.select_plan(newer, Some(2), cx);
+            assert_eq!(screen.level, 0);
+            assert!(screen.plan_selected.is_none());
+            assert!(screen.model_input.is_none());
+            assert_eq!(screen.live_plan(cx).unwrap().run, newer);
+            screen.select_plan(older, Some(1), cx);
+        });
+        state.update(&mut cx, |state, _| {
+            state.run_streams.get_mut(&older).unwrap().pending.clear()
+        });
+        screen.update(&mut cx, |screen, cx| {
+            let unavailable = screen.live_plan(cx).unwrap();
+            assert_eq!(unavailable.run, older);
+            assert!(unavailable.plans.is_err());
+        });
+        screen.update(&mut cx, |screen, cx| screen.select_plan(older, None, cx));
+        std::fs::remove_file(&path).unwrap();
+        screen.update(&mut cx, |screen, cx| {
+            assert!(screen.live_plan(cx).unwrap().plans.is_err())
+        });
+        std::fs::write(&path, include_str!("../../testdata/four_level_flow.toml")).unwrap();
+        state.update(&mut cx, |state, _| {
+            state.project_path = Some(root.path().join("different-project"))
+        });
+        screen.update(&mut cx, |screen, cx| {
+            assert!(screen.live_plan(cx).unwrap().plans.is_err())
+        });
+    }
+
+    #[test]
+    fn model_editor_rejects_detached_input_and_accepts_the_replacement_gate() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let root = tempfile::tempdir().unwrap();
+        let run = surge_core::RunId::new();
+        let path = root.path().join("flow.toml");
+        std::fs::write(&path, include_str!("../../testdata/four_level_flow.toml")).unwrap();
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+            let mut stream = crate::run_stream::RunStreamState::default();
+            stream.artifacts.insert("flow".into(), path);
+            stream.pending.push(crate::run_stream::PendingDecision {
+                seq: 1,
+                time: String::new(),
+                node: "flow_gate".into(),
+                kind: crate::run_stream::DecisionKind::HumanInput {
+                    call_id: None,
+                    prompt: "Plan".into(),
+                    schema: None,
+                },
+            });
+            state.run_streams.insert(run, stream);
+            state
+        });
+        let screen = cx.new(|cx| FlowScreen::with_state(state.clone(), cx));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        window.update(|window, cx| {
+            screen.update(cx, |screen, cx| {
+                screen.plan_selected = Some("final_spec".into());
+                screen.provider_notes = Some(std::collections::HashMap::new());
+                screen.profiles = Some(Ok(std::rc::Rc::new(
+                    surge_orchestrator::profile_loader::ProfileRegistry::new(
+                        surge_orchestrator::profile_loader::DiskProfileSet::empty(),
+                    ),
+                )));
+                cx.notify();
+            });
+            window.render_frame(cx);
+        });
+        let old_input = window.update(|_, cx| screen.read(cx).model_input.clone().unwrap());
+        window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.run_streams.get_mut(&run).unwrap().pending[0].seq = 2;
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        let current_input = window.update(|_, cx| screen.read(cx).model_input.clone().unwrap());
+        assert_ne!(old_input, current_input);
+        window.update(|window, cx| {
+            old_input.update(cx, |input, cx| {
+                input.set_value("stale-model", window, cx);
+                cx.emit(gpui_kit::component::input::InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                });
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| assert!(!state.read(cx).plan_edits.contains_key(&run)));
+        window.update(|window, cx| {
+            current_input.update(cx, |input, cx| {
+                input.set_value("current-model", window, cx);
+                cx.emit(gpui_kit::component::input::InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                });
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).plan_edits[&run].0["final_spec"]
+                    .model
+                    .as_deref(),
+                Some("current-model")
+            )
+        });
+    }
+
+    #[test]
+    fn changed_project_clears_the_previous_stored_plan_before_loading() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.project_path = Some(std::path::PathBuf::from("/project-a"));
+            state
+        });
+        let screen = cx.new(|cx| FlowScreen::with_state(state.clone(), cx));
+        screen.update(&mut cx, |screen, _| {
+            screen.stored = Some(super::FlowScreen::unavailable(
+                surge_core::RunId::new(),
+                "Old plan",
+            ))
+        });
+        state.update(&mut cx, |state, _| {
+            state.project_path = Some(std::path::PathBuf::from("/project-b"))
+        });
+        screen.update(&mut cx, |screen, cx| {
+            let old_generation = screen.stored_generation;
+            screen.reload_stored_if_changed(cx);
+            assert!(screen.stored.is_none());
+            assert!(screen.stored_generation > old_generation);
+        });
+    }
+
+    #[test]
+    fn delayed_stored_loader_rejects_a_b_a_stale_completions() {
+        let mut cx = TestAppContext::single();
+        let a = std::path::PathBuf::from("/project-a");
+        let b = std::path::PathBuf::from("/project-b");
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.project_path = Some(a.clone());
+            state
+        });
+        let requests = super::ControlledStoredPlans::default();
+        let screen = cx.new(|cx| FlowScreen::with_state(state.clone(), cx));
+        screen.update(&mut cx, |screen, cx| {
+            screen.controlled_stored_plans = Some(requests.clone());
+            screen.stored_for = None;
+            screen.reload_stored_if_changed(cx);
+        });
+        for project in [&b, &a] {
+            state.update(&mut cx, |state, _| {
+                state.project_path = Some(project.clone())
+            });
+            screen.update(&mut cx, |screen, cx| screen.reload_stored_if_changed(cx));
+        }
+        assert_eq!(requests.borrow().len(), 3);
+        let old_a = requests.borrow_mut().remove(0);
+        let old_b = requests.borrow_mut().remove(0);
+        let current_a = requests.borrow_mut().remove(0);
+        assert!(
+            old_a
+                .send(Some(FlowScreen::unavailable(
+                    surge_core::RunId::new(),
+                    "Stale A"
+                )))
+                .is_ok()
+        );
+        assert!(
+            old_b
+                .send(Some(FlowScreen::unavailable(
+                    surge_core::RunId::new(),
+                    "Stale B"
+                )))
+                .is_ok()
+        );
+        cx.run_until_parked();
+        screen.update(&mut cx, |screen, _| assert!(screen.stored.is_none()));
+        let current_run = surge_core::RunId::new();
+        assert!(
+            current_a
+                .send(Some(FlowScreen::unavailable(current_run, "Current A")))
+                .is_ok()
+        );
+        cx.run_until_parked();
+        screen.update(&mut cx, |screen, _| {
+            assert_eq!(screen.stored.as_ref().unwrap().run, current_run)
+        });
+    }
+
+    #[test]
+    fn stored_fallback_run_change_resets_the_previous_inspector() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../testdata/four_level_flow.toml")).unwrap();
+        let older = surge_core::RunId::new();
+        let newer = surge_core::RunId::new();
+        let screen = cx.new(|cx| {
+            let mut screen = FlowScreen::new(cx);
+            screen.stored = Some(super::ProjectPlan {
+                run: older,
+                headline: "Older".into(),
+                plans: Ok(LevelPlans::new(&graph)),
+            });
+            screen
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        window.update(|_, cx| {
+            screen.update(cx, |screen, cx| {
+                screen.level = 2;
+                screen.plan_selected = Some("old-node".into());
+                screen.stored = Some(super::ProjectPlan {
+                    run: newer,
+                    headline: "Newer".into(),
+                    plans: Ok(LevelPlans::new(&graph)),
+                });
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let screen = screen.read(cx);
+            assert_eq!(screen.plan_run, Some(newer));
+            assert_eq!(screen.level, 0);
+            assert!(screen.plan_selected.is_none());
+            assert!(screen.model_input.is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn reused_occurrences_navigate_with_scoped_children_and_breadcrumbs(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::init();
+            crate::theme::sync_component_theme(cx);
+        });
+        let mut graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../testdata/four_level_flow.toml")).unwrap();
+        let mut second =
+            graph.nodes[&surge_core::keys::NodeKey::try_from("milestone_loop").unwrap()].clone();
+        second.id = surge_core::keys::NodeKey::try_from("second_milestone_loop").unwrap();
+        graph.nodes.insert(second.id.clone(), second);
+        let plans = LevelPlans::new(&graph);
+        assert_eq!(plans.ancestry(6), [0, 2, 4, 6]);
+        let screen = cx.new(|cx| {
+            let mut screen = FlowScreen::new(cx);
+            screen.mode = Mode::Library;
+            screen.library_cache.insert(0, plans);
+            screen
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        let second = window.debug_bounds("flow-level-2").unwrap();
+        window.simulate_click(second.center(), gpui_kit::Modifiers::default());
+        window.update(|window, cx| {
+            assert_eq!(screen.read(cx).level, 2);
+            window.render_frame(cx);
+            window.click(SharedString::from("plan-node-task_loop"), cx);
+        });
+        window.update(|_, cx| assert_eq!(screen.read(cx).level, 4));
+        assert!(window.debug_bounds("flow-level-2").is_some());
+        assert!(
+            window.debug_bounds("flow-level-1").is_none(),
+            "unrelated sibling is not an ancestor"
+        );
+        let subtask = window.debug_bounds("flow-level-6").unwrap();
+        window.simulate_click(subtask.center(), gpui_kit::Modifiers::default());
+        window.update(|_, cx| assert_eq!(screen.read(cx).level, 6));
+        let root = window.debug_bounds("flow-level-0").unwrap();
+        window.simulate_click(root.center(), gpui_kit::Modifiers::default());
+        window.update(|window, cx| {
+            assert_eq!(screen.read(cx).level, 0);
+            window.focus_next(cx);
+            window.focus_next(cx);
+            window.render_frame(cx);
+            window.press("enter", cx);
+        });
+        window.update(|_, cx| assert_eq!(screen.read(cx).level, 1));
     }
 }

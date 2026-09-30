@@ -68,6 +68,19 @@ fn main() {
         theme::init();
         theme::sync_component_theme(cx);
         SurgeApp::bind_actions(cx);
+        let quit_shortcut = if cfg!(target_os = "macos") {
+            "cmd-q"
+        } else {
+            "ctrl-q"
+        };
+        cx.bind_keys([KeyBinding::new(quit_shortcut, actions::Quit, None)]);
+        cx.on_action(|_: &actions::Quit, cx| cx.quit());
+        cx.on_window_closed(|cx, _window_id| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(

@@ -13,7 +13,15 @@ use gpui_kit::*;
 
 use crate::theme;
 
-/// Monospace family for the whole shell — one voice, per the design system.
+/// Native sans-serif family for prose, controls, and navigation.
+#[cfg(target_os = "macos")]
+pub const BODY: &str = "Helvetica Neue";
+#[cfg(target_os = "windows")]
+pub const BODY: &str = "Segoe UI";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub const BODY: &str = "sans-serif";
+
+/// Monospace family for code, identifiers, and terminal output.
 ///
 /// A system face on each OS, so nothing is downloaded or bundled: Menlo
 /// ships with every macOS, Consolas with every Windows. On Linux the name
@@ -90,7 +98,7 @@ pub fn pill(text: impl Into<SharedString>, fg: Hsla, bg: Hsla) -> Div {
         .border_1()
         .border_color(fg.opacity(0.38))
         .text_color(fg)
-        .text_size(px(9.5))
+        .text_size(px(11.5))
         .font_weight(FontWeight::BOLD)
         .child(SharedString::from(text.to_uppercase()))
 }
@@ -111,6 +119,7 @@ pub fn kbd(text: impl Into<SharedString>) -> Div {
         .border_color(theme::hairline_strong())
         .bg(theme::panel_deep())
         .text_color(theme::text_muted())
+        .font_family(MONO)
         .text_size(px(10.0))
         .font_weight(FontWeight::SEMIBOLD)
         .child(text.into())
@@ -121,7 +130,7 @@ pub fn section_label(text: impl Into<SharedString>) -> Div {
     let text: SharedString = text.into();
     div()
         .text_color(theme::text_dim())
-        .text_size(px(9.5))
+        .text_size(px(12.0))
         .font_weight(FontWeight::BOLD)
         .child(SharedString::from(text.to_uppercase()))
 }
@@ -130,7 +139,7 @@ pub fn section_label(text: impl Into<SharedString>) -> Div {
 pub fn meta(text: impl Into<SharedString>) -> Div {
     div()
         .text_color(theme::text_muted())
-        .text_size(px(10.0))
+        .text_size(px(13.0))
         .child(text.into())
 }
 
@@ -179,14 +188,14 @@ pub fn page_header(
                 .min_w_0()
                 .child(
                     div()
-                        .text_size(px(18.0))
+                        .text_size(px(24.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme::text_primary())
                         .child(title.into()),
                 )
                 .children(subtitle.map(|sub| {
                     div()
-                        .text_size(px(12.0))
+                        .text_size(px(14.0))
                         .text_color(theme::text_muted())
                         .child(sub)
                 })),
@@ -230,7 +239,7 @@ pub fn empty_state(
         )
         .child(
             div()
-                .text_size(px(13.0))
+                .text_size(px(16.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text_primary())
                 .child(title.into()),
@@ -239,8 +248,8 @@ pub fn empty_state(
             div()
                 .max_w(px(420.0))
                 .text_center()
-                .text_size(px(12.0))
-                .line_height(px(18.0))
+                .text_size(px(14.0))
+                .line_height(px(21.0))
                 .text_color(theme::text_muted())
                 .child(body.into()),
         )
@@ -266,7 +275,7 @@ pub fn legend_chip(role: theme::Semantic, count: Option<usize>) -> Div {
         )
         .child(
             div()
-                .text_size(px(11.0))
+                .text_size(px(13.0))
                 .text_color(theme::text_muted())
                 .child(role.label()),
         )

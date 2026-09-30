@@ -4,6 +4,8 @@ use gpui_kit::*;
 actions!(
     surge,
     [
+        // Application lifecycle
+        Quit,
         // Surface navigation (Ctrl+1..9)
         GoToFleet,
         GoToRoadmap,

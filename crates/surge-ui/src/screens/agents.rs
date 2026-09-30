@@ -7,16 +7,20 @@
 //! to touch (the sandbox delegation matrix per mode), and how it is set up.
 //! "Make default" writes `surge.toml`; "Add agent" opens the catalog.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::base::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_acp::DetectedAgent;
+use surge_core::profile::registry::{Provenance, ResolvedProfile};
+use surge_core::profile::{ExpectedBindingSource, RoleCategory};
 use surge_core::sandbox::SandboxMode;
 use surge_core::sandbox_matrix::{RuntimeSandboxMatrix, default_matrix};
+use surge_orchestrator::profile_loader::ProfileRegistry;
 
 use crate::agent_usage::{Readiness, Usage};
 use crate::app_state::AppState;
@@ -106,9 +110,179 @@ fn fmt_tokens(n: u64) -> String {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgentsTab {
+    Runtimes,
+    Profiles,
+}
+
+struct ProfilePreview {
+    key: String,
+    name: String,
+    resolved: Result<ResolvedProfile, String>,
+}
+
+enum ProfileCatalog {
+    NotLoaded,
+    Loading,
+    Ready(Vec<ProfilePreview>),
+    Failed(String),
+}
+
+fn profile_previews(registry: &ProfileRegistry) -> Vec<ProfilePreview> {
+    let mut seen = HashSet::new();
+    registry
+        .list()
+        .into_iter()
+        .filter_map(|entry| {
+            if entry.profile.role.category == RoleCategory::Bootstrap {
+                return None;
+            }
+            let key = format!("{}@{}", entry.profile.role.id, entry.profile.role.version);
+            if !seen.insert(key.clone()) {
+                return None;
+            }
+            let resolved = surge_core::profile::keyref::parse_key_ref(&key)
+                .map_err(|error| error.to_string())
+                .and_then(|key| registry.resolve(&key).map_err(|error| error.to_string()));
+            if resolved
+                .as_ref()
+                .is_ok_and(|item| item.profile.role.category == RoleCategory::Bootstrap)
+            {
+                return None;
+            }
+            Some(ProfilePreview {
+                key,
+                name: resolved
+                    .as_ref()
+                    .map_or(entry.profile.role.display_name, |item| {
+                        item.profile.role.display_name.clone()
+                    }),
+                resolved,
+            })
+        })
+        .collect()
+}
+
+fn profile_heading(text: impl Into<SharedString>) -> Div {
+    div()
+        .text_size(px(15.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::text_primary())
+        .child(text.into())
+}
+
+const PROFILE_DEFAULTS_NOTICE: &str = "Profile defaults, not effective session settings. Workflow stages and session overrides may change these values.";
+
+fn profile_sections(item: &ResolvedProfile) -> Vec<(String, String)> {
+    let p = &item.profile;
+    let list = |items: &[String]| {
+        if items.is_empty() {
+            "None declared".to_string()
+        } else {
+            items.join("\n")
+        }
+    };
+    let provenance = match item.provenance {
+        Provenance::Versioned => "Versioned",
+        Provenance::Latest => "Latest",
+        Provenance::Bundled => "Bundled",
+    };
+    let bindings = p
+        .bindings
+        .expected
+        .iter()
+        .map(|binding| {
+            let source = match &binding.source {
+                ExpectedBindingSource::NodeOutput { from_role } => {
+                    format!("Node output from {from_role}")
+                },
+                ExpectedBindingSource::RunArtifact => "Run artifact".into(),
+                ExpectedBindingSource::Any => "Any source".into(),
+            };
+            format!(
+                "{} · {source} · {}",
+                binding.name,
+                if binding.optional {
+                    "optional"
+                } else {
+                    "required"
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    let outcomes = p
+        .outcomes
+        .iter()
+        .map(|outcome| {
+            let produced = outcome
+                .produced_artifacts
+                .iter()
+                .map(|artifact| {
+                    format!(
+                        "{} ({:?}, schema {})",
+                        artifact.path, artifact.contract.kind, artifact.contract.schema_version
+                    )
+                })
+                .collect::<Vec<_>>();
+            format!(
+                "{} · {} · {:?}\nRequired artifacts: {}\nProduced artifacts: {}",
+                outcome.id,
+                outcome.description,
+                outcome.edge_kind_hint,
+                list(&outcome.required_artifacts),
+                list(&produced)
+            )
+        })
+        .collect::<Vec<_>>();
+    vec![
+        (
+            "About".into(),
+            format!(
+                "{}\nWhen to use: {}",
+                p.role.description, p.role.when_to_use
+            ),
+        ),
+        (
+            "Origin and inheritance IDs".into(),
+            format!(
+                "{provenance}\n{}",
+                item.chain
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            ),
+        ),
+        (
+            "Runtime defaults".into(),
+            format!(
+                "Agent: {}\nModel: {}\nTemperature: {}\nMax tokens: {}\nSandbox: {:?}",
+                p.runtime.agent_id,
+                p.runtime.recommended_model,
+                p.runtime.default_temperature,
+                p.runtime.default_max_tokens,
+                p.sandbox.mode
+            ),
+        ),
+        ("Default skills".into(), list(&p.tools.default_skills)),
+        ("Default MCP servers".into(), list(&p.tools.default_mcp)),
+        (
+            "Default shell allowlist".into(),
+            list(&p.tools.default_shell_allowlist),
+        ),
+        ("Expected inputs".into(), list(&bindings)),
+        ("Outcomes and artifacts".into(), list(&outcomes)),
+        ("Full prompt template".into(), p.prompt.system.clone()),
+    ]
+}
+
 /// Agents screen.
 pub struct AgentsScreen {
     state: Entity<AppState>,
+    tab: AgentsTab,
+    profiles: ProfileCatalog,
+    selected_profile: Option<String>,
     selected: Option<String>,
     matrix: RuntimeSandboxMatrix,
     usage: HashMap<String, Usage>,
@@ -126,6 +300,9 @@ impl AgentsScreen {
         .detach();
         let mut this = Self {
             state,
+            tab: AgentsTab::Runtimes,
+            profiles: ProfileCatalog::NotLoaded,
+            selected_profile: None,
             selected: None,
             matrix: default_matrix(),
             usage: HashMap::new(),
@@ -135,6 +312,131 @@ impl AgentsScreen {
         };
         this.reload_if_changed(cx);
         this
+    }
+
+    fn show_profiles(&mut self, cx: &mut Context<Self>) {
+        self.tab = AgentsTab::Profiles;
+        if matches!(self.profiles, ProfileCatalog::NotLoaded) {
+            self.profiles = ProfileCatalog::Loading;
+            let task = cx.background_executor().spawn(async {
+                ProfileRegistry::load()
+                    .map(|registry| profile_previews(&registry))
+                    .map_err(|error| error.to_string())
+            });
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let result = task.await;
+                cx.update(|cx| {
+                    let _ = this.update(cx, |screen, cx| {
+                        screen.profiles = match result {
+                            Ok(items) => ProfileCatalog::Ready(items),
+                            Err(error) => ProfileCatalog::Failed(error),
+                        };
+                        cx.notify();
+                    });
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn render_profiles(&self, cx: &mut Context<Self>) -> AnyElement {
+        let items = match &self.profiles {
+            ProfileCatalog::Ready(items) => items,
+            ProfileCatalog::Failed(error) => {
+                return ui::panel()
+                    .child(profile_heading("Could not load profiles"))
+                    .child(error.clone())
+                    .into_any_element();
+            },
+            _ => return ui::panel().child("Loading profiles…").into_any_element(),
+        };
+        let selected = self
+            .selected_profile
+            .as_ref()
+            .and_then(|key| items.iter().find(|item| &item.key == key))
+            .or_else(|| items.first());
+        let mut details = ui::panel()
+            .flex_1()
+            .min_w(px(0.0))
+            .v_flex()
+            .p(px(20.0))
+            .gap(px(16.0));
+        if let Some(item) = selected {
+            details = details
+                .child(profile_heading(item.name.clone()))
+                .child(item.key.clone())
+                .child(
+                    div()
+                        .text_color(theme::text_muted())
+                        .child(PROFILE_DEFAULTS_NOTICE),
+                );
+            match &item.resolved {
+                Ok(resolved) => {
+                    for (heading, body) in profile_sections(resolved) {
+                        let prompt = heading == "Full prompt template";
+                        details = details.child(
+                            div()
+                                .v_flex()
+                                .gap(px(6.0))
+                                .child(profile_heading(heading))
+                                .child(
+                                    div()
+                                        .text_size(px(14.0))
+                                        .text_color(theme::text_primary())
+                                        .when(prompt, |el| el.font_family(ui::MONO))
+                                        .child(body),
+                                ),
+                        );
+                    }
+                },
+                Err(error) => {
+                    details = details
+                        .child(profile_heading("Could not resolve this profile"))
+                        .child(error.clone())
+                },
+            }
+        } else {
+            details = details.child("No profiles available");
+        }
+        let rows = items
+            .iter()
+            .map(|item| {
+                let key = item.key.clone();
+                let selector = format!("profile-{}", item.key);
+                let mut name = item.name.chars().take(19).collect::<String>();
+                if item.name.chars().count() > 19 {
+                    name.push('…');
+                }
+                let version = item.key.rsplit_once('@').map_or("", |(_, version)| version);
+                Button::new(SharedString::from(format!("profile-{}", item.key)))
+                    .accessibility_id(SharedString::from(selector.clone()))
+                    .debug_selector(move || selector.clone())
+                    .ghost()
+                    .label(format!("{name} · {version}"))
+                    .tooltip(format!("{} · {}", item.name, item.key))
+                    .selected(selected.is_some_and(|selected| selected.key == item.key))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected_profile = Some(key.clone());
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
+        div()
+            .h_flex()
+            .items_start()
+            .gap(px(20.0))
+            .child(
+                ui::panel()
+                    .w(px(280.0))
+                    .flex_none()
+                    .v_flex()
+                    .p(px(8.0))
+                    .gap(px(6.0))
+                    .children(rows),
+            )
+            .child(details)
+            .into_any_element()
     }
 
     fn reload_if_changed(&mut self, cx: &mut Context<Self>) {
@@ -739,7 +1041,9 @@ impl Render for AgentsScreen {
                 .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(AgentsAction::OpenCatalog))),
         );
 
-        let body: AnyElement = if agents.is_empty() {
+        let body: AnyElement = if self.tab == AgentsTab::Profiles {
+            self.render_profiles(cx)
+        } else if agents.is_empty() {
             ui::panel()
                 .child(
                     ui::empty_state(
@@ -800,6 +1104,30 @@ impl Render for AgentsScreen {
                 .into_any_element()
         };
 
+        let tabs = div()
+            .h_flex()
+            .gap(px(8.0))
+            .child(
+                Button::new("agents-runtimes-tab")
+                    .accessibility_id("agents-runtimes-tab")
+                    .debug_selector(|| "agents-runtimes-tab".into())
+                    .outline()
+                    .label("Runtimes")
+                    .selected(self.tab == AgentsTab::Runtimes)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.tab = AgentsTab::Runtimes;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("agents-profiles-tab")
+                    .accessibility_id("agents-profiles-tab")
+                    .debug_selector(|| "agents-profiles-tab".into())
+                    .outline()
+                    .label("Profiles")
+                    .selected(self.tab == AgentsTab::Profiles)
+                    .on_click(cx.listener(|this, _, _, cx| this.show_profiles(cx))),
+            );
         div()
             .id("agents-scroll")
             .size_full()
@@ -808,7 +1136,14 @@ impl Render for AgentsScreen {
             .px(px(28.0))
             .pt(px(22.0))
             .pb(px(32.0))
-            .child(div().v_flex().gap(px(18.0)).child(header).child(body))
+            .child(
+                div()
+                    .v_flex()
+                    .gap(px(18.0))
+                    .child(header)
+                    .child(tabs)
+                    .child(body),
+            )
     }
 }
 
@@ -817,6 +1152,218 @@ mod tests {
     use super::{fmt_tokens, readiness_look};
     use crate::agent_usage::Readiness;
     use crate::theme::Semantic;
+
+    #[test]
+    fn profiles_are_discoverable_separately_from_runtimes() {
+        use gpui_kit::{AppContext as _, TestAppContext};
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.installed_agents.clear();
+            state
+        });
+        let view = cx.new(|cx| super::AgentsScreen::new(state, cx));
+        let (_, window) = cx
+            .add_window_view(|window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+        assert!(window.debug_bounds("agents-runtimes-tab").is_some());
+        assert!(window.debug_bounds("agents-profiles-tab").is_some());
+        let items =
+            super::profile_previews(&surge_orchestrator::profile_loader::ProfileRegistry::new(
+                surge_orchestrator::profile_loader::DiskProfileSet::empty(),
+            ));
+        let key = items
+            .iter()
+            .find(|item| item.key == "implementer@1.0.0")
+            .unwrap()
+            .key
+            .clone();
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.profiles = super::ProfileCatalog::Ready(items);
+                cx.notify();
+            })
+        });
+        let tab = window.debug_bounds("agents-profiles-tab").unwrap();
+        window.simulate_click(tab.center(), gpui_kit::Modifiers::default());
+        let row = window.debug_bounds("profile-implementer@1.0.0").unwrap();
+        window.simulate_click(row.center(), gpui_kit::Modifiers::default());
+        window.update(|_, cx| {
+            assert_eq!(
+                view.read(cx).selected_profile.as_deref(),
+                Some(key.as_str())
+            )
+        });
+        let runtime = window.debug_bounds("agents-runtimes-tab").unwrap();
+        window.simulate_click(runtime.center(), gpui_kit::Modifiers::default());
+        window.simulate_click(tab.center(), gpui_kit::Modifiers::default());
+        window.update(|_, cx| {
+            assert_eq!(
+                view.read(cx).selected_profile.as_deref(),
+                Some(key.as_str())
+            );
+            assert!(matches!(
+                view.read(cx).profiles,
+                super::ProfileCatalog::Ready(_)
+            ));
+        });
+    }
+
+    #[test]
+    fn bundled_profiles_are_resolved_by_version_and_hide_bootstrap() {
+        use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
+        let registry = ProfileRegistry::new(DiskProfileSet::empty());
+        let items = super::profile_previews(&registry);
+        assert!(
+            items
+                .iter()
+                .any(|item| item.key.starts_with("implementer@"))
+        );
+        assert!(items.iter().all(|item| {
+            item.resolved.as_ref().is_ok_and(|resolved| {
+                resolved.profile.role.category != surge_core::profile::RoleCategory::Bootstrap
+            })
+        }));
+        assert!(items.iter().all(|item| item.key.contains('@')));
+        let implementer = items
+            .iter()
+            .find(|item| item.key.starts_with("implementer@"))
+            .unwrap()
+            .resolved
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            implementer.provenance,
+            surge_core::profile::registry::Provenance::Bundled
+        );
+        assert!(
+            implementer
+                .profile
+                .tools
+                .default_skills
+                .iter()
+                .any(|skill| skill == "aif-implement")
+        );
+        assert!(super::PROFILE_DEFAULTS_NOTICE.contains("not effective session settings"));
+    }
+
+    #[test]
+    fn disk_profiles_show_inherited_defaults_full_template_and_resolution_errors() {
+        use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = |id: &str, extends: &str, prompt: &str| {
+            format!(
+                r#"
+schema_version = 1
+[role]
+id = "{id}"
+version = "1.0.0"
+display_name = "Fixture {id}"
+category = "agents"
+description = "Fixture description"
+when_to_use = "Fixture use"
+extends = "{extends}"
+[runtime]
+recommended_model = "fixture-model"
+[[outcomes]]
+id = "done"
+description = "Reviewed result"
+edge_kind_hint = "forward"
+required_artifacts = ["result.md"]
+[prompt]
+system = "{prompt}"
+"#
+            )
+        };
+        std::fs::write(
+            dir.path().join("specialist-1.0.toml"),
+            fixture(
+                "specialist",
+                "implementer@1.0",
+                "FULL TEMPLATE START {{ context }} END",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("broken-1.0.toml"),
+            fixture("broken", "does-not-exist@1.0", "broken template"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("specialist.toml"),
+            fixture("specialist", "implementer@1.0", "LATEST WRONG TEMPLATE")
+                .replace("Fixture specialist", "Latest duplicate name"),
+        )
+        .unwrap();
+        let items = super::profile_previews(&ProfileRegistry::new(
+            DiskProfileSet::scan(dir.path()).unwrap(),
+        ));
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item.key == "specialist@1.0.0")
+                .count(),
+            1
+        );
+        assert_eq!(
+            items
+                .iter()
+                .find(|item| item.key == "specialist@1.0.0")
+                .unwrap()
+                .name,
+            "Fixture specialist"
+        );
+        let specialist = items
+            .iter()
+            .find(|item| item.key == "specialist@1.0.0")
+            .unwrap()
+            .resolved
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            specialist.provenance,
+            surge_core::profile::registry::Provenance::Versioned
+        );
+        assert!(
+            specialist
+                .chain
+                .iter()
+                .any(|id| id.as_str() == "implementer")
+        );
+        assert!(
+            specialist
+                .profile
+                .tools
+                .default_skills
+                .iter()
+                .any(|skill| skill == "aif-implement")
+        );
+        let sections = super::profile_sections(specialist);
+        assert_eq!(
+            sections
+                .iter()
+                .find(|(title, _)| title == "Full prompt template")
+                .unwrap()
+                .1,
+            "FULL TEMPLATE START {{ context }} END"
+        );
+        assert!(
+            sections
+                .iter()
+                .find(|(title, _)| title == "Outcomes and artifacts")
+                .unwrap()
+                .1
+                .contains("result.md")
+        );
+        assert!(
+            items
+                .iter()
+                .find(|item| item.key == "broken@1.0.0")
+                .unwrap()
+                .resolved
+                .is_err()
+        );
+    }
 
     #[test]
     fn readiness_is_never_optimistic_before_it_is_known() {

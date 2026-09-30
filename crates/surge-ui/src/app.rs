@@ -43,6 +43,13 @@ struct BootstrapIndexEntry {
 /// Reconnect attempts (1s apart) after a live daemon link drops.
 const DAEMON_RECONNECT_ATTEMPTS: u32 = 60;
 
+#[derive(Clone)]
+enum DispatchOrigin {
+    Wizard(Entity<SpecWizardScreen>),
+    Fleet(Entity<FleetScreen>),
+    Other(Screen),
+}
+
 /// Root application view.
 pub struct SurgeApp {
     state: Entity<AppState>,
@@ -57,6 +64,8 @@ pub struct SurgeApp {
     command_palette: Option<Entity<CommandPalette>>,
     // Screen entities (created on demand).
     fleet: Option<Entity<FleetScreen>>,
+    fleet_drafts: HashMap<PathBuf, Entity<FleetScreen>>,
+    accepted_planning_runs: HashMap<surge_core::RunId, surge_core::RunId>,
     flow: Option<Entity<FlowScreen>>,
     memory: Option<Entity<MemoryScreen>>,
     runs_screen: Option<Entity<RunsScreen>>,
@@ -66,6 +75,7 @@ pub struct SurgeApp {
     agents_screen: Option<Entity<AgentsScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
+    wizard_return_screen: Screen,
     wizard_drafts: HashMap<PathBuf, Entity<SpecWizardScreen>>,
     agent_terminal: Option<Entity<AgentTerminalScreen>>,
     settings: Option<Entity<SettingsScreen>>,
@@ -77,6 +87,11 @@ pub struct SurgeApp {
     /// here because the RunsScreen entity is created lazily — calling
     /// select_run before it exists would silently drop the selection.
     pending_run_selection: Option<surge_core::id::RunId>,
+    pending_run_tab: Option<crate::screens::runs::RunTab>,
+    pending_task_selection: Option<(
+        surge_core::roadmap::MilestoneId,
+        surge_core::roadmap::RoadmapTaskId,
+    )>,
     bootstrap_operations: HashMap<
         surge_core::RunId,
         (
@@ -144,6 +159,8 @@ impl SurgeApp {
             command_palette_open: false,
             command_palette: None,
             fleet: None,
+            fleet_drafts: HashMap::new(),
+            accepted_planning_runs: HashMap::new(),
             flow: None,
             memory: None,
             runs_screen: None,
@@ -154,11 +171,14 @@ impl SurgeApp {
             agent_terminal: None,
             agent_hub: None,
             spec_wizard: None,
+            wizard_return_screen: Screen::Fleet,
             wizard_drafts: HashMap::new(),
             settings: None,
             pending_notifications: Vec::new(),
             stream_subscribed: HashSet::new(),
             pending_run_selection: None,
+            pending_run_tab: None,
+            pending_task_selection: None,
             bootstrap_operations: HashMap::new(),
             bootstrap_index: Self::load_bootstrap_index(),
         }
@@ -168,6 +188,8 @@ impl SurgeApp {
     /// Selection is parked in `pending_run_selection` and applied when
     /// the (lazily created) RunsScreen renders.
     fn open_run_cockpit(&mut self, run_id: Option<surge_core::id::RunId>, cx: &mut Context<Self>) {
+        self.pending_task_selection = None;
+        self.pending_run_tab = None;
         self.pending_run_selection = run_id;
         self.navigate(Screen::Runs, cx);
     }
@@ -232,7 +254,12 @@ impl SurgeApp {
     /// implementation run; a plain planning run stopped after the flow gate
     /// and never built anything.
     fn dispatch_run(&mut self, prompt: String, cx: &mut Context<Self>) {
-        self.dispatch_bootstrap(prompt, surge_core::RunId::new(), None, cx);
+        self.dispatch_bootstrap(
+            prompt,
+            surge_core::RunId::new(),
+            DispatchOrigin::Other(self.active_screen),
+            cx,
+        );
     }
 
     /// Submit a stable, daemon-owned application operation and retain its identity locally.
@@ -240,13 +267,13 @@ impl SurgeApp {
         &mut self,
         prompt: String,
         operation_id: surge_core::RunId,
-        origin: Option<Entity<SpecWizardScreen>>,
+        origin: DispatchOrigin,
         cx: &mut Context<Self>,
     ) {
         if prompt.trim().is_empty() {
             self.dispatch_failed(
                 operation_id,
-                origin.as_ref(),
+                &origin,
                 "Describe what you want to build before starting.".into(),
                 cx,
             );
@@ -256,12 +283,16 @@ impl SurgeApp {
         let Some(project_path) = project_path else {
             self.dispatch_failed(
                 operation_id,
-                origin.as_ref(),
+                &origin,
                 "Open a configured Git project before starting.".into(),
                 cx,
             );
             return;
         };
+        if let Some(error) = self.state.read(cx).project_load_error.clone() {
+            self.dispatch_failed(operation_id, &origin, error, cx);
+            return;
+        }
         let budget = self
             .state
             .read(cx)
@@ -273,7 +304,7 @@ impl SurgeApp {
         if budget.limits.usd.is_some() {
             self.dispatch_failed(
                 operation_id,
-                origin.as_ref(),
+                &origin,
                 "This build cannot start safely: durable application runs cannot enforce a USD cap across planning and implementation yet. Remove the USD cap or set a token-only limit in project Settings, then retry.".into(),
                 cx,
             );
@@ -282,7 +313,7 @@ impl SurgeApp {
         let Some(facade) = self.state.read(cx).daemon_state.facade() else {
             self.dispatch_failed(
                 operation_id,
-                origin.as_ref(),
+                &origin,
                 "Daemon offline. Start it from the sidebar, then retry.".into(),
                 cx,
             );
@@ -319,9 +350,10 @@ impl SurgeApp {
                         app.bootstrap_operations
                             .insert(operation_id, (project_path.clone(), status.clone()));
                         app.dispatch_accepted(
+                            operation_id,
                             status.planning_run,
                             &project_path,
-                            origin.as_ref(),
+                            &origin,
                             cx,
                         );
                         app.track_bootstrap_operation(
@@ -334,7 +366,7 @@ impl SurgeApp {
                 },
                 Err(error) => {
                     let _ = this.update(cx, |app, cx| {
-                        app.dispatch_failed(operation_id, origin.as_ref(), error, cx);
+                        app.dispatch_failed(operation_id, &origin, error, cx);
                     });
                 },
             }
@@ -528,7 +560,12 @@ impl SurgeApp {
                 run_id,
                 description,
             } => {
-                self.dispatch_bootstrap(description.clone(), *run_id, Some(wizard.clone()), cx);
+                self.dispatch_bootstrap(
+                    description.clone(),
+                    *run_id,
+                    DispatchOrigin::Wizard(wizard.clone()),
+                    cx,
+                );
             },
             SpecWizardEvent::OpenRun(run_id) => {
                 let draft = wizard.read(cx);
@@ -543,23 +580,43 @@ impl SurgeApp {
                     self.wizard_drafts.remove(&project_path);
                 }
                 self.spec_wizard = None;
-                self.open_run_cockpit(Some(*run_id), cx);
+                self.open_run_cockpit(
+                    Some(
+                        self.accepted_planning_runs
+                            .get(run_id)
+                            .copied()
+                            .unwrap_or(*run_id),
+                    ),
+                    cx,
+                );
             },
-            SpecWizardEvent::Cancel => self.navigate(Screen::Backlog, cx),
+            SpecWizardEvent::Cancel => {
+                if self.active_screen == Screen::SpecWizard
+                    && self.spec_wizard.as_ref() == Some(&wizard)
+                    && self.state.read(cx).project_path.as_ref()
+                        == Some(&wizard.read(cx).project_path)
+                {
+                    self.navigate(self.wizard_return_screen, cx);
+                }
+            },
         }
     }
 
     fn dispatch_failed(
         &mut self,
         run_id: surge_core::RunId,
-        origin: Option<&Entity<SpecWizardScreen>>,
+        origin: &DispatchOrigin,
         error: String,
         cx: &mut Context<Self>,
     ) {
         self.stream_subscribed.remove(&run_id);
-        if let Some(wizard) = origin {
+        if let DispatchOrigin::Wizard(wizard) = origin {
             wizard.update(cx, |wizard, cx| {
                 wizard.finish_submission(run_id, Err(error), cx);
+            });
+        } else if let DispatchOrigin::Fleet(fleet) = origin {
+            fleet.update(cx, |fleet, cx| {
+                fleet.finish_submission(run_id, Err(error), cx);
             });
         } else {
             self.pending_notifications
@@ -570,29 +627,41 @@ impl SurgeApp {
 
     fn dispatch_accepted(
         &mut self,
+        operation_id: surge_core::RunId,
         run_id: surge_core::RunId,
         project_path: &std::path::Path,
-        origin: Option<&Entity<SpecWizardScreen>>,
+        origin: &DispatchOrigin,
         cx: &mut Context<Self>,
     ) {
         self.state.update(cx, |state, cx| {
             state.run_streams.entry(run_id).or_default().live = true;
             cx.notify();
         });
+        self.accepted_planning_runs.insert(operation_id, run_id);
         let same_project = self.state.read(cx).project_path.as_deref() == Some(project_path);
-        let show_run = if let Some(wizard) = origin {
+        let show_run = if let DispatchOrigin::Wizard(wizard) = origin {
             let applied = wizard.update(cx, |wizard, cx| {
-                wizard.finish_submission(run_id, Ok(()), cx)
+                wizard.finish_submission(operation_id, Ok(()), cx)
             });
             applied
                 && same_project
                 && self.active_screen == Screen::SpecWizard
                 && self.spec_wizard.as_ref() == Some(wizard)
+        } else if let DispatchOrigin::Fleet(fleet) = origin {
+            let applied = fleet.update(cx, |fleet, cx| {
+                fleet.finish_submission(operation_id, Ok(()), cx)
+            });
+            applied
+                && same_project
+                && self.active_screen == Screen::Fleet
+                && self.fleet.as_ref() == Some(fleet)
+        } else if let DispatchOrigin::Other(screen) = origin {
+            same_project && self.active_screen == *screen
         } else {
-            same_project
+            false
         };
         if show_run {
-            if origin.is_some() {
+            if matches!(origin, DispatchOrigin::Wizard(_)) {
                 self.wizard_drafts.remove(project_path);
                 self.spec_wizard = None;
             }
@@ -736,7 +805,6 @@ impl SurgeApp {
             },
             WelcomeEvent::NewProject => self.create_project(cx),
             WelcomeEvent::BrowseProject => {
-                self.close_run_preview(cx);
                 // Native directory picker dialog.
                 let receiver = cx.prompt_for_paths(PathPromptOptions {
                     files: false,
@@ -795,7 +863,6 @@ impl SurgeApp {
             cx.notify();
             return;
         }
-        self.close_run_preview(cx);
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -806,6 +873,11 @@ impl SurgeApp {
         recent.touch(&name, path);
         let _ = recent.save();
 
+        if let (Some(project), Some(fleet)) =
+            (self.state.read(cx).project_path.clone(), self.fleet.take())
+        {
+            self.fleet_drafts.insert(project, fleet);
+        }
         // Load project data into AppState.
         self.state.update(cx, |state, _cx| {
             state.load_project(path);
@@ -815,7 +887,7 @@ impl SurgeApp {
         self.install_top_bar(&name, path, cx);
 
         // Reset screen entities so they re-read from AppState.
-        self.fleet = None;
+        self.fleet = self.fleet_drafts.remove(path);
         self.flow = None;
         self.memory = None;
         self.runs_screen = None;
@@ -826,6 +898,7 @@ impl SurgeApp {
         self.agent_hub = None;
         self.agent_terminal = None;
         self.spec_wizard = None;
+        self.wizard_return_screen = Screen::Fleet;
         self.settings = None;
 
         self.mode = AppMode::Project {
@@ -844,7 +917,7 @@ impl SurgeApp {
         cx.subscribe(
             &top_bar,
             |this, _bar, event: &TopBarEvent, cx| match event {
-                TopBarEvent::ProjectSwitcherOpened => this.close_run_preview(cx),
+                TopBarEvent::ProjectSwitcherOpened => {},
                 TopBarEvent::SwitchProject(path) => this.open_project(path, cx),
                 TopBarEvent::OpenOther => {
                     this.handle_welcome_event(WelcomeEvent::BrowseProject, cx);
@@ -858,7 +931,6 @@ impl SurgeApp {
     }
 
     fn create_project(&mut self, cx: &mut Context<Self>) {
-        self.close_run_preview(cx);
         // Reuse the open project's agent settings; on a first launch there is
         // none, so fall back to the same detected-agent default as
         // `surge init --default` rather than refusing to create anything.
@@ -899,15 +971,14 @@ impl SurgeApp {
         .detach();
     }
 
-    fn close_run_preview(&mut self, cx: &mut Context<Self>) {
-        if let Some(runs) = &self.runs_screen {
-            runs.update(cx, |screen, cx| screen.close_preview(cx));
-        }
-    }
-
     fn navigate(&mut self, screen: Screen, cx: &mut Context<Self>) {
-        if screen != Screen::Runs {
-            self.close_run_preview(cx);
+        if screen == Screen::Flow
+            && let Some(flow) = &self.flow
+        {
+            flow.update(cx, |flow, cx| flow.show_project_plan(cx));
+        }
+        if screen == Screen::SpecWizard && self.active_screen != Screen::SpecWizard {
+            self.wizard_return_screen = self.active_screen;
         }
         self.active_screen = screen;
         self.sidebar.update(cx, |sb, cx| sb.set_active(screen, cx));
@@ -1199,7 +1270,6 @@ impl SurgeApp {
     }
 
     fn open_palette(&mut self, cx: &mut Context<Self>) {
-        self.close_run_preview(cx);
         let palette = cx.new(CommandPalette::new);
         cx.subscribe(
             &palette,
@@ -1269,8 +1339,18 @@ impl SurgeApp {
                             FleetAction::OpenRun(run_id) => {
                                 this.open_run_cockpit(*run_id, cx);
                             },
-                            FleetAction::Dispatch(prompt) => {
-                                this.dispatch_run(prompt.clone(), cx);
+                            FleetAction::OpenResult(run, tab) => {
+                                this.open_run_cockpit(Some(*run), cx);
+                                this.pending_run_tab = Some(*tab);
+                            },
+                            FleetAction::NewTask => this.navigate(Screen::SpecWizard, cx),
+                            FleetAction::Dispatch(operation_id, prompt) => {
+                                this.dispatch_bootstrap(
+                                    prompt.clone(),
+                                    *operation_id,
+                                    DispatchOrigin::Fleet(_f.clone()),
+                                    cx,
+                                );
                             },
                         }
                     })
@@ -1306,6 +1386,12 @@ impl SurgeApp {
                 if let Some(run_id) = self.pending_run_selection.take() {
                     s.update(cx, |screen, cx| screen.select_run(run_id, cx));
                 }
+                if let Some((milestone, task)) = self.pending_task_selection.take() {
+                    s.update(cx, |screen, cx| screen.select_task(milestone, task, cx));
+                }
+                if let Some(tab) = self.pending_run_tab.take() {
+                    s.update(cx, |screen, cx| screen.select_tab(tab, cx));
+                }
                 s.into_any_element()
             },
             Screen::ContextMemory => {
@@ -1333,6 +1419,15 @@ impl SurgeApp {
                         &r,
                         |this: &mut Self, _r, event: &RoadmapEvent, cx| match event {
                             RoadmapEvent::DescribeApp => this.navigate(Screen::Fleet, cx),
+                            RoadmapEvent::OpenTask {
+                                run,
+                                milestone,
+                                task,
+                            } => {
+                                this.open_run_cockpit(Some(*run), cx);
+                                this.pending_task_selection =
+                                    Some((milestone.clone(), task.clone()));
+                            },
                         },
                     )
                     .detach();
@@ -1350,7 +1445,19 @@ impl SurgeApp {
                             InboxAction::OpenRun(run_id) => {
                                 this.open_run_cockpit(Some(*run_id), cx);
                             },
-                            InboxAction::OpenPlan => this.navigate(Screen::Flow, cx),
+                            InboxAction::OpenPlan {
+                                run_id,
+                                decision_seq,
+                            } => {
+                                this.navigate(Screen::Flow, cx);
+                                let state = this.state.clone();
+                                let flow = this.flow.get_or_insert_with(|| {
+                                    cx.new(|cx| FlowScreen::with_state(state, cx))
+                                });
+                                flow.update(cx, |flow, cx| {
+                                    flow.select_plan(*run_id, Some(*decision_seq), cx)
+                                });
+                            },
                         },
                     )
                     .detach();
@@ -1528,7 +1635,7 @@ impl Render for SurgeApp {
                         this.handle_welcome_event(WelcomeEvent::BrowseProject, cx)
                     }))
                     .size_full()
-                    .font_family(crate::ui::MONO)
+                    .font_family(crate::ui::BODY)
                     .child(welcome.clone())
                     .into_any_element(),
                 AppMode::Project { .. } => {
@@ -1536,7 +1643,7 @@ impl Render for SurgeApp {
                         .key_context("SurgeApp")
                         .track_focus(&self.focus)
                         .size_full()
-                        .font_family(crate::ui::MONO)
+                        .font_family(crate::ui::BODY)
                         .bg(theme::background())
                         .text_color(theme::text_primary())
                         .on_action(cx.listener(|this, _: &GoToFleet, _w, cx| {
@@ -1619,7 +1726,7 @@ impl Render for SurgeApp {
         div()
             .size_full()
             .v_flex()
-            .font_family(crate::ui::MONO)
+            .font_family(crate::ui::BODY)
             .bg(theme::background())
             .child(self.render_title_bar())
             .child(div().flex_1().min_h_0().child(content))

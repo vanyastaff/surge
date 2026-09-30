@@ -1,9 +1,5 @@
-//! Design tokens for the desktop app — "The Evidence Console".
-//!
-//! Adapted from Archify's design system (see `docs/design/desktop.md`): a
-//! midnight canvas, one mono voice, and a fixed semantic color vocabulary
-//! where every saturated color names *who is acting* — an agent, a plan,
-//! a verifier, you, or a failure. Color is never decoration.
+//! Native workbench design tokens: readable prose, quiet surfaces, and
+//! semantic colors for progress, decisions, and evidence.
 //!
 //! Screens read tokens through the free functions below; the palette lives
 //! in a thread-local so a theme switch re-colors every surface on the next
@@ -46,27 +42,26 @@ impl SurgeThemeColors {
     fn dark(primary: Hsla) -> Self {
         Self {
             primary,
-            // Canvas #020617 · mask #0F172A · border #1E293B (Tailwind slate).
-            background: rgb(0x020617),
-            panel_deep: rgb(0x01040F),
-            panel: rgb(0x060D1F),
-            sidebar_bg: rgb(0x040A1A),
-            surface: rgb(0x111A2E),
-            panel_raised: rgb(0x0B1427),
-            hairline: rgb(0x1E293B),
-            hairline_strong: rgb(0x334155),
-            graph_line: rgb(0x3B4A63),
+            background: rgb(0x181A1E),
+            panel_deep: rgb(0x151619),
+            panel: rgb(0x202227),
+            sidebar_bg: rgb(0x202227),
+            surface: rgb(0x2C2F35),
+            panel_raised: rgb(0x25282E),
+            hairline: rgb(0x383C43),
+            hairline_strong: rgb(0x4A505A),
+            graph_line: rgb(0x747D8A),
             grid: rgba(0x94A3B8, 0.055),
-            text_primary: rgb(0xF1F5F9),
-            text_muted: rgb(0x94A3B8),
-            text_dim: rgb(0x64748B),
+            text_primary: rgb(0xF0F1F3),
+            text_muted: rgb(0xB8BEC8),
+            text_dim: rgb(0xA3A9B3),
             success: rgb(0x34D399),
             warning: rgb(0xFBBF24),
             error: rgb(0xFB7185),
             violet: rgb(0xA78BFA),
             orange: rgb(0xFB923C),
             slate: rgb(0x94A3B8),
-            on_accent: rgb(0x020617),
+            on_accent: rgb(0x151619),
             dark: true,
         }
     }
@@ -74,22 +69,22 @@ impl SurgeThemeColors {
     fn light(primary: Hsla) -> Self {
         Self {
             primary,
-            background: rgb(0xF8FAFC),
-            panel_deep: rgb(0xF1F5F9),
-            panel: rgb(0xF8FAFC),
-            sidebar_bg: rgb(0xF1F5F9),
-            surface: rgb(0xE2E8F0),
+            background: rgb(0xFAF9F7),
+            panel_deep: rgb(0xF4F2EE),
+            panel: rgb(0xF3F2EF),
+            sidebar_bg: rgb(0xF3F2EF),
+            surface: rgb(0xEEEDE9),
             panel_raised: rgb(0xFFFFFF),
-            hairline: rgb(0xE2E8F0),
-            hairline_strong: rgb(0xCBD5E1),
-            graph_line: rgb(0x94A3B8),
+            hairline: rgb(0xDEDDD7),
+            hairline_strong: rgb(0xC5C6C8),
+            graph_line: rgb(0x8A929D),
             grid: rgba(0x0F172A, 0.05),
-            text_primary: rgb(0x0F172A),
-            text_muted: rgb(0x475569),
-            text_dim: rgb(0x94A3B8),
-            success: rgb(0x059669),
-            warning: rgb(0xD97706),
-            error: rgb(0xE11D48),
+            text_primary: rgb(0x20252D),
+            text_muted: rgb(0x515B68),
+            text_dim: rgb(0x626A77),
+            success: rgb(0x147D54),
+            warning: rgb(0xA85F08),
+            error: rgb(0xC5384B),
             violet: rgb(0x7C3AED),
             orange: rgb(0xEA580C),
             slate: rgb(0x64748B),
@@ -180,7 +175,7 @@ impl ThemeName {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Signal => "Verified cyan on a midnight console",
+            Self::Signal => "Cyan for active work",
             Self::Proof => "Evidence green as the focus color",
             Self::Violet => "Repository violet, calm and dense",
             Self::Amber => "The original Surge amber",
@@ -244,10 +239,10 @@ impl Semantic {
 
 thread_local! {
     static COLORS: RefCell<SurgeThemeColors> = RefCell::new(
-        SurgeThemeColors::dark(ThemeName::Signal.accent_for(true))
+        SurgeThemeColors::light(ThemeName::Ocean.accent_for(false))
     );
     static CURRENT: RefCell<(ThemeName, ThemeMode)> =
-        const { RefCell::new((ThemeName::Signal, ThemeMode::Dark)) };
+        const { RefCell::new((ThemeName::Ocean, ThemeMode::Light)) };
 }
 
 /// Persisted appearance choice (`$SURGE_HOME/ui/appearance.json`).
@@ -255,6 +250,15 @@ thread_local! {
 struct Appearance {
     theme: ThemeName,
     mode: ThemeMode,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            theme: ThemeName::Ocean,
+            mode: ThemeMode::Light,
+        }
+    }
 }
 
 fn appearance_path() -> Option<PathBuf> {
@@ -282,13 +286,10 @@ fn save_appearance(appearance: Appearance) {
     }
 }
 
-/// Load the persisted appearance (or the Signal/Dark default) into the
+/// Load the persisted appearance (or the Ocean/Light default) into the
 /// token store. Call once at startup, before the first window renders.
 pub fn init() {
-    let Appearance { theme, mode } = load_appearance().unwrap_or(Appearance {
-        theme: ThemeName::Signal,
-        mode: ThemeMode::Dark,
-    });
+    let Appearance { theme, mode } = load_appearance().unwrap_or_default();
     set_palette(theme, mode);
 }
 
@@ -328,9 +329,9 @@ pub fn sync_component_theme(cx: &mut App) {
     };
     Theme::change(mode, None, cx);
     Theme::update(cx, |t| {
-        t.font_family = crate::ui::MONO.into();
+        t.font_family = crate::ui::BODY.into();
         t.mono_font_family = crate::ui::MONO.into();
-        t.font_size = gpui_kit::px(13.0);
+        t.font_size = gpui_kit::px(15.0);
         t.mono_font_size = gpui_kit::px(12.0);
         t.radius = gpui_kit::px(6.0);
         t.radius_lg = gpui_kit::px(12.0);
@@ -581,4 +582,58 @@ pub fn tint(color: Hsla) -> Hsla {
 /// Border for a semantic node.
 pub fn stroke(color: Hsla) -> Hsla {
     color.opacity(if is_dark() { 0.62 } else { 0.75 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Appearance, SurgeThemeColors, ThemeMode, ThemeName};
+
+    #[test]
+    fn new_install_defaults_preserve_saved_appearance_choices() {
+        let defaults = Appearance::default();
+        assert_eq!(
+            (defaults.theme, defaults.mode),
+            (ThemeName::Ocean, ThemeMode::Light)
+        );
+        let saved: Appearance =
+            serde_json::from_str(r#"{"theme":"Signal","mode":"Dark"}"#).unwrap();
+        assert_eq!(
+            (saved.theme, saved.mode),
+            (ThemeName::Signal, ThemeMode::Dark)
+        );
+    }
+
+    #[test]
+    fn workbench_palette_keeps_secondary_text_readable() {
+        fn luminance(color: gpui_kit::Hsla) -> f32 {
+            fn linear(component: f32) -> f32 {
+                if component <= 0.04045 {
+                    component / 12.92
+                } else {
+                    ((component + 0.055) / 1.055).powf(2.4)
+                }
+            }
+            let color = color.to_rgb();
+            0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+        }
+        for colors in [
+            SurgeThemeColors::light(ThemeName::Ocean.accent_for(false)),
+            SurgeThemeColors::dark(ThemeName::Ocean.accent_for(true)),
+        ] {
+            for text in [colors.text_primary, colors.text_muted, colors.text_dim] {
+                for background in [
+                    colors.background,
+                    colors.panel,
+                    colors.surface,
+                    colors.panel_raised,
+                ] {
+                    let foreground = luminance(text);
+                    let background = luminance(background);
+                    let contrast =
+                        (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05);
+                    assert!(contrast >= 4.5, "body text contrast is {contrast}");
+                }
+            }
+        }
+    }
 }

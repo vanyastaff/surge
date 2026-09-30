@@ -163,3 +163,44 @@ submission; durable isolated bootstrap through implementation; decisions and
 recovery; preview/changes/checks; then comparative efficiency measurements.
 Each slice needs visible end-to-end evidence. The tracked queue is
 [project completion](../.ai-factory/plans/project-completion.md).
+
+## Installed Agentlas Desktop: native inspection, September 29
+
+The user installed Agentlas and requested an inspection. The installed application
+`/Applications/Agentlas.app` reports version **1.2.51** in its bundle metadata;
+its Work readiness panel also displays 1.2.51. This adds native UI observations
+to the earlier source-only audit. It does not retroactively turn that source
+audit into an execution benchmark.
+
+### Surfaces inspected
+
+| Step | Native observation | Assessment and implication for Surge |
+|---|---|---|
+| One landing | A standing CEO/orchestrator, Team/Sessions/Mail navigation, taskforces, teammates, ordinary-language request composer and suggested tasks covering social media, newsletters and a store homepage. | A low-friction entry fits non-developers. Surge should start from a desired result and explain the team/process afterward. |
+| Work dashboard | Projects, approvals, orchestrator/worker model priorities, runtime connections, agent toolbox, Hub and machine readiness. No project tasks existed in this installation. | Capabilities are visible, but the initial screen is dense. Prefer actionable readiness over exposing the entire configuration surface. Connection status is not proof of successful execution. |
+| Automations | Natural-language draft input, Hub graph installation and Graphs/One automations views. The list was empty. | Reusable processes can be created from an outcome rather than manual wiring alone; execution was not observed. |
+| New automation form | Schedule, file/folder and predecessor triggers; project source/instructions/memory; team/single/Hub selection; default or pinned model; browser/computer-use choices; prompt; Create and blank-canvas actions. Installed teams and agents were empty; blank canvas was disabled in the untouched form. | Important configuration exists, but the form requires setup decisions before reaching a graph. Do not infer that canvas editing is broken; it was not exercised. Do not copy this configuration burden into the ordinary-user journey. |
+| Profile and rules | Existing One profile exposes name, role and personality/preferences; another panel manages user-saved rules. The teammate creation form states that each teammate has its own chat and memory and offers a model choice or an existing agent. | Separate persona, durable rules, task context and available tools. A friendly profile form does not prove context isolation or memory correctness. |
+
+Dialogs were closed without saving a profile or creating an automation. No agent
+execution, external communication, package installation, provider-fallback test,
+restart-recovery test or comparative cost measurement was performed. Screens were
+observed through native Computer Use; no persistent screenshot set was produced,
+so these are inspection notes, not a completed screenshot audit.
+
+### Published design versus measured behavior
+
+[Agentlas OS](https://github.com/agentlas-ai/Agentlas-OS) describes task splitting,
+sourcing specialists, pinned package identities, separate planning/work/verification
+invocations and evidence receipts. These are published contracts, not measured
+results from this installation.
+
+[Agentlas Graph](https://agentlas.cloud/updates/automation-tools-are-not-ai) describes
+agent slots alongside deterministic steps, verification/rewrite loops and shareable
+graph packages. Its broad superiority claims about other automation products are
+vendor positioning; this inspection did not establish those comparisons.
+
+For Surge, the concrete target remains: describe the outcome, inspect a generated
+plan and staffed process, explore roadmap/milestone/task/subtask occurrences, change
+future work, and inspect a working result with evidence. Editable graphs and role
+amendment during a mission must be demonstrated in Surge before being claimed.

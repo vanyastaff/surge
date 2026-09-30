@@ -4,7 +4,8 @@
 //! bootstrap (description → roadmap → flow, each approved by you), then the
 //! roadmap's milestones — each running its own steps around an inner task
 //! loop — and inside each milestone the tasks, each running its own steps
-//! (spec → build → check …, with retries). Final steps run after the loops.
+//! (spec → build → check …, with retries) and any recorded subtask loops.
+//! Final steps run after the loops.
 //!
 //! [`fold`] turns the planning run's and the implementation run's events,
 //! plus the run graph and the approved roadmap, into that hierarchy. It is
@@ -30,6 +31,14 @@ pub enum StepState {
     Unfinished,
 }
 
+/// Participant identity recorded when the stage opened its actual session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedParticipant {
+    pub profile: String,
+    pub runtime: Option<String>,
+    pub session: surge_core::SessionId,
+}
+
 /// One step of a level's own flow (a graph node as it ran).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step {
@@ -40,6 +49,18 @@ pub struct Step {
     pub attempts: u32,
     /// The agent's own one-line report, when it gave one.
     pub summary: Option<String>,
+    pub participant: Option<RecordedParticipant>,
+    /// Binding names only; no hashes or resolved content are presented.
+    pub inputs: Option<Vec<String>>,
+    pub skills: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IterationState {
+    Planned,
+    Running,
+    Finished(String),
+    Unfinished,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +70,8 @@ pub struct TaskView {
     pub status: RoadmapStatus,
     pub verified: bool,
     pub steps: Vec<Step>,
+    pub subtasks: Vec<TaskView>,
+    pub iteration: IterationState,
     /// Found while doing another task.
     pub discovered_from: Option<RoadmapTaskId>,
 }
@@ -100,7 +123,7 @@ pub struct Mission {
 }
 
 /// Loop scope while folding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Scope {
     Milestone {
         loop_id: String,
@@ -110,6 +133,7 @@ enum Scope {
         loop_id: String,
         milestone: usize,
         index: usize,
+        subtasks: Vec<usize>,
     },
 }
 
@@ -188,6 +212,8 @@ fn seed(roadmap: Option<&RoadmapArtifact>) -> Vec<MilestoneView> {
                             status: RoadmapStatus::Pending,
                             verified: false,
                             steps: Vec::new(),
+                            subtasks: Vec::new(),
+                            iteration: IterationState::Planned,
                             discovered_from: t.discovered_from.clone(),
                         })
                         .collect(),
@@ -288,6 +314,52 @@ pub fn fold(
                 }) {
                     scopes.pop();
                 }
+                if let Some(Scope::Task {
+                    milestone,
+                    index: task_index,
+                    subtasks,
+                    ..
+                }) = scopes.last().cloned()
+                {
+                    if !is_subtask_loop(graph.as_ref(), &loop_id) {
+                        continue;
+                    }
+                    let (Some(id), Some(title)) = (item_str(item, "id"), item_str(item, "title"))
+                    else {
+                        continue;
+                    };
+                    let parent = task_at(&mut mission, milestone, task_index, &subtasks);
+                    let child_index = match parent
+                        .subtasks
+                        .iter()
+                        .position(|task| task.id.as_str() == id)
+                    {
+                        Some(index) => index,
+                        None => {
+                            parent.subtasks.push(TaskView {
+                                id: id.into(),
+                                title,
+                                status: RoadmapStatus::Pending,
+                                verified: false,
+                                steps: Vec::new(),
+                                subtasks: Vec::new(),
+                                iteration: IterationState::Planned,
+                                discovered_from: None,
+                            });
+                            parent.subtasks.len() - 1
+                        },
+                    };
+                    parent.subtasks[child_index].iteration = IterationState::Running;
+                    let mut child_path = subtasks;
+                    child_path.push(child_index);
+                    scopes.push(Scope::Task {
+                        loop_id,
+                        milestone,
+                        index: task_index,
+                        subtasks: child_path,
+                    });
+                    continue;
+                }
                 let id = item_str(item, "id").unwrap_or_else(|| format!("#{}", index + 1));
                 let title = item_str(item, "title").unwrap_or_else(|| id.clone());
                 let is_milestone = item.get("tasks").is_some_and(toml::Value::is_array);
@@ -341,6 +413,8 @@ pub fn fold(
                                 status: RoadmapStatus::Pending,
                                 verified: false,
                                 steps: Vec::new(),
+                                subtasks: Vec::new(),
+                                iteration: IterationState::Planned,
                                 discovered_from: None,
                             });
                             m.tasks.len() - 1
@@ -349,10 +423,12 @@ pub fn fold(
                     if m.tasks[index].status == RoadmapStatus::Pending {
                         m.tasks[index].status = RoadmapStatus::Running;
                     }
+                    m.tasks[index].iteration = IterationState::Running;
                     scopes.push(Scope::Task {
                         loop_id,
                         milestone,
                         index,
+                        subtasks: Vec::new(),
                     });
                 }
             },
@@ -365,8 +441,19 @@ pub fn fold(
                         l == loop_id
                     },
                 }) {
-                    if let Scope::Milestone { index, .. } = &scopes[pos] {
-                        mission.milestones[*index].finished = Some(outcome.as_str().to_string());
+                    match &scopes[pos] {
+                        Scope::Milestone { index, .. } => {
+                            mission.milestones[*index].finished = Some(outcome.as_str().to_string())
+                        },
+                        Scope::Task {
+                            milestone,
+                            index,
+                            subtasks,
+                            ..
+                        } => {
+                            task_at(&mut mission, *milestone, *index, subtasks).iteration =
+                                IterationState::Finished(outcome.as_str().to_string());
+                        },
                     }
                     scopes.truncate(pos);
                 }
@@ -397,7 +484,11 @@ pub fn fold(
                 match steps.last_mut().filter(|s| s.node == id) {
                     Some(step) => {
                         step.state = StepState::Working;
-                        step.attempts = step.attempts.max(*attempt);
+                        step.attempts = (*attempt).max(1);
+                        step.summary = None;
+                        step.participant = None;
+                        step.inputs = None;
+                        step.skills.clear();
                     },
                     None => steps.push(Step {
                         node: id.clone(),
@@ -406,9 +497,56 @@ pub fn fold(
                         state: StepState::Working,
                         attempts: (*attempt).max(1),
                         summary: None,
+                        participant: None,
+                        inputs: None,
+                        skills: Vec::new(),
                     }),
                 }
                 placed.insert(id, scope);
+            },
+            EventPayload::SessionOpened {
+                node,
+                session,
+                agent,
+                agent_id,
+            } => {
+                with_active_step(
+                    &mut mission,
+                    &placed,
+                    scopes.last(),
+                    node.as_str(),
+                    |step| {
+                        step.participant = Some(RecordedParticipant {
+                            profile: agent.clone(),
+                            runtime: agent_id.clone(),
+                            session: *session,
+                        });
+                    },
+                );
+            },
+            EventPayload::StageInputsResolved { node, bindings } => {
+                with_active_step(
+                    &mut mission,
+                    &placed,
+                    scopes.last(),
+                    node.as_str(),
+                    |step| {
+                        step.inputs = Some(bindings.keys().cloned().collect());
+                    },
+                );
+            },
+            EventPayload::SkillBound { node, name, .. } => {
+                with_active_step(
+                    &mut mission,
+                    &placed,
+                    scopes.last(),
+                    node.as_str(),
+                    |step| {
+                        if !step.skills.contains(name) {
+                            step.skills.push(name.clone());
+                        }
+                    },
+                );
             },
             EventPayload::HumanInputRequested { node, .. } => {
                 with_step(&mut mission, &placed, node.as_str(), |s| {
@@ -441,12 +579,12 @@ pub fn fold(
                 });
             },
             EventPayload::TaskStatusChanged { task_id, to, .. } => {
-                if let Some(task) = task_mut(&mut mission, task_id) {
+                if let Some(task) = scoped_task_mut(&mut mission, &scopes, task_id) {
                     task.status = *to;
                 }
             },
             EventPayload::TaskVerified { task_id, .. } => {
-                if let Some(task) = task_mut(&mut mission, task_id) {
+                if let Some(task) = scoped_task_mut(&mut mission, &scopes, task_id) {
                     task.status = RoadmapStatus::Completed;
                     task.verified = true;
                 }
@@ -456,7 +594,7 @@ pub fn fold(
                 discovered_from,
                 title,
             } => {
-                if task_mut(&mut mission, task_id).is_none() {
+                if task_occurrences(&mission, task_id) == 0 {
                     let milestone = mission
                         .milestones
                         .iter()
@@ -469,6 +607,8 @@ pub fn fold(
                             status: RoadmapStatus::Pending,
                             verified: false,
                             steps: Vec::new(),
+                            subtasks: Vec::new(),
+                            iteration: IterationState::Planned,
                             discovered_from: Some(discovered_from.clone()),
                         });
                     }
@@ -493,9 +633,7 @@ pub fn fold(
         mission.steps.iter_mut().for_each(settle);
         for m in &mut mission.milestones {
             m.steps.iter_mut().for_each(settle);
-            for t in &mut m.tasks {
-                t.steps.iter_mut().for_each(settle);
-            }
+            settle_tasks(&mut m.tasks);
         }
     }
     mission.now = now(&mission);
@@ -507,9 +645,34 @@ fn steps_at<'a>(mission: &'a mut Mission, scope: Option<&Scope>) -> &'a mut Vec<
         None => &mut mission.steps,
         Some(Scope::Milestone { index, .. }) => &mut mission.milestones[*index].steps,
         Some(Scope::Task {
-            milestone, index, ..
-        }) => &mut mission.milestones[*milestone].tasks[*index].steps,
+            milestone,
+            index,
+            subtasks,
+            ..
+        }) => &mut task_at(mission, *milestone, *index, subtasks).steps,
     }
+}
+
+fn with_active_step(
+    mission: &mut Mission,
+    placed: &BTreeMap<String, Option<Scope>>,
+    scope: Option<&Scope>,
+    node: &str,
+    update: impl FnOnce(&mut Step),
+) {
+    // These events carry a node but no attempt or ancestry identity. Only
+    // the current scoped, open occurrence can own them; never a prior task.
+    if placed
+        .get(node)
+        .is_none_or(|placed_scope| placed_scope.as_ref() != scope)
+    {
+        return;
+    }
+    with_step(mission, placed, node, |step| {
+        if matches!(step.state, StepState::Working | StepState::WaitingOnYou) {
+            update(step);
+        }
+    });
 }
 
 fn with_step(
@@ -530,12 +693,129 @@ fn with_step(
     }
 }
 
+fn is_subtask_loop(graph: Option<&Graph>, loop_id: &str) -> bool {
+    use surge_core::loop_config::IterableSource;
+    let Some(node) = graph.and_then(|graph| all_nodes(graph).get(loop_id).copied()) else {
+        return false;
+    };
+    let NodeConfig::Loop(config) = &node.config else {
+        return false;
+    };
+    if config.iteration_var_name == "subtask" {
+        return true;
+    }
+    let path = match &config.iterates_over {
+        IterableSource::RunArtifact { jsonpath, .. }
+        | IterableSource::Artifact { jsonpath, .. }
+        | IterableSource::LoopItem { jsonpath, .. } => jsonpath,
+        IterableSource::Static(_) => return false,
+    };
+    let path = path.trim().strip_prefix('$').unwrap_or(path.trim());
+    path.split('.')
+        .any(|segment| segment.strip_suffix("[*]").unwrap_or(segment) == "subtasks")
+}
+
+fn task_at<'a>(
+    mission: &'a mut Mission,
+    milestone: usize,
+    index: usize,
+    subtasks: &[usize],
+) -> &'a mut TaskView {
+    let mut task = &mut mission.milestones[milestone].tasks[index];
+    for child_index in subtasks {
+        task = &mut task.subtasks[*child_index];
+    }
+    task
+}
+
+fn find_task<'a>(tasks: &'a mut [TaskView], id: &RoadmapTaskId) -> Option<&'a mut TaskView> {
+    for task in tasks {
+        if task.id == *id {
+            return Some(task);
+        }
+        if let Some(child) = find_task(&mut task.subtasks, id) {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn count_tasks(tasks: &[TaskView], id: &RoadmapTaskId) -> usize {
+    tasks
+        .iter()
+        .map(|task| usize::from(task.id == *id) + count_tasks(&task.subtasks, id))
+        .sum()
+}
+
+fn task_occurrences(mission: &Mission, id: &RoadmapTaskId) -> usize {
+    mission
+        .milestones
+        .iter()
+        .map(|milestone| count_tasks(&milestone.tasks, id))
+        .sum()
+}
+
 fn task_mut<'a>(mission: &'a mut Mission, id: &RoadmapTaskId) -> Option<&'a mut TaskView> {
+    // An unscoped ledger event with a repeated id cannot identify its target.
+    if task_occurrences(mission, id) != 1 {
+        return None;
+    }
     mission
         .milestones
         .iter_mut()
-        .flat_map(|m| m.tasks.iter_mut())
-        .find(|t| t.id == *id)
+        .find_map(|milestone| find_task(&mut milestone.tasks, id))
+}
+
+fn scoped_task_mut<'a>(
+    mission: &'a mut Mission,
+    scopes: &[Scope],
+    id: &RoadmapTaskId,
+) -> Option<&'a mut TaskView> {
+    let active = scopes.iter().rev().find_map(|scope| {
+        if let Scope::Task {
+            milestone,
+            index,
+            subtasks,
+            ..
+        } = scope
+            && task_at(mission, *milestone, *index, subtasks).id == *id
+        {
+            Some((*milestone, *index, subtasks.clone()))
+        } else {
+            None
+        }
+    });
+    if let Some((milestone, index, subtasks)) = active {
+        return Some(task_at(mission, milestone, index, &subtasks));
+    }
+    task_mut(mission, id)
+}
+
+fn settle_tasks(tasks: &mut [TaskView]) {
+    for task in tasks {
+        for step in &mut task.steps {
+            if matches!(step.state, StepState::Working | StepState::WaitingOnYou) {
+                step.state = StepState::Unfinished;
+            }
+        }
+        if task.iteration == IterationState::Running {
+            task.iteration = IterationState::Unfinished;
+        }
+        settle_tasks(&mut task.subtasks);
+    }
+}
+
+fn active_task(task: &TaskView) -> Option<String> {
+    for child in &task.subtasks {
+        if let Some(active) = active_task(child) {
+            return Some(format!("{} › {active}", task.title));
+        }
+    }
+    task.steps
+        .iter()
+        .rev()
+        .find(|step| matches!(step.state, StepState::Working | StepState::WaitingOnYou))
+        .map(|step| format!("{} › {}", task.title, step.label))
 }
 
 /// A plain headline for a run's terminal error; the raw text stays
@@ -562,8 +842,8 @@ fn now(mission: &Mission) -> Option<String> {
     let live = |s: &Step| matches!(s.state, StepState::Working | StepState::WaitingOnYou);
     for m in &mission.milestones {
         for t in &m.tasks {
-            if let Some(s) = t.steps.iter().rev().find(|s| live(s)) {
-                return Some(format!("{} › {} › {}", m.title, t.title, s.label));
+            if let Some(active) = active_task(t) {
+                return Some(format!("{} › {active}", m.title));
             }
         }
         if let Some(s) = m.steps.iter().rev().find(|s| live(s)) {
@@ -747,5 +1027,411 @@ mod tests {
         let mission = fold(&[], &[], Some(&roadmap));
         assert_eq!(mission.milestones[0].tasks.len(), 2);
         assert!(!mission.milestones[0].started);
+    }
+    fn subtask_graph() -> surge_core::graph::Graph {
+        use surge_core::loop_config::IterableSource;
+        let mut graph = graph();
+        let task_body: surge_core::keys::SubgraphKey = "task_body".try_into().unwrap();
+        let child_body: surge_core::keys::SubgraphKey = "subtask_body".try_into().unwrap();
+        let child = graph.subgraphs[&task_body].clone();
+        graph.subgraphs.insert(child_body.clone(), child);
+        let mut loop_node = graph.nodes[&key("milestone_loop")].clone();
+        loop_node.id = key("subtask_loop");
+        let surge_core::node::NodeConfig::Loop(config) = &mut loop_node.config else {
+            panic!("fixture outer node is a loop");
+        };
+        config.body = child_body;
+        config.iteration_var_name = "subtask".into();
+        config.iterates_over = IterableSource::Artifact {
+            node: key("spec_task"),
+            name: "spec".into(),
+            jsonpath: "spec.subtasks".into(),
+        };
+        graph
+            .subgraphs
+            .get_mut(&task_body)
+            .unwrap()
+            .nodes
+            .insert(loop_node.id.clone(), loop_node);
+        graph
+    }
+
+    fn iteration_completed(loop_id: &str) -> EventPayload {
+        EventPayload::LoopIterationCompleted {
+            loop_id: key(loop_id),
+            index: 0,
+            outcome: out("completed"),
+        }
+    }
+
+    #[test]
+    fn nested_subtasks_preserve_parent_steps_and_repeated_child_ids() {
+        let events = vec![
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(subtask_graph()),
+                graph_hash: ContentHash::compute(b"subtasks"),
+            },
+            iter(
+                "milestone_loop",
+                "id = 'm1'\ntitle = 'Timer'\ntasks = []",
+                0,
+            ),
+            iter("task_loop", "id = 't1'\ntitle = 'First parent'", 0),
+            enter("spec_task", 1),
+            done("spec_task", "drafted"),
+            iter(
+                "subtask_loop",
+                "id = 'leaf'\ntitle = 'First child with its full descriptive title'",
+                0,
+            ),
+            enter("impl_task", 1),
+            done("impl_task", "pass"),
+            iteration_completed("subtask_loop"),
+            enter("verify_task", 1),
+            done("verify_task", "pass"),
+            iteration_completed("task_loop"),
+            iter("task_loop", "id = 't2'\ntitle = 'Second parent'", 1),
+            iter("subtask_loop", "id = 'leaf'\ntitle = 'Second child'", 0),
+            enter("impl_task", 1),
+            EventPayload::TaskStatusChanged {
+                task_id: "leaf".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::Failed,
+                authority_node: key("impl_task"),
+            },
+        ];
+        let mission = fold(&[], &events, None);
+        let milestone = &mission.milestones[0];
+        assert_eq!(milestone.tasks.len(), 2);
+        let first = &milestone.tasks[0];
+        let second = &milestone.tasks[1];
+        assert_eq!(
+            first
+                .steps
+                .iter()
+                .map(|step| step.node.as_str())
+                .collect::<Vec<_>>(),
+            ["spec_task", "verify_task"]
+        );
+        assert_eq!(first.subtasks.len(), 1);
+        assert_eq!(first.subtasks[0].steps[0].node, "impl_task");
+        assert_eq!(
+            first.subtasks[0].iteration,
+            super::IterationState::Finished("completed".into())
+        );
+        assert!(!first.subtasks[0].verified);
+        assert_eq!(first.subtasks[0].status, RoadmapStatus::Pending);
+        assert_eq!(second.subtasks[0].status, RoadmapStatus::Failed);
+        assert_eq!(
+            mission.now.as_deref(),
+            Some("Timer › Second parent › Second child › Build")
+        );
+        let mut scoped_events = events.clone();
+        scoped_events.push(EventPayload::TaskVerified {
+            task_id: "leaf".into(),
+            node: key("verify_task"),
+            evidence: ContentHash::compute(b"second child scoped"),
+        });
+        let scoped = fold(&[], &scoped_events, None);
+        assert!(!scoped.milestones[0].tasks[0].subtasks[0].verified);
+        assert!(scoped.milestones[0].tasks[1].subtasks[0].verified);
+        let mut late_events = events.clone();
+        late_events.push(iteration_completed("subtask_loop"));
+        late_events.push(iteration_completed("task_loop"));
+        late_events.push(iteration_completed("milestone_loop"));
+        late_events.push(EventPayload::TaskVerified {
+            task_id: "leaf".into(),
+            node: key("verify_task"),
+            evidence: ContentHash::compute(b"ambiguous"),
+        });
+        let late = fold(&[], &late_events, None);
+        assert!(!late.milestones[0].tasks[0].subtasks[0].verified);
+        assert!(!late.milestones[0].tasks[1].subtasks[0].verified);
+    }
+
+    #[test]
+    fn unrelated_nested_iterator_stays_in_parent_and_terminal_failure_settles_children() {
+        let mut graph = subtask_graph();
+        let task_body: surge_core::keys::SubgraphKey = "task_body".try_into().unwrap();
+        let mut retry = graph.subgraphs[&task_body].nodes[&key("subtask_loop")].clone();
+        retry.id = key("retry_loop");
+        let surge_core::node::NodeConfig::Loop(config) = &mut retry.config else {
+            panic!("fixture node is a loop");
+        };
+        config.iteration_var_name = "attempt".into();
+        config.iterates_over = surge_core::loop_config::IterableSource::RunArtifact {
+            name: "retry".into(),
+            jsonpath: "not_subtasks".into(),
+        };
+        graph
+            .subgraphs
+            .get_mut(&task_body)
+            .unwrap()
+            .nodes
+            .insert(retry.id.clone(), retry);
+        let events = vec![
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(graph),
+                graph_hash: ContentHash::compute(b"subtasks"),
+            },
+            iter(
+                "milestone_loop",
+                "id = 'm1'\ntitle = 'Timer'\ntasks = []",
+                0,
+            ),
+            iter("task_loop", "id = 't1'\ntitle = 'Parent'", 0),
+            iter("retry_loop", "id = 'retry'\ntitle = 'Attempt'", 0),
+            enter("spec_task", 1),
+            done("spec_task", "drafted"),
+            iteration_completed("retry_loop"),
+            iter("subtask_loop", "id = 'leaf'\ntitle = 'Child'", 0),
+            enter("impl_task", 1),
+            EventPayload::RunFailed {
+                error: "provider disconnected".into(),
+            },
+        ];
+        let mission = fold(&[], &events, None);
+        assert_eq!(mission.milestones[0].tasks.len(), 1);
+        let parent = &mission.milestones[0].tasks[0];
+        assert_eq!(parent.steps[0].node, "spec_task");
+        assert_eq!(parent.subtasks.len(), 1);
+        assert_eq!(
+            parent.subtasks[0].iteration,
+            super::IterationState::Unfinished
+        );
+        assert_eq!(parent.subtasks[0].steps[0].state, StepState::Unfinished);
+        assert!(!parent.subtasks[0].verified);
+        assert!(mission.now.is_none());
+    }
+
+    #[test]
+    fn subtask_classifier_requires_an_exact_path_segment() {
+        use surge_core::loop_config::IterableSource;
+        let mut graph = subtask_graph();
+        let body: surge_core::keys::SubgraphKey = "task_body".parse().unwrap();
+        let node = graph
+            .subgraphs
+            .get_mut(&body)
+            .unwrap()
+            .nodes
+            .get_mut(&key("subtask_loop"))
+            .unwrap();
+        let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+            panic!("loop fixture");
+        };
+        config.iteration_var_name = "item".into();
+        for path in ["spec.retry_subtasks", "spec.subtasks_count"] {
+            let node = graph
+                .subgraphs
+                .get_mut(&body)
+                .unwrap()
+                .nodes
+                .get_mut(&key("subtask_loop"))
+                .unwrap();
+            let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+                panic!("loop fixture");
+            };
+            config.iterates_over = IterableSource::Artifact {
+                node: key("spec_task"),
+                name: "spec".into(),
+                jsonpath: path.into(),
+            };
+            assert!(!super::is_subtask_loop(Some(&graph), "subtask_loop"));
+        }
+        let node = graph
+            .subgraphs
+            .get_mut(&body)
+            .unwrap()
+            .nodes
+            .get_mut(&key("subtask_loop"))
+            .unwrap();
+        let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+            panic!("loop fixture");
+        };
+        config.iterates_over = IterableSource::Artifact {
+            node: key("spec_task"),
+            name: "spec".into(),
+            jsonpath: "spec.subtasks".into(),
+        };
+        assert!(super::is_subtask_loop(Some(&graph), "subtask_loop"));
+        let node = graph
+            .subgraphs
+            .get_mut(&body)
+            .unwrap()
+            .nodes
+            .get_mut(&key("subtask_loop"))
+            .unwrap();
+        let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+            panic!("loop fixture");
+        };
+        config.iterates_over = IterableSource::Artifact {
+            node: key("spec_task"),
+            name: "spec".into(),
+            jsonpath: "$.subtasks[*]".into(),
+        };
+        assert!(super::is_subtask_loop(Some(&graph), "subtask_loop"));
+        let node = graph
+            .subgraphs
+            .get_mut(&body)
+            .unwrap()
+            .nodes
+            .get_mut(&key("subtask_loop"))
+            .unwrap();
+        let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+            panic!("loop fixture");
+        };
+        config.iterates_over = IterableSource::Static(Vec::new());
+        assert!(!super::is_subtask_loop(Some(&graph), "subtask_loop"));
+        let node = graph
+            .subgraphs
+            .get_mut(&body)
+            .unwrap()
+            .nodes
+            .get_mut(&key("subtask_loop"))
+            .unwrap();
+        let surge_core::node::NodeConfig::Loop(config) = &mut node.config else {
+            panic!("loop fixture");
+        };
+        config.iteration_var_name = "subtask".into();
+        assert!(super::is_subtask_loop(Some(&graph), "subtask_loop"));
+    }
+    #[test]
+    fn third_level_loop_keeps_subtask_under_parent() {
+        let events = vec![
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(subtask_graph()),
+                graph_hash: ContentHash::compute(b"subtasks"),
+            },
+            iter(
+                "milestone_loop",
+                "id = 'm1'\ntitle = 'Timer'\ntasks = []",
+                0,
+            ),
+            iter("task_loop", "id = 't1'\ntitle = 'Parent'", 0),
+            iter("subtask_loop", "id = 'leaf'\ntitle = 'Child'", 0),
+            enter("impl_task", 1),
+            done("impl_task", "pass"),
+            iteration_completed("subtask_loop"),
+            enter("verify_task", 1),
+        ];
+        let mission = fold(&[], &events, None);
+        assert_eq!(
+            mission.milestones[0].tasks.len(),
+            1,
+            "a subtask must not become a second roadmap task"
+        );
+        assert_eq!(
+            mission.milestones[0].tasks[0].steps[0].node, "verify_task",
+            "parent scope must survive child completion"
+        );
+    }
+    fn participant(
+        node: &str,
+        profile: &str,
+        runtime: Option<&str>,
+        session: surge_core::SessionId,
+    ) -> EventPayload {
+        EventPayload::SessionOpened {
+            node: key(node),
+            session,
+            agent: profile.into(),
+            agent_id: runtime.map(str::to_string),
+        }
+    }
+    fn inputs(node: &str, name: &str) -> EventPayload {
+        EventPayload::StageInputsResolved {
+            node: key(node),
+            bindings: [(name.into(), ContentHash::compute(b"private input"))].into(),
+        }
+    }
+    fn skill(node: &str, name: &str) -> EventPayload {
+        EventPayload::SkillBound {
+            node: key(node),
+            name: name.into(),
+            provider: surge_core::skill::SkillProvider::ProjectDir,
+            hash: ContentHash::compute(b"private skill"),
+            gate_enabled: true,
+        }
+    }
+
+    #[test]
+    fn participant_context_belongs_to_the_scoped_occurrence_and_latest_attempt() {
+        let first = surge_core::SessionId::new();
+        let retry = surge_core::SessionId::new();
+        let parent = surge_core::SessionId::new();
+        let second = surge_core::SessionId::new();
+        let mut events = vec![
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(subtask_graph()),
+                graph_hash: ContentHash::compute(b"context"),
+            },
+            iter(
+                "milestone_loop",
+                "id = 'm1'\ntitle = 'Timer'\ntasks = []",
+                0,
+            ),
+            iter("task_loop", "id = 't1'\ntitle = 'First parent'", 0),
+            iter("subtask_loop", "id = 'leaf'\ntitle = 'First child'", 0),
+            enter("impl_task", 1),
+            participant("impl_task", "implementer@1", Some("claude"), first),
+            inputs("impl_task", "old-context"),
+            skill("impl_task", "old-skill"),
+            EventPayload::OutcomeReported {
+                node: key("impl_task"),
+                outcome: out("pass"),
+                summary: "old report".into(),
+            },
+            EventPayload::StageFailed {
+                node: key("impl_task"),
+                reason: "retry".into(),
+                retry_available: true,
+            },
+            enter("impl_task", 2),
+        ];
+        let reset = fold(&[], &events, None);
+        let child = &reset.milestones[0].tasks[0].subtasks[0].steps[0];
+        assert_eq!(child.attempts, 2);
+        assert!(child.participant.is_none());
+        assert!(child.inputs.is_none());
+        assert!(child.skills.is_empty());
+        assert!(child.summary.is_none());
+        events.extend([
+            participant("impl_task", "reviewer@2", None, retry),
+            inputs("impl_task", "new-context"),
+            skill("impl_task", "new-skill"),
+            done("impl_task", "pass"),
+            iteration_completed("subtask_loop"),
+            enter("impl_task", 1),
+            participant("impl_task", "parent-worker@1", Some("codex"), parent),
+            inputs("impl_task", "parent-context"),
+            skill("impl_task", "parent-skill"),
+            done("impl_task", "pass"),
+            iteration_completed("task_loop"),
+            iter("task_loop", "id = 't2'\ntitle = 'Second parent'", 1),
+            // A node-only record before entry cannot overwrite the previous task.
+            inputs("impl_task", "unscoped-stale"),
+            skill("impl_task", "unscoped-stale"),
+            iter("subtask_loop", "id = 'leaf'\ntitle = 'Second child'", 0),
+            enter("impl_task", 1),
+            participant("impl_task", "second-worker@1", Some("gemini"), second),
+            inputs("impl_task", "second-context"),
+            skill("impl_task", "second-skill"),
+        ]);
+        let mission = fold(&[], &events, None);
+        let first_task = &mission.milestones[0].tasks[0];
+        let child = &first_task.subtasks[0].steps[0];
+        assert_eq!(child.participant.as_ref().unwrap().session, retry);
+        assert_eq!(child.participant.as_ref().unwrap().profile, "reviewer@2");
+        assert!(child.participant.as_ref().unwrap().runtime.is_none());
+        assert_eq!(child.inputs.as_ref().unwrap(), &["new-context"]);
+        assert_eq!(child.skills, ["new-skill"]);
+        let parent_step = &first_task.steps[0];
+        assert_eq!(parent_step.participant.as_ref().unwrap().session, parent);
+        assert_eq!(parent_step.inputs.as_ref().unwrap(), &["parent-context"]);
+        assert_eq!(parent_step.skills, ["parent-skill"]);
+        let second_child = &mission.milestones[0].tasks[1].subtasks[0].steps[0];
+        assert_eq!(second_child.participant.as_ref().unwrap().session, second);
+        assert_eq!(second_child.inputs.as_ref().unwrap(), &["second-context"]);
+        assert_eq!(second_child.skills, ["second-skill"]);
     }
 }

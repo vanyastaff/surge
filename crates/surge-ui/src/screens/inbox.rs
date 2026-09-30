@@ -38,7 +38,7 @@ pub enum InboxAction {
     /// Open the run cockpit focused on this run.
     OpenRun(RunId),
     /// Show the plan under review full-size (Flow screen).
-    OpenPlan,
+    OpenPlan { run_id: RunId, decision_seq: u64 },
 }
 
 impl EventEmitter<InboxAction> for InboxScreen {}
@@ -84,19 +84,52 @@ impl InboxItem {
     }
 }
 
+#[derive(Default)]
+enum DecisionSubmission {
+    #[default]
+    Editing,
+    Pending,
+    Failed(String),
+    Acknowledged {
+        comment: String,
+    },
+}
+
+#[derive(Default)]
+struct DecisionDraft {
+    comment: String,
+    submission: DecisionSubmission,
+}
+
+struct SubmittedDecision {
+    identity: String,
+    run_id: RunId,
+    comment: String,
+    edits: Option<surge_core::node_overrides::NodeOverrides>,
+}
+
+#[cfg(test)]
+type ControlledResponses = std::rc::Rc<
+    std::cell::RefCell<
+        Vec<(
+            serde_json::Value,
+            tokio::sync::oneshot::Sender<Result<(), String>>,
+        )>,
+    >,
+>;
+
 /// Inbox screen — the urgency-ranked operator decision queue.
 pub struct InboxScreen {
     state: Entity<AppState>,
     selected: usize,
     response_input: Option<Entity<InputState>>,
-    /// Verbatim feedback from the last facade call.
-    action_note: Option<String>,
+    response_owner: Option<String>,
+    drafts: std::collections::HashMap<String, DecisionDraft>,
+    #[cfg(test)]
+    controlled_responses: Option<ControlledResponses>,
     /// Parsed + laid-out workflow plans and their step-list Markdown, keyed
     /// by a hash of the document. Built once per document, not per frame.
     plans: std::collections::HashMap<u64, std::rc::Rc<ReviewedPlan>>,
-    /// Identity of the decision `action_note` reports on. The note renders
-    /// only on that item, so "resolved · …" never lands on the next gate.
-    note_owner: Option<String>,
     documents: std::collections::HashMap<std::path::PathBuf, String>,
     /// Decisions already made in this project, newest first.
     history: Vec<crate::decisions::Decision>,
@@ -147,8 +180,10 @@ impl InboxScreen {
             state,
             selected: 0,
             response_input: None,
-            action_note: None,
-            note_owner: None,
+            response_owner: None,
+            drafts: std::collections::HashMap::new(),
+            #[cfg(test)]
+            controlled_responses: None,
             plans: std::collections::HashMap::new(),
             documents: std::collections::HashMap::new(),
             history: Vec::new(),
@@ -356,126 +391,235 @@ impl InboxScreen {
     /// Resolve a live human-input / gate decision over IPC.
     fn resolve_live(
         &mut self,
-        run_id: RunId,
+        submitted: SubmittedDecision,
         node: String,
         call_id: Option<String>,
         response: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
         let Ok(node) = surge_core::keys::NodeKey::try_from(node.as_str()) else {
-            self.action_note = Some("invalid request node — refresh this run".into());
-            cx.notify();
+            self.finish_resolution(
+                submitted,
+                Err("invalid request node — refresh this run".into()),
+                cx,
+            );
             return;
         };
+        #[cfg(test)]
+        if let Some(responses) = &self.controlled_responses {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            responses.borrow_mut().push((response, sender));
+            cx.spawn(async move |this, cx| {
+                let result = receiver
+                    .await
+                    .unwrap_or_else(|_| Err("resolver disconnected".into()));
+                let _ = this.update(cx, |screen, cx| {
+                    screen.finish_resolution(submitted, result, cx)
+                });
+            })
+            .detach();
+            return;
+        }
         let Some(facade) = self.state.read(cx).daemon_state.facade() else {
-            self.action_note = Some("daemon offline — cannot resolve".into());
-            cx.notify();
+            self.finish_resolution(submitted, Err("daemon offline — cannot resolve".into()), cx);
             return;
         };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let note = match facade
-                .resolve_requested_input(run_id, node, call_id, response)
+            let result = facade
+                .resolve_requested_input(submitted.run_id, node, call_id, response)
                 .await
-            {
-                Ok(()) => format!("resolved · r-{}", run_id.short().to_lowercase()),
-                Err(e) => format!("resolve failed: {e}"),
-            };
-            cx.update(|cx| {
-                let _ = this.update(cx, |t, cx| {
-                    t.action_note = Some(note);
-                    cx.notify();
-                });
+                .map_err(|error| error.to_string());
+            let _ = this.update(cx, |screen, cx| {
+                screen.finish_resolution(submitted, result, cx)
             });
         })
         .detach();
     }
 
-    /// Read the shared comment box and clear it — a comment belongs to
-    /// exactly one decision, never the next one too.
-    fn take_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) -> String {
-        let Some(input) = self.response_input.clone() else {
-            return String::new();
-        };
-        let text = input.read(cx).value().trim().to_string();
-        if !text.is_empty() {
-            input.update(cx, |s, cx| s.set_value("", window, cx));
+    fn finish_resolution(
+        &mut self,
+        submitted: SubmittedDecision,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let draft = self.drafts.entry(submitted.identity.clone()).or_default();
+        if !matches!(draft.submission, DecisionSubmission::Pending) {
+            return;
         }
-        text
+        draft.submission = match result {
+            Ok(()) => {
+                if draft.comment == submitted.comment {
+                    draft.comment.clear();
+                }
+                if let Some(edits) = submitted.edits {
+                    self.state.update(cx, |state, cx| {
+                        let newer_flow_decision = state
+                            .run_streams
+                            .get(&submitted.run_id)
+                            .is_some_and(|stream| {
+                                stream.pending.iter().any(|decision| {
+                                    decision.node == "flow_gate"
+                                        && format!("live-{}-{}", submitted.run_id, decision.seq)
+                                            != submitted.identity
+                                })
+                            });
+                        if !newer_flow_decision
+                            && state.plan_edits.get(&submitted.run_id) == Some(&edits)
+                        {
+                            state.plan_edits.remove(&submitted.run_id);
+                            cx.notify();
+                        }
+                    });
+                }
+                DecisionSubmission::Acknowledged {
+                    comment: submitted.comment,
+                }
+            },
+            Err(error) => DecisionSubmission::Failed(format!("Resolve failed: {error}")),
+        };
+        cx.notify();
+    }
+
+    fn comment(&self, cx: &Context<Self>) -> String {
+        self.response_input
+            .as_ref()
+            .map_or_else(String::new, |input| input.read(cx).value().to_string())
+    }
+
+    fn begin_submission(
+        &mut self,
+        item: &InboxItem,
+        edits: Option<surge_core::node_overrides::NodeOverrides>,
+        cx: &mut Context<Self>,
+    ) -> Option<SubmittedDecision> {
+        let Source::Live { run_id, .. } = &item.source else {
+            return None;
+        };
+        let identity = item.identity();
+        // Stale event handlers cannot submit another decision's draft.
+        if self.response_owner.as_ref() != Some(&identity)
+            || !self
+                .items(cx)
+                .0
+                .iter()
+                .any(|current| current.identity() == identity)
+        {
+            return None;
+        }
+        let comment = self.comment(cx);
+        let draft = self.drafts.entry(identity.clone()).or_default();
+        if matches!(
+            draft.submission,
+            DecisionSubmission::Pending | DecisionSubmission::Acknowledged { .. }
+        ) {
+            return None;
+        }
+        draft.comment = comment.clone();
+        draft.submission = DecisionSubmission::Pending;
+        cx.notify();
+        Some(SubmittedDecision {
+            identity,
+            run_id: *run_id,
+            comment,
+            edits,
+        })
     }
 
     fn decide(
         &mut self,
         item: &InboxItem,
         outcome: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.note_owner = Some(item.identity());
-        let comment = self.take_comment(window, cx);
-
-        match &item.source {
-            Source::Live {
-                run_id,
-                node,
-                call_id,
-                ..
-            } => {
-                // HumanGate resolution contract (engine.rs
-                // resolve_human_input): `{"outcome": <declared key>}`,
-                // free-form fields ride along — the bootstrap driver
-                // sends the comment as `comment`.
-                let mut payload = serde_json::json!({ "outcome": outcome });
-                if !comment.is_empty() {
-                    payload["comment"] = serde_json::Value::String(comment);
-                }
-                // Plan edits made in the Flow inspector ride along with the
-                // approval of that plan (and only with an approval).
-                if outcome == "approve" && node.as_str() == "flow_gate" {
-                    let edits = self
-                        .state
-                        .update(cx, |state, _| state.plan_edits.remove(run_id));
-                    if let Some(edits) = edits.filter(|e| !e.is_empty())
-                        && let Ok(value) = serde_json::to_value(&edits)
-                    {
-                        payload["node_overrides"] = value;
-                    }
-                }
-                self.resolve_live(*run_id, node.clone(), call_id.clone(), payload, cx);
-            },
-            Source::FailedRun { run_id } => {
-                cx.emit(InboxAction::OpenRun(*run_id));
-            },
+        let Source::Live {
+            run_id,
+            node,
+            call_id,
+            ..
+        } = &item.source
+        else {
+            if let Source::FailedRun { run_id } = item.source {
+                cx.emit(InboxAction::OpenRun(run_id));
+            }
+            return;
+        };
+        let edits = if outcome == "approve" && node == "flow_gate" {
+            self.state
+                .read(cx)
+                .plan_edits
+                .get(run_id)
+                .filter(|edits| !edits.is_empty())
+                .cloned()
+        } else {
+            None
+        };
+        let Some(submitted) = self.begin_submission(item, edits, cx) else {
+            return;
+        };
+        let mut payload = serde_json::json!({ "outcome": outcome });
+        if !submitted.comment.trim().is_empty() {
+            payload["comment"] = serde_json::Value::String(submitted.comment.clone());
         }
+        if let Some(edits) = &submitted.edits {
+            match serde_json::to_value(edits) {
+                Ok(value) => payload["node_overrides"] = value,
+                Err(error) => {
+                    self.finish_resolution(
+                        submitted,
+                        Err(format!("Could not serialize plan edits: {error}")),
+                        cx,
+                    );
+                    return;
+                },
+            }
+        }
+        self.resolve_live(submitted, node.clone(), call_id.clone(), payload, cx);
     }
 
-    /// Send the free-text response for a live tool-driven human-input
-    /// item (a scoped tool call ID). Typed gate requests go through
-    /// the outcome buttons instead — the engine requires `{"outcome"}`.
-    fn send_response(&mut self, item: &InboxItem, window: &mut Window, cx: &mut Context<Self>) {
-        self.note_owner = Some(item.identity());
+    fn send_response(&mut self, item: &InboxItem, _window: &mut Window, cx: &mut Context<Self>) {
         if let Source::Live {
-            run_id,
             node,
             call_id: Some(call_id),
             kind: DecisionKind::HumanInput { .. },
             ..
         } = &item.source
             && surge_core::id::GateRequestId::from_event_call_id(call_id).is_none()
+            && !self.comment(cx).trim().is_empty()
+            && let Some(submitted) = self.begin_submission(item, None, cx)
         {
-            let run_id = *run_id;
-            let node = node.clone();
-            let call_id = call_id.clone();
-            let text = self.take_comment(window, cx);
-            if text.is_empty() {
-                return;
+            let payload = serde_json::Value::String(submitted.comment.clone());
+            self.resolve_live(submitted, node.clone(), Some(call_id.clone()), payload, cx);
+        }
+    }
+
+    /// Synchronize the shared input even when the live queue changes without a click.
+    fn sync_response_owner(
+        &mut self,
+        owner: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(previous) = &self.response_owner {
+            let comment = self.comment(cx);
+            let draft = self.drafts.entry(previous.clone()).or_default();
+            let acknowledged = matches!(&draft.submission,
+                DecisionSubmission::Acknowledged { comment: submitted } if submitted == &comment);
+            let clear_input = acknowledged && !comment.is_empty();
+            draft.comment = if acknowledged { String::new() } else { comment };
+            if clear_input && let Some(input) = self.response_input.clone() {
+                input.update(cx, |input, cx| input.set_value("", window, cx));
             }
-            self.resolve_live(
-                run_id,
-                node,
-                Some(call_id),
-                serde_json::Value::String(text),
-                cx,
-            );
+        }
+        if self.response_owner != owner {
+            let comment = owner
+                .as_ref()
+                .and_then(|identity| self.drafts.get(identity))
+                .map_or_else(String::new, |draft| draft.comment.clone());
+            if let Some(input) = self.response_input.clone() {
+                input.update(cx, |input, cx| input.set_value(comment, window, cx));
+            }
+            self.response_owner = owner;
         }
     }
 
@@ -660,16 +804,11 @@ impl InboxScreen {
             .children(state_rows)
     }
 
-    /// Select queue item `i`, dropping a half-typed comment meant for
-    /// another item.
+    /// Select queue item `i`, preserving each decision's draft separately.
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected != i
-            && let Some(input) = self.response_input.clone()
-        {
-            input.update(cx, |s, cx| s.set_value("", window, cx));
-        }
         self.selected = i;
-        self.action_note = None;
+        let (items, _) = self.items(cx);
+        self.sync_response_owner(items.get(i).map(InboxItem::identity), window, cx);
         cx.notify();
     }
 
@@ -755,12 +894,16 @@ impl InboxScreen {
                     )
                     .child(div().flex_1())
                     .children(
-                        self.action_note
-                            .clone()
-                            .filter(|_| self.note_owner.as_deref() == Some(item.identity().as_str()))
+                        self.drafts.get(&item.identity()).and_then(|draft| match &draft.submission {
+                            DecisionSubmission::Editing => None,
+                            DecisionSubmission::Pending => Some("Sending decision…".to_owned()),
+                            DecisionSubmission::Failed(error) => Some(error.clone()),
+                            DecisionSubmission::Acknowledged { .. } => Some("Decision acknowledged".to_owned()),
+                        })
                             .map(|n| {
                         div()
                             .id("decision-status")
+                            .test_support().debug_selector(|| "decision-status".into())
                             .role(Role::Label)
                             .aria_label(n.clone())
                             .text_size(px(10.5))
@@ -796,6 +939,10 @@ impl InboxScreen {
             // A generated workflow is reviewed as a diagram first; the
             // step list and raw TOML follow for detail.
             let is_workflow = label == WORKFLOW_LABEL;
+            let target = match item.source {
+                Source::Live { run_id, seq, .. } => Some((run_id, seq)),
+                _ => None,
+            };
             let reviewed = is_workflow.then(|| self.reviewed_plan(body));
             if let Some(plan) = reviewed.as_ref().and_then(|r| r.prepared.clone()) {
                 pane = pane.child(
@@ -812,6 +959,7 @@ impl InboxScreen {
                                 .child(
                                     div()
                                         .id("decision-open-plan")
+                                        .test_support().debug_selector(|| "decision-open-plan".into())
                                         .role(Role::Button)
                                         .aria_label("Open full plan")
                                         .cursor_pointer()
@@ -820,8 +968,10 @@ impl InboxScreen {
                                         .text_color(theme::accent())
                                         .hover(|s: StyleRefinement| s.opacity(0.8))
                                         .child("Open full plan ↗")
-                                        .on_click(cx.listener(|_this, _e, _w, cx| {
-                                            cx.emit(InboxAction::OpenPlan);
+                                        .on_click(cx.listener(move |_this, _e, _w, cx| {
+                                            if let Some((run_id, decision_seq)) = target {
+                                                cx.emit(InboxAction::OpenPlan { run_id, decision_seq });
+                                            }
                                         })),
                                 ),
                         )
@@ -896,6 +1046,9 @@ impl InboxScreen {
         if is_tool_input || is_gate_input {
             footer = footer.child(
                 div()
+                    .id("decision-response")
+                    .test_support()
+                    .debug_selector(|| "decision-response".into())
                     .mt(px(18.0))
                     .h_flex()
                     .gap(px(10.0))
@@ -926,11 +1079,25 @@ impl InboxScreen {
             .gap(px(10.0))
             .items_center();
 
+        let blocked = self.drafts.get(&item.identity()).is_some_and(|draft| {
+            matches!(
+                draft.submission,
+                DecisionSubmission::Pending | DecisionSubmission::Acknowledged { .. }
+            )
+        });
         let primary = |id: SharedString, label: String| {
             div()
-                .id(id)
+                .id(id.clone())
+                .test_support()
+                .debug_selector(|| id.to_string())
+                .accessibility_id(id)
                 .role(Role::Button)
                 .aria_label(label.clone())
+                .when(blocked, |element| {
+                    element
+                        .opacity(0.5)
+                        .aria_description("Decision already submitted")
+                })
                 .h(px(38.0))
                 .px(px(18.0))
                 .rounded_lg()
@@ -947,9 +1114,17 @@ impl InboxScreen {
         };
         let secondary = |id: SharedString, label: String| {
             div()
-                .id(id)
+                .id(id.clone())
+                .test_support()
+                .debug_selector(|| id.to_string())
+                .accessibility_id(id)
                 .role(Role::Button)
                 .aria_label(label.clone())
+                .when(blocked, |element| {
+                    element
+                        .opacity(0.5)
+                        .aria_description("Decision already submitted")
+                })
                 .h(px(38.0))
                 .px(px(15.0))
                 .rounded_lg()
@@ -966,9 +1141,17 @@ impl InboxScreen {
         };
         let danger = |id: SharedString, label: String| {
             div()
-                .id(id)
+                .id(id.clone())
+                .test_support()
+                .debug_selector(|| id.to_string())
+                .accessibility_id(id)
                 .role(Role::Button)
                 .aria_label(label.clone())
+                .when(blocked, |element| {
+                    element
+                        .opacity(0.5)
+                        .aria_description("Decision already submitted")
+                })
                 .h(px(38.0))
                 .px(px(16.0))
                 .rounded_lg()
@@ -1003,7 +1186,6 @@ impl InboxScreen {
                                 state.dismissed_runs.insert(run_id);
                                 cx.notify();
                             });
-                            this.action_note = None;
                             cx.notify();
                         }),
                     ),
@@ -1205,6 +1387,13 @@ impl Render for InboxScreen {
         self.load_review_documents(cx);
         self.reload_history_if_changed(cx);
         let (items, live) = self.items(cx);
+        self.sync_response_owner(
+            items
+                .get(self.selected.min(items.len().saturating_sub(1)))
+                .map(InboxItem::identity),
+            window,
+            cx,
+        );
         if items.is_empty() {
             return div().size_full().child(self.render_all_clear(live, cx));
         }
@@ -1291,6 +1480,268 @@ mod tests {
                     .any(|(label, _)| label.contains("SCHEMA"))
             );
         });
+    }
+
+    #[gpui_kit::test]
+    fn offline_approval_preserves_exact_comment_and_plan_edits(cx: &mut TestAppContext) {
+        let (state, inbox, run, _) = controlled_fixture(cx, false);
+        inbox.update(cx, |screen, _| screen.controlled_responses = None);
+        state.update(cx, |state, _| {
+            state.plan_edits.insert(run, edits("offline"));
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        write_comment(window, &inbox, "  Preserve this comment  ");
+        click(window, "inbox-outcome-approve");
+        assert_comment(window, &inbox, "  Preserve this comment  ");
+        window.update(|_, cx| {
+            inbox.update(cx, |screen, cx| {
+                assert_eq!(state.read(cx).plan_edits.get(&run), Some(&edits("offline")));
+                let owner = screen.response_owner.as_ref().unwrap();
+                assert!(matches!(&screen.drafts[owner].submission,
+                super::DecisionSubmission::Failed(error) if error.contains("daemon offline")));
+            })
+        });
+        assert!(window.debug_bounds("decision-status").is_some());
+    }
+
+    fn init_components(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::init();
+            crate::theme::sync_component_theme(cx);
+        });
+    }
+
+    fn decision(seq: u64, tool: bool) -> crate::run_stream::PendingDecision {
+        crate::run_stream::PendingDecision {
+            seq,
+            time: String::new(),
+            node: "flow_gate".into(),
+            kind: crate::run_stream::DecisionKind::HumanInput {
+                call_id: Some(if tool {
+                    format!("tool-{seq}")
+                } else {
+                    surge_core::id::GateRequestId::new().to_string()
+                }),
+                prompt: format!("Decision {seq}"),
+                schema: (!tool).then(|| serde_json::json!({"x-surge-bootstrap-stage":"flow"})),
+            },
+        }
+    }
+
+    fn controlled_fixture(
+        cx: &mut TestAppContext,
+        tool: bool,
+    ) -> (
+        gpui_kit::Entity<AppState>,
+        gpui_kit::Entity<InboxScreen>,
+        surge_core::RunId,
+        super::ControlledResponses,
+    ) {
+        init_components(cx);
+        let run = surge_core::RunId::new();
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            let mut stream = crate::run_stream::RunStreamState::default();
+            stream.pending.push(decision(1, tool));
+            state.run_streams.insert(run, stream);
+            state
+        });
+        let responses = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let inbox = cx.new(|cx| {
+            let mut screen = InboxScreen::new(state.clone(), cx);
+            screen.controlled_responses = Some(responses.clone());
+            screen
+        });
+        (state, inbox, run, responses)
+    }
+
+    fn write_comment(
+        window: &mut gpui_kit::VisualTestContext,
+        inbox: &gpui_kit::Entity<InboxScreen>,
+        text: &str,
+    ) {
+        assert!(window.debug_bounds("decision-response").is_some());
+        window.update(|window, cx| {
+            inbox.update(cx, |screen, cx| {
+                screen
+                    .response_input
+                    .clone()
+                    .unwrap()
+                    .update(cx, |input, cx| input.set_value(text, window, cx));
+            })
+        });
+    }
+
+    fn click(window: &mut gpui_kit::VisualTestContext, id: &'static str) {
+        let bounds = window.debug_bounds(id).unwrap();
+        window.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+    }
+
+    fn assert_comment(
+        window: &mut gpui_kit::VisualTestContext,
+        inbox: &gpui_kit::Entity<InboxScreen>,
+        expected: &str,
+    ) {
+        window.update(|_, cx| {
+            inbox.update(cx, |screen, cx| assert_eq!(screen.comment(cx), expected))
+        });
+    }
+
+    fn edits(model: &str) -> surge_core::node_overrides::NodeOverrides {
+        surge_core::node_overrides::NodeOverrides(std::collections::BTreeMap::from([(
+            "implement".into(),
+            surge_core::node_overrides::NodeOverride {
+                model: Some(model.into()),
+                ..Default::default()
+            },
+        )]))
+    }
+
+    #[gpui_kit::test]
+    fn approval_rejection_preserves_edits_and_retry_acknowledges_once(cx: &mut TestAppContext) {
+        let (state, inbox, run, responses) = controlled_fixture(cx, false);
+        state.update(cx, |state, _| {
+            state.plan_edits.insert(run, edits("first"));
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        write_comment(window, &inbox, "  exact comment  ");
+        click(window, "inbox-outcome-approve");
+        click(window, "inbox-outcome-approve");
+        assert_eq!(responses.borrow().len(), 1);
+        let (payload, sender) = responses.borrow_mut().remove(0);
+        assert_eq!(payload["comment"], "  exact comment  ");
+        assert_eq!(
+            payload["node_overrides"],
+            serde_json::to_value(edits("first")).unwrap()
+        );
+        sender.send(Err("queue rejected".into())).unwrap();
+        window.run_until_parked();
+        assert_comment(window, &inbox, "  exact comment  ");
+        window.update(|_, cx| inbox.update(cx, |screen, cx| {
+            let owner = screen.response_owner.as_ref().unwrap();
+            assert!(matches!(&screen.drafts[owner].submission, super::DecisionSubmission::Failed(error) if error.contains("queue rejected")));
+            assert_eq!(state.read(cx).plan_edits.get(&run), Some(&edits("first")));
+        }));
+        click(window, "inbox-outcome-approve");
+        responses.borrow_mut().remove(0).1.send(Ok(())).unwrap();
+        window.run_until_parked();
+        assert_comment(window, &inbox, "");
+        window.update(|_, cx| assert!(!state.read(cx).plan_edits.contains_key(&run)));
+        click(window, "inbox-outcome-approve");
+        assert!(responses.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn pending_tool_response_blocks_enter_and_late_ack_preserves_changed_text(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, inbox, _, responses) = controlled_fixture(cx, true);
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        write_comment(window, &inbox, "  exact response  ");
+        click(window, "inbox-send-response");
+        let bounds = window.debug_bounds("decision-response").unwrap();
+        window.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+        window.simulate_keystrokes("enter enter");
+        assert_eq!(responses.borrow().len(), 1);
+        let (payload, sender) = responses.borrow_mut().remove(0);
+        assert_eq!(payload, serde_json::json!("  exact response  "));
+        write_comment(window, &inbox, "new response");
+        sender.send(Ok(())).unwrap();
+        window.run_until_parked();
+        assert_comment(window, &inbox, "new response");
+    }
+
+    #[gpui_kit::test]
+    fn switching_decisions_preserves_drafts_and_scopes_late_error(cx: &mut TestAppContext) {
+        let (state, inbox, run, responses) = controlled_fixture(cx, false);
+        state.update(cx, |state, _| {
+            state
+                .run_streams
+                .get_mut(&run)
+                .unwrap()
+                .pending
+                .push(decision(2, false))
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        write_comment(window, &inbox, "first draft");
+        click(window, "inbox-outcome-approve");
+        let first_owner = window.update(|_, cx| inbox.read(cx).response_owner.clone().unwrap());
+        window.update(|window, cx| inbox.update(cx, |screen, cx| screen.select(1, window, cx)));
+        assert_comment(window, &inbox, "");
+        write_comment(window, &inbox, "second draft");
+        responses
+            .borrow_mut()
+            .remove(0)
+            .1
+            .send(Err("first rejection".into()))
+            .unwrap();
+        window.run_until_parked();
+        assert_comment(window, &inbox, "second draft");
+        window.update(|window, cx| inbox.update(cx, |screen, cx| {
+            assert_ne!(screen.response_owner.as_ref(), Some(&first_owner));
+            assert!(matches!(&screen.drafts[&first_owner].submission, super::DecisionSubmission::Failed(error) if error.contains("first rejection")));
+            screen.select(0, window, cx);
+        }));
+        assert_comment(window, &inbox, "first draft");
+    }
+
+    #[gpui_kit::test]
+    fn acknowledged_approval_does_not_remove_changed_overrides(cx: &mut TestAppContext) {
+        let (state, inbox, run, responses) = controlled_fixture(cx, false);
+        state.update(cx, |state, _| {
+            state.plan_edits.insert(run, edits("first"));
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        click(window, "inbox-outcome-approve");
+        window.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.plan_edits.insert(run, edits("changed"));
+            })
+        });
+        responses.borrow_mut().remove(0).1.send(Ok(())).unwrap();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(state.read(cx).plan_edits.get(&run), Some(&edits("changed")))
+        });
+    }
+
+    #[gpui_kit::test]
+    fn queue_replacement_preserves_same_valued_new_plan_edits_and_comment(cx: &mut TestAppContext) {
+        let (state, inbox, run, responses) = controlled_fixture(cx, false);
+        state.update(cx, |state, _| {
+            state.plan_edits.insert(run, edits("first"));
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(inbox.clone(), window, cx)
+        });
+        write_comment(window, &inbox, "old draft");
+        click(window, "inbox-outcome-approve");
+        window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.run_streams.get_mut(&run).unwrap().pending = vec![decision(2, false)];
+                state.plan_edits.insert(run, edits("first"));
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        assert_comment(window, &inbox, "");
+        write_comment(window, &inbox, "new decision draft");
+        responses.borrow_mut().remove(0).1.send(Ok(())).unwrap();
+        window.run_until_parked();
+        assert_comment(window, &inbox, "new decision draft");
+        window
+            .update(|_, cx| assert_eq!(state.read(cx).plan_edits.get(&run), Some(&edits("first"))));
     }
 
     #[gpui_kit::test]

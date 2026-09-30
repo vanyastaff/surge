@@ -164,3 +164,119 @@ seven-line draft and its offline error.
 Both previously observed native failures are therefore repaired in this build.
 Strict clippy, Rust 1.96 and cross-platform verification remain separate gates;
 this offline pass does not establish real agent execution or recovery.
+
+## September 29 product interface pass
+
+The isolated `codex/product-readiness` checkout builds a default-feature native
+bundle at `.codex/builds/Surge.app`. Its final executable SHA-256 is
+`d86b5d672b980b731a8a8faedf532f63f1b10907dfe07cc0f75c3e048987c9c0`.
+Ad-hoc bundle signature verification passed. All 194 UI tests, workspace
+formatting, diff whitespace and strict UI Clippy checks passed on Rust 1.98.1.
+This pass did not recheck the declared Rust 1.96 MSRV or other platforms.
+
+Computer Use inspected actual retained project runs, rather than sample cards:
+
+- Tasks exposes all four retained runs, filters and the selected request.
+- New task accepts exact padded multiline Russian text; Back returns to Tasks.
+  This native input check did not submit a new provider execution.
+- Workflows opens the actual project → milestone → task template, retaining
+  parent breadcrumbs. Four-level and reused-body navigation additionally passed
+  GPUI interaction tests with fixed fixtures.
+- Profiles exposes role defaults, expected inputs, outcomes and the full prompt
+  template through scrolling. Light and dark task surfaces were inspected.
+- A 960 × 640 window was inspected during the visual pass. This found shrinking
+  detail headings; the final fixed-height heading and accessible result action
+  were subsequently checked in the final 1280 × 800 bundle.
+- Cmd+Q and closing the last window both terminate the preview process, and
+  reopening the same bundle restores a usable welcome screen. The daemon is
+  separate and was not stopped.
+
+Visual review drove bounded pane scrolling, stable header height, earlier result
+actions, readable diagram text and profile-panel padding. The template inspector
+does not claim an effective live session from an unrelated run's node name.
+Live instance-specific graph drilldown, process editing and cross-provider
+completion remain separate acceptance work.
+
+### Follow-up: connected recorded task processes
+
+The earlier component pass did not establish product readiness or fidelity to the design reference. A native-window follow-up found that expanded roadmap details extended below the viewport without scrolling. Aligning the scroll container content to the start restored scrolling; the process action now precedes long acceptance criteria.
+
+Roadmap plan items now link to their owning implementation run and milestone-qualified task. The recorded-process explorer provides mission/milestone/task/subtask navigation and displays actual step states and agent reports. Selecting another run resets the task scope; external run links reset the previous tab. Missing execution is stated explicitly.
+
+Native verification on the retained timer mission confirmed the roadmap task link, parent navigation, specification/build/check reports, and scrolling to the final report. This verified navigation of recorded work, not a fresh provider execution. Editing a mission process, adding a profile during execution, and live graph editing remain unimplemented product requirements.
+
+### Follow-up: first-open static preview
+
+The primary checkout's native bundle reproduced a persistent black preview of
+the completed timer mission. Reload displayed the same application's HTML,
+styles and JavaScript. Switching away and reopening reproduced the failure.
+
+The pinned Wry builder started navigation before attaching the native child;
+the GPUI wrapper then reset its bounds to zero until prepaint. The preview now
+creates the child without a URL and starts navigation on the next frame only
+after observing a nonzero layout. Closure cancels pending navigation; origin,
+asset and navigation restrictions are retained.
+
+The rebuilt primary-source bundle displayed the real timer without Reload on
+first opening and after switching to Changes and back. Clicking Start produced
+a countdown from 25:00 to 24:53, confirming script execution. The Changes pane
+replaced the native browser correctly. Initial asynchronous loading can still
+briefly show an empty surface; a zero-area layout reports an explicit reopen
+error. These observations verify the retained static result on macOS, not a new
+agent execution or backend application startup.
+
+### Follow-up: recorded participants and operator guidance
+
+Task-process cards show the profile and runtime from `SessionOpened`. A scoped
+Work details disclosure exposes the recorded session, resolved binding names
+and bound skill names. These are event projections, not current profile
+defaults. Retry entry clears the preceding attempt's evidence; repeated task
+and subtask node names stay isolated. Legacy events lacking this data are
+labelled as not recorded. GPUI interaction regressions exercise disclosure and
+scope changes, including human gates and missing runtime information.
+
+The orchestrator now persists `StageInputsResolved` before opening an agent
+session, hashing the complete resolved values independently of the capped ACP
+echo. Duplicate targets are rejected before launch. Actual stage-launch
+integration regressions cover large/static/file inputs, changed file content,
+empty inputs and failed resolution/validation/rendering. The local gate passed
+398 orchestrator unit tests plus eight integration-harness tests (four exercise
+the new stage behaviour), and strict all-target/all-feature Clippy. The running
+daemon was not replaced during this pass; this is production-source and mock
+bridge evidence, not new context records from a live provider run.
+
+Send guidance keeps drafts until acknowledgement, guards duplicate pending
+sends, preserves edits made while waiting, and scopes drafts and responses by
+project and run. Delayed responses injected at the production submission and
+settlement boundary exercise rejection, retry and late acknowledgements. This
+does not prove exactly-once delivery after a lost RPC acknowledgement; the
+failure message says that queueing could not be confirmed. Guidance is queued
+for a subsequent agent step and does not change the mission graph or add a role.
+
+### Follow-up: exact plan ownership and final local verification
+
+Opening a plan from Decisions carries its run and pending decision sequence.
+An unavailable or expired requested decision produces an explicit message rather
+than selecting another mission. Plan edits and model input events retain their
+owner; detached editors and delayed stored-plan loads cannot modify or replace
+the newly selected plan. Content fingerprints refresh a changed flow at the
+same path without reparsing unchanged content every frame. GPUI regressions
+reproduce the wrong-mission selection, stale same-path content and reordered
+stored-plan responses. No live pending provider decision was created for this
+verification.
+
+The final local checks passed 208 UI unit tests and five UI gate integration
+tests, plus strict UI Clippy across all targets and features. Formatting and
+diff checks passed. The rebuilt macOS bundle visibly showed Spec, Build and
+Check participants for a retained task; Work details exposed its recorded
+session and honestly marked absent legacy inputs and skills. Its static timer
+preview loaded without Reload after the initial asynchronous empty surface.
+Interactive graph editing and adding specialists remain unimplemented.
+
+### Product correction: Rust-first results
+
+The user clarified that browser preview is unnecessary for their primarily Rust
+projects. Preview was removed from result tabs and completed-task actions, and
+the native webview lifecycle was disconnected from the results screen. Results
+now expose Overview, Changes, Checks and Log. The preview observations above
+remain historical evidence, not a current product requirement.

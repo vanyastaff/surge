@@ -87,7 +87,7 @@ impl SpecWizardScreen {
         let description = self.prompt(cx);
         if description.trim().is_empty() {
             self.submission = SubmissionState::Editing {
-                error: Some("Describe the work before starting a planning run.".into()),
+                error: Some("Describe the work before starting a task.".into()),
             };
             cx.notify();
             return;
@@ -126,28 +126,28 @@ impl Render for SpecWizardScreen {
         div().size_full().v_flex().p_6().gap_4().child(
             div().v_flex().max_w(px(700.0)).w_full().gap_4().p_6()
                 .bg(theme::surface()).rounded_xl()
-                .child(div().text_lg().text_color(theme::text_primary()).child("Plan a task"))
+                .child(div().text_lg().text_color(theme::text_primary()).child("New task"))
                 .child(div().text_sm().text_color(theme::text_muted())
                     .child(format!("Project: {}", self.project_path.display())))
                 .child(div().text_sm().text_color(theme::text_muted()).child(
-                    "Send your request to the daemon to prepare a description, roadmap, and flow. Review its decisions in Inbox. This starts planning; it does not start the generated implementation."))
+                    "Describe the result you want. Surge prepares a plan for your review, then carries out the approved work. You can review requests and suggest changes in Decisions."))
                 .child(div().id("planning-prompt-region").min_h(px(200.0)).flex_shrink_0().test_support().debug_selector(|| "planning-prompt".into())
                     .child(Textarea::new(&input).h(px(200.0)).accessibility_id("planning-prompt").aria_label("Task description").disabled(!editing)))
                 .when_some(self.error().map(str::to_owned), |el, error| {
                     el.child(div().id("planning-error").role(Role::Label).aria_label(error.clone()).test_support().debug_selector(|| "planning-error".into()).text_sm()
                         .text_color(theme::error()).child(error))
                 })
-                .when(pending, |el| el.child(div().id("pending-status").role(Role::Label).aria_label("Submitting planning request…").child("Submitting planning request…")))
-                .when_some(accepted, |el, id| el.child(div().id("accepted-status").role(Role::Label).aria_label(format!("Planning request {id} accepted or queued by the daemon.")).text_sm()
-                    .child(format!("Planning request {id} accepted or queued by the daemon."))))
+                .when(pending, |el| el.child(div().id("pending-status").role(Role::Label).aria_label("Submitting task…").child("Submitting task…")))
+                .when_some(accepted, |el, id| el.child(div().id("accepted-status").role(Role::Label).aria_label(format!("Task request {id} accepted or queued.")).text_sm()
+                    .child(format!("Task request {id} accepted or queued."))))
                 .child(div().h_flex().gap_3()
                     .child(Button::new("planning-back").ghost().label("Back").accessibility_id("planning-back")
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(SpecWizardEvent::Cancel))))
                     .child(if let Some(id) = accepted {
-                        Button::new("planning-open").primary().label("Open planning run").accessibility_id("planning-open")
+                        Button::new("planning-open").primary().label("Open task").accessibility_id("planning-open")
                             .on_click(cx.listener(move |_, _, _, cx| cx.emit(SpecWizardEvent::OpenRun(id))))
                     } else {
-                        Button::new("planning-start").primary().label("Start planning").accessibility_id("planning-start")
+                        Button::new("planning-start").primary().label("Start task").accessibility_id("planning-start")
                             .debug_selector(|| "planning-submit".into())
                             .disabled(pending || self.prompt(cx).trim().is_empty())
                             .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))

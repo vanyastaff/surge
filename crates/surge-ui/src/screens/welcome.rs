@@ -130,17 +130,16 @@ impl WelcomeScreen {
                     .line_height(px(38.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::text_primary())
-                    .child("Describe an app.")
-                    .child("Surge builds it —")
-                    .child(div().text_color(theme::accent()).child("with evidence.")),
+                    .child("Delegate a task.")
+                    .child(div().text_color(theme::accent()).child("Review the result.")),
             )
             .child(
                 div()
                     .max_w(px(470.0))
-                    .text_size(px(13.0))
-                    .line_height(px(20.0))
+                    .text_size(px(16.0))
+                    .line_height(px(24.0))
                     .text_color(theme::text_muted())
-                    .child("Your coding agent plans, builds and checks it. You approve."),
+                    .child("Use your coding agents to plan, implement, and check work in your project. Review plans, follow progress, and make decisions."),
             )
     }
 
@@ -148,29 +147,28 @@ impl WelcomeScreen {
         div()
             .h_flex()
             .gap(px(10.0))
-            // New app → empty folder picker + repository initialization.
-            // The primary path: most people arrive with an idea, not a repo.
-            .child(
-                Button::new("new-project")
-                    .primary()
-                    .large()
-                    .icon(Lucide::FolderPlus)
-                    .label("New app")
-                    .accessibility_id("new-project")
-                    .on_click(cx.listener(|_this, _event, _window, cx| {
-                        cx.emit(WelcomeEvent::NewProject);
-                    })),
-            )
-            // Open existing → native directory picker.
+            // Open an existing project → native directory picker.
             .child(
                 Button::new("open-project")
-                    .outline()
+                    .primary()
                     .large()
                     .icon(IconName::FolderOpen)
                     .label("Open project")
                     .accessibility_id("open-project")
                     .on_click(cx.listener(|_this, _event, _window, cx| {
                         cx.emit(WelcomeEvent::BrowseProject);
+                    })),
+            )
+            // New app → empty folder picker + repository initialization.
+            .child(
+                Button::new("new-project")
+                    .outline()
+                    .large()
+                    .icon(Lucide::FolderPlus)
+                    .label("New app")
+                    .accessibility_id("new-project")
+                    .on_click(cx.listener(|_this, _event, _window, cx| {
+                        cx.emit(WelcomeEvent::NewProject);
                     })),
             )
             .child(
@@ -495,8 +493,7 @@ impl WelcomeScreen {
                         el.child(ui::empty_state(
                             "◎",
                             "No projects yet",
-                            "Start a new app in an empty folder, or open a repository you \
-                             already have. It will be listed here next time.",
+                            "Open a project to delegate your first task, or start in an empty folder. Your projects will appear here next time.",
                         ))
                     })
                     .children(rows),
@@ -538,7 +535,6 @@ impl Render for WelcomeScreen {
             .size_full()
             .bg(theme::background())
             .overflow_hidden()
-            .child(ui::grid_backdrop(24.0))
             .child(
                 div()
                     .size_full()

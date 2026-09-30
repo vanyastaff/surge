@@ -498,8 +498,8 @@ pub fn maintain(
         // through `maintain` until M2 wrote a test that did, so a variant
         // sitting unconstructed and untested is invisible to it for as
         // long as it stays unconstructed. Confirmed live in this workspace
-        // right now: `BootstrapArtifactProduced`, `BootstrapStageStarted`,
-        // and `StageInputsResolved` are not constructed anywhere in this
+        // right now: `BootstrapArtifactProduced` and `BootstrapStageStarted`
+        // are not constructed anywhere in this
         // workspace today — "the variant exists" does not imply "the
         // variant reaches this function", so this arm's coverage is
         // contingent on something exercising the new variant, not

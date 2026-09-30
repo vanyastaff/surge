@@ -24,6 +24,8 @@ pub struct AppState {
     pub project_scope: Option<crate::project::ProjectScope>,
     pub project_name: String,
     pub config: Option<SurgeConfig>,
+    /// Failure loading this project's configuration or ACP pool, for UI notifications.
+    pub project_load_error: Option<String>,
     pub current_branch: String,
 
     // ── Agents ──
@@ -129,6 +131,7 @@ impl AppState {
             project_scope: None,
             project_name: String::new(),
             config: None,
+            project_load_error: None,
             current_branch: "main".to_string(),
             registry,
             installed_agents,
@@ -339,6 +342,9 @@ impl AppState {
 
     /// Load project from a directory path.
     pub fn load_project(&mut self, path: &std::path::Path) {
+        self.config = None;
+        self.agent_pool = None;
+        self.project_load_error = None;
         self.project_path = Some(path.to_path_buf());
         self.project_scope = Some(crate::project::ProjectScope::resolve(path));
         self.project_name = path
@@ -351,29 +357,28 @@ impl AppState {
         // so a builtin provider like ollama-acp is usable from the desktop
         // chat without first being copied into surge.toml.
         let config_path = path.join("surge.toml");
-        if let Ok(config) = SurgeConfig::load(&config_path) {
-            let registry = surge_acp::Registry::for_run(&config);
-            let agents = registry.agent_configs();
-            let default_agent = registry
-                .normalize_agent_id(&config.default_agent)
-                .unwrap_or_else(|| config.default_agent.clone());
-            if let Ok(pool) = AgentPool::new(
-                agents,
-                default_agent,
-                path.to_path_buf(),
-                PermissionPolicy::default(),
-                config.resilience.clone(),
-            ) {
-                self.agent_pool = Some(Arc::new(pool));
-            }
-            self.config = Some(config);
-        }
+        let config_absent = match std::fs::symlink_metadata(&config_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            metadata => {
+                let loaded = metadata
+                    .map_err(|error| surge_core::SurgeError::Config(error.to_string()))
+                    .and_then(|_| load_project_runtime(path));
+                match loaded {
+                    Ok((config, pool)) => {
+                        self.config = Some(config);
+                        self.agent_pool = Some(Arc::new(pool));
+                    },
+                    Err(error) => self.record_project_load_error(error),
+                }
+                false
+            },
+        };
 
         // Re-detect installed agents (might have changed).
         self.installed_agents = self.registry.detect_installed_with_paths();
 
         // If no pool yet (no surge.toml), create one from installed agents.
-        if self.agent_pool.is_none() && !self.installed_agents.is_empty() {
+        if config_absent && !self.installed_agents.is_empty() {
             let mut agents = std::collections::HashMap::new();
             let mut default_agent = String::new();
             for detected in &self.installed_agents {
@@ -383,19 +388,32 @@ impl AppState {
                 }
                 agents.insert(detected.entry.id.clone(), config);
             }
-            if let Ok(pool) = AgentPool::new(
+            match AgentPool::new(
                 agents,
                 default_agent,
                 path.to_path_buf(),
                 PermissionPolicy::default(),
                 surge_core::config::ResilienceConfig::default(),
             ) {
-                self.agent_pool = Some(Arc::new(pool));
+                Ok(pool) => self.agent_pool = Some(Arc::new(pool)),
+                Err(error) => self.record_project_load_error(error),
             }
         }
 
         // Try detecting current git branch.
         self.current_branch = detect_branch(path).unwrap_or_else(|| "main".to_string());
+    }
+
+    fn record_project_load_error(&mut self, error: surge_core::SurgeError) {
+        let reason = match error {
+            surge_core::SurgeError::Config(_) => "configuration could not be read or validated",
+            surge_core::SurgeError::AgentConnection(_) => "agent runtime could not be initialized",
+            _ => "project runtime could not be loaded",
+        };
+        let diagnostic =
+            format!("Project {reason}. Check surge.toml and reload configuration in Settings.");
+        tracing::warn!(project = ?self.project_path, reason, "Project runtime unavailable");
+        self.project_load_error = Some(diagnostic);
     }
 
     /// Update config in-place and save to disk.
@@ -407,6 +425,12 @@ impl AppState {
     /// no place to save and silently mutating in-memory only would
     /// diverge from disk.
     pub fn update_config(&mut self, config: SurgeConfig) -> Result<(), surge_core::SurgeError> {
+        if self.project_load_error.is_some() {
+            return Err(surge_core::SurgeError::Config(
+                "Check surge.toml and reload configuration in Settings before saving changes."
+                    .into(),
+            ));
+        }
         let project_path = self.project_path.as_ref().ok_or_else(|| {
             surge_core::SurgeError::Config(
                 "No project loaded; cannot save config without project_path".into(),
@@ -477,6 +501,25 @@ impl AppState {
     }
 }
 
+/// Load configuration and its pool together so failures cannot leave a partial runtime.
+fn load_project_runtime(
+    path: &std::path::Path,
+) -> Result<(SurgeConfig, AgentPool), surge_core::SurgeError> {
+    let config = SurgeConfig::load(&path.join("surge.toml"))?;
+    let registry = Registry::for_run(&config);
+    let default_agent = registry
+        .normalize_agent_id(&config.default_agent)
+        .unwrap_or_else(|| config.default_agent.clone());
+    let pool = AgentPool::new(
+        registry.agent_configs(),
+        default_agent,
+        path.to_path_buf(),
+        PermissionPolicy::default(),
+        config.resilience.clone(),
+    )?;
+    Ok((config, pool))
+}
+
 /// Detect current git branch name from a path.
 fn detect_branch(path: &std::path::Path) -> Option<String> {
     let head_file = path.join(".git").join("HEAD");
@@ -495,6 +538,144 @@ mod tests {
     use surge_core::config::{AgentConfig, ResilienceConfig, Transport};
 
     use super::*;
+
+    fn project_config(path: &std::path::Path, agent: &str, budget: f64) {
+        let mut config = SurgeConfig {
+            default_agent: agent.into(),
+            ..SurgeConfig::default()
+        };
+        let mut runtime = test_agent_config();
+        runtime.command = format!("{agent}-command");
+        config.agents.insert(agent.into(), runtime);
+        config.analytics.budget_usd = Some(budget);
+        config
+            .save(&path.join("surge.toml"))
+            .expect("valid fixture");
+    }
+
+    #[test]
+    fn project_switch_drops_config_and_pool_when_config_missing_or_invalid() {
+        let first = tempfile::tempdir().expect("first project");
+        let second = tempfile::tempdir().expect("second project");
+        project_config(first.path(), "project-a", 17.0);
+        let mut state = AppState::new();
+        state.registry = Registry::empty();
+        for invalid in [false, true] {
+            state.load_project(first.path());
+            assert_eq!(
+                state.config.as_ref().unwrap().analytics.budget_usd,
+                Some(17.0)
+            );
+            assert_eq!(
+                state.agent_pool.as_ref().unwrap().default_agent(),
+                "project-a"
+            );
+            if invalid {
+                std::fs::write(second.path().join("surge.toml"), "[invalid").unwrap();
+            }
+            state.load_project(second.path());
+            assert_eq!(state.project_path.as_deref(), Some(second.path()));
+            assert!(
+                state.config.is_none(),
+                "previous project config must be dropped"
+            );
+            assert!(
+                state.agent_pool.is_none(),
+                "previous project pool must be dropped"
+            );
+            assert_eq!(state.project_load_error.is_some(), invalid);
+        }
+    }
+
+    #[test]
+    fn project_switch_replaces_valid_config_and_pool() {
+        let first = tempfile::tempdir().unwrap();
+        let third = tempfile::tempdir().unwrap();
+        project_config(first.path(), "project-a", 17.0);
+        project_config(third.path(), "project-c", 31.0);
+        let mut state = AppState::new();
+        state.registry = Registry::empty();
+        state.load_project(first.path());
+        let first_pool = Arc::clone(state.agent_pool.as_ref().unwrap());
+        state.load_project(third.path());
+        assert_eq!(state.project_path.as_deref(), Some(third.path()));
+        let config = state.config.as_ref().unwrap();
+        assert_eq!(config.default_agent, "project-c");
+        assert_eq!(config.analytics.budget_usd, Some(31.0));
+        assert_eq!(config.agents["project-c"].command, "project-c-command");
+        assert_eq!(config.agents["project-c"].args, ["test"]);
+        let pool = state.agent_pool.as_ref().unwrap();
+        assert_eq!(pool.default_agent(), "project-c");
+        assert!(!Arc::ptr_eq(&first_pool, pool));
+        assert!(state.project_load_error.is_none());
+    }
+
+    #[test]
+    fn project_switch_unreadable_config_blocks_installed_fallback_and_recovers() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        project_config(first.path(), "project-a", 17.0);
+        let mut state = AppState::new();
+        let mut installed_config = test_agent_config();
+        installed_config.command = std::env::current_exe().unwrap().display().to_string();
+        state.registry =
+            Registry::from_config(HashMap::from([("installed-test".into(), installed_config)]));
+        state.load_project(first.path());
+        let first_pool = Arc::clone(state.agent_pool.as_ref().unwrap());
+        std::fs::create_dir(second.path().join("surge.toml")).unwrap();
+        state.load_project(second.path());
+        assert!(!state.installed_agents.is_empty(), "fixture is installed");
+        assert!(state.config.is_none());
+        assert!(state.agent_pool.is_none(), "read failure forbids fallback");
+        assert!(state.project_load_error.is_some());
+        std::fs::remove_dir(second.path().join("surge.toml")).unwrap();
+        state.load_project(second.path());
+        assert!(state.config.is_none());
+        assert!(state.project_load_error.is_none());
+        let fallback_pool = state.agent_pool.as_ref().unwrap();
+        assert_eq!(fallback_pool.default_agent(), "installed-test");
+        assert!(!Arc::ptr_eq(&first_pool, fallback_pool));
+        assert_eq!(state.project_path.as_deref(), Some(second.path()));
+    }
+
+    #[test]
+    fn project_load_diagnostic_does_not_echo_configuration_values() {
+        let project = tempfile::tempdir().unwrap();
+        let sensitive = "sensitive-runtime-value";
+        std::fs::write(
+            project.path().join("surge.toml"),
+            format!("[pipeline]\nmax_parallel = \"{sensitive}\"\n"),
+        )
+        .unwrap();
+        let mut state = AppState::new();
+        state.registry = Registry::empty();
+        state.load_project(project.path());
+        let diagnostic = state.project_load_error.as_deref().unwrap();
+        assert!(!diagnostic.contains(sensitive));
+        assert!(diagnostic.contains("reload configuration"));
+        assert!(state.config.is_none());
+        assert!(state.agent_pool.is_none());
+    }
+
+    #[test]
+    fn update_config_preserves_a_failed_project_file_until_reload() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("surge.toml");
+        let broken = "[broken";
+        std::fs::write(&path, broken).unwrap();
+        let mut state = AppState::new();
+        state.registry = Registry::empty();
+        state.load_project(project.path());
+        assert!(state.project_load_error.is_some());
+        assert!(state.update_config(SurgeConfig::default()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        assert!(state.config.is_none());
+        std::fs::remove_file(&path).unwrap();
+        state.load_project(project.path());
+        assert!(state.project_load_error.is_none());
+        assert!(state.update_config(SurgeConfig::default()).is_ok());
+        assert!(SurgeConfig::load(&path).is_ok());
+    }
 
     #[test]
     fn active_run_refresh_preserves_finished_history() {

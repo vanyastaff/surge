@@ -1,6 +1,86 @@
 # Agent OS and coding-agent landscape
 
-Status: research note, last checked 2026-07-07.
+Status: research note. Original survey checked 2026-07-07; the reference update
+below was checked 2026-09-29. Older survey entries have not been revalidated.
+
+## September 29 reference update: memory and explorable workflows
+
+The owner supplied [Hindsight](https://hindsight.vectorize.io/) and
+[Archify](https://tt-a1i.github.io/archify/) as references. Their public pages
+were retrieved on 2026-09-29. This establishes their documented behavior,
+not their popularity, adoption rate, or the date a trend began.
+
+Hindsight separates retained facts, consolidated observations and curated
+mental models. Its retrieval combines semantic, keyword, entity and temporal
+search; observations retain supporting evidence and change history. The
+lesson for Surge is selective, traceable knowledge across sessions: a role
+should receive relevant information with sources and freshness, rather than
+an ever-growing shared transcript. Whether Hindsight itself is the right
+implementation remains untested; evaluating an integration requires a separate
+comparison of retrieval quality, latency and local deployment requirements.
+
+Archify generates explorable diagrams from natural language, with progressive
+MAP / READ / FULL detail, route inspection and portable HTML output. The
+lesson is how to explain an existing process and reveal its structure. A
+generated diagram alone is not an execution engine or proof of completion.
+
+### Product requirement clarified by the owner
+
+Surge should expose Roadmap → Milestones / Missions → Tasks → Subtasks.
+Each item can have its own flow. At every level, the user should understand
+the goal, current work, expected output and decisions in plain language, then
+open a step to inspect its nested flow, comparable to the visual navigation
+of n8n or Make. Methodology names, prompts, skills and MCP configuration are
+optional detail. Adding a specialist or changing a process must become a
+reviewable change to the executable workflow, with its affected work shown.
+The hierarchy is available when the work needs it; a small task should not
+require the user to create four empty levels. A role's workflow step is not
+automatically a subtask: subtasks represent distinct work with their own
+identity, objective, process and result.
+
+### Current evidence and acceptance boundary
+
+`flow_levels.rs` splits loop and subgraph bodies into parent-qualified views;
+the Flow screen opens the selected parent's child level and keeps its ancestor
+breadcrumbs. Four-level and reused-body fixtures now cover subtask templates,
+graph-node clicks and keyboard navigation. Mission event folding also keeps
+recorded subtasks beneath their actual parent, with execution outcome and
+verification represented separately. These checks do not establish separate
+live graph views for every task and subtask. The template inspector therefore
+labels profile defaults and does not infer a node's session state from an
+unrelated execution with the same node name.
+
+Acceptance therefore needs four nested levels, navigation scoped to the
+actual parent (including reused bodies and repeated node names), an honest
+distinction between planned structure and observed execution, and durable
+review of process changes. Full arbitrary graph editing, live graph mutation
+and per-item execution drilldown are still work to validate, not shipped
+capabilities inferred from a diagram.
+
+The next implementation contract should distinguish a reusable flow
+definition from its execution instance. Instance identity must include the
+run, parent occurrence and item identity; a node name alone cannot identify
+a task's current work across repeated iterations. The UI should open the
+selected item's instance, show its original goal and recorded outputs, and
+keep the corresponding template available as optional detail.
+
+A request such as “add a designer before implementation” should produce a
+proposed workflow revision showing the added role, its inputs, output and
+which pending items will use it. Acceptance persists that revision before
+execution continues at a safe boundary. Completed history keeps its original
+revision. A useful first interaction is a plain-language amendment plus a
+reviewable diagram change; drag-and-drop authoring is optional, rather than
+a prerequisite for ordinary use.
+
+Two additional references make the execution contract concrete:
+[n8n sub-workflows](https://docs.n8n.io/build/flow-logic/break-workflows-into-smaller-parts)
+define child inputs and provide links between parent and child executions;
+[Make subscenarios](https://help.make.com/subscenarios) define input/output
+handoffs and distinguish waiting for a child result from continuing without
+it. For Surge, a visible nested node should therefore explain what it
+receives, what it returns and whether its parent is waiting. Navigation must
+return to the same parent execution. A reusable definition and a particular
+execution remain separate identities even when their diagrams look alike.
 
 This page tracks adjacent products and patterns that matter for Surge. It is not
 a support matrix; see [Agent runtimes](agent-runtimes.md) for Agent Client Protocol (ACP) runtime wiring.
@@ -855,4 +935,3 @@ Managed agents and first-party manager views try to complete a task inside one
 vendor's walls. Surge is the local-first layer that makes fleets of agents from
 any vendor finish whole projects — with a ledger that can't lose work, a
 verifier that can't be gamed, and an event log that can replay how it happened.
-

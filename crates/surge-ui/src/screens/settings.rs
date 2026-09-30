@@ -483,6 +483,12 @@ impl SettingsScreen {
             return;
         }
         let result: Result<(), String> = self.state.update(cx, |state, _cx| {
+            if state.project_load_error.is_some() {
+                return Err(
+                    "Repair surge.toml and reload configuration before saving project settings."
+                        .into(),
+                );
+            }
             let project_path = state
                 .project_path
                 .clone()
@@ -541,6 +547,68 @@ impl SettingsScreen {
         cx.notify();
     }
 
+    fn reload_project_configuration(&mut self, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            if let Some(path) = state.project_path.clone() {
+                state.load_project(&path);
+                cx.notify();
+            }
+        });
+        if self.state.read(cx).project_load_error.is_none() {
+            let page = self.active_page;
+            *self = Self::new(self.state.clone(), cx);
+            self.active_page = page;
+        }
+        cx.notify();
+    }
+
+    fn render_project_warning(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let path = self
+            .state
+            .read(cx)
+            .project_path
+            .as_ref()
+            .map(|path| crate::ui::abbreviate_home(&path.join("surge.toml")));
+        div()
+            .id("settings-project-warning")
+            .role(Role::Label)
+            .aria_label(
+                "Project runtime unavailable. Check surge.toml and agent setup, then reload configuration.",
+            )
+            .v_flex()
+            .gap(px(10.0))
+            .m(px(20.0))
+            .p(px(16.0))
+            .rounded(px(crate::ui::R_CONTROL))
+            .border_1()
+            .border_color(theme::warning().opacity(0.45))
+            .bg(theme::tint(theme::warning()))
+            .text_size(px(14.0))
+            .text_color(theme::text_primary())
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Project runtime unavailable"),
+            )
+            .child("Check the configuration file and agent setup, then reload before changing project settings.")
+            .children(path.map(|path| {
+                div()
+                    .font_family(crate::ui::MONO)
+                    .text_size(px(12.0))
+                    .child(path)
+            }))
+            .child(
+                Button::new("settings-reload-config")
+                    .outline()
+                    .label("Reload configuration")
+                    .accessibility_id("settings-reload-config")
+                    .debug_selector(|| "settings-reload-config".into())
+                    .on_click(cx.listener(|this, _, _, cx| this.reload_project_configuration(cx))),
+            )
+            .test_support()
+            .debug_selector(|| "settings-project-warning".into())
+    }
+
     // ── Internal sidebar ───────────────────────────────────────────
 
     fn render_settings_sidebar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -572,7 +640,7 @@ impl SettingsScreen {
                             )
                             .child(
                                 div()
-                                    .text_size(px(13.0))
+                                    .text_size(px(15.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme::text_primary())
                                     .child("Settings"),
@@ -613,7 +681,7 @@ impl SettingsScreen {
                     .pb_1()
                     .text_size(px(10.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text_muted().opacity(0.5))
+                    .text_color(theme::text_dim())
                     .child(title.to_string()),
             )
             .children(items)
@@ -651,7 +719,7 @@ impl SettingsScreen {
                             .h_flex()
                             .justify_center()
                             .items_center()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::primary())
                             .child(
@@ -670,7 +738,7 @@ impl SettingsScreen {
                     .v_flex()
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(project_name.clone()),
@@ -752,7 +820,7 @@ impl SettingsScreen {
                     .v_flex()
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_primary())
                             .child(page.label().to_string()),
                     )
@@ -836,13 +904,13 @@ impl SettingsScreen {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_muted())
                             .child(format!("{subtitle} — maps to")),
                     )
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .px_2()
                             .py_0p5()
                             .rounded_md()
@@ -856,7 +924,7 @@ impl SettingsScreen {
         } else {
             header = header.child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(theme::text_muted())
                     .child(subtitle.to_string()),
             );
@@ -895,7 +963,7 @@ impl SettingsScreen {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(if self.save_error.is_some() {
                         theme::error()
                     } else {
@@ -983,7 +1051,7 @@ impl SettingsScreen {
                     }))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if is_selected {
                                 theme::text_primary()
@@ -1001,9 +1069,9 @@ impl SettingsScreen {
             .child(self.section_title("Appearance Mode"))
             .child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(theme::text_muted())
-                    .child("Dark is the primary surface; light keeps the same vocabulary"),
+                    .child("Choose a light or dark surface for the same work and decisions."),
             )
             .child(div().h_flex().gap_3().children(cards))
     }
@@ -1055,7 +1123,7 @@ impl SettingsScreen {
                                     .items_center()
                                     .child(
                                         div()
-                                            .text_size(px(12.0))
+                                            .text_size(px(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
                                             .child(tn.label().to_string()),
@@ -1098,7 +1166,7 @@ impl SettingsScreen {
             .child(self.section_title("Color Theme"))
             .child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(theme::text_muted())
                     .child("Select a color palette for the interface"),
             )
@@ -1222,7 +1290,7 @@ impl SettingsScreen {
                                     .items_center()
                                     .child(
                                         div()
-                                            .text_size(px(12.0))
+                                            .text_size(px(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
                                             .child(id.clone()),
@@ -1284,7 +1352,7 @@ impl SettingsScreen {
                             .gap_0p5()
                             .child(
                                 div()
-                                    .text_size(px(12.0))
+                                    .text_size(px(14.0))
                                     .text_color(theme::text_muted())
                                     .child(entry.id.clone()),
                             )
@@ -1422,7 +1490,7 @@ impl SettingsScreen {
             .child(self.section_title("What agents may touch"))
             .child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(theme::text_muted())
                     .child("The default for new missions. Each agent's exact flags are on the Agents screen."),
             )
@@ -1465,7 +1533,7 @@ impl SettingsScreen {
             .child(self.section_title("Gates"))
             .child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(theme::text_muted())
                     .child("Pause pipeline at these checkpoints for human approval"),
             )
@@ -1520,7 +1588,7 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(name.to_string()),
@@ -1620,7 +1688,7 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(label.to_string()),
@@ -1687,7 +1755,7 @@ impl SettingsScreen {
                     )
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .min_w(px(28.0))
@@ -1749,7 +1817,7 @@ impl SettingsScreen {
                     .child(self.section_title("Where missions work"))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_muted())
                             .child("Every mission builds in its own git worktree, so your checkout is never touched until you keep the changes."),
                     )
@@ -1911,7 +1979,7 @@ impl SettingsScreen {
                     }))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(if is_selected {
                                 theme::accent()
@@ -1959,27 +2027,27 @@ impl SettingsScreen {
     fn render_keybindings(&self) -> Div {
         let navigation = [
             Kb {
-                action: "Fleet",
+                action: "Tasks",
                 keys: "Ctrl+1",
-                description: "The run constellation (home)",
+                description: "Work and progress in this project",
             },
             Kb {
-                action: "Roadmap",
+                action: "Plan",
                 keys: "Ctrl+2",
                 description: "Milestones and delivery line",
             },
             Kb {
-                action: "Missions",
+                action: "Results",
                 keys: "Ctrl+3",
-                description: "Per-run cockpit",
+                description: "Inspect the result of each run",
             },
             Kb {
-                action: "Flow",
+                action: "Workflows",
                 keys: "Ctrl+4",
-                description: "DAG editor",
+                description: "Customize stages and their connections",
             },
             Kb {
-                action: "Inbox",
+                action: "Decisions",
                 keys: "Ctrl+5",
                 description: "Decisions blocked on you",
             },
@@ -1991,7 +2059,7 @@ impl SettingsScreen {
             Kb {
                 action: "Agents",
                 keys: "Ctrl+7",
-                description: "The crew",
+                description: "Installed runtimes and readiness",
             },
             Kb {
                 action: "Memory",
@@ -2047,7 +2115,7 @@ impl SettingsScreen {
                     .child(self.section_title("Navigation"))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_muted())
                             .child("Switch between screens"),
                     )
@@ -2097,7 +2165,7 @@ impl SettingsScreen {
                             .gap_0p5()
                             .child(
                                 div()
-                                    .text_size(px(12.0))
+                                    .text_size(px(14.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme::text_primary())
                                     .child(action.to_string()),
@@ -2434,7 +2502,7 @@ impl SettingsScreen {
                     .child(self.section_title("Logging"))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_muted())
                             .child("Set the verbosity level for Surge logs"),
                     )
@@ -2515,7 +2583,7 @@ impl SettingsScreen {
                     .border_color(theme::hairline())
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(name),
@@ -2543,7 +2611,7 @@ impl SettingsScreen {
                 .child(self.section_title("Configured Servers"))
                 .child(
                     div()
-                        .text_size(px(12.0))
+                        .text_size(px(14.0))
                         .text_color(theme::text_muted())
                         .child(
                             "Per-run scoped, supervised, sandbox-delegated (ADR-0014). \
@@ -2590,7 +2658,7 @@ impl SettingsScreen {
                     .child(self.section_title("Project Context"))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_muted())
                             .child(
                                 "The stable context generated by `surge project describe`, \
@@ -2612,7 +2680,7 @@ impl SettingsScreen {
                     .child(self.section_title("Memory Store"))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .text_color(theme::text_muted())
                             .child(
                                 "SQLite + FTS5 knowledge base (discoveries, patterns, \
@@ -2680,7 +2748,7 @@ impl SettingsScreen {
                     .border_color(theme::hairline())
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(14.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(id),
@@ -2759,7 +2827,7 @@ impl SettingsScreen {
                                     .gap(px(2.0))
                                     .child(
                                         div()
-                                            .text_size(px(12.0))
+                                            .text_size(px(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
                                             .child(telegram_row.0),
@@ -2793,7 +2861,7 @@ impl SettingsScreen {
             .py(px(6.0))
             .child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .text_color(theme::text_muted())
                     .child(label.to_string()),
             )
@@ -2802,7 +2870,7 @@ impl SettingsScreen {
 
     fn value_box(&self, value: &str) -> Div {
         div()
-            .text_size(px(12.0))
+            .text_size(px(14.0))
             .text_color(theme::text_primary())
             .px_3()
             .py(px(6.0))
@@ -2822,6 +2890,8 @@ impl Render for SettingsScreen {
         div()
             .size_full()
             .flex()
+            .font_family(crate::ui::BODY)
+            .text_size(px(14.0))
             .bg(theme::panel_deep())
             .overflow_hidden()
             .child(self.render_settings_sidebar(cx))
@@ -2831,6 +2901,9 @@ impl Render for SettingsScreen {
                     .min_w(px(0.0))
                     .h_full()
                     .v_flex()
+                    .when(self.state.read(cx).project_load_error.is_some(), |el| {
+                        el.child(self.render_project_warning(cx))
+                    })
                     .child(self.render_content(cx))
                     .when(
                         self.is_dirty() || self.save_error.is_some() || self.saved,
@@ -2845,6 +2918,69 @@ mod save_tests {
     use super::SettingsScreen;
     use crate::app_state::AppState;
     use gpui_kit::{AppContext as _, TestAppContext};
+
+    #[test]
+    fn reload_configuration_recovers_settings_after_file_repair() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("surge.toml");
+        std::fs::write(&path, "[invalid").unwrap();
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.registry = surge_acp::Registry::empty();
+            state.load_project(directory.path());
+            state
+        });
+        let screen = cx.new(|cx| SettingsScreen::new(state.clone(), cx));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        assert!(window.debug_bounds("settings-project-warning").is_some());
+        let reload = window.debug_bounds("settings-reload-config").unwrap();
+        window.simulate_click(reload.center(), gpui_kit::Modifiers::default());
+        window.update(|_, cx| assert!(state.read(cx).project_load_error.is_some()));
+        std::fs::write(
+            &path,
+            "[pipeline]\nmax_parallel = 7\n[analytics]\nbudget_tokens = 1234\n",
+        )
+        .unwrap();
+        window.simulate_click(reload.center(), gpui_kit::Modifiers::default());
+        window.update(|_, cx| {
+            assert!(state.read(cx).project_load_error.is_none());
+            let settings = screen.read(cx);
+            assert_eq!(settings.max_parallel, 7);
+            assert_eq!(settings.budget_tokens, Some(1234));
+            assert!(settings.changes().is_empty());
+        });
+        assert!(window.debug_bounds("settings-project-warning").is_none());
+    }
+
+    #[test]
+    fn unavailable_project_runtime_cannot_write_default_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surge.toml");
+        std::fs::write(&path, "schema_version = 1\n").unwrap();
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.project_path = Some(dir.path().to_path_buf());
+            state.project_load_error = Some("pool construction failed".into());
+            state
+        });
+        let screen = cx.new(|cx| SettingsScreen::new(state, cx));
+        screen.update(&mut cx, |screen, cx| {
+            screen.max_parallel = 4;
+            screen.save_config(cx);
+            assert!(screen.save_error.is_some());
+            assert_eq!(screen.changes().len(), 1);
+        });
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "schema_version = 1\n"
+        );
+    }
 
     #[test]
     fn saving_writes_only_the_touched_key_and_keeps_comments() {

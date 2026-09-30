@@ -1,4 +1,4 @@
-//! Missions — one idea, planned and built (rail · overview · preview ·
+//! Missions — one idea, planned and built (rail · overview ·
 //! changes · checks · log · steer). A mission is a planning run plus the
 //! implementation run it launched; the engine-level runs stay visible in
 //! Log and in the run IDs.
@@ -20,15 +20,13 @@ mod run_changes;
 mod run_checks;
 #[path = "run_mission.rs"]
 mod run_mission;
-#[path = "run_preview.rs"]
-mod run_preview;
 
-use std::time::Duration;
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
+use gpui_kit::component::{Disableable, Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::id::RunId;
@@ -353,14 +351,37 @@ fn validate_result_folder(path: std::path::PathBuf) -> Result<std::path::PathBuf
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RunTab {
+pub(crate) enum RunTab {
     /// The mission level by level (default).
     Overview,
-    Preview,
     Changes,
     Checks,
     /// Raw steps and events, for developers.
     Log,
+}
+
+#[cfg(test)]
+type ControlledGuidance = std::rc::Rc<
+    std::cell::RefCell<
+        Vec<(
+            RunId,
+            String,
+            tokio::sync::oneshot::Sender<Result<String, String>>,
+        )>,
+    >,
+>;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct GuidanceKey {
+    project: Option<PathBuf>,
+    run: RunId,
+}
+
+struct GuidanceDraft {
+    input: Entity<InputState>,
+    revision: u64,
+    pending: bool,
+    note: Option<String>,
 }
 
 /// Runs screen — daemon-run cockpit.
@@ -368,14 +389,19 @@ pub struct RunsScreen {
     state: Entity<AppState>,
     /// Selected real run; falls back to the most attention-worthy.
     selected: Option<RunId>,
-    steer_input: Option<Entity<InputState>>,
+    guidance: HashMap<GuidanceKey, GuidanceDraft>,
+    #[cfg(test)]
+    controlled_guidance: Option<ControlledGuidance>,
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
     tab: RunTab,
-    preview: Option<(RunId, Entity<run_preview::PreviewView>)>,
     checks: Option<(RunId, Entity<run_checks::ChecksView>)>,
     changes: Option<(RunId, Entity<run_changes::ChangesView>)>,
     mission: Option<Entity<run_mission::MissionPanel>>,
+    task_focus: Option<(
+        surge_core::roadmap::MilestoneId,
+        surge_core::roadmap::RoadmapTaskId,
+    )>,
     log_filter: LogFilter,
     steps_scroll: ScrollHandle,
     /// (run, step count) last scrolled to, so a new step scrolls once.
@@ -470,37 +496,45 @@ impl RunsScreen {
         Self {
             state,
             selected: None,
-            steer_input: None,
+            guidance: HashMap::new(),
+            #[cfg(test)]
+            controlled_guidance: None,
             action_note: None,
             tab: RunTab::Overview,
-            preview: None,
             checks: None,
             changes: None,
             mission: None,
+            task_focus: None,
             log_filter: LogFilter::All,
             steps_scroll: ScrollHandle::new(),
             steps_seen: (None, 0),
         }
     }
 
-    fn clear_preview(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, preview)) = self.preview.take() {
-            preview.update(cx, |view, cx| view.close(cx));
-        }
-    }
-
-    pub fn close_preview(&mut self, cx: &mut Context<Self>) {
-        self.clear_preview(cx);
-        if self.tab == RunTab::Preview {
-            self.tab = RunTab::Overview;
-        }
+    /// Focus a specific run (used by Fleet → "Open run" deep links).
+    pub fn select_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
+        self.selected = Some(run_id);
+        self.tab = RunTab::Overview;
+        self.task_focus = None;
+        self.mission = None;
         cx.notify();
     }
 
-    /// Focus a specific run (used by Fleet → "Open run" deep links).
-    pub fn select_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
-        self.clear_preview(cx);
-        self.selected = Some(run_id);
+    /// Open the recorded process of one task within its owning milestone.
+    pub fn select_task(
+        &mut self,
+        milestone: surge_core::roadmap::MilestoneId,
+        task: surge_core::roadmap::RoadmapTaskId,
+        cx: &mut Context<Self>,
+    ) {
+        self.task_focus = Some((milestone, task));
+        self.tab = RunTab::Overview;
+        self.mission = None;
+        cx.notify();
+    }
+
+    pub(crate) fn select_tab(&mut self, tab: RunTab, cx: &mut Context<Self>) {
+        self.tab = tab;
         cx.notify();
     }
 
@@ -640,43 +674,143 @@ impl RunsScreen {
         .detach();
     }
 
+    fn guidance_key(&self, run: RunId, cx: &Context<Self>) -> GuidanceKey {
+        GuidanceKey {
+            project: self.state.read(cx).project_path.clone(),
+            run,
+        }
+    }
+
+    fn guidance_input(
+        &mut self,
+        key: &GuidanceKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(draft) = self.guidance.get(key) {
+            return draft.input.clone();
+        }
+        let input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Guidance for the next agent step…"));
+        let owner = key.clone();
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this: &mut Self, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    if let Some(draft) = this.guidance.get_mut(&owner) {
+                        draft.revision = draft.revision.saturating_add(1);
+                    }
+                },
+                InputEvent::PressEnter { .. } => {
+                    let (rows, selected, _) = this.rows(cx);
+                    if rows
+                        .get(selected)
+                        .and_then(|row| row.run_id)
+                        .is_some_and(|run| this.guidance_key(run, cx) == owner)
+                    {
+                        this.submit_steer(window, cx);
+                    }
+                },
+                _ => {},
+            },
+        )
+        .detach();
+        self.guidance.insert(
+            key.clone(),
+            GuidanceDraft {
+                input: input.clone(),
+                revision: 0,
+                pending: false,
+                note: None,
+            },
+        );
+        input
+    }
+
     fn submit_steer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(input) = self.steer_input.clone() else {
-            return;
-        };
-        let message = input.read(cx).value().trim().to_string();
-        if message.is_empty() {
-            return;
-        }
-
         let (rows, sel, live) = self.rows(cx);
-        let Some(row) = rows.get(sel) else { return };
+        let Some(row) = rows.get(sel) else {
+            return;
+        };
+        let Some(run) = row.run_id else {
+            return;
+        };
+        let key = self.guidance_key(run, cx);
+        let Some(draft) = self.guidance.get_mut(&key) else {
+            return;
+        };
+        if draft.pending {
+            return;
+        }
+        let input = draft.input.clone();
+        let exact = input.read(cx).value().to_string();
+        if exact.trim().is_empty() {
+            return;
+        }
+        #[cfg(test)]
+        let live = live || self.controlled_guidance.is_some();
         if !live || !row.active {
-            self.action_note = Some("steer needs a live, active run".into());
+            draft.note = Some("Guidance requires a connected, active run".into());
             cx.notify();
             return;
         }
-        let Some(run_id) = row.run_id else { return };
-        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
-            self.action_note = Some("daemon offline — cannot steer".into());
-            cx.notify();
-            return;
-        };
-
-        input.update(cx, |s, cx| s.set_value("", window, cx));
+        let revision = draft.revision;
+        draft.pending = true;
+        draft.note = Some("Sending guidance…".into());
+        let message = exact.trim().to_string();
+        let request = self.guidance_request(run, message, cx);
+        let handle = window.window_handle();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let note = match facade.submit_steer(run_id, message).await {
-                Ok(steer_id) => format!("steer queued · {steer_id}"),
-                Err(e) => format!("steer failed: {e}"),
-            };
-            cx.update(|cx| {
-                let _ = this.update(cx, |t, cx| {
-                    t.action_note = Some(note);
+            let result = request.await;
+            let _ = cx.update_window(handle, |_, window, cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    let Some(draft) = screen.guidance.get_mut(&key) else {
+                        return;
+                    };
+                    if result.is_ok()
+                        && draft.revision == revision
+                        && input.read(cx).value().as_ref() == exact
+                    {
+                        input.update(cx, |input, cx| input.set_value("", window, cx));
+                    }
+                    draft.pending = false;
+                    draft.note = Some(match result {
+                        Ok(_) => "Guidance queued for the next agent step".into(),
+                        Err(error) => format!("Could not confirm guidance was queued: {error}"),
+                    });
                     cx.notify();
                 });
             });
         })
         .detach();
+        cx.notify();
+    }
+
+    fn guidance_request(
+        &self,
+        run: RunId,
+        message: String,
+        cx: &Context<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>>>> {
+        #[cfg(test)]
+        if let Some(responses) = &self.controlled_guidance {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            responses.borrow_mut().push((run, message, sender));
+            return Box::pin(async move {
+                receiver
+                    .await
+                    .unwrap_or_else(|_| Err("facade disconnected".into()))
+            });
+        }
+        let facade = self.state.read(cx).daemon_state.facade();
+        Box::pin(async move {
+            let facade = facade.ok_or("daemon offline — cannot send guidance")?;
+            facade
+                .submit_steer(run, message)
+                .await
+                .map_err(|error| error.to_string())
+        })
     }
 
     // ── panes ───────────────────────────────────────────────────────
@@ -721,8 +855,9 @@ impl RunsScreen {
                     el.hover(|s: StyleRefinement| s.bg(theme::surface().opacity(0.6)))
                 })
                 .on_click(cx.listener(move |this, _e, _w, cx| {
-                    this.clear_preview(cx);
                     this.selected = run_id;
+                    this.task_focus = None;
+                    this.mission = None;
                     this.action_note = None;
                     cx.notify();
                 }))
@@ -1103,7 +1238,6 @@ impl RunsScreen {
             .border_color(theme::hairline());
         for (tab, label, icon) in [
             (RunTab::Overview, "Overview", Lucide::Workflow),
-            (RunTab::Preview, "Preview", Lucide::AppWindow),
             (RunTab::Changes, "Changes", Lucide::GitCompare),
             (RunTab::Checks, "Checks", Lucide::ShieldCheck),
             (RunTab::Log, "Log", Lucide::ScrollText),
@@ -1134,9 +1268,6 @@ impl RunsScreen {
                     .cursor_pointer()
                     .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
                     .on_click(cx.listener(move |screen, _, _, cx| {
-                        if screen.tab != tab {
-                            screen.clear_preview(cx);
-                        }
                         screen.tab = tab;
                         cx.notify();
                     }))
@@ -1398,58 +1529,49 @@ impl RunsScreen {
             .child(body)
     }
 
-    fn render_steer_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        if self.steer_input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Tell the agent something — it reads it before the next step…")
-            });
-            cx.subscribe_in(
-                &input,
-                window,
-                |this: &mut Self, _input, event: &InputEvent, window, cx| {
-                    if matches!(event, InputEvent::PressEnter { .. }) {
-                        this.submit_steer(window, cx);
-                    }
-                },
-            )
-            .detach();
-            self.steer_input = Some(input);
-        }
-
+    fn render_steer_bar(&mut self, run: RunId, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let key = self.guidance_key(run, cx);
+        let input = self.guidance_input(&key, window, cx);
+        let (pending, note) = self
+            .guidance
+            .get(&key)
+            .map_or((false, None), |draft| (draft.pending, draft.note.clone()));
         div()
-            .h(px(58.0))
             .flex_shrink_0()
-            .h_flex()
-            .gap(px(12.0))
-            .items_center()
-            .px(px(16.0))
+            .v_flex()
+            .gap(px(6.0))
+            .p(px(12.0))
             .bg(theme::panel())
             .border_t_1()
             .border_color(theme::hairline())
             .child(
                 div()
-                    .flex_1()
                     .h_flex()
                     .gap(px(10.0))
                     .items_center()
-                    .h(px(36.0))
-                    .px(px(12.0))
-                    .rounded(px(ui::R_CONTROL + 2.0))
-                    .bg(theme::panel_deep())
-                    .border_1()
-                    .border_color(theme::hairline_strong())
-                    .child(ui::role_badge("steer", theme::Semantic::You))
                     .child(
                         div().flex_1().child(
-                            Input::new(self.steer_input.as_ref().unwrap())
+                            Input::new(&input)
                                 .accessibility_id("steer-run")
-                                .aria_label("Steer active run")
-                                .appearance(false),
+                                .aria_label("Guidance for the next agent step"),
                         ),
                     )
-                    .child(ui::kbd("↵")),
+                    .child(
+                        Button::new("send-guidance")
+                            .primary()
+                            .label("Send guidance")
+                            .disabled(pending)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.submit_steer(window, cx)),
+                            ),
+                    ),
             )
+            .children(note.map(|note| {
+                div()
+                    .text_size(px(13.0))
+                    .text_color(theme::text_muted())
+                    .child(note)
+            }))
     }
 }
 
@@ -1478,20 +1600,6 @@ impl Render for RunsScreen {
                 .children(self.render_attention(row, cx))
                 .child(self.render_tabs(cx));
             match self.tab {
-                RunTab::Preview => {
-                    if let Some(run_id) = row.run_id {
-                        if self.preview.as_ref().is_none_or(|(id, _)| *id != run_id) {
-                            self.clear_preview(cx);
-                            self.preview = Some((
-                                run_id,
-                                cx.new(|cx| run_preview::PreviewView::new(run_id, window, cx)),
-                            ));
-                        }
-                        if let Some((_, preview)) = &self.preview {
-                            main = main.child(preview.clone());
-                        }
-                    }
-                },
                 RunTab::Checks => {
                     if let Some(run_id) = row.run_id {
                         if self.checks.as_ref().is_none_or(|(id, _)| *id != run_id) {
@@ -1530,8 +1638,9 @@ impl Render for RunsScreen {
                             .as_ref()
                             .is_none_or(|panel| panel.read(cx).runs() != runs);
                         if stale {
-                            self.mission =
-                                Some(cx.new(|cx| run_mission::MissionPanel::new(runs, cx)));
+                            self.mission = Some(cx.new(|cx| {
+                                run_mission::MissionPanel::new(runs, self.task_focus.clone(), cx)
+                            }));
                         }
                         if let Some(panel) = &self.mission {
                             let seq = row.events.clone();
@@ -1542,7 +1651,6 @@ impl Render for RunsScreen {
                 },
             }
         } else {
-            self.clear_preview(cx);
             main = main.child(
                 div().flex_1().flex().items_center().justify_center().child(
                     ui::empty_state(
@@ -1578,7 +1686,13 @@ impl Render for RunsScreen {
                     })
                     .child(main),
             )
-            .when(steerable, |el| el.child(self.render_steer_bar(window, cx)))
+            .when(steerable, |el| {
+                if let Some(run) = selected.as_ref().and_then(|row| row.run_id) {
+                    el.child(self.render_steer_bar(run, window, cx))
+                } else {
+                    el
+                }
+            })
     }
 }
 
@@ -1587,6 +1701,202 @@ mod empty_state_tests {
     use super::RunsScreen;
     use crate::app_state::AppState;
     use gpui_kit::{AppContext, TestAppContext};
+
+    #[test]
+    fn guidance_retains_draft_until_delayed_facade_acknowledges() {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let run = surge_core::RunId::new();
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+            state
+        });
+        let screen = cx.new(|cx| RunsScreen::new(state.clone(), cx));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        let responses = super::ControlledGuidance::default();
+        window.update(|window, cx| {
+            screen.update(cx, |screen, cx| {
+                screen.controlled_guidance = Some(responses.clone());
+                screen.selected = Some(run);
+                let key = screen.guidance_key(run, cx);
+                let input = screen.guidance_input(&key, window, cx);
+                input.update(cx, |input, cx| {
+                    input.set_value("  Keep this exact guidance  ", window, cx)
+                });
+
+                screen.submit_steer(window, cx);
+                assert_eq!(
+                    input.read(cx).value().as_ref(),
+                    "  Keep this exact guidance  "
+                );
+            })
+        });
+        window.run_until_parked();
+        assert_eq!(responses.borrow().len(), 1);
+        let (sent_run, message, sender) = responses.borrow_mut().remove(0);
+        assert_eq!(sent_run, run);
+        assert_eq!(message, "Keep this exact guidance");
+        sender.send(Err("acknowledgment lost".into())).unwrap();
+        window.run_until_parked();
+        window.update(|window, cx| {
+            screen.update(cx, |screen, cx| {
+                let key = screen.guidance_key(run, cx);
+                let draft = screen.guidance.get(&key).unwrap();
+                assert_eq!(
+                    draft.input.read(cx).value().as_ref(),
+                    "  Keep this exact guidance  "
+                );
+                assert!(!draft.pending);
+                assert!(draft.note.as_ref().unwrap().contains("Could not confirm"));
+                screen.submit_steer(window, cx);
+                screen.submit_steer(window, cx);
+            })
+        });
+        assert_eq!(
+            responses.borrow().len(),
+            1,
+            "pending submission must not duplicate"
+        );
+        let (_, _, sender) = responses.borrow_mut().remove(0);
+        let other_run = surge_core::RunId::new();
+        window.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.runs.push(crate::app_state::UiRun {
+                    run_id: other_run,
+                    status: surge_orchestrator::engine::handle::RunStatus::Active,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: None,
+                })
+            })
+        });
+        window.update(|window, cx| {
+            screen.update(cx, |screen, cx| {
+                let key = screen.guidance_key(run, cx);
+                let input = screen.guidance.get(&key).unwrap().input.clone();
+                input.update(cx, |input, cx| {
+                    use gpui_kit::EntityInputHandler as _;
+                    let len = input.value().encode_utf16().count();
+                    input.replace_text_in_range(Some(0..len), "revised during pending", window, cx)
+                });
+                input.update(cx, |input, cx| {
+                    use gpui_kit::EntityInputHandler as _;
+                    let len = input.value().encode_utf16().count();
+                    input.replace_text_in_range(
+                        Some(0..len),
+                        "  Keep this exact guidance  ",
+                        window,
+                        cx,
+                    )
+                });
+                screen.select_run(other_run, cx);
+                let other = screen.guidance_key(other_run, cx);
+                let input = screen.guidance_input(&other, window, cx);
+                input.update(cx, |input, cx| {
+                    input.set_value("Other run draft", window, cx)
+                });
+            })
+        });
+        window.run_until_parked();
+        sender.send(Ok("queued-one".into())).unwrap();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            screen.update(cx, |screen, cx| {
+                let key = screen.guidance_key(run, cx);
+                assert_eq!(
+                    screen.guidance[&key].input.read(cx).value().as_ref(),
+                    "  Keep this exact guidance  ",
+                    "retyping the same text is a newer revision"
+                );
+                let other = screen.guidance_key(other_run, cx);
+                assert_eq!(
+                    screen.guidance[&other].input.read(cx).value().as_ref(),
+                    "Other run draft"
+                );
+                assert!(
+                    screen.guidance[&other].note.is_none(),
+                    "late acknowledgment belongs to the original run"
+                );
+            })
+        });
+        window.update(|window, cx| {
+            screen.update(cx, |screen, cx| {
+                screen.select_run(run, cx);
+                screen.submit_steer(window, cx);
+            })
+        });
+        let (_, _, sender) = responses.borrow_mut().remove(0);
+        window.update(|window, cx| {
+            screen.update(cx, |screen, cx| {
+                screen.state.update(cx, |state, _| {
+                    state.project_path = Some(std::path::PathBuf::from("/other-project"))
+                });
+                let key = screen.guidance_key(run, cx);
+                let input = screen.guidance_input(&key, window, cx);
+                assert!(input.read(cx).value().is_empty());
+                input.update(cx, |input, cx| {
+                    input.set_value("Other project draft", window, cx)
+                });
+            })
+        });
+        window.run_until_parked();
+        sender.send(Ok("queued-two".into())).unwrap();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            screen.update(cx, |screen, cx| {
+                let current = screen.guidance_key(run, cx);
+                assert_eq!(
+                    screen.guidance[&current].input.read(cx).value().as_ref(),
+                    "Other project draft"
+                );
+                assert!(screen.guidance[&current].note.is_none());
+                let previous = super::GuidanceKey { project: None, run };
+                assert!(
+                    screen.guidance[&previous].input.read(cx).value().is_empty(),
+                    "unchanged acknowledged draft clears in its own project"
+                );
+                screen.guidance[&previous].input.update(cx, |_, cx| {
+                    cx.emit(gpui_kit::component::input::InputEvent::PressEnter {
+                        secondary: false,
+                        shift: false,
+                    });
+                });
+            })
+        });
+        window.run_until_parked();
+        assert!(
+            responses.borrow().is_empty(),
+            "an old input Enter must not submit another project's draft"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn task_deep_link_resets_previous_tab_and_scope(cx: &mut TestAppContext) {
+        let screen = cx.update(|cx| {
+            let state = cx.new(|_| AppState::new());
+            cx.new(|cx| RunsScreen::new(state, cx))
+        });
+        screen.update(cx, |screen, cx| {
+            screen.tab = super::RunTab::Log;
+            screen.select_task("old".into(), "shared".into(), cx);
+            let run = surge_core::RunId::new();
+            screen.select_run(run, cx);
+            assert_eq!(screen.selected, Some(run));
+            assert!(matches!(screen.tab, super::RunTab::Overview));
+            assert!(screen.task_focus.is_none());
+            screen.select_task("m2".into(), "shared".into(), cx);
+            assert_eq!(screen.task_focus, Some(("m2".into(), "shared".into())));
+        });
+    }
 
     #[gpui_kit::test]
     fn empty_cockpit_never_invents_runs(cx: &mut TestAppContext) {

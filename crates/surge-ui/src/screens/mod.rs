@@ -14,6 +14,3 @@ pub mod welcome;
 
 #[cfg(test)]
 mod smoke_test;
-
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
-mod preview_assets;

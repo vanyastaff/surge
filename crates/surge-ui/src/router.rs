@@ -2,20 +2,19 @@ use gpui_kit::assets::IconName;
 
 /// All screens available in Surge UI.
 ///
-/// The first nine (see [`Screen::sidebar_items`]) are the fleet-ops
-/// surfaces; everything after is a secondary screen reachable through
-/// the command palette or contextual navigation.
+/// Primary destinations follow the operator's work; setup and specialist
+/// tools remain available through Customize and contextual navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Screen {
-    /// Fleet — the run constellation (mission-control home).
+    /// Tasks — work and progress in the current project.
     Fleet,
     /// Roadmap — description → milestones → runs.
     Roadmap,
-    /// Runs — per-run cockpit (rail, stage pipeline, event log).
+    /// Results — per-run evidence, stage progress, and event log.
     Runs,
     /// Flow — the DAG editor.
     Flow,
-    /// Inbox — decisions blocked on the operator.
+    /// Decisions — gates and failures that need the operator.
     Inbox,
     /// Backlog — triage → ready → in flight → shipped.
     Backlog,
@@ -34,16 +33,16 @@ impl Screen {
     /// Display name for the sidebar.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Fleet => "Fleet",
-            Self::Roadmap => "Roadmap",
-            Self::Runs => "Missions",
-            Self::Flow => "Flow",
-            Self::Inbox => "Inbox",
+            Self::Fleet => "Tasks",
+            Self::Roadmap => "Plan",
+            Self::Runs => "Results",
+            Self::Flow => "Workflows",
+            Self::Inbox => "Decisions",
             Self::Backlog => "Backlog",
             Self::Agents => "Agents",
             Self::ContextMemory => "Memory",
             Self::Settings => "Settings",
-            Self::SpecWizard => "Plan a task",
+            Self::SpecWizard => "New task",
             Self::AgentHub => "Agent Hub",
             Self::AgentTerminals => "Terminals",
         }
@@ -84,19 +83,27 @@ impl Screen {
         }
     }
 
-    /// Screens shown in main sidebar navigation (top section) —
-    /// the concept's eight surfaces plus Settings.
+    /// Everyday destinations, in the order work moves through them.
     pub fn sidebar_items() -> &'static [Screen] {
         &[
             Self::Fleet,
             Self::Roadmap,
-            Self::Runs,
-            Self::Flow,
             Self::Inbox,
+            Self::Runs,
+            Self::Settings,
+        ]
+    }
+
+    /// Existing setup and specialist routes, always discoverable in Customize.
+    pub fn customize_items() -> &'static [Screen] {
+        &[
+            Self::Flow,
             Self::Backlog,
             Self::Agents,
             Self::ContextMemory,
-            Self::Settings,
+            Self::SpecWizard,
+            Self::AgentHub,
+            Self::AgentTerminals,
         ]
     }
 }

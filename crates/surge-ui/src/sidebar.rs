@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui_kit::component::Icon;
 use gpui_kit::component::StyledExt;
 use gpui_kit::component::tooltip::Tooltip;
@@ -28,12 +30,14 @@ pub struct StartDaemon;
 
 impl EventEmitter<StartDaemon> for AppSidebar {}
 
-/// The fleet-ops navigation rail: logo, destinations, live daemon
-/// footer. Restyled from the classic sidebar per the "Surge -
-/// Interactive" concept — same nav model, new chrome.
+/// Operator navigation with everyday destinations, expandable project
+/// tools, and live engine status.
 pub struct AppSidebar {
     active: Screen,
     collapsed: bool,
+    customize_expanded: bool,
+    customize_focus: FocusHandle,
+    navigation_focus: HashMap<Screen, FocusHandle>,
     /// Read-only handle to app state for the live daemon footer. The
     /// rail observes it so the footer re-renders when the daemon link
     /// flips or the run list changes — no faked "LIVE".
@@ -53,12 +57,22 @@ impl AppSidebar {
         Self {
             active,
             collapsed,
+            customize_expanded: Screen::customize_items().contains(&active),
+            customize_focus: cx.focus_handle(),
+            navigation_focus: Screen::sidebar_items()
+                .iter()
+                .chain(Screen::customize_items())
+                .map(|screen| (*screen, cx.focus_handle()))
+                .collect(),
             state,
         }
     }
 
     pub fn set_active(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.active = screen;
+        if Screen::customize_items().contains(&screen) {
+            self.customize_expanded = true;
+        }
         cx.notify();
     }
 
@@ -73,7 +87,7 @@ impl AppSidebar {
         self.state.read(cx).needs_you_count()
     }
 
-    fn render_nav_item(&self, screen: Screen, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_nav_item(&self, screen: Screen, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let is_active = self.active == screen;
         let collapsed = self.collapsed;
         let label = screen.label();
@@ -86,20 +100,45 @@ impl AppSidebar {
 
         let base = div()
             .id(SharedString::from(format!("nav-{label}")))
+            .accessibility_id(SharedString::from(format!("nav-{label}")))
             .role(Role::Button)
-            .aria_label(label)
+            .aria_label(badge.map_or_else(
+                || label.to_string(),
+                |count| format!("{label}, {count} waiting"),
+            ))
             .h_flex()
             .gap(px(9.0))
             .items_center()
             .px(px(10.0))
-            .py(px(6.0))
+            .min_h(px(38.0))
+            .py(px(8.0))
             .mx(px(6.0))
             .rounded(px(ui::R_CONTROL))
+            .border_1()
+            .border_color(transparent_black())
             .cursor_pointer()
+            .when_some(self.navigation_focus.get(&screen), |row, focus| {
+                row.track_focus(focus)
+            })
+            .focus_visible(|style| style.border_color(theme::accent()))
+            .tab_index(0)
+            .tab_stop(true)
+            .on_key_down(cx.listener(move |_, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    cx.emit(NavigateTo(screen));
+                    cx.stop_propagation();
+                }
+            }))
             .when(collapsed, |el| el.justify_center())
-            .when_some(screen.shortcut(), |el, sc| {
-                let text = format!("{label}  {}", ui::shortcut_label(sc));
-                el.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+            .tooltip(move |window, cx| {
+                let mut text = screen.shortcut().map_or_else(
+                    || label.to_string(),
+                    |shortcut| format!("{label}  {}", ui::shortcut_label(shortcut)),
+                );
+                if let Some(count) = badge {
+                    text.push_str(&format!(" · {count} waiting"));
+                }
+                Tooltip::new(text).build(window, cx)
             })
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(NavigateTo(screen));
@@ -130,7 +169,7 @@ impl AppSidebar {
             row = row.child(
                 div()
                     .flex_1()
-                    .text_size(px(12.0))
+                    .text_size(px(14.0))
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.to_string()),
             );
@@ -140,16 +179,71 @@ impl AppSidebar {
                     div()
                         .px(px(6.0))
                         .rounded_full()
-                        .bg(theme::warning())
-                        .text_size(px(9.5))
+                        .bg(theme::tint(theme::warning()))
+                        .text_size(px(12.0))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(theme::on_accent())
+                        .text_color(theme::text_primary())
                         .child(n.to_string()),
                 );
             }
         }
 
-        row
+        row.test_support()
+            .debug_selector(move || format!("nav-{label}"))
+    }
+
+    fn render_customize_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let expanded = self.customize_expanded;
+        div()
+            .id("nav-advanced")
+            .accessibility_id("nav-advanced")
+            .role(Role::Button)
+            .aria_label(if expanded {
+                "Collapse Customize"
+            } else {
+                "Expand Customize"
+            })
+            .aria_expanded(expanded)
+            .tooltip(|window, cx| {
+                Tooltip::new("Customize workflows, agents, and project tools").build(window, cx)
+            })
+            .h_flex()
+            .items_center()
+            .gap(px(9.0))
+            .min_h(px(38.0))
+            .px(px(10.0))
+            .mx(px(6.0))
+            .mt(px(12.0))
+            .rounded(px(ui::R_CONTROL))
+            .border_1()
+            .border_color(transparent_black())
+            .text_size(px(14.0))
+            .text_color(theme::text_muted())
+            .cursor_pointer()
+            .when(self.collapsed, |el| el.justify_center())
+            .hover(|style: StyleRefinement| style.bg(theme::surface()))
+            .track_focus(&self.customize_focus)
+            .focus_visible(|style| style.border_color(theme::accent()).bg(theme::surface()))
+            .tab_index(0)
+            .tab_stop(true)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.customize_expanded = !this.customize_expanded;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(Icon::new(gpui_kit::component::IconName::Settings).size(px(16.0)))
+            .when(!self.collapsed, |el| {
+                el.child(div().flex_1().child("Customize"))
+                    .child(if expanded { "−" } else { "+" })
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.customize_expanded = !this.customize_expanded;
+                cx.notify();
+            }))
+            .test_support()
+            .debug_selector(|| "nav-advanced".into())
     }
 
     /// Footer: whether the engine is reachable (click to start it when it
@@ -176,7 +270,7 @@ impl AppSidebar {
             .h_flex()
             .gap(px(8.0))
             .items_center()
-            .h(px(28.0))
+            .h(px(36.0))
             .px(px(8.0))
             .rounded(px(ui::R_CONTROL))
             .when(!collapsed, |el| el.flex_1())
@@ -195,7 +289,7 @@ impl AppSidebar {
             .when(!collapsed, |el| {
                 el.child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(px(13.0))
                         .text_color(if offline {
                             theme::text_primary()
                         } else {
@@ -233,7 +327,7 @@ impl AppSidebar {
             } else {
                 "Collapse sidebar"
             })
-            .size(px(28.0))
+            .size(px(36.0))
             .flex_none()
             .flex()
             .items_center()
@@ -254,9 +348,9 @@ impl AppSidebar {
 
 impl Render for AppSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = if self.collapsed { px(52.0) } else { px(200.0) };
+        let width = if self.collapsed { px(60.0) } else { px(208.0) };
 
-        let items: Vec<Stateful<Div>> = Screen::sidebar_items()
+        let items: Vec<_> = Screen::sidebar_items()
             .iter()
             .map(|&screen| self.render_nav_item(screen, cx))
             .collect();
@@ -265,15 +359,97 @@ impl Render for AppSidebar {
             .v_flex()
             .w(width)
             .h_full()
+            .font_family(ui::BODY)
             .flex_shrink_0()
             .bg(theme::panel())
             .border_r_1()
             .border_color(theme::hairline())
             // Nav items
-            .child(div().v_flex().gap(px(2.0)).pt(px(10.0)).children(items))
-            // Spacer
-            .child(div().flex_1())
+            .child(
+                div().id("sidebar-navigation").v_flex().flex_1().min_h_0().overflow_y_scroll().gap(px(4.0)).pt(px(16.0))
+                    .children(items)
+                    .child(self.render_customize_toggle(cx))
+                    .when(self.customize_expanded, |el| {
+                        el.children(Screen::customize_items().iter().map(|&screen| self.render_nav_item(screen, cx)))
+                    })
+            )
             // Engine status + collapse toggle
             .child(self.render_footer(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use gpui_kit::{AppContext as _, Modifiers, TestAppContext};
+
+    use super::{AppSidebar, NavigateTo};
+    use crate::{app_state::AppState, router::Screen};
+
+    #[test]
+    fn sidebar_main_routes_and_advanced_navigation() {
+        assert_eq!(
+            Screen::sidebar_items(),
+            [
+                Screen::Fleet,
+                Screen::Roadmap,
+                Screen::Inbox,
+                Screen::Runs,
+                Screen::Settings,
+            ]
+        );
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| AppState::new());
+        let sidebar = cx.new(|cx| AppSidebar::new(Screen::Fleet, false, state, cx));
+        let navigated = Rc::new(RefCell::new(None));
+        let emitted = navigated.clone();
+        cx.update(|cx| {
+            cx.subscribe(&sidebar, move |_, event: &NavigateTo, _| {
+                emitted.replace(Some(event.0));
+            })
+            .detach();
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(sidebar.clone(), window, cx)
+        });
+        for id in [
+            "nav-Tasks",
+            "nav-Plan",
+            "nav-Decisions",
+            "nav-Results",
+            "nav-Settings",
+        ] {
+            assert!(window.debug_bounds(id).is_some());
+        }
+        window.update(|window, cx| {
+            let focus = sidebar.read(cx).navigation_focus[&Screen::Fleet].clone();
+            focus.focus(window, cx);
+        });
+        window.simulate_keystrokes("enter");
+        assert_eq!(*navigated.borrow(), Some(Screen::Fleet));
+        assert!(window.debug_bounds("nav-Workflows").is_none());
+        let toggle = window.debug_bounds("nav-advanced").unwrap();
+        window.simulate_click(toggle.center(), Modifiers::default());
+        let roadmap = window.debug_bounds("nav-Workflows").unwrap();
+        window.simulate_click(roadmap.center(), Modifiers::default());
+        assert_eq!(*navigated.borrow(), Some(Screen::Flow));
+        window.simulate_click(toggle.center(), Modifiers::default());
+        assert!(window.debug_bounds("nav-Workflows").is_none());
+        window.update(|window, cx| {
+            let focus = sidebar.read(cx).customize_focus.clone();
+            focus.focus(window, cx);
+        });
+        window.simulate_keystrokes("enter");
+        assert!(window.debug_bounds("nav-Workflows").is_some());
+        window.simulate_keystrokes("space");
+        assert!(window.debug_bounds("nav-Workflows").is_none());
+        window.update(|_, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.set_active(Screen::ContextMemory, cx)
+            })
+        });
+        assert!(window.debug_bounds("nav-Memory").is_some());
     }
 }

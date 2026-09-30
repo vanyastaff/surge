@@ -92,7 +92,6 @@ mod native {
         let navigation_origin = origin.replacen("surge-preview://", "http://surge-preview.", 1);
         #[cfg(target_os = "macos")]
         let navigation_origin = origin.clone();
-        let url = format!("{origin}/index.html");
         wry::WebViewBuilder::new()
             .with_incognito(true)
             .with_devtools(false)
@@ -128,7 +127,6 @@ mod native {
                     });
                 },
             )
-            .with_url(url)
             .build_as_child(window)
             .map_err(|error| error.to_string())
     }
@@ -138,7 +136,29 @@ mod native {
         status: String,
         pending: Option<Arc<PreviewAssets>>,
         webview: Option<Entity<gpui_wry::WebView>>,
+        navigation: InitialNavigation,
         closed: Arc<AtomicBool>,
+    }
+
+    #[derive(Default)]
+    enum InitialNavigation {
+        #[default]
+        WaitingForLayout,
+        Started,
+        Closed,
+    }
+
+    impl InitialNavigation {
+        fn start(&mut self, bounds: Bounds<Pixels>) -> bool {
+            if !matches!(self, Self::WaitingForLayout)
+                || bounds.size.width <= px(0.0)
+                || bounds.size.height <= px(0.0)
+            {
+                return false;
+            }
+            *self = Self::Started;
+            true
+        }
     }
 
     impl PreviewView {
@@ -170,12 +190,14 @@ mod native {
                 status: "Locating static application…".into(),
                 pending: None,
                 webview: None,
+                navigation: InitialNavigation::default(),
                 closed: Arc::new(AtomicBool::new(false)),
             }
         }
 
         pub(in super::super) fn close(&mut self, cx: &mut Context<Self>) {
             self.closed.store(true, Ordering::Release);
+            self.navigation = InitialNavigation::Closed;
             self.pending = None;
             if let Some(webview) = self.webview.take() {
                 webview.update(cx, |view, _| view.hide());
@@ -209,9 +231,28 @@ mod native {
                 match build_webview(assets, self.origin.clone(), self.closed.clone(), window) {
                     Ok(view) => {
                         self.webview = Some(cx.new(|cx| gpui_wry::WebView::new(view, window, cx)));
-                        self.status =
-                            "Static application · local files · backend services are not started"
-                                .into();
+                        // Wry starts a builder URL before attaching its native child. The
+                        // GPUI wrapper then sets zero bounds until prepaint. Navigate only
+                        // after that first layout, rather than loading into a zero-size view.
+                        let weak = cx.entity().downgrade();
+                        window.on_next_frame(move |_, cx| {
+                            let _ = weak.update(cx, |view, cx| {
+                                if view.closed.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                let Some(webview) = &view.webview else { return; };
+                                let bounds = webview.read(cx).bounds();
+                                if !view.navigation.start(bounds) {
+                                    view.status = "Cannot open embedded preview: preview layout has no visible area. Reopen Preview to try again.".into();
+                                } else {
+                                    match webview.read(cx).raw().load_url(&format!("{}/index.html", view.origin)) {
+                                        Ok(()) => view.status = "Static application · local files · backend services are not started".into(),
+                                        Err(error) => view.status = format!("Cannot load embedded preview: {error}"),
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        });
                     },
                     Err(error) => self.status = format!("Cannot open embedded preview: {error}"),
                 }
@@ -323,6 +364,54 @@ mod native {
         }
 
         #[test]
+        fn relative_styles_and_scripts_are_served_at_the_document_origin() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(
+                root.path().join("index.html"),
+                "<link rel=stylesheet href=styles.css><script src=app.js></script>",
+            )
+            .unwrap();
+            std::fs::write(root.path().join("styles.css"), "body { color: red; }").unwrap();
+            std::fs::write(root.path().join("app.js"), "document.title = 'Ready';").unwrap();
+            let assets = PreviewAssets::new(root.path().into()).unwrap();
+            let origin = "surge-preview://run-one";
+            for (path, mime, expected) in [
+                ("index.html", "text/html; charset=utf-8", "<link"),
+                ("styles.css", "text/css; charset=utf-8", "body"),
+                ("app.js", "text/javascript; charset=utf-8", "document.title"),
+            ] {
+                let request = Request::builder()
+                    .uri(format!("{origin}/{path}"))
+                    .body(Vec::new())
+                    .unwrap();
+                let result = asset_response(&assets, &request, origin);
+                assert_eq!(result.status(), StatusCode::OK);
+                assert_eq!(result.headers()["content-type"], mime);
+                assert!(
+                    std::str::from_utf8(result.body())
+                        .unwrap()
+                        .starts_with(expected)
+                );
+            }
+        }
+
+        #[test]
+        fn first_navigation_requires_layout_runs_once_and_cannot_outlive_close() {
+            use super::InitialNavigation;
+            use gpui_kit::{Bounds, point, px, size};
+            let bounds =
+                |width, height| Bounds::new(point(px(12.0), px(40.0)), size(px(width), px(height)));
+            let mut navigation = InitialNavigation::default();
+            for (width, height) in [(0.0, 0.0), (600.0, 0.0), (0.0, 400.0)] {
+                assert!(!navigation.start(bounds(width, height)));
+            }
+            assert!(navigation.start(bounds(600.0, 400.0)));
+            assert!(!navigation.start(bounds(600.0, 400.0)));
+            let mut closed = InitialNavigation::Closed;
+            assert!(!closed.start(bounds(600.0, 400.0)));
+        }
+
+        #[test]
         fn windows_navigation_origin_is_separate_from_restored_protocol_origin() {
             let origin = "http://surge-preview.run-one";
             assert!(navigation_allowed(
@@ -357,10 +446,17 @@ mod native {
                 status: "Loading".into(),
                 pending: None,
                 webview: None,
+                navigation: super::InitialNavigation::default(),
                 closed: closed.clone(),
             });
             view.update(&mut cx, |view, cx| view.close(cx));
             assert!(closed.load(Ordering::Acquire));
+            view.update(&mut cx, |view, _| {
+                assert!(!view.navigation.start(gpui_kit::Bounds::new(
+                    gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(0.0)),
+                    gpui_kit::size(gpui_kit::px(600.0), gpui_kit::px(400.0)),
+                )));
+            });
         }
     }
 }
