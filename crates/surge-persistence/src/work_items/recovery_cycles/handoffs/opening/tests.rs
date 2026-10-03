@@ -1291,3 +1291,340 @@ async fn automatic_wake_atomically_reserves_continue_candidate_and_handoff() {
     );
     f.writer.close().await.unwrap();
 }
+
+async fn seal_fixture_exhaustion(f: &Fixture) -> RecoveryCycle {
+    let current = f
+        .store
+        .recovery_cycle(f.claim.run, &f.body.logical_invocation, 1)
+        .unwrap();
+    f.store
+        .record_selected_rate_limit(
+            &f.claim,
+            &current,
+            &f.body.reservation,
+            &quota_source(f),
+            &quota_error_observation(),
+        )
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_typed_exhaustion_is_reservation_and_recipe_scoped_after_reopen() {
+    let f = fixture().await;
+    seal_fixture_exhaustion(&f).await;
+    let reopened = Storage::open(f._home.path()).await.unwrap().work_items();
+    let expected = &f.body.launch.candidate;
+    let evidence = reopened
+        .inspect_fresh_typed_exhaustion(&f.body.reservation, expected, 100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(evidence.receipt(), f.body.reservation);
+    assert_eq!(evidence.candidate(), expected);
+    assert!(evidence.source_revision() > 0);
+    assert_eq!(evidence.observed_at_ms(), 100);
+    assert_eq!(evidence.valid_until_ms(), 1100);
+    assert!(
+        reopened
+            .inspect_fresh_typed_exhaustion(&f.body.reservation, expected, 100)
+            .unwrap()
+            .is_some()
+    );
+    for now in [99, 1100, 1101] {
+        assert!(
+            reopened
+                .inspect_fresh_typed_exhaustion(&f.body.reservation, expected, now)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let alternatives = [
+        FrozenQuotaCandidate::new(
+            expected.candidate().clone(),
+            None,
+            ContentHash::compute(b"different-recipe"),
+        )
+        .unwrap(),
+        FrozenQuotaCandidate::new(
+            expected.candidate().clone(),
+            Some("different-model".into()),
+            *expected.launch_hash(),
+        )
+        .unwrap(),
+        FrozenQuotaCandidate::new(
+            RecoveryCandidate::new(
+                "a".into(),
+                AccountEvidence::Known {
+                    provider: "provider".into(),
+                    account_key: "different-account".into(),
+                },
+            )
+            .unwrap(),
+            None,
+            *expected.launch_hash(),
+        )
+        .unwrap(),
+        FrozenQuotaCandidate::new(
+            RecoveryCandidate::new("b".into(), AccountEvidence::Unknown).unwrap(),
+            None,
+            *expected.launch_hash(),
+        )
+        .unwrap(),
+    ];
+    for candidate in alternatives {
+        assert!(
+            reopened
+                .inspect_fresh_typed_exhaustion(&f.body.reservation, &candidate, 100)
+                .unwrap()
+                .is_none()
+        );
+    }
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_typed_exhaustion_requires_original_and_latest_false_windows() {
+    for (available, observed, expiry, reset, now, fresh) in [
+        (false, 200, 300, None, 299, true),
+        (false, 200, 300, None, 300, false),
+        (false, 200, 1200, Some(500), 499, true),
+        (false, 200, 1200, Some(500), 500, false),
+        (false, 200, 1200, None, 199, false),
+        (false, 200, 1200, None, 1100, false),
+        (true, 200, 300, None, 250, false),
+        (true, 200, 300, None, 400, false),
+    ] {
+        let f = fixture().await;
+        let current = seal_fixture_exhaustion(&f).await;
+        let observation = QuotaObservation::new(QuotaEvidence::Observed {
+            observed_at_ms: observed,
+            expires_at_ms: expiry,
+            available,
+            reset_at_ms: reset,
+        })
+        .unwrap();
+        f.store
+            .record_recovery_observation(&f.claim, &current, &f.body.reservation, &observation)
+            .unwrap();
+        assert_eq!(
+            f.store
+                .inspect_fresh_typed_exhaustion(&f.body.reservation, &f.body.launch.candidate, now)
+                .unwrap()
+                .is_some(),
+            fresh
+        );
+        f.writer.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_typed_exhaustion_unknown_probes_never_extend_typed_ttl_or_create_origin() {
+    for probe in [QuotaObservation::unknown(), QuotaObservation::unsupported()] {
+        let f = fixture().await;
+        let current = seal_fixture_exhaustion(&f).await;
+        let marker = f.store.typed_rate_limit(&f.body.reservation).unwrap();
+        let current = f
+            .store
+            .record_recovery_observation(
+                &f.claim,
+                &current,
+                &f.body.reservation,
+                &QuotaObservation::new(QuotaEvidence::Observed {
+                    observed_at_ms: 200,
+                    expires_at_ms: 2200,
+                    available: false,
+                    reset_at_ms: None,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        f.store
+            .record_recovery_observation(&f.claim, &current, &f.body.reservation, &probe)
+            .unwrap();
+        assert!(
+            f.store
+                .inspect_fresh_typed_exhaustion(&f.body.reservation, &f.body.launch.candidate, 1099)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            f.store
+                .inspect_fresh_typed_exhaustion(&f.body.reservation, &f.body.launch.candidate, 1100)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            f.store.typed_rate_limit(&f.body.reservation).unwrap(),
+            marker
+        );
+        f.writer.close().await.unwrap();
+    }
+    let f = fixture().await;
+    f.store
+        .record_recovery_observation(
+            &f.claim,
+            &f.cycle,
+            &f.body.reservation,
+            &quota_error_observation(),
+        )
+        .unwrap();
+    assert!(
+        f.store
+            .inspect_fresh_typed_exhaustion(&f.body.reservation, &f.body.launch.candidate, 100)
+            .unwrap()
+            .is_none()
+    );
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_typed_exhaustion_original_ttl_and_reset_each_bound_latest_probe() {
+    for retry in [None, Some(400)] {
+        let f = fixture().await;
+        let source = QuotaRateLimitSource::new(
+            f.opening_seq,
+            f.original.descriptor.invocation(),
+            f.original.session,
+            retry,
+            "429".into(),
+        )
+        .unwrap();
+        let original = QuotaObservation::new(QuotaEvidence::Observed {
+            observed_at_ms: 100,
+            expires_at_ms: 1100,
+            available: false,
+            reset_at_ms: retry.map(|delay| 100 + i64::try_from(delay).unwrap()),
+        })
+        .unwrap();
+        let current = f
+            .store
+            .record_selected_rate_limit(&f.claim, &f.cycle, &f.body.reservation, &source, &original)
+            .unwrap();
+        let later = QuotaObservation::new(QuotaEvidence::Observed {
+            observed_at_ms: 200,
+            expires_at_ms: 2200,
+            available: false,
+            reset_at_ms: None,
+        })
+        .unwrap();
+        f.store
+            .record_recovery_observation(&f.claim, &current, &f.body.reservation, &later)
+            .unwrap();
+        let until = if retry.is_some() { 500 } else { 1100 };
+        assert!(
+            f.store
+                .inspect_fresh_typed_exhaustion(
+                    &f.body.reservation,
+                    &f.body.launch.candidate,
+                    until - 1
+                )
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            f.store
+                .inspect_fresh_typed_exhaustion(
+                    &f.body.reservation,
+                    &f.body.launch.candidate,
+                    until
+                )
+                .unwrap()
+                .is_none()
+        );
+        f.writer.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_typed_exhaustion_rejects_corrupted_original_or_latest_bounds() {
+    for corruption in [
+        "removed_reset",
+        "extended_reset",
+        "extended_expiry",
+        "older_observed",
+        "missing_exhaustion",
+    ] {
+        let f = fixture().await;
+        let source = QuotaRateLimitSource::new(
+            f.opening_seq,
+            f.original.descriptor.invocation(),
+            f.original.session,
+            Some(400),
+            "429".into(),
+        )
+        .unwrap();
+        let original = QuotaObservation::new(QuotaEvidence::Observed {
+            observed_at_ms: 100,
+            expires_at_ms: 1100,
+            available: false,
+            reset_at_ms: Some(500),
+        })
+        .unwrap();
+        let current = f
+            .store
+            .record_selected_rate_limit(&f.claim, &f.cycle, &f.body.reservation, &source, &original)
+            .unwrap();
+        let later = QuotaObservation::new(QuotaEvidence::Observed {
+            observed_at_ms: 200,
+            expires_at_ms: 2200,
+            available: false,
+            reset_at_ms: None,
+        })
+        .unwrap();
+        f.store
+            .record_recovery_observation(&f.claim, &current, &f.body.reservation, &later)
+            .unwrap();
+        let conn = f.store.pool.get().unwrap();
+        if corruption == "older_observed" {
+            let older = serde_json::to_string(
+                &QuotaObservation::new(QuotaEvidence::Observed {
+                    observed_at_ms: 50,
+                    expires_at_ms: 1200,
+                    available: false,
+                    reset_at_ms: None,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE work_item_quota_candidates SET observed=?,exhaustion=? WHERE receipt=?",
+                params![older, older, f.body.reservation],
+            )
+            .unwrap();
+        } else if corruption == "missing_exhaustion" {
+            conn.execute(
+                "UPDATE work_item_quota_candidates SET exhaustion=NULL WHERE receipt=?",
+                [&f.body.reservation],
+            )
+            .unwrap();
+        } else {
+            let body: String = conn
+                .query_row(
+                    "SELECT typed_exhaustion FROM work_item_quota_candidates WHERE receipt=?",
+                    [&f.body.reservation],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut marker: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let observed = &mut marker["observation"]["evidence"]["Observed"];
+            match corruption {
+                "removed_reset" => observed["reset_at_ms"] = serde_json::Value::Null,
+                "extended_reset" => observed["reset_at_ms"] = serde_json::json!(900),
+                "extended_expiry" => observed["expires_at_ms"] = serde_json::json!(2100),
+                _ => unreachable!(),
+            }
+            conn.execute(
+                "UPDATE work_item_quota_candidates SET typed_exhaustion=? WHERE receipt=?",
+                params![serde_json::to_string(&marker).unwrap(), f.body.reservation],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        assert!(
+            f.store
+                .inspect_fresh_typed_exhaustion(&f.body.reservation, &f.body.launch.candidate, 700)
+                .is_err(),
+            "{corruption}"
+        );
+        f.writer.close().await.unwrap();
+    }
+}

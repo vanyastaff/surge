@@ -104,6 +104,53 @@ impl QuotaRateLimitMarker {
     }
 }
 
+/// Fresh typed exhaustion for one exact historical reservation and launch recipe.
+/// This read-only value grants no opening or dispatch authority and makes no
+/// statement about account-global freshness or observations in other runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreshTypedExhaustion {
+    marker: SealedRateLimit,
+    observed_at_ms: i64,
+    valid_until_ms: i64,
+}
+impl FreshTypedExhaustion {
+    /// Reservation whose original typed response was inspected.
+    pub fn receipt(&self) -> &str {
+        &self.marker.reservation
+    }
+    /// Exact frozen runtime, account, model and launch recipe.
+    pub fn candidate(&self) -> &FrozenQuotaCandidate {
+        &self.marker.candidate
+    }
+    /// Recovery-cycle revision that sealed the original typed response.
+    pub fn source_revision(&self) -> u64 {
+        self.marker.recorded_revision
+    }
+    /// Both observations have occurred at or before this time.
+    pub fn observed_at_ms(&self) -> i64 {
+        self.observed_at_ms
+    }
+    /// Exclusive upper bound from both TTLs and any provider resets.
+    pub fn valid_until_ms(&self) -> i64 {
+        self.valid_until_ms
+    }
+}
+
+fn exhausted_window(observation: &QuotaObservation) -> Option<(i64, i64)> {
+    match observation.evidence() {
+        QuotaEvidence::Observed {
+            available: false,
+            observed_at_ms,
+            expires_at_ms,
+            reset_at_ms,
+        } => Some((
+            *observed_at_ms,
+            reset_at_ms.map_or(*expires_at_ms, |reset| reset.min(*expires_at_ms)),
+        )),
+        _ => None,
+    }
+}
+
 fn validate_marker(marker: &SealedRateLimit) -> Result<()> {
     if marker.attempt_generation == 0
         || marker.cycle_generation == 0
@@ -158,6 +205,38 @@ fn read_marker(conn: &Connection, receipt: &str) -> Result<Option<SealedRateLimi
             "rate-limit identity columns differ".into(),
         ));
     }
+    let stage = handoffs::read_bound_stage(conn, marker.run, &marker.logical_invocation)?;
+    let QuotaEvidence::Observed {
+        observed_at_ms,
+        expires_at_ms,
+        reset_at_ms,
+        ..
+    } = marker.observation.evidence()
+    else {
+        return Err(WorkItemError::Invalid(
+            "typed rate-limit window is absent".into(),
+        ));
+    };
+    let expected_reset = marker
+        .source
+        .retry_after_ms
+        .map(|delay| {
+            let delay = i64::try_from(delay)
+                .map_err(|_| WorkItemError::Invalid("rate-limit delay overflow".into()))?;
+            observed_at_ms
+                .checked_add(delay)
+                .ok_or_else(|| WorkItemError::Invalid("rate-limit reset overflow".into()))
+        })
+        .transpose()?;
+    if stage.node() != &marker.node
+        || !stage.candidates().contains(&marker.candidate)
+        || expires_at_ms.checked_sub(*observed_at_ms) != Some(stage.observation_ttl_ms())
+        || &expected_reset != reset_at_ms
+    {
+        return Err(WorkItemError::Invalid(
+            "typed rate-limit differs from frozen policy or original delay".into(),
+        ));
+    }
     Ok(Some(marker))
 }
 
@@ -174,6 +253,74 @@ struct RateLimitOpeningEvidence {
 }
 
 impl WorkItemStore {
+    /// Inspect one reservation in a consistent read snapshot. Candidate mismatch,
+    /// cancelled exhaustion, future observations and elapsed validity return None.
+    /// Invalid stored provenance is an error. This never authorizes dispatch.
+    pub fn inspect_fresh_typed_exhaustion(
+        &self,
+        receipt: &str,
+        expected: &FrozenQuotaCandidate,
+        now_ms: i64,
+    ) -> Result<Option<FreshTypedExhaustion>> {
+        let mut connection = self.pool.get()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let Some(marker) = read_marker(&tx, receipt)? else {
+            return Ok(None);
+        };
+        if &marker.candidate != expected {
+            return Ok(None);
+        }
+        let (observed, exhaustion): (Option<String>, Option<String>) = tx.query_row(
+            "SELECT observed,exhaustion FROM work_item_quota_candidates WHERE receipt=?",
+            [receipt],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let observed = observed
+            .map(|body| serde_json::from_str::<QuotaObservation>(&body))
+            .transpose()?;
+        let exhaustion = exhaustion
+            .map(|body| serde_json::from_str::<QuotaObservation>(&body))
+            .transpose()?;
+        let Some(observed) = observed else {
+            return Err(WorkItemError::Invalid(
+                "typed rate-limit observed evidence is absent".into(),
+            ));
+        };
+        match observed.evidence() {
+            QuotaEvidence::Observed {
+                available: true, ..
+            } if exhaustion.is_none() => return Ok(None),
+            QuotaEvidence::Observed {
+                available: false, ..
+            } if exhaustion.as_ref() == Some(&observed) => {},
+            _ => {
+                return Err(WorkItemError::Invalid(
+                    "typed rate-limit latest observed/exhaustion disagree".into(),
+                ));
+            },
+        }
+        let Some((original_at, original_until)) = exhausted_window(&marker.observation) else {
+            return Ok(None);
+        };
+        let Some((latest_at, latest_until)) = exhausted_window(&observed) else {
+            return Ok(None);
+        };
+        if latest_at < original_at {
+            return Err(WorkItemError::Invalid(
+                "typed rate-limit latest observation precedes original response".into(),
+            ));
+        }
+        let observed_at_ms = latest_at;
+        let valid_until_ms = original_until.min(latest_until);
+        if now_ms < observed_at_ms || now_ms >= valid_until_ms {
+            return Ok(None);
+        }
+        Ok(Some(FreshTypedExhaustion {
+            marker,
+            observed_at_ms,
+            valid_until_ms,
+        }))
+    }
     /// Historical typed origin is independent of the latest quota probe.
     pub fn typed_rate_limit(&self, receipt: &str) -> Result<Option<QuotaRateLimitMarker>> {
         let connection = self.pool.get()?;

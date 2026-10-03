@@ -47,6 +47,44 @@ override retry even at/after an observed reset. The fix allows the original prof
 retry at that boundary; 65 capacity tests, strict core all-target/all-feature clippy
 and workspace format checks pass. Independent code review returned ACCEPTABLE.
 
+### Ordering observations across attempts
+
+Reservation-scoped inspection is insufficient for pre-dispatch selection: a later
+successful opening in another run may supersede its old exhausted marker. The next
+storage step must assign a monotonic registry admission epoch before each comparable
+provider-opening effect. Admission sets the exact configured recipe to Unknown;
+a typed error updates that projection only if its epoch is still current. A late
+error from an older attempt remains audit evidence and cannot resurrect exhaustion.
+
+Scope is project + candidate/runtime/account evidence + model + launch fingerprint,
+not proven account-global capacity. Current launch fingerprints omit inherited
+authentication environment; Unknown account identity must remain Unknown. Historical
+markers must not be backfilled into an actionable projection without a complete
+ordering of subsequent opens. Primary, fallback, continuation and comparable
+openings without quota recovery must all produce supersession barriers. Failed RPC
+or host death after admission leaves Unknown; replay inspection grants no new RPC.
+
+Projection inspection then loads the current sealed reservation evidence in one
+read snapshot. Only after this ordering exists may pre-dispatch skip/reservation
+consume it with the current claim/control and frozen policy fences.
+
+### Reservation evidence implementation checkpoint
+
+Added `inspect_fresh_typed_exhaustion` and opaque `FreshTypedExhaustion`. Inspection
+uses one SQLite read snapshot, exact frozen candidate/recipe matching and the
+intersection of original/latest observation validity and known resets. Available
+evidence cancels exhaustion; unknown/unsupported probes cannot extend the original
+typed response's validity. Stored marker reads verify original TTL against the
+immutable frozen stage and reset against the retained provider delay, rejecting
+inconsistent or older observed evidence.
+
+The storage-boundary tests demonstrated behavioral RED before implementation and
+again for reset tampering before repair. After repair, all 34 recovery-cycle tests,
+strict scoped clippy and scoped format checks passed; independent re-review returned
+ACCEPTABLE. The full persistence library suite also passed: 438 tests. This read-only
+API grants no opening authority and does not yet establish
+the latest account/recipe observation across different runs. T12 remains in repair.
+
 ## Что должно заработать
 
 Перед диспатчем ноды движок смотрит, влезет ли работа в остаток окна. Не влезает — ран паркуется с временем пробуждения и виден в inbox как ожидающий, а не как молча вставший. После сброса он просыпается сам, с замороженным бюджетом, который переармируется точно так же, как при обычном resume. Если ротация включена, вместо парковки берётся следующий настроенный профиль того же рантайма.
