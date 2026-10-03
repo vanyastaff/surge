@@ -273,6 +273,37 @@ evidence, not a final spec or code-quality verdict. The candidate remains frozen
 while read-only triage consolidates defects with the relative-cwd gap below;
 the shared formal repair count remains 2/3, with no third dispatch yet.
 
+Read-only triage identifies test-adapter contract failures: WireBridge rewrites
+the launch recipe after admission; AuthorBridge returns a fabricated launch hash
+and omits the original writer observation. Keep the production equality fence;
+configure the exact real mock command and profile before admission, and make the
+in-process double report its received config faithfully. A mismatched-descriptor
+negative must still prove cleanup and zero prompt.
+
+Retained timed-out skill journals show a 5.37-second catalog-discovery interval,
+followed by SkillBound and SessionOpened, after the test pump's three-second
+readiness deadline had already failed. Root's targeted session `25190` passed
+the pinned-skill test in 0.736 seconds; this does not clear the failed full gate.
+The reviewed fixture-only repair monitors actual readiness, completion and pump
+failure under bounded deadlines, preserves trust/revisit assertions and leaves
+production HOME discovery and the shared MockBridge timeout unchanged.
+
+### Consolidated formal repair 3/3 (2026-10-03)
+
+Root dispatches the last shared repair after the frozen candidate's full gate
+failed. The accepted scope combines the actual-cwd preparation lease below with
+the diagnosed fixture corrections, reviewed additive snapshots and an explicit
+zero-effect refusal oracle for still-unowned configured rotation. Lead and
+independent adversarial pre-code review accepted this shape. The skills readiness
+reshape installs the real broadcast receiver before publishing the subscription
+counter; bounded local helpers then monitor pump and run completion together.
+
+One builder owns production/storage and relative-cwd acceptance; a helper owns
+the isolated test-fixture corrections. This is one consolidated repair dispatch,
+not separate new budgets. Root hands the sole Cargo/build ownership to the main
+builder; the helper performs no Cargo calls. Final outer verification, Phase 5a
+and then Phase 5b remain pending. The count is now 3/3 and must not be reset.
+
 ## Что должно заработать
 
 ### Actual launch cwd for configured sources (reviewed repair dependency)
