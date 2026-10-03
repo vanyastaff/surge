@@ -336,6 +336,20 @@ OS lock, without timeout-based ownership or guessed PID checks. It grants neithe
 provider effects nor automatic first launch. Existing prepared workspaces must
 not be recreated after loss, and failed preparation must preserve retained files.
 
+The secure preparation path is scoped by a pure host-config/graph predicate:
+configured `RotationPolicy::Candidate` and an Agent node, including subgraphs.
+It performs no auth-file or key I/O before obtaining the guard. Ordinary Starts
+without configured rotation, legacy caller-owned quota policy and terminal-only
+graphs retain their existing cross-platform path; every reserve still enforces
+the live preparation fence. Platforms without the required secure lock support
+explicitly refuse the new configured-rotation path before provider effects.
+They must not silently disable rotation or use an insecure lock fallback.
+
+Secure lock implementation belongs in a private persistence module. It does not
+depend upward on orchestrator or introduce a generic public filesystem API.
+Descriptor ownership transfer and Darwin ACL FFI remain unsafe audit sites even
+when most operations use safe nix wrappers.
+
 Acceptance requires real normal daemon Start with relative files whose checkout
 and actual-cwd contents differ; selected/skipped/post-429 actual-file changes;
 concurrent exact replay; direct mutation bypass refusal; stale/control/archive
