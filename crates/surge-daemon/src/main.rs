@@ -257,8 +257,7 @@ fn main() -> std::process::ExitCode {
         // comment, and the L3 auto-merge gate) up front, BEFORE crash
         // recovery runs. A crash-resumed run can reach a terminal state during
         // startup and publish `RunFinished` before the consumer *tasks* are
-        // spawned (those need the TaskRouter's DB connection, which is created
-        // after recovery). Because these receivers already exist when recovery
+        // spawned after recovery. Because these receivers already exist when recovery
         // runs, the global broadcast (capacity 64) buffers such events until
         // the consumer tasks drain them — so recovered runs still get
         // tracker-completion comments and L3 merge handling.
@@ -348,6 +347,19 @@ fn main() -> std::process::ExitCode {
         let shutdown_for_wake = shutdown.clone();
         tokio::spawn(wake_scheduler.run(shutdown_for_wake));
 
+        // Completion reconciliation also serves inbox-only and previously configured sources.
+        match rusqlite::Connection::open(storage.registry_db_path()) {
+            Ok(conn) => {
+                intake_completion::spawn(
+                    completion_rx,
+                    Arc::clone(&source_registry),
+                    Arc::new(TokioMutex::new(conn)),
+                    Arc::clone(&storage),
+                );
+            },
+            Err(error) => tracing::error!(%error, "ticket completion reconciliation unavailable"),
+        }
+
         if !sources.is_empty() {
             if let Some((source_map_arc, conn_arc)) = spawn_task_router(
                 sources,
@@ -359,8 +371,6 @@ fn main() -> std::process::ExitCode {
             )
             .await
             {
-                // Run-completion → tracker comment + ticket FSM transition.
-                intake_completion::spawn(completion_rx, Arc::clone(&source_map_arc), Arc::clone(&conn_arc));
                 // L3 auto-merge gate. Uses `merge_gate_rx`, subscribed before
                 // recovery (see above) so it cannot miss a `RunFinished`
                 // published while a crash-resumed run finished during startup.
@@ -376,7 +386,7 @@ fn main() -> std::process::ExitCode {
                     config.merge_gate.publish_run_report,
                 );
             } else {
-                info!("intake disabled; run-completion → tracker-comment hook not started");
+                info!("intake disabled; TaskRouter not started");
             }
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");

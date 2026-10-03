@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use surge_acp::bridge::error::{
     BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
 };
@@ -21,6 +22,7 @@ use tokio::sync::{Mutex, broadcast};
 #[allow(dead_code)] // fields exist for test assertion via pattern matching
 pub enum RecordedCall {
     OpenSession,
+    Subscribe,
     SendMessage {
         session: SessionId,
     },
@@ -42,7 +44,6 @@ pub enum RecordedCall {
         session: SessionId,
     },
     CloseSession(SessionId),
-    Subscribe,
 }
 
 pub struct MockBridge {
@@ -50,6 +51,7 @@ pub struct MockBridge {
     scripted_events: Mutex<VecDeque<BridgeEvent>>,
     /// Calls recorded for assertion.
     pub recorded_calls: Arc<Mutex<Vec<RecordedCall>>>,
+    subscribe_count: AtomicUsize,
     /// Broadcast channel.
     tx: broadcast::Sender<BridgeEvent>,
     /// Queue of SessionIds to return from `open_session` calls.
@@ -77,6 +79,7 @@ impl MockBridge {
         Self {
             scripted_events: Mutex::new(VecDeque::new()),
             recorded_calls: Arc::new(Mutex::new(Vec::new())),
+            subscribe_count: AtomicUsize::new(0),
             tx,
             pinned_session_ids: Mutex::new(VecDeque::new()),
             last_prompt: Mutex::new(None),
@@ -93,6 +96,11 @@ impl MockBridge {
     /// (not just the one asserting on steering) sees it as used.
     pub async fn last_prompt(&self) -> Option<String> {
         self.last_prompt.lock().await.clone()
+    }
+
+    #[allow(dead_code)] // not exercised by every test binary sharing this fixture
+    pub fn subscribe_count(&self) -> usize {
+        self.subscribe_count.load(Ordering::SeqCst)
     }
 
     /// Pin the `SessionId` that the next `open_session` call will return.
@@ -183,7 +191,10 @@ impl BridgeFacade for MockBridge {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, _config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         self.recorded_calls
             .lock()
             .await
@@ -194,7 +205,30 @@ impl BridgeFacade for MockBridge {
             .await
             .pop_front()
             .unwrap_or_else(SessionId::new);
-        Ok(id)
+        use surge_core::execution_recovery::*;
+        let (descriptor, mode) = match config.opening {
+            SessionOpening::Continue(saved) => (saved, SessionOpenMode::Resume),
+            SessionOpening::New => (
+                ProviderSessionDescriptor::new(
+                    ProviderSessionId::new(format!("fixture-provider-{id}")).unwrap(),
+                    config.invocation,
+                    config.runtime,
+                    surge_core::ContentHash::compute(b"fixture launch"),
+                    if config.working_dir.is_absolute() {
+                        config.working_dir
+                    } else {
+                        std::env::current_dir().unwrap().join(config.working_dir)
+                    },
+                    SessionRestoreCapabilities {
+                        resume: true,
+                        load: true,
+                    },
+                )
+                .unwrap(),
+                SessionOpenMode::New,
+            ),
+        };
+        Ok(OpenedSession::new(id, descriptor, mode).unwrap())
     }
 
     async fn send_message(
@@ -282,7 +316,8 @@ impl BridgeFacade for MockBridge {
     }
 
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
-        // Cannot be async; record the call without locking.
+        // Cannot await here; the event receiver is installed synchronously.
+        self.subscribe_count.fetch_add(1, Ordering::SeqCst);
         let recorded = self.recorded_calls.clone();
         tokio::spawn(async move {
             recorded.lock().await.push(RecordedCall::Subscribe);
@@ -305,6 +340,10 @@ mod tests {
 
     fn minimal_session_config() -> SessionConfig {
         SessionConfig {
+            writer_id: surge_core::id::ExecutionWriterId::new(),
+            invocation: surge_core::id::StageInvocationId::new(),
+            runtime: "fixture".into(),
+            opening: Default::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },

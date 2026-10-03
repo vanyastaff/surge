@@ -46,6 +46,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage persistent tasks and associated attempts.
+    Task {
+        #[command(subcommand)]
+        command: commands::task::TaskCommands,
+    },
     #[command(name = "internal-stage-mcp", hide = true)]
     InternalStageMcp,
     /// Check connection to an agent
@@ -355,6 +360,7 @@ async fn main() -> Result<()> {
         Commands::Init(_)
             | Commands::Clean { .. }
             | Commands::Config { .. }
+            | Commands::Task { .. }
             | Commands::Bootstrap(_)
             | Commands::Feature { .. }
             | Commands::Engine { .. }
@@ -562,6 +568,7 @@ async fn run_command(command: Commands) -> Result<()> {
             commands::analytics::run(command)?;
         },
 
+        Commands::Task { command } => commands::task::execute(command).await?,
         Commands::Bootstrap(args) => {
             commands::bootstrap::run(args).await?;
         },

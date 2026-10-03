@@ -843,3 +843,22 @@ fn ready_batches_omit_cycles() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0][0].id, "c");
 }
+
+#[test]
+fn passed_verification_rejects_cancelled_skipped_and_missing_checks() {
+    for result in ["cancelled", "skipped", "failed"] {
+        let text = format!(
+            "task_id = \"m1-t1\"\noutcome = \"passed\"\nsummary = \"claimed success\"\n[[checks]]\ncommand = \"cargo test\"\nresult = \"{result}\"\n"
+        );
+        let report: VerificationReportArtifact = toml::from_str(&text).unwrap();
+        assert!(
+            !report.validate().is_empty(),
+            "{result} cannot certify a passed report"
+        );
+    }
+    let report: VerificationReportArtifact = toml::from_str(
+        "task_id = \"m1-t1\"\noutcome = \"passed\"\nsummary = \"no actual checks\"\n",
+    )
+    .unwrap();
+    assert!(!report.validate().is_empty(), "summary is not evidence");
+}

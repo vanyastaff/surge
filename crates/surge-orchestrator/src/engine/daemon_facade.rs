@@ -166,6 +166,26 @@ impl DaemonClient {
     }
 
     /// Allocate a fresh request id.
+    /// Send a persistent-task operation to its single durable daemon owner.
+    pub async fn work_item(
+        &self,
+        command: surge_core::work_item::WorkItemCommand,
+    ) -> Result<surge_core::work_item::WorkItemResult, EngineError> {
+        match self
+            .rpc(|request_id| DaemonRequest::WorkItem {
+                request_id,
+                command: Box::new(command),
+            })
+            .await?
+        {
+            DaemonResponse::WorkItemOk { result, .. } => Ok(*result),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Storage(format!(
+                "unexpected task reply: {other:?}"
+            ))),
+        }
+    }
+
     fn next_request_id(&self) -> RequestId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
@@ -228,6 +248,14 @@ pub enum BootstrapClientError {
 }
 
 impl DaemonEngineFacade {
+    /// Send a typed persistent-task control to the durable daemon owner.
+    pub async fn work_item(
+        &self,
+        command: surge_core::work_item::WorkItemCommand,
+    ) -> Result<surge_core::work_item::WorkItemResult, EngineError> {
+        self.inner.work_item(command).await
+    }
+
     /// Open an IPC connection and return a facade.
     pub async fn connect(socket_path: PathBuf) -> Result<Self, EngineError> {
         Ok(Self {
@@ -877,6 +905,9 @@ impl DaemonEngineFacade {
 
 fn map_error(code: ErrorCode, message: &str) -> EngineError {
     match code {
+        ErrorCode::WorkItemConflict | ErrorCode::WorkItemBusy | ErrorCode::WorkItemRejected => {
+            EngineError::WorkItemRejected(message.to_string())
+        },
         ErrorCode::RunNotFound => {
             EngineError::Internal(format!("daemon: run not found ({message})"))
         },

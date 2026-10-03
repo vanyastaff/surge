@@ -59,6 +59,8 @@ pub mod intake;
 /// Per-side-effect idempotency log for outbound intake actions
 /// (tracker comments, label changes, merge proposals).
 pub mod intake_emit_log;
+/// Durable tracker completion delivery.
+pub mod intake_outbox;
 
 /// Data models for token usage tracking
 pub mod models;
@@ -117,3 +119,6 @@ pub mod error {
     /// Result type for persistence operations
     pub type Result<T> = std::result::Result<T, PersistenceError>;
 }
+
+/// Durable work-item history and execution reservations.
+pub mod work_items;

@@ -170,6 +170,10 @@ async fn loop_max_iterations_2_runs_at_most_2_body_executions() {
 
     // Run completes (MaxIterations=2 exits cleanly after 2 iterations).
     let _outcome = handle.await_completion().await.expect("await_completion");
+    storage
+        .inspect_folded_run(run_id)
+        .await
+        .expect("actual loop policy journal must retain trusted routing scope");
 
     let reader = storage.open_run_reader(run_id).await.unwrap();
     let events = reader

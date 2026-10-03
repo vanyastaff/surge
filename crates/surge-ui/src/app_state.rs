@@ -17,6 +17,7 @@ use crate::daemon_link::ConnectionState;
 /// Screens hold `Entity<AppState>` and read data from it.
 /// When data changes, `cx.notify()` triggers UI re-render.
 pub struct AppState {
+    pub(crate) tasks: crate::work_items::TaskCache,
     // ── Project ──
     pub project_path: Option<PathBuf>,
     /// Ownership rule for runs of the open project; see
@@ -143,6 +144,7 @@ impl AppState {
             dismissed_runs: crate::dismissed::DismissedRuns::load(),
             plan_edits: HashMap::new(),
             bootstrap_operations: HashMap::new(),
+            tasks: crate::work_items::TaskCache::default(),
         }
     }
 
@@ -162,6 +164,7 @@ impl AppState {
 
         match event {
             GlobalDaemonEvent::RunAccepted { run_id } => {
+                self.run_streams.entry(*run_id).or_default().mark_started();
                 if let Some(existing) = self.runs.iter_mut().find(|r| &r.run_id == run_id) {
                     existing.status = RunStatus::Active;
                 } else {
@@ -294,7 +297,35 @@ impl AppState {
     /// and failed/aborted runs. One number for the Inbox badge and the
     /// Fleet chip so the two can never disagree.
     pub fn needs_you_count(&self) -> usize {
-        self.pending_decisions().len() + self.unacknowledged_failures().len()
+        self.pending_decisions().len()
+            + self.unacknowledged_failures().len()
+            + self.inspection_runs().len()
+    }
+
+    /// Runs requiring inspection, including crash evidence absent from coarse lifecycle rows.
+    pub fn inspection_runs(&self) -> Vec<(RunId, surge_core::run_display::RunDisplayState)> {
+        self.run_streams
+            .iter()
+            .filter(|(id, _)| self.run_in_project(id))
+            .filter_map(|(id, stream)| {
+                let display = stream.display();
+                // Existing exact requests already occupy the operator queue;
+                // unknown display evidence must not duplicate or replace them.
+                if display == surge_core::run_display::RunDisplayState::Unknown
+                    && !stream.pending.is_empty()
+                {
+                    return None;
+                }
+                matches!(
+                    display,
+                    surge_core::run_display::RunDisplayState::Unknown
+                        | surge_core::run_display::RunDisplayState::Waiting(
+                            surge_core::run_display::WaitingReason::RecoveryRequired
+                        )
+                )
+                .then_some((*id, display))
+            })
+            .collect()
     }
 
     /// Failed/aborted runs of the open project the operator has not
@@ -310,6 +341,27 @@ impl AppState {
     /// Operator's request for a run, when its `RunStarted` was observed.
     pub fn run_prompt(&self, run_id: &RunId) -> Option<&str> {
         self.run_streams.get(run_id)?.prompt.as_deref()
+    }
+
+    /// Human-facing mission label; the recorded agent prompt remains unchanged.
+    pub fn run_mission_title(&self, run_id: &RunId) -> Option<&str> {
+        let stream = self.run_streams.get(run_id)?;
+        let title = stream.trusted_work_item().and_then(|item| {
+            let scope = self.tasks.scope.as_ref()?;
+            if self.project_scope.as_ref().is_some_and(|project| {
+                project.owns(stream.run_path.as_deref(), stream.git_common_dir.as_deref())
+                    != Some(true)
+            }) {
+                return None;
+            }
+            self.tasks.records.iter().find_map(|record| {
+                (record.id == item
+                    && record.workspace.repository == scope.repository
+                    && stream.git_common_dir.as_ref() == Some(&scope.repository))
+                .then_some(record.title.as_str())
+            })
+        });
+        title.or(stream.prompt.as_deref())
     }
 
     /// Merge durable terminal history; live state is supplied by the daemon.

@@ -44,7 +44,7 @@ async fn shutdown_cancels_token_and_disconnects_all() {
     let token = registry.cancel_token();
     assert!(!token.is_cancelled(), "token must start live");
 
-    registry.shutdown().await;
+    registry.shutdown().await.unwrap();
 
     assert!(
         token.is_cancelled(),
@@ -64,8 +64,8 @@ async fn shutdown_is_idempotent() {
     let registry = Arc::new(McpRegistry::from_config(&[unreachable_server("a")], None));
     // A run that terminates, then a recovery pass that terminates again,
     // must not panic or hang on a second teardown.
-    registry.shutdown().await;
-    registry.shutdown().await;
+    registry.shutdown().await.unwrap();
+    registry.shutdown().await.unwrap();
     assert!(registry.cancel_token().is_cancelled());
     let statuses = registry.statuses().await;
     assert_eq!(statuses.len(), 1);
@@ -78,7 +78,8 @@ async fn empty_registry_shutdown_is_a_noop() {
     // Must return promptly and cancel the token even with no servers.
     tokio::time::timeout(Duration::from_secs(2), registry.shutdown())
         .await
-        .expect("empty-registry shutdown must not block");
+        .expect("empty-registry shutdown must not block")
+        .expect("empty registry has no unconfirmed child service");
     assert!(registry.cancel_token().is_cancelled());
     assert!(registry.statuses().await.is_empty());
 }

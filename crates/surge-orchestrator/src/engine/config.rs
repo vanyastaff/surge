@@ -94,6 +94,11 @@ pub enum SnapshotPolicy {
 /// Per-run configuration; passed to `Engine::start_run` and `Engine::resume_run`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineRunConfig {
+    /// Host-frozen per-stage quota fallback candidates for persistent tasks.
+    /// Candidate order and launch fingerprints are accepted before reservation
+    /// and remain unchanged across daemon restarts.
+    #[serde(default)]
+    pub quota_recovery: surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy,
     /// Default human-input timeout if a `HumanGate` doesn't override.
     /// Default 5 minutes.
     #[serde(with = "humantime_serde")]
@@ -136,6 +141,13 @@ pub struct EngineRunConfig {
     /// memory directory).
     #[serde(default)]
     pub project_memory: Option<ProjectContextSeed>,
+    /// Memory claims snapshotted at run admission and packed independently for
+    /// each node that binds `project_memory`.
+    #[serde(default)]
+    pub memory_claim_candidates: Option<Vec<surge_core::memory::MemoryClaim>>,
+    /// Per-node memory pack budget captured from project configuration.
+    #[serde(default)]
+    pub context_pack: Option<surge_core::context_pack::ContextPackConfig>,
     /// Additional first-class artifacts copied into a run before its first
     /// stage executes. Used by follow-up amendment runs to seed the appended
     /// roadmap slice without relying on mutable project files.
@@ -298,6 +310,8 @@ impl Default for BootstrapRunConfig {
 impl Default for EngineRunConfig {
     fn default() -> Self {
         Self {
+            quota_recovery:
+                surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(300),
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
@@ -305,6 +319,8 @@ impl Default for EngineRunConfig {
             bootstrap_parent: None,
             project_context: None,
             project_memory: None,
+            memory_claim_candidates: None,
+            context_pack: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
@@ -365,6 +381,8 @@ mod tests {
     #[test]
     fn engine_run_config_with_mcp_servers_serde_roundtrip() {
         let cfg = EngineRunConfig {
+            quota_recovery:
+                surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(120),
             stage_timeout_override: None,
             mcp_servers: vec![McpServerRef::new(
@@ -378,6 +396,8 @@ mod tests {
             bootstrap_parent: None,
             project_context: None,
             project_memory: None,
+            memory_claim_candidates: None,
+            context_pack: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
@@ -398,6 +418,7 @@ mod tests {
         let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
         let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
         assert!(parsed.mcp_servers.is_empty());
+        assert!(parsed.quota_recovery.stages().is_empty());
         // Legacy blobs without `initial_prompt` must default to the empty
         // string so the engine treats them as non-bootstrap runs.
         assert!(parsed.initial_prompt.is_empty());
@@ -407,6 +428,8 @@ mod tests {
     #[test]
     fn engine_run_config_serializes_initial_prompt() {
         let cfg = EngineRunConfig {
+            quota_recovery:
+                surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(60),
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
@@ -414,6 +437,8 @@ mod tests {
             bootstrap_parent: None,
             project_context: None,
             project_memory: None,
+            memory_claim_candidates: None,
+            context_pack: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
@@ -431,6 +456,8 @@ mod tests {
     fn engine_run_config_serializes_bootstrap_parent() {
         let parent = RunId::new();
         let cfg = EngineRunConfig {
+            quota_recovery:
+                surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             bootstrap_parent: Some(parent),
             ..EngineRunConfig::default()
         };
@@ -457,6 +484,8 @@ mod tests {
     #[test]
     fn bootstrap_run_config_serde_roundtrip() {
         let cfg = EngineRunConfig {
+            quota_recovery:
+                surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(60),
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
@@ -464,6 +493,8 @@ mod tests {
             bootstrap_parent: None,
             project_context: None,
             project_memory: None,
+            memory_claim_candidates: None,
+            context_pack: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
             budget: surge_core::budget::BudgetGuard::default(),

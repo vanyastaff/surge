@@ -119,6 +119,12 @@ async fn dispatch(agent: &MockAgent, request: acp::ClientRequest) -> acp::Result
         acp::ClientRequest::NewSessionRequest(request) => {
             serde_json::to_value(agent.new_session(request).await?)
         },
+        acp::ClientRequest::LoadSessionRequest(request) => {
+            serde_json::to_value(agent.load_session(request).await?)
+        },
+        acp::ClientRequest::ResumeSessionRequest(request) => {
+            serde_json::to_value(agent.resume_session(request).await?)
+        },
         acp::ClientRequest::PromptRequest(request) => {
             serde_json::to_value(agent.prompt(request).await?)
         },

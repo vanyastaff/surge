@@ -121,6 +121,15 @@ pub async fn bind_skills(params: SkillBindingParams<'_>) -> Result<Vec<BoundSkil
                 params.node,
                 params.writer,
                 prompt,
+                pending
+                    .iter()
+                    .map(|r| SkillRef {
+                        name: r.declared.name.clone(),
+                        provider: r.declared.provider,
+                        version: r.declared.version.clone(),
+                        hash: Some(r.resolved.hash),
+                    })
+                    .collect(),
                 params.gate_resolutions,
                 params.approval_timeout,
             )
@@ -382,6 +391,7 @@ async fn request_and_await_approval(
     node: &NodeKey,
     writer: &RunWriter,
     prompt: String,
+    bindings: Vec<SkillRef>,
     gate_resolutions: Option<&GateResolutions>,
     timeout: Duration,
 ) -> Result<(), StageError> {
@@ -392,6 +402,14 @@ async fn request_and_await_approval(
             registry.lock().await.insert(
                 node.clone(),
                 crate::engine::stage::human_gate::PendingGate {
+                    recorder: writer.event_recorder(),
+                    allow_freetext: false,
+                    allowed_outcomes: vec![
+                        surge_core::OutcomeKey::try_from("approve")
+                            .map_err(|error| StageError::RecoveryRequired(error.to_string()))?,
+                        surge_core::OutcomeKey::try_from("reject")
+                            .map_err(|error| StageError::RecoveryRequired(error.to_string()))?,
+                    ],
                     request_id,
                     sender: tx,
                 },
@@ -401,6 +419,9 @@ async fn request_and_await_approval(
         None => None,
     };
 
+    let mut schema = approval_response_schema();
+    schema["x-surge-skill-bindings"] = serde_json::to_value(bindings)
+        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
     writer
         .append_event(VersionedEventPayload::new(
             EventPayload::HumanInputRequested {
@@ -408,7 +429,7 @@ async fn request_and_await_approval(
                 session: None,
                 call_id: Some(request_id.to_string()),
                 prompt,
-                schema: Some(approval_response_schema()),
+                schema: Some(schema),
             },
         ))
         .await
@@ -440,16 +461,10 @@ async fn request_and_await_approval(
     // all) fails closed.
     match &resolution {
         Some(res) => {
-            writer
-                .append_event(VersionedEventPayload::new(
-                    EventPayload::HumanInputResolved {
-                        node: node.clone(),
-                        call_id: Some(request_id.to_string()),
-                        response: res.response.clone(),
-                    },
-                ))
-                .await
-                .map_err(|e| StageError::Storage(e.to_string()))?;
+            crate::engine::stage::human_gate::persist_gate_resolution(
+                writer, node, request_id, res,
+            )
+            .await?;
         },
         None => {
             writer
@@ -525,6 +540,7 @@ mod tests {
                 if let Some(tx) = guard.remove(&node) {
                     drop(guard);
                     let _ = tx.sender.send(HumanGateResolution {
+                        committed_seq: None,
                         outcome: surge_core::keys::OutcomeKey::try_from(outcome).unwrap(),
                         response: serde_json::json!({"outcome": outcome}),
                     });

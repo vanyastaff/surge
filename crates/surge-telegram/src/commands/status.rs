@@ -118,7 +118,12 @@ where
 /// same body schema is used by the cockpit's status card (see
 /// `card::render::render_status`), kept distinct so callers can choose
 /// between a card and a plain reply without coupling.
-fn render_snapshot(snap: &RunStatusSnapshot) -> String {
+pub(crate) fn render_snapshot(snap: &RunStatusSnapshot) -> String {
+    render_snapshot_for(&snap.run_id, snap)
+}
+
+/// One escaped body for the command reply and status card.
+pub(crate) fn render_snapshot_for(run_id: &RunId, snap: &RunStatusSnapshot) -> String {
     let active = snap.active_node.as_deref().unwrap_or("(not yet started)");
     let outcome = snap.last_outcome.as_deref().unwrap_or("—");
     let attempt = snap
@@ -127,31 +132,97 @@ fn render_snapshot(snap: &RunStatusSnapshot) -> String {
     let elapsed_s = snap
         .elapsed_ms
         .map_or_else(|| "—".to_owned(), |ms| format!("{}s", ms / 1_000));
-    let state = if snap.terminal {
-        if snap.failed {
-            "❌ failed"
-        } else {
-            "✅ done"
-        }
-    } else {
-        "▶ running"
-    };
+    let state = snap.display.label();
+    let mut action = snap
+        .display
+        .next_action()
+        .map_or_else(String::new, |text| format!("\nnext action: {text}"));
+    if let Some((until, basis)) = snap.display.wake() {
+        action.push_str(&format!(
+            "\nwake: {} ({})",
+            until.to_rfc3339(),
+            match basis {
+                surge_core::capacity::WakeBasis::ObservedReset => "observed provider reset",
+                surge_core::capacity::WakeBasis::PolicyBackoff => "policy backoff",
+            }
+        ));
+    }
+    let active = escape_code(active);
+    let outcome = escape_code(outcome);
     format!(
         "📊 *Run status* — `{run_id}`\n\n\
          active node: `{active}`\n\
          last outcome: `{outcome}` (attempt {attempt})\n\
          elapsed: {elapsed_s}\n\
          events: {events}\n\
-         state: {state}",
-        run_id = snap.run_id,
+         state: {state}{action}",
         events = snap.event_count,
     )
+}
+
+fn escape_code(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('`', "\\`")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn status_command_and_card_explain_waits_with_identical_safe_text() {
+        use surge_core::run_display::{RunDisplayState, WaitingReason};
+        let id = RunId::new();
+        let until = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        for (display, label, action) in [
+            (
+                RunDisplayState::Waiting(WaitingReason::HumanInput),
+                "Waiting for human input",
+                "Answer the pending request in the Inbox.",
+            ),
+            (
+                RunDisplayState::Waiting(WaitingReason::Capacity {
+                    until,
+                    basis: surge_core::capacity::WakeBasis::ObservedReset,
+                    runtime: Some("runtime-a".into()),
+                }),
+                "Waiting for capacity",
+                "Wait for the recorded wake time; successful dispatch depends on available capacity.",
+            ),
+            (
+                RunDisplayState::Waiting(WaitingReason::RecoveryRequired),
+                "Recovery requires an operator",
+                "Inspect the run and choose whether to resume or abort.",
+            ),
+            (
+                RunDisplayState::Unknown,
+                "Run state is unconfirmed",
+                "Inspect the run journal before taking action.",
+            ),
+        ] {
+            let mut snap = RunStatusSnapshot::empty(id);
+            snap.display = display;
+            snap.active_node = Some("node`injected\\name".into());
+            let text = render_snapshot(&snap);
+            assert!(text.contains(label));
+            assert!(text.contains(action));
+            assert!(text.contains("node\\`injected\\\\name"));
+            assert_eq!(crate::card::render::render_status(&id, &snap).body_md, text);
+            assert!(
+                !snap.terminal,
+                "a waiting display is no completion evidence"
+            );
+        }
+        let mut snap = RunStatusSnapshot::empty(id);
+        snap.display = RunDisplayState::Waiting(WaitingReason::Capacity {
+            until,
+            basis: surge_core::capacity::WakeBasis::ObservedReset,
+            runtime: None,
+        });
+        assert!(
+            render_snapshot(&snap).contains("2027-01-15T08:00:00+00:00 (observed provider reset)")
+        );
+    }
 
     #[derive(Default)]
     struct FakeProvider {
@@ -210,6 +281,7 @@ mod tests {
     async fn known_run_renders_snapshot_block() {
         let run_id = RunId::new();
         let mut snap = RunStatusSnapshot::empty(run_id);
+        snap.display = surge_core::run_display::RunDisplayState::Working;
         snap.active_node = Some("approve_plan".into());
         snap.last_outcome = Some("approve".into());
         snap.last_attempt = Some(1);
@@ -224,7 +296,7 @@ mod tests {
             .unwrap();
         assert!(reply.text.contains("approve_plan"));
         assert!(reply.text.contains("45s"));
-        assert!(reply.text.contains("running"));
+        assert!(reply.text.contains("Running"));
         assert!(reply.text.contains("events: 7"));
     }
 
@@ -232,12 +304,14 @@ mod tests {
     async fn terminal_failed_run_shows_failed_state() {
         let run_id = RunId::new();
         let mut snap = RunStatusSnapshot::empty(run_id);
+        snap.display =
+            surge_core::run_display::RunDisplayState::Done(surge_core::TerminalReason::Failed);
         snap.terminal = true;
         snap.failed = true;
         let provider = FakeProvider::returning(snap);
         let reply = handle_status(42, &run_id.to_string(), &provider)
             .await
             .unwrap();
-        assert!(reply.text.contains("failed"));
+        assert!(reply.text.contains("Failed"));
     }
 }

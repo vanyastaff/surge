@@ -31,7 +31,34 @@ pub async fn compile_trace(
 /// read.
 pub async fn compile_report(storage: &Arc<Storage>, run: &str) -> Result<RunReport, OperatorError> {
     let (run_id, events) = load_events(storage, run).await?;
-    Ok(RunReport::compile(run_id, &events))
+    let mut report = RunReport::compile(run_id, &events);
+    use surge_core::verification_evidence::ProofFreshness;
+    let current = super::verification::current_proofs(storage, run_id);
+    report.freshness = match current {
+        Some(states)
+            if !states.is_empty()
+                && states
+                    .values()
+                    .all(|state| *state == ProofFreshness::Current)
+                && report.evidence_backed == Some(true) =>
+        {
+            ProofFreshness::Current
+        },
+        Some(states)
+            if states
+                .values()
+                .any(|state| *state == ProofFreshness::Unknown) =>
+        {
+            ProofFreshness::Unknown
+        },
+        Some(states) if !states.is_empty() => ProofFreshness::Stale,
+        Some(_) => ProofFreshness::Unbound,
+        None => ProofFreshness::Unknown,
+    };
+    if report.evidence_backed.is_some() && report.freshness != ProofFreshness::Current {
+        report.evidence_backed = Some(false);
+    }
+    Ok(report)
 }
 
 async fn load_events(

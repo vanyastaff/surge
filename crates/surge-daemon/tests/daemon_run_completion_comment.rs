@@ -38,6 +38,14 @@ fn db_with_schema() -> Connection {
         "../../surge-persistence/src/runs/migrations/registry/0004_inbox_callback_columns.sql"
     );
     conn.execute_batch(m4).unwrap();
+    conn.execute_batch(include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0013_intake_emit_log.sql"
+    ))
+    .unwrap();
+    conn.execute_batch(include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0020_terminal_comment_outbox.sql"
+    ))
+    .unwrap();
     conn
 }
 
@@ -70,9 +78,15 @@ struct Setup {
     conn: Arc<TokioMutex<Connection>>,
     tx: broadcast::Sender<GlobalDaemonEvent>,
     rx: broadcast::Receiver<GlobalDaemonEvent>,
+    storage: Arc<surge_persistence::runs::Storage>,
+    _dir: tempfile::TempDir,
 }
 
-fn make_setup() -> Setup {
+async fn make_setup() -> Setup {
+    let _dir = tempfile::tempdir().unwrap();
+    let storage = surge_persistence::runs::Storage::open(_dir.path())
+        .await
+        .unwrap();
     let src = Arc::new(MockTaskSource::new("mock:test", "mock"));
     let mut map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
     map.insert("mock:test".into(), Arc::clone(&src) as Arc<dyn TaskSource>);
@@ -85,6 +99,8 @@ fn make_setup() -> Setup {
         conn,
         tx,
         rx,
+        storage,
+        _dir,
     }
 }
 
@@ -137,7 +153,7 @@ async fn wait_for_terminal_state(
     None
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_completed_posts_success_comment_and_transitions_state() {
     let Setup {
         src,
@@ -145,7 +161,9 @@ async fn run_completed_posts_success_comment_and_transitions_state() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     let run_id = RunId::new();
     let run_id_str = run_id.to_string();
     {
@@ -153,7 +171,7 @@ async fn run_completed_posts_success_comment_and_transitions_state() {
         seed_ticket(&guard, "mock:test#1", &run_id_str);
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     tx.send(GlobalDaemonEvent::RunFinished {
         run_id,
@@ -168,7 +186,7 @@ async fn run_completed_posts_success_comment_and_transitions_state() {
         .expect("consumer did not transition ticket within deadline");
     assert_eq!(row.state, TicketState::Completed);
 
-    let comments = src.posted_comments().await;
+    let comments = wait_for_comment(&src).await;
     assert_eq!(comments.len(), 1, "expected exactly one comment");
     assert!(comments[0].1.starts_with("✅"), "got: {}", comments[0].1);
     assert!(
@@ -178,7 +196,7 @@ async fn run_completed_posts_success_comment_and_transitions_state() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_failed_posts_failure_comment_and_transitions_state() {
     let Setup {
         src,
@@ -186,7 +204,9 @@ async fn run_failed_posts_failure_comment_and_transitions_state() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     let run_id = RunId::new();
     let run_id_str = run_id.to_string();
     {
@@ -194,7 +214,7 @@ async fn run_failed_posts_failure_comment_and_transitions_state() {
         seed_ticket(&guard, "mock:test#2", &run_id_str);
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     tx.send(GlobalDaemonEvent::RunFinished {
         run_id,
@@ -209,7 +229,7 @@ async fn run_failed_posts_failure_comment_and_transitions_state() {
         .expect("consumer did not transition ticket within deadline");
     assert_eq!(row.state, TicketState::Failed);
 
-    let comments = src.posted_comments().await;
+    let comments = wait_for_comment(&src).await;
     assert_eq!(comments.len(), 1);
     assert!(
         comments[0].1.starts_with("❌ Run failed:"),
@@ -219,7 +239,7 @@ async fn run_failed_posts_failure_comment_and_transitions_state() {
     assert!(comments[0].1.contains("graph validation error"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_aborted_posts_abort_comment_and_transitions_state() {
     let Setup {
         src,
@@ -227,7 +247,9 @@ async fn run_aborted_posts_abort_comment_and_transitions_state() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     let run_id = RunId::new();
     let run_id_str = run_id.to_string();
     {
@@ -235,7 +257,7 @@ async fn run_aborted_posts_abort_comment_and_transitions_state() {
         seed_ticket(&guard, "mock:test#3", &run_id_str);
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     tx.send(GlobalDaemonEvent::RunFinished {
         run_id,
@@ -250,7 +272,7 @@ async fn run_aborted_posts_abort_comment_and_transitions_state() {
         .expect("consumer did not transition ticket within deadline");
     assert_eq!(row.state, TicketState::Aborted);
 
-    let comments = src.posted_comments().await;
+    let comments = wait_for_comment(&src).await;
     assert_eq!(comments.len(), 1);
     assert!(comments[0].1.starts_with("Run aborted:"));
     assert!(comments[0].1.contains("user pressed Stop"));
@@ -263,7 +285,7 @@ async fn run_aborted_posts_abort_comment_and_transitions_state() {
 /// Aborted `RunOutcome` onto `Aborted`, which would have told the human
 /// the run stopped when it is actually parked, working as designed, and
 /// will resume on its own.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_parked_posts_pause_comment_and_leaves_ticket_state_untouched() {
     let Setup {
         src,
@@ -271,7 +293,9 @@ async fn run_parked_posts_pause_comment_and_leaves_ticket_state_untouched() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     let run_id = RunId::new();
     let run_id_str = run_id.to_string();
     {
@@ -279,7 +303,7 @@ async fn run_parked_posts_pause_comment_and_leaves_ticket_state_untouched() {
         seed_ticket(&guard, "mock:test#4", &run_id_str);
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     let wake_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:05:00Z")
         .unwrap()
@@ -325,7 +349,7 @@ async fn run_parked_posts_pause_comment_and_leaves_ticket_state_untouched() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_finished_with_no_matching_ticket_is_a_no_op() {
     let Setup {
         src,
@@ -333,7 +357,9 @@ async fn run_finished_with_no_matching_ticket_is_a_no_op() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     // Seed only a sentinel ticket. The first event below uses a different
     // run_id with no row in `ticket_index`, so the consumer must skip it.
     // The second event targets the sentinel, giving us a deterministic
@@ -345,7 +371,7 @@ async fn run_finished_with_no_matching_ticket_is_a_no_op() {
         seed_ticket(&guard, "mock:test#sentinel", &sentinel_run_id_str);
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     let unmatched_run_id = RunId::new();
     tx.send(GlobalDaemonEvent::RunFinished {
@@ -371,7 +397,7 @@ async fn run_finished_with_no_matching_ticket_is_a_no_op() {
         .expect("consumer did not process sentinel event within deadline");
     assert_eq!(row.state, TicketState::Completed);
 
-    let comments = src.posted_comments().await;
+    let comments = wait_for_comment(&src).await;
     assert_eq!(
         comments.len(),
         1,
@@ -380,7 +406,7 @@ async fn run_finished_with_no_matching_ticket_is_a_no_op() {
     assert_eq!(comments[0].0.as_str(), "mock:test#sentinel");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn post_comment_failure_still_transitions_state() {
     let Setup {
         src,
@@ -388,7 +414,9 @@ async fn post_comment_failure_still_transitions_state() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     src.arm_post_comment_failure().await;
     let run_id = RunId::new();
     let run_id_str = run_id.to_string();
@@ -397,7 +425,7 @@ async fn post_comment_failure_still_transitions_state() {
         seed_ticket(&guard, "mock:test#5", &run_id_str);
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     tx.send(GlobalDaemonEvent::RunFinished {
         run_id,
@@ -422,7 +450,7 @@ async fn post_comment_failure_still_transitions_state() {
 /// future migration or manual edit that loosened DB validation) must not
 /// block the FSM transition. The cosmetic comment post is skipped, but
 /// the on-disk ticket state still moves to terminal.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn invalid_task_id_string_skips_comment_but_transitions_state() {
     let Setup {
         src,
@@ -430,7 +458,9 @@ async fn invalid_task_id_string_skips_comment_but_transitions_state() {
         conn,
         tx,
         rx,
-    } = make_setup();
+        storage,
+        _dir,
+    } = make_setup().await;
     let run_id = RunId::new();
     let run_id_str = run_id.to_string();
 
@@ -461,7 +491,7 @@ async fn invalid_task_id_string_skips_comment_but_transitions_state() {
             .unwrap();
     }
 
-    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn), storage);
 
     tx.send(GlobalDaemonEvent::RunFinished {
         run_id,
@@ -480,4 +510,439 @@ async fn invalid_task_id_string_skips_comment_but_transitions_state() {
     // No comment posted: the bad task_id couldn't be parsed for the
     // TaskSource API, so the cosmetic note was skipped.
     assert!(src.posted_comments().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_terminal_event_posts_only_one_comment() {
+    let Setup {
+        src,
+        map,
+        conn,
+        tx,
+        rx,
+        storage,
+        _dir,
+    } = make_setup().await;
+    let run_id = RunId::new();
+    seed_ticket(&*conn.lock().await, "mock:test#repeat", &run_id.to_string());
+    let handle = intake_completion::spawn(rx, map, conn, storage);
+    for _ in 0..2 {
+        tx.send(GlobalDaemonEvent::RunFinished {
+            run_id,
+            outcome: RunOutcome::Completed {
+                terminal: NodeKey::try_new("end").unwrap(),
+            },
+        })
+        .unwrap();
+    }
+    drop(tx);
+    handle.await.unwrap();
+    assert_eq!(src.posted_comments().await.len(), 1);
+}
+
+async fn journal(
+    storage: &Arc<surge_persistence::runs::Storage>,
+    run_id: RunId,
+    terminal: Option<surge_core::run_event::EventPayload>,
+) {
+    use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
+    let writer = storage.create_run(run_id, "/project", None).await.unwrap();
+    writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: "/project".into(),
+            initial_prompt: "test".into(),
+            config: RunConfig {
+                bootstrap_edit_loop_cap: None,
+                sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                auto_pr: false,
+                mcp_servers: Vec::new(),
+                budget: surge_core::budget::BudgetGuard::default(),
+            },
+        }))
+        .await
+        .unwrap();
+    if let Some(terminal) = terminal {
+        writer
+            .append_event(VersionedEventPayload::new(terminal))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_reconciles_lost_terminal_events_and_preserves_nonterminal_tickets() {
+    use surge_core::run_event::EventPayload;
+    let Setup {
+        src,
+        map,
+        conn,
+        tx,
+        rx,
+        storage,
+        _dir,
+    } = make_setup().await;
+    let completed = RunId::new();
+    let failed = RunId::new();
+    let aborted = RunId::new();
+    let active = RunId::new();
+    let absent = RunId::new();
+    let corrupt = RunId::new();
+    let corrupt_path = _dir
+        .path()
+        .join("runs")
+        .join(corrupt.to_string())
+        .join("events.sqlite");
+    std::fs::create_dir_all(corrupt_path.parent().unwrap()).unwrap();
+    std::fs::write(&corrupt_path, b"invalid sqlite journal").unwrap();
+    for (run_id, payload) in [
+        (
+            completed,
+            Some(EventPayload::RunCompleted {
+                terminal_node: NodeKey::try_new("end").unwrap(),
+            }),
+        ),
+        (
+            failed,
+            Some(EventPayload::RunFailed {
+                error: "broken test".into(),
+            }),
+        ),
+        (
+            aborted,
+            Some(EventPayload::RunAborted {
+                reason: "cancelled".into(),
+            }),
+        ),
+        (active, None),
+    ] {
+        journal(&storage, run_id, payload).await;
+    }
+    {
+        let guard = conn.lock().await;
+        for (name, run_id) in [
+            ("complete", completed),
+            ("fail", failed),
+            ("abort", aborted),
+            ("active", active),
+            ("absent", absent),
+            ("corrupt", corrupt),
+        ] {
+            seed_ticket(&guard, &format!("mock:test#{name}"), &run_id.to_string());
+            IntakeRepo::new(&guard)
+                .update_state(&format!("mock:test#{name}"), TicketState::RunStarted)
+                .unwrap();
+        }
+    }
+    drop(tx);
+    let handle = intake_completion::spawn(rx, map, Arc::clone(&conn), Arc::clone(&storage));
+    assert_eq!(
+        wait_for_terminal_state(&conn, &aborted.to_string())
+            .await
+            .unwrap()
+            .state,
+        TicketState::Aborted
+    );
+    assert_eq!(
+        wait_for_terminal_state(&conn, &completed.to_string())
+            .await
+            .unwrap()
+            .state,
+        TicketState::Completed
+    );
+    assert_eq!(
+        wait_for_terminal_state(&conn, &failed.to_string())
+            .await
+            .unwrap()
+            .state,
+        TicketState::Failed
+    );
+    handle.await.unwrap();
+    assert_eq!(src.posted_comments().await.len(), 3);
+    let guard = conn.lock().await;
+    for run_id in [active, absent, corrupt] {
+        assert_eq!(
+            IntakeRepo::new(&guard)
+                .lookup_ticket_by_run_id(&run_id.to_string())
+                .unwrap()
+                .unwrap()
+                .state,
+            TicketState::RunStarted
+        );
+    }
+    assert!(
+        !_dir
+            .path()
+            .join("runs")
+            .join(absent.to_string())
+            .join("events.sqlite")
+            .exists()
+    );
+    assert_eq!(
+        std::fs::read(corrupt_path).unwrap(),
+        b"invalid sqlite journal"
+    );
+}
+
+struct HangingCommentSource(MockTaskSource, tokio::sync::Notify);
+
+#[async_trait::async_trait]
+impl TaskSource for HangingCommentSource {
+    fn id(&self) -> &str {
+        self.0.id()
+    }
+    fn display_name(&self) -> &str {
+        self.0.display_name()
+    }
+    fn provider(&self) -> &'static str {
+        self.0.provider()
+    }
+    fn watch_for_tasks<'a>(
+        &'a self,
+    ) -> futures::stream::BoxStream<'a, surge_intake::Result<surge_intake::types::TaskEvent>> {
+        self.0.watch_for_tasks()
+    }
+    async fn fetch_task(
+        &self,
+        id: &surge_intake::types::TaskId,
+    ) -> surge_intake::Result<surge_intake::types::TaskDetails> {
+        self.0.fetch_task(id).await
+    }
+    async fn list_open_tasks(&self) -> surge_intake::Result<Vec<surge_intake::types::TaskSummary>> {
+        self.0.list_open_tasks().await
+    }
+    async fn acknowledge_task(&self, id: &surge_intake::types::TaskId) -> surge_intake::Result<()> {
+        self.0.acknowledge_task(id).await
+    }
+    async fn post_comment(
+        &self,
+        id: &surge_intake::types::TaskId,
+        body: &str,
+    ) -> surge_intake::Result<()> {
+        if id.as_str().ends_with("hang") {
+            self.1.notify_one();
+            std::future::pending().await
+        } else {
+            self.0.post_comment(id, body).await
+        }
+    }
+    async fn set_label(
+        &self,
+        id: &surge_intake::types::TaskId,
+        label: &str,
+        present: bool,
+    ) -> surge_intake::Result<()> {
+        self.0.set_label(id, label, present).await
+    }
+    async fn read_labels(
+        &self,
+        id: &surge_intake::types::TaskId,
+    ) -> surge_intake::Result<Vec<String>> {
+        self.0.read_labels(id).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hanging_comment_does_not_block_local_state_or_later_ticket_forever() {
+    use surge_core::run_event::EventPayload;
+    let Setup {
+        map: _,
+        src: _,
+        conn,
+        tx,
+        rx,
+        storage,
+        _dir,
+    } = make_setup().await;
+    let source = Arc::new(HangingCommentSource(
+        MockTaskSource::new("mock:test", "mock"),
+        tokio::sync::Notify::new(),
+    ));
+    let mut map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
+    map.insert("mock:test".into(), source.clone());
+    let first = RunId::new();
+    let second = RunId::new();
+    for run_id in [first, second] {
+        journal(
+            &storage,
+            run_id,
+            Some(EventPayload::RunAborted {
+                reason: "cancelled".into(),
+            }),
+        )
+        .await;
+    }
+    {
+        let guard = conn.lock().await;
+        seed_ticket(&guard, "mock:test#a-hang", &first.to_string());
+        seed_ticket(&guard, "mock:test#b-next", &second.to_string());
+    }
+    drop(tx);
+    let handle = intake_completion::spawn(rx, Arc::new(map), conn.clone(), storage);
+    assert_eq!(
+        wait_for_terminal_state(&conn, &first.to_string())
+            .await
+            .unwrap()
+            .state,
+        TicketState::Aborted
+    );
+    // The worker must leave the hung provider after its 5-second delivery bound.
+    tokio::time::timeout(Duration::from_secs(8), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    let guard = conn.lock().await;
+    assert_eq!(
+        IntakeRepo::new(&guard)
+            .fetch("mock:test#b-next")
+            .unwrap()
+            .unwrap()
+            .state,
+        TicketState::Aborted
+    );
+    drop(guard);
+    assert_eq!(source.0.posted_comments().await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_terminal_comment_is_retried_after_restart_for_terminal_ticket() {
+    let Setup {
+        src,
+        map,
+        conn,
+        tx,
+        rx,
+        storage,
+        _dir,
+    } = make_setup().await;
+    let run_id = RunId::new();
+    seed_ticket(&*conn.lock().await, "mock:test#retry", &run_id.to_string());
+    src.arm_post_comment_failure().await;
+    let first = intake_completion::spawn(rx, map, conn.clone(), storage.clone());
+    tx.send(GlobalDaemonEvent::RunFinished {
+        run_id,
+        outcome: RunOutcome::Aborted {
+            reason: "cancelled".into(),
+        },
+    })
+    .unwrap();
+    drop(tx);
+    first.await.unwrap();
+    assert_eq!(
+        IntakeRepo::new(&*conn.lock().await)
+            .fetch("mock:test#retry")
+            .unwrap()
+            .unwrap()
+            .state,
+        TicketState::Aborted
+    );
+    let recovered_source = Arc::new(MockTaskSource::new("mock:test", "mock"));
+    let mut recovered_map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
+    recovered_map.insert("mock:test".into(), recovered_source.clone());
+    let (tx, rx) = broadcast::channel(8);
+    let second = intake_completion::spawn(rx, Arc::new(recovered_map), conn, storage);
+    // Leave the restored worker time to retry persisted provider failure/backoff.
+    let comments = tokio::time::timeout(Duration::from_secs(9), async {
+        loop {
+            let comments = recovered_source.posted_comments().await;
+            if !comments.is_empty() {
+                break comments;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    drop(tx);
+    second.await.unwrap();
+    assert_eq!(comments.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_ingestion_progresses_while_delivery_is_hung() {
+    let Setup {
+        conn,
+        tx,
+        rx,
+        storage,
+        _dir,
+        src: _,
+        map: _,
+    } = make_setup().await;
+    let source = Arc::new(HangingCommentSource(
+        MockTaskSource::new("mock:test", "mock"),
+        tokio::sync::Notify::new(),
+    ));
+    let mut map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
+    map.insert("mock:test".into(), source.clone());
+    let first = RunId::new();
+    let second = RunId::new();
+    {
+        let guard = conn.lock().await;
+        seed_ticket(&guard, "mock:test#a-hang", &first.to_string());
+        seed_ticket(&guard, "mock:test#b-progress", &second.to_string());
+    }
+    let handle = intake_completion::spawn(rx, Arc::new(map), conn.clone(), storage);
+    tx.send(GlobalDaemonEvent::RunFinished {
+        run_id: first,
+        outcome: RunOutcome::Aborted {
+            reason: "first".into(),
+        },
+    })
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), source.1.notified())
+        .await
+        .unwrap();
+    tx.send(GlobalDaemonEvent::RunFinished {
+        run_id: second,
+        outcome: RunOutcome::Aborted {
+            reason: "second".into(),
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        wait_for_terminal_state(&conn, &second.to_string())
+            .await
+            .unwrap()
+            .state,
+        TicketState::Aborted
+    );
+    drop(tx);
+    handle.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_source_retains_diagnostic_and_durable_terminal_intent() {
+    let Setup {
+        conn,
+        tx,
+        rx,
+        storage,
+        _dir,
+        src: _,
+        map: _,
+    } = make_setup().await;
+    let run_id = RunId::new();
+    seed_ticket(
+        &*conn.lock().await,
+        "mock:test#missing-source",
+        &run_id.to_string(),
+    );
+    let handle = intake_completion::spawn(rx, Arc::new(HashMap::new()), conn.clone(), storage);
+    tx.send(GlobalDaemonEvent::RunFinished {
+        run_id,
+        outcome: RunOutcome::Aborted {
+            reason: "cancelled".into(),
+        },
+    })
+    .unwrap();
+    drop(tx);
+    handle.await.unwrap();
+    let guard = conn.lock().await;
+    let (state, error, delivered): (String, String, Option<i64>) = guard.query_row(
+        "SELECT ticket_index.state, terminal_comment_outbox.last_error, terminal_comment_outbox.delivered_at
+         FROM terminal_comment_outbox JOIN ticket_index USING(task_id)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+    assert_eq!(state, "Aborted");
+    assert!(error.contains("restore source configuration"));
+    assert_eq!(delivered, None);
 }

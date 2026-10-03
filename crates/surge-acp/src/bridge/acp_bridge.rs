@@ -129,7 +129,10 @@ impl AcpBridge {
     /// Open a new ACP session. The bridge spawns the agent subprocess,
     /// performs the ACP handshake, declares the sandbox-filtered tool list,
     /// and returns the freshly-allocated `SessionId`.
-    pub async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    pub async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         let (tx, rx) = oneshot::channel();
         let permit = tokio::select! {
             biased;
@@ -141,7 +144,7 @@ impl AcpBridge {
         };
         self.cmd_tx
             .send(BridgeCommand::OpenSession {
-                config,
+                config: Box::new(config),
                 reply: tx,
                 permit,
             })
@@ -395,6 +398,10 @@ mod tests {
 
         let bridge = AcpBridge::with_defaults().unwrap();
         let cfg = SessionConfig {
+            writer_id: surge_core::id::ExecutionWriterId::new(),
+            invocation: surge_core::id::StageInvocationId::new(),
+            runtime: "fixture".into(),
+            opening: Default::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },

@@ -19,6 +19,10 @@ async fn handshake_failure_returns_open_session_error() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {

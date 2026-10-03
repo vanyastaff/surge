@@ -214,6 +214,7 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
 
 fn run_config() -> RunConfig {
     RunConfig {
+        bootstrap_edit_loop_cap: None,
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
         auto_pr: false,

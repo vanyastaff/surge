@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use surge_core::{NodeKey, RunId, VersionedEventPayload};
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,7 +29,7 @@ pub enum WriterCommand {
     /// Append a single event to the log and run view maintenance in the same tx.
     AppendEvent {
         /// Payload to append.
-        payload: VersionedEventPayload,
+        payload: Box<VersionedEventPayload>,
         /// Reply channel; the sender returns the assigned `EventSeq` on success.
         reply: oneshot::Sender<Result<EventSeq, WriterError>>,
     },
@@ -39,6 +39,28 @@ pub enum WriterCommand {
         payloads: Vec<VersionedEventPayload>,
         /// Reply channel; returns the assigned `EventSeq`s in input order.
         reply: oneshot::Sender<Result<Vec<EventSeq>, WriterError>>,
+    },
+    /// Accept one host decision against an unchanged trusted request prefix.
+    CommitGateAnswer {
+        /// Exact journal prefix validated by the host.
+        prefix: EventSeq,
+        /// Original request and stage occurrence.
+        request: surge_core::execution_recovery::gate_commit::GateCommitRequest,
+        /// Original operator response.
+        response: serde_json::Value,
+        /// Durable accepted response event sequence.
+        reply: oneshot::Sender<Result<EventSeq, WriterError>>,
+    },
+    /// Commit a prepared stage route and its post-route snapshot against one journal prefix.
+    CommitStageRoute {
+        /// Last event observed while preparing the route.
+        prefix: EventSeq,
+        /// Ordered routing events to publish together.
+        payloads: Vec<VersionedEventPayload>,
+        /// Snapshot encoded for the final event sequence of this batch.
+        blob: Vec<u8>,
+        /// Final committed event sequence.
+        reply: oneshot::Sender<Result<EventSeq, WriterError>>,
     },
     /// Persist an artifact (file + DB row).
     StoreArtifact {
@@ -68,6 +90,15 @@ pub enum WriterCommand {
         blob: Vec<u8>,
         /// Reply channel.
         reply: oneshot::Sender<Result<(), WriterError>>,
+    },
+    /// Atomically seal a suspension snapshot against an unchanged journal prefix.
+    SealSuspension {
+        /// Exact prefix captured by the host after writer cleanup.
+        fence: surge_core::execution_recovery::SuspensionFence,
+        /// Host-encoded recovery snapshot anchored to that prefix.
+        blob: Vec<u8>,
+        /// Assigned suspension event sequence, after snapshot and event commit together.
+        reply: oneshot::Sender<Result<EventSeq, WriterError>>,
     },
     /// Truncate all materialized views and replay from the event log.
     RebuildViews {
@@ -201,6 +232,22 @@ async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCo
             })();
             let _ = reply.send(result);
         },
+        WriterCommand::CommitGateAnswer {
+            prefix,
+            request,
+            response,
+            reply,
+        } => {
+            let _ = reply.send(commit_gate_answer(conn, cfg, prefix, &request, response));
+        },
+        WriterCommand::CommitStageRoute {
+            prefix,
+            payloads,
+            blob,
+            reply,
+        } => {
+            let _ = reply.send(commit_stage_route(conn, cfg, prefix, &payloads, &blob));
+        },
         WriterCommand::Flush { reply } => {
             // Strict-ordering ack: by the time the writer dequeues this command,
             // every previously enqueued command has been processed and committed.
@@ -310,6 +357,10 @@ async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCo
             })();
             let _ = reply.send(result);
         },
+        WriterCommand::SealSuspension { fence, blob, reply } => {
+            let result = seal_suspension(conn, cfg, fence, blob);
+            let _ = reply.send(result);
+        },
         WriterCommand::RebuildViews { reply } => {
             let result = (|| -> Result<(), WriterError> {
                 let tx = conn.transaction()?;
@@ -344,4 +395,205 @@ async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCo
         },
     }
     true
+}
+
+fn commit_stage_route(
+    conn: &mut Connection,
+    cfg: &WriterConfig,
+    prefix: EventSeq,
+    payloads: &[VersionedEventPayload],
+    blob: &[u8],
+) -> Result<EventSeq, WriterError> {
+    use surge_core::run_event::EventPayload;
+    if !(2..=3).contains(&payloads.len())
+        || !matches!(payloads[0].payload(), EventPayload::EdgeTraversed { .. })
+        || !matches!(payloads[1].payload(), EventPayload::StageCompleted { .. })
+        || (payloads.len() == 3
+            && !matches!(
+                payloads[2].payload(),
+                EventPayload::StageRouteCommitted { .. }
+                    | EventPayload::GateStageRouteCommitted { .. }
+            ))
+    {
+        return Err(WriterError::OperationRejected(
+            "stage route requires an edge and stage completion".into(),
+        ));
+    }
+    let tx = conn.transaction()?;
+    let current: u64 = tx.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |row| {
+        row.get(0)
+    })?;
+    if current != prefix.as_u64() {
+        return Err(WriterError::OperationRejected(
+            "stage route journal prefix changed before commit".into(),
+        ));
+    }
+    if let EventPayload::StageRouteCommitted {
+        invocation,
+        outcome_commit_seq,
+    } = payloads
+        .last()
+        .map(VersionedEventPayload::payload)
+        .ok_or_else(|| WriterError::OperationRejected("empty stage route".into()))?
+    {
+        let accepted: Option<(String, String)> = tx.query_row(
+            "SELECT node_id,outcome FROM stage_outcome_commits WHERE invocation=? AND committed_seq=? AND routed_seq IS NULL",
+            params![invocation.as_ulid().to_string(),outcome_commit_seq], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        let matches = accepted.is_some_and(|(node, outcome)|
+            matches!(payloads[0].payload(), EventPayload::EdgeTraversed { from, .. } if from.as_str()==node)
+            && matches!(payloads[1].payload(), EventPayload::StageCompleted { node: completed_node, outcome: completed_outcome } if completed_node.as_str()==node && completed_outcome.as_str()==outcome));
+        if !matches {
+            return Err(WriterError::OperationRejected(
+                "stage route contradicts accepted invocation identity".into(),
+            ));
+        }
+    }
+    if let Some(EventPayload::GateStageRouteCommitted {
+        request,
+        stage_entry_seq,
+        outcome_commit_seq,
+    }) = payloads.last().map(VersionedEventPayload::payload)
+    {
+        let accepted: Option<(String,String)> = tx.query_row(
+            "SELECT node_id,outcome FROM gate_stage_commits WHERE request_id=? AND stage_entry_seq=? AND committed_seq=? AND disposition=? AND routed_seq IS NULL",
+            params![request.as_ulid().to_string(),stage_entry_seq,outcome_commit_seq,"\"route\""], |row|Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        let matches = accepted.is_some_and(|(node,outcome)|
+            matches!(payloads[0].payload(), EventPayload::EdgeTraversed { from,.. } if from.as_str()==node)
+            && matches!(payloads[1].payload(), EventPayload::StageCompleted { node:completed,outcome:actual } if completed.as_str()==node && actual.as_str()==outcome));
+        if !matches {
+            return Err(WriterError::OperationRejected(
+                "gate route contradicts accepted decision identity".into(),
+            ));
+        }
+    }
+    let mut final_seq = prefix;
+    for payload in payloads {
+        let timestamp = cfg.clock.now_ms();
+        let assigned: u64 = tx.query_row(
+            "INSERT INTO events(timestamp,kind,payload,schema_version) VALUES(?,?,?,?) RETURNING seq",
+            params![timestamp, payload.payload().discriminant_str(), serde_json::to_vec(payload)?, payload.schema_version()],
+            |row| row.get(0),
+        )?;
+        final_seq = EventSeq(assigned);
+        views::maintain(&tx, final_seq, timestamp, payload.payload())?;
+    }
+    tx.execute(
+        "INSERT INTO graph_snapshots(at_seq,snapshot,bytes_compressed) VALUES(?,?,?)",
+        params![final_seq.as_u64(), blob, blob.len() as u64],
+    )?;
+    tx.commit()?;
+    Ok(final_seq)
+}
+
+fn seal_suspension(
+    conn: &mut Connection,
+    cfg: &WriterConfig,
+    fence: surge_core::execution_recovery::SuspensionFence,
+    blob: Vec<u8>,
+) -> Result<EventSeq, WriterError> {
+    if fence.control_generation == 0 || !fence.cleanup_confirmed {
+        return Err(WriterError::Internal(
+            "suspension requires confirmed cleanup and a nonzero control generation".into(),
+        ));
+    }
+    let tx = conn.transaction()?;
+    let prefix: u64 = tx.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |row| {
+        row.get(0)
+    })?;
+    if prefix != fence.snapshot_seq {
+        return Err(WriterError::OperationRejected(
+            "suspension snapshot prefix changed before commit".into(),
+        ));
+    }
+    let payload =
+        VersionedEventPayload::new(surge_core::run_event::EventPayload::RunSuspended { fence });
+    let timestamp = cfg.clock.now_ms();
+    let seq: u64 = tx.query_row(
+        "INSERT INTO events(timestamp,kind,payload,schema_version) VALUES(?,?,?,?) RETURNING seq",
+        params![
+            timestamp,
+            payload.payload().discriminant_str(),
+            serde_json::to_vec(&payload)?,
+            payload.schema_version()
+        ],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "INSERT OR REPLACE INTO graph_snapshots(at_seq,snapshot,bytes_compressed) VALUES(?,?,?)",
+        params![prefix, &blob, blob.len() as u64],
+    )?;
+    views::maintain(&tx, EventSeq(seq), timestamp, payload.payload())?;
+    tx.commit()?;
+    Ok(EventSeq(seq))
+}
+
+fn commit_gate_answer(
+    conn: &mut Connection,
+    cfg: &WriterConfig,
+    prefix: EventSeq,
+    request: &surge_core::execution_recovery::gate_commit::GateCommitRequest,
+    response: serde_json::Value,
+) -> Result<EventSeq, WriterError> {
+    let tx = conn.transaction()?;
+    let actual: u64 = tx.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |row| {
+        row.get(0)
+    })?;
+    if actual != prefix.as_u64() {
+        return Err(WriterError::OperationRejected(
+            "gate answer prefix changed".into(),
+        ));
+    }
+    let entry: Vec<u8> = tx.query_row(
+        "SELECT payload FROM events WHERE seq=?",
+        [request.stage_entry_seq()],
+        |row| row.get(0),
+    )?;
+    let original: Vec<u8> = tx.query_row(
+        "SELECT payload FROM events WHERE seq=?",
+        [request.requested_seq()],
+        |row| row.get(0),
+    )?;
+    let entry: VersionedEventPayload = serde_json::from_slice(&entry)?;
+    let original: VersionedEventPayload = serde_json::from_slice(&original)?;
+    if !matches!(entry.payload(),surge_core::EventPayload::StageEntered {node,..} if node==request.node())
+        || !matches!(original.payload(),surge_core::EventPayload::HumanInputRequested {node,session:None,call_id:Some(call),..}
+            if node==request.node() && surge_core::id::GateRequestId::from_event_call_id(call)==Some(request.request()))
+    {
+        return Err(WriterError::OperationRejected(
+            "gate answer has no original request occurrence".into(),
+        ));
+    }
+    let latest_entry: u64 = tx.query_row(
+        "SELECT COALESCE(MAX(seq),0) FROM events WHERE kind='StageEntered'",
+        [],
+        |row| row.get(0),
+    )?;
+    let closed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE seq>? AND kind IN ('HumanInputResolved','HumanInputTimedOut','StageCompleted','RunCompleted','RunFailed','RunAborted'))",[request.requested_seq()],|row|row.get(0))?;
+    if latest_entry != request.stage_entry_seq() || closed {
+        return Err(WriterError::OperationRejected(
+            "gate request is no longer pending".into(),
+        ));
+    }
+    let payload = VersionedEventPayload::new(surge_core::EventPayload::HumanInputResolved {
+        node: request.node().clone(),
+        call_id: Some(request.request().to_string()),
+        response,
+    });
+    let ts = cfg.clock.now_ms();
+    let seq: u64 = tx.query_row(
+        "INSERT INTO events(timestamp,kind,payload,schema_version) VALUES(?,?,?,?) RETURNING seq",
+        params![
+            ts,
+            payload.payload().discriminant_str(),
+            serde_json::to_vec(&payload)?,
+            payload.schema_version()
+        ],
+        |row| row.get(0),
+    )?;
+    let seq = EventSeq(seq);
+    views::maintain(&tx, seq, ts, payload.payload())?;
+    tx.commit()?;
+    Ok(seq)
 }

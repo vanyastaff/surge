@@ -269,6 +269,26 @@ impl<'a> IntakeRepo<'a> {
         Ok(())
     }
 
+    /// Correlated tickets still awaiting a terminal run fact. No display limit applies.
+    pub fn pending_run_tickets(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut statement = self.conn.prepare(
+            "SELECT task_id, run_id FROM ticket_index WHERE run_id IS NOT NULL \
+             AND state IN ('Active', 'RunStarted') ORDER BY task_id",
+        )?;
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    }
+
+    /// Promote only this run's RunStarted ticket; cannot resurrect terminal or
+    /// reassigned tickets. Terminal updates belong to intake_outbox's transaction.
+    pub fn mark_run_active(&self, task_id: &str, run_id: &str) -> rusqlite::Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE ticket_index SET state = 'Active' WHERE task_id = ?1 AND run_id = ?2 AND state = 'RunStarted'",
+            params![task_id, run_id],
+        )? == 1)
+    }
+
     /// Update only the `last_seen` timestamp on an existing row.
     pub fn upsert_last_seen(
         &self,
@@ -738,6 +758,27 @@ mod repo_tests {
         let m4 = include_str!("runs/migrations/registry/0004_inbox_callback_columns.sql");
         conn.execute_batch(m4).unwrap();
         conn
+    }
+
+    #[test]
+    fn active_promotion_is_correlated_and_cannot_resurrect_terminal() {
+        let conn = db_with_schema();
+        conn.execute_batch("INSERT INTO runs(id) VALUES ('old'), ('new');")
+            .unwrap();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("mock:test#1", TicketState::RunStarted);
+        row.run_id = Some("new".into());
+        repo.insert(&row).unwrap();
+        assert!(!repo.mark_run_active(&row.task_id, "old").unwrap());
+        assert!(repo.mark_run_active(&row.task_id, "new").unwrap());
+        repo.update_state(&row.task_id, TicketState::Completed)
+            .unwrap();
+        assert!(!repo.mark_run_active(&row.task_id, "new").unwrap());
+        assert_eq!(
+            repo.fetch(&row.task_id).unwrap().unwrap().state,
+            TicketState::Completed
+        );
+        assert!(repo.pending_run_tickets().unwrap().is_empty());
     }
 
     fn sample_row(task_id: &str, state: TicketState) -> IntakeRow {

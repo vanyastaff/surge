@@ -39,6 +39,10 @@ async fn real_429_with_retry_after_survives_the_acp_wire_as_rate_limited() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -55,7 +59,7 @@ async fn real_429_with_retry_after_survives_the_acp_wire_as_rate_limited() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.unwrap();
+    let sid = bridge.open_session(cfg).await.unwrap().session;
 
     let err = bridge
         .send_message(

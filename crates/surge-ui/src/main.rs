@@ -30,6 +30,7 @@ mod sidebar;
 mod theme;
 mod top_bar;
 mod ui;
+mod work_items;
 
 use gpui_kit::*;
 

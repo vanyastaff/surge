@@ -10,10 +10,11 @@
 //! rows; the call site checks the boolean return to decide whether the
 //! side-effect must run.
 //!
-//! This layer is additive on top of per-source idempotency the comment
-//! poster already performs (GitHub exact-body match, Linear idempotency
-//! keys). It catches retries that survive daemon restarts and that span
-//! multiple side-effect channels.
+//! This records successful emissions across restarts and channels. A has/post/record
+//! sequence alone does not serialize concurrent sends or resolve uncertain external
+//! success. Terminal comments use intake_outbox leases and atomic acknowledgment.
+//! GitHub searches one comment page for an exact body; Linear currently sends no
+//! idempotency key, so provider-level duplicate suppression is not guaranteed.
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};

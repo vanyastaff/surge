@@ -62,6 +62,9 @@ pub enum BootstrapError {
         /// When the run is expected to resume on its own.
         wake_at: chrono::DateTime<chrono::Utc>,
     },
+    /// Bootstrap execution is suspended and has not completed.
+    #[error("bootstrap run is suspended")]
+    RunSuspended,
     /// No post-bootstrap `PipelineMaterialized` event was found.
     #[error("bootstrap did not materialize a follow-up graph")]
     MaterializedGraphMissing,
@@ -126,6 +129,10 @@ pub async fn run_bootstrap_in_worktree(
         RunOutcome::Completed { .. } => {},
         RunOutcome::Failed { error } => return Err(BootstrapError::RunFailed(error)),
         RunOutcome::Aborted { reason } => return Err(BootstrapError::RunAborted(reason)),
+        RunOutcome::RecoveryRequired { diagnostic, .. } => {
+            return Err(BootstrapError::RunFailed(diagnostic));
+        },
+        RunOutcome::Suspended { .. } => return Err(BootstrapError::RunSuspended),
         RunOutcome::Parked { wake_at } => return Err(BootstrapError::RunParked { wake_at }),
     }
 

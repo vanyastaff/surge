@@ -38,6 +38,7 @@ pub mod event_tap;
 pub mod facade;
 pub mod fork;
 pub mod frames;
+mod gate_answers;
 pub mod handle;
 pub mod hooks;
 pub mod ipc;
@@ -53,10 +54,12 @@ pub mod steer;
 pub mod tools;
 pub mod validate;
 pub mod version_probe;
+pub(crate) mod writer_coverage;
 
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use daemon_facade::{DaemonClient, DaemonEngineFacade};
 pub use engine::Engine;
+pub use engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME;
 pub use error::EngineError;
 pub use event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 pub use facade::{EngineFacade, LocalEngineFacade};
@@ -69,3 +72,5 @@ pub use ipc::{
 pub use replay_view::{
     CostView, EdgeView, NodeStatus, NodeView, ReplayView, TerminalKind, build_replay_view,
 };
+
+mod work_items;

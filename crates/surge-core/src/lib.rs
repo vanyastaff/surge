@@ -61,6 +61,8 @@ pub mod node_overrides;
 pub mod notify_config;
 pub mod predicate;
 pub mod profile;
+pub mod route_selection;
+pub mod run_display;
 pub mod run_event;
 pub mod run_report;
 pub mod run_state;
@@ -159,3 +161,10 @@ pub use validation::{
     NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind,
     ValidationReport, validate, validate_with_resolver,
 };
+
+pub mod verification_evidence;
+
+/// Provider session identity and recoverable execution boundaries.
+pub mod execution_recovery;
+/// Persistent task identity and accepted history.
+pub mod work_item;

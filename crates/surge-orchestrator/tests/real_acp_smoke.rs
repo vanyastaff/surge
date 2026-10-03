@@ -109,7 +109,10 @@ impl RealAcpBridge {
 
 #[async_trait]
 impl BridgeFacade for RealAcpBridge {
-    async fn open_session(&self, mut config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        mut config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         tracing::info!(
             target: "real_acp_smoke",
             binary = %self.launch.binary.display(),

@@ -137,6 +137,8 @@ pub async fn scripted_body(
                     outcome: surge_core::keys::OutcomeKey::try_from(outcome.as_str()).unwrap(),
                     summary: "scripted iteration result".into(),
                     artifacts_produced: vec![],
+
+                    verification_report: None,
                 })
                 .await;
             pump_bridge.pump_scripted_events().await;

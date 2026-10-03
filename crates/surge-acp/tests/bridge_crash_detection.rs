@@ -21,6 +21,10 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -39,7 +43,7 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.unwrap();
+    let sid = bridge.open_session(cfg).await.unwrap().session;
 
     // Drain SessionEstablished
     let _ = timeout(Duration::from_secs(2), events.recv()).await;

@@ -102,7 +102,10 @@ impl BridgeFacade for DeterministicMockBridge {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         let session = SessionId::new();
         let outcome = config
             .declared_outcomes
@@ -113,8 +116,22 @@ impl BridgeFacade for DeterministicMockBridge {
         self.working_dirs
             .lock()
             .await
-            .insert(session, config.working_dir);
-        Ok(session)
+            .insert(session, config.working_dir.clone());
+        Ok(surge_core::execution_recovery::OpenedSession::new(
+            session,
+            surge_core::execution_recovery::ProviderSessionDescriptor::new(
+                surge_core::execution_recovery::ProviderSessionId::new("deterministic".into())
+                    .unwrap(),
+                config.invocation,
+                config.runtime,
+                surge_core::ContentHash::compute(b"deterministic"),
+                config.working_dir,
+                Default::default(),
+            )
+            .unwrap(),
+            surge_core::execution_recovery::SessionOpenMode::New,
+        )
+        .unwrap())
     }
 
     async fn send_message(
@@ -149,11 +166,6 @@ impl BridgeFacade for DeterministicMockBridge {
             let _ = std::fs::write(working_dir.join("spec.md"), SPEC_MD);
             artifacts_produced.push("spec.toml".to_string());
             artifacts_produced.push("spec.md".to_string());
-            let _ = std::fs::write(
-                working_dir.join("verification-report.toml"),
-                VERIFICATION_REPORT_TOML,
-            );
-            artifacts_produced.push("verification-report.toml".to_string());
             for (name, content) in UNCONTRACTED_ARTIFACTS {
                 let _ = std::fs::write(working_dir.join(name), content);
                 artifacts_produced.push((*name).to_string());
@@ -165,6 +177,8 @@ impl BridgeFacade for DeterministicMockBridge {
             outcome,
             summary: "deterministic mock outcome".into(),
             artifacts_produced,
+
+            verification_report: Some(Box::new(toml::from_str(VERIFICATION_REPORT_TOML).unwrap())),
         });
         Ok(())
     }
@@ -314,6 +328,27 @@ async fn all_archetypes_complete_against_deterministic_mock_bridge() {
                 .iter()
                 .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. })),
             "{name}: missing RunCompleted event"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload.payload, EventPayload::TaskVerified { .. })),
+            "generic archetype audit cannot claim task proof"
+        );
+        let history: Vec<_> = events
+            .iter()
+            .map(|event| surge_core::RunEvent {
+                run_id: RunId::new(),
+                seq: event.seq.as_u64(),
+                timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
+                payload: event.payload.payload().clone(),
+            })
+            .collect();
+        let report = surge_core::run_report::RunReport::compile(RunId::new(), &history);
+        assert_ne!(report.evidence_backed, Some(true));
+        assert_ne!(
+            report.freshness,
+            surge_core::verification_evidence::ProofFreshness::Current
         );
     }
 }

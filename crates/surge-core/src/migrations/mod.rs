@@ -90,7 +90,11 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v9:** adds the nonterminal [`EventPayload::StageToolReceipt`] variant.
 /// Accepted candidates still require prompt success and final validation.
 /// Older readers reject v9 with [`SurgeError::SchemaTooNew`].
-pub const MAX_SUPPORTED_VERSION: u32 = 9;
+/// **v10:** revision/criteria observations and host-bound verification reports.
+/// Old unbound TaskVerified events decode but cannot establish fresh proof.
+/// **v11:** immutable persistent-task attempt association.
+/// **v12:** recoverable suspension and provider establishment fences.
+pub const MAX_SUPPORTED_VERSION: u32 = 13;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -282,6 +286,62 @@ impl Migration for IdentityV9 {
     }
 }
 
+/// Identity decoder for bound verification, retaining legacy optional defaults.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV10;
+impl Migration for IdentityV10 {
+    fn version(&self) -> u32 {
+        10
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v10 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for persistent-task attempt bindings.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV11;
+impl Migration for IdentityV11 {
+    fn version(&self) -> u32 {
+        11
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v11 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for recoverable execution fences.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV12;
+impl Migration for IdentityV12 {
+    fn version(&self) -> u32 {
+        12
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v12 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for host-owned human decision effect and route commitments.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV13;
+impl Migration for IdentityV13 {
+    fn version(&self) -> u32 {
+        13
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v13 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -290,7 +350,7 @@ pub struct MigrationChain {
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
-    /// [`IdentityV7`], [`IdentityV8`], and [`IdentityV9`].
+    /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], and [`IdentityV11`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -304,6 +364,10 @@ impl MigrationChain {
                 Box::new(IdentityV7),
                 Box::new(IdentityV8),
                 Box::new(IdentityV9),
+                Box::new(IdentityV10),
+                Box::new(IdentityV11),
+                Box::new(IdentityV12),
+                Box::new(IdentityV13),
             ],
         }
     }
@@ -412,7 +476,6 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 9);
     }
 
     #[test]
@@ -420,7 +483,10 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 9 }
+            SurgeError::SchemaTooNew {
+                found: 99,
+                max: MAX_SUPPORTED_VERSION
+            }
         ));
     }
 
@@ -487,6 +553,8 @@ mod tests {
             task_id: "m1-t1".into(),
             node: NodeKey::try_from("verify_1").unwrap(),
             evidence: ContentHash::compute(b"verification-report"),
+
+            report: None,
         };
         let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
@@ -574,5 +642,52 @@ mod tests {
         let bytes = make_v2_bytes(payload.clone());
         let migrated = migrate_payload(2, &bytes).expect("v2 migrates");
         assert_eq!(migrated, payload);
+    }
+}
+
+#[cfg(test)]
+mod work_item_golden {
+    use super::*;
+    #[test]
+    fn prior_event_and_bound_attempt_have_explicit_version_gate() {
+        let old = br#"{"schema_version":10,"payload":{"type":"run_failed","error":"historical"}}"#;
+        assert_eq!(
+            migrate_payload(10, old).unwrap(),
+            EventPayload::RunFailed {
+                error: "historical".into()
+            }
+        );
+        let requirements =
+            crate::work_item::WorkItemRequirements::new("Accepted".into(), vec!["Works".into()])
+                .unwrap();
+        let binding = crate::work_item::WorkItemBinding {
+            item: "00000000000000000000000001".parse().unwrap(),
+            revision: 1,
+            requirements_hash: requirements.hash().unwrap(),
+            generation: 1,
+        };
+        let context = crate::work_item::WorkItemContext::new(binding, requirements).unwrap();
+        let payload = EventPayload::WorkItemAttemptBound { context };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["payload"]["type"], "work_item_attempt_bound");
+        assert_eq!(
+            value["payload"]["context"]["binding"]["item"],
+            "00000000000000000000000001"
+        );
+        assert_eq!(
+            migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap(),
+            payload
+        );
+        let future_version = MAX_SUPPORTED_VERSION + 1;
+        assert!(matches!(
+            migrate_payload(future_version, b"invalid"),
+            Err(SurgeError::SchemaTooNew {
+                found,
+                max: MAX_SUPPORTED_VERSION
+            }) if found == future_version
+        ));
     }
 }

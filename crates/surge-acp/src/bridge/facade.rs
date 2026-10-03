@@ -35,7 +35,10 @@ pub trait BridgeFacade: Send + Sync {
     }
 
     /// Open a new ACP session with the given configuration.
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError>;
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>;
 
     /// Send a user-role message to an open session.
     async fn send_message(
@@ -76,7 +79,10 @@ pub trait BridgeFacade: Send + Sync {
 
 #[async_trait]
 impl BridgeFacade for AcpBridge {
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         AcpBridge::open_session(self, config).await
     }
 

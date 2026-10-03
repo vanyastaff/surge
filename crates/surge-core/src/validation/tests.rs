@@ -838,6 +838,7 @@ fn validate_with_run_config_surfaces_mcp_undeclared() {
         subgraphs: BTreeMap::new(),
     };
     let run_cfg = RunConfig {
+        bootstrap_edit_loop_cap: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::ReadOnly,
         approval_default: ApprovalPolicy::OnRequest,
@@ -926,6 +927,7 @@ fn validate_with_run_config_happy_path_returns_no_mcp_errors() {
     };
 
     let run_cfg = RunConfig {
+        bootstrap_edit_loop_cap: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,

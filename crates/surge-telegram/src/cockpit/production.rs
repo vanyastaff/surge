@@ -302,13 +302,30 @@ impl RunSnapshotProvider for PersistenceSnapshots {
             inspection.database
         else {
             if inspection.registry.is_some() || inspection.run_directory_present {
-                return Err(TelegramCockpitError::Persistence(
-                    "run event database is missing".into(),
+                return Ok(Some(
+                    surge_persistence::runs::query::aggregate_status_with_registry(
+                        run_id,
+                        &[],
+                        inspection.registry.map(|row| row.status),
+                    ),
                 ));
             }
             return Ok(None);
         };
-        let snapshot = surge_persistence::runs::query::aggregate_status(run_id, &events);
+        let mut snapshot = surge_persistence::runs::query::aggregate_status_with_registry(
+            run_id,
+            &events,
+            inspection.registry.map(|row| row.status),
+        );
+        // Only durable terminal evidence retires request cards; a crash does not.
+        snapshot.terminal = matches!(
+            snapshot.display,
+            surge_core::run_display::RunDisplayState::Done(_)
+        );
+        snapshot.failed = matches!(
+            snapshot.display,
+            surge_core::run_display::RunDisplayState::Done(surge_core::TerminalReason::Failed)
+        );
         Ok(Some(snapshot))
     }
 }

@@ -164,6 +164,26 @@ impl ClientConnection {
             .block_task()
             .await
     }
+    pub(crate) async fn load_session(
+        &self,
+        request: agent_client_protocol::schema::v1::LoadSessionRequest,
+    ) -> Result<agent_client_protocol::schema::v1::LoadSessionResponse> {
+        self.connection()
+            .await?
+            .send_request(request)
+            .block_task()
+            .await
+    }
+    pub(crate) async fn resume_session(
+        &self,
+        request: agent_client_protocol::schema::v1::ResumeSessionRequest,
+    ) -> Result<agent_client_protocol::schema::v1::ResumeSessionResponse> {
+        self.connection()
+            .await?
+            .send_request(request)
+            .block_task()
+            .await
+    }
     pub(crate) async fn set_session_mode(
         &self,
         request: SetSessionModeRequest,

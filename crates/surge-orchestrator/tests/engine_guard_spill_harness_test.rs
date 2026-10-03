@@ -154,6 +154,8 @@ async fn configured_repeat_threshold_is_honored_not_the_default() {
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     let mock_for_pump = mock.clone();
@@ -384,6 +386,8 @@ async fn configured_spill_cap_is_honored_and_lands_in_the_runs_own_artifact_stor
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     let mock_for_pump = mock.clone();

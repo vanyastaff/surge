@@ -135,6 +135,8 @@ mod tests {
             (
                 10,
                 EventPayload::SessionOpened {
+                    opened: None,
+                    handoff: None,
                     node: "impl".try_into().unwrap(),
                     session: a,
                     agent: "implementer@2.0".into(),
@@ -155,6 +157,8 @@ mod tests {
             (
                 20,
                 EventPayload::SessionOpened {
+                    opened: None,
+                    handoff: None,
                     node: "verify".try_into().unwrap(),
                     session: b,
                     agent: "verifier@2.0".into(),

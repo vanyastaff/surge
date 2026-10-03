@@ -157,6 +157,10 @@ async fn subgraph_emits_entered_and_exited_then_completes() {
         RunOutcome::Completed { .. } => {},
         other => panic!("expected Completed, got {other:?}"),
     }
+    storage
+        .inspect_folded_run(run_id)
+        .await
+        .expect("actual subgraph journal must retain trusted routing scope");
 
     let reader = storage.open_run_reader(run_id).await.unwrap();
     let events = reader

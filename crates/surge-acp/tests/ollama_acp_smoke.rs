@@ -98,6 +98,10 @@ async fn ollama_runtime_handshakes_and_answers() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Custom {
@@ -115,7 +119,11 @@ async fn ollama_runtime_handshakes_and_answers() {
         env,
     };
 
-    let session = bridge.open_session(cfg).await.expect("open session");
+    let session = bridge
+        .open_session(cfg)
+        .await
+        .expect("open session")
+        .session;
     let established = timeout(Duration::from_secs(60), events.recv())
         .await
         .expect("SessionEstablished within 60s")

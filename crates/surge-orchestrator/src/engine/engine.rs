@@ -270,8 +270,12 @@ impl Engine {
         let ledger: Arc<dyn crate::engine::capacity::CapacityLedger> = Arc::new(
             crate::engine::capacity::PersistentCapacityLedger::new(self.storage.clone()),
         );
+        let history: Arc<dyn crate::engine::capacity::ArchetypeHistory> = Arc::new(
+            crate::engine::capacity::PersistentArchetypeHistory::new(self.storage.clone()),
+        );
         let estimator: Arc<dyn crate::engine::capacity::WorkEstimator> = Arc::new(
-            crate::engine::capacity::RunHistoryWorkEstimator::new(writer.reader()),
+            crate::engine::capacity::RunHistoryWorkEstimator::new(writer.reader())
+                .with_history(history),
         );
         (ledger, estimator)
     }
@@ -313,69 +317,67 @@ impl Engine {
         run_id: RunId,
         graph: Graph,
         worktree_path: PathBuf,
-        mut run_config: EngineRunConfig,
+        run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
-        use crate::engine::handle::RunHandle;
-        use crate::engine::run_task::{RunTaskParams, execute};
-        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
-        use tokio::sync::broadcast;
+        self.start_run_owned(run_id, graph, worktree_path, run_config, None)
+            .await
+    }
 
-        tracing::info!(
-            target: "surge.path.exercised",
-            path = "engine",
-            kind = "start",
-            run_id = %run_id,
-            "entered engine path",
-        );
-
-        // A profile registry lets validation resolve profile references and
-        // agent-runtime identity (e.g. `ValidationErrorKind::SameRuntimeVerification`,
-        // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
-        // impl. No registry keeps today's resolver-free behavior unchanged.
+    /// Freeze validated host configuration before creating a durable task reservation.
+    pub async fn freeze_work_item_config(
+        &self,
+        graph: &Graph,
+        mut config: EngineRunConfig,
+    ) -> Result<EngineRunConfig, EngineError> {
         match self.config.profile_registry.as_ref() {
             Some(registry) => {
-                validate_for_m6_with_resolver(&graph, registry.as_ref())?;
-                crate::engine::validate::validate_profile_inputs(&graph, registry)?;
+                crate::engine::validate::validate_for_m6_with_resolver(graph, registry.as_ref())?;
+                crate::engine::validate::validate_profile_inputs(graph, registry)?;
             },
-            None => validate_for_m6(&graph)?,
+            None => crate::engine::validate::validate_for_m6(graph)?,
         }
+        crate::engine::validate::validate_quota_policy(
+            graph,
+            &config.quota_recovery,
+            self.config.profile_registry.as_deref(),
+        )?;
+        self.seed_profile_catalog(&mut config).await?;
+        crate::engine::validate::validate_loop_seeds(graph, &config.seed_artifacts)?;
+        Ok(config)
+    }
 
-        run_config.memory_store_path =
-            self.resolve_memory_store_path(run_config.memory_store_path.take());
+    /// Launch exactly the host's durable reservation, never a caller-owned binding.
+    pub async fn start_work_item(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<RunHandle, EngineError> {
+        let (attempt, workspace, _, config) = super::work_items::pinned(&self.storage, claim)?;
+        self.start_run_owned(
+            attempt.run,
+            *attempt.graph,
+            workspace.path,
+            config,
+            Some(claim),
+        )
+        .await
+    }
 
-        // No registry wired keeps today's behavior unchanged — see
-        // `seed_profile_catalog`'s doc for what this seeds and why.
-        self.seed_profile_catalog(&mut run_config).await?;
-
-        crate::engine::validate::validate_loop_seeds(&graph, &run_config.seed_artifacts)?;
-
-        if self.runs.read().await.contains_key(&run_id) {
-            return Err(EngineError::RunAlreadyActive(run_id));
-        }
-
-        if !worktree_path.exists() {
-            return Err(EngineError::WorktreeMissing(worktree_path));
-        }
-
-        let writer = self
-            .storage
-            .create_run(run_id, &worktree_path, None)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
-        self.spawn_event_forwarder(run_id, &writer);
-        let artifact_store =
-            surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
-
-        let events = self
-            .build_startup_events(&artifact_store, run_id, &graph, &worktree_path, &run_config)
+    async fn start_run_owned(
+        &self,
+        run_id: RunId,
+        graph: Graph,
+        worktree_path: PathBuf,
+        run_config: EngineRunConfig,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<RunHandle, EngineError> {
+        use crate::engine::run_task::{RunTaskParams, execute};
+        use tokio::sync::broadcast;
+        let (writer, artifact_store, run_config) = self
+            .prepare_run_start(run_id, &graph, &worktree_path, run_config, claim)
             .await?;
-        writer
-            .append_events(events)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
 
         let per_run_mcp_registry =
-            self.resolve_run_mcp_registry(&run_config.mcp_servers, &worktree_path);
+            self.resolve_run_mcp_registry(&run_config.mcp_servers, &worktree_path, &writer);
         let mcp_servers_clone = run_config.mcp_servers.clone();
 
         let (event_tx, event_rx) = broadcast::channel(256);
@@ -388,6 +390,8 @@ impl Engine {
         let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
         let run_agent_registry = self.agent_registry_for(&run_config);
         let params = RunTaskParams {
+            work_item_claim: claim.cloned(),
+            pending_suspension: None,
             run_id,
             writer,
             artifact_store,
@@ -401,6 +405,7 @@ impl Engine {
             cancel: registration.cancel,
             resume_cursor: None,
             resume_memory: None,
+            resume_memory_applied_seq: None,
             resume_frames: None,
             resume_root_traversal_counts: None,
             resume_applied_graph_revision_seq: None,
@@ -442,6 +447,137 @@ impl Engine {
         })
     }
 
+    async fn prepare_run_start(
+        &self,
+        run_id: RunId,
+        graph: &Graph,
+        worktree_path: &Path,
+        mut run_config: EngineRunConfig,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<
+        (
+            surge_persistence::runs::run_writer::RunWriter,
+            surge_persistence::artifacts::ArtifactStore,
+            EngineRunConfig,
+        ),
+        EngineError,
+    > {
+        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
+        let task_context = if let Some(claim) = claim {
+            let (_, _, context, _) = super::work_items::pinned(&self.storage, claim)?;
+            Some(context)
+        } else {
+            if self
+                .storage
+                .work_items()
+                .for_run(run_id)
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+                .is_some()
+            {
+                return Err(EngineError::Storage(
+                    "reserved task run requires host launch ownership".into(),
+                ));
+            }
+            None
+        };
+
+        tracing::info!(
+            target: "surge.path.exercised",
+            path = "engine",
+            kind = "start",
+            run_id = %run_id,
+            "entered engine path",
+        );
+
+        // A profile registry lets validation resolve profile references and
+        // agent-runtime identity (e.g. `ValidationErrorKind::SameRuntimeVerification`,
+        // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
+        // impl. No registry keeps today's resolver-free behavior unchanged.
+        match self.config.profile_registry.as_ref() {
+            Some(registry) => {
+                validate_for_m6_with_resolver(graph, registry.as_ref())?;
+                crate::engine::validate::validate_profile_inputs(graph, registry)?;
+            },
+            None => validate_for_m6(graph)?,
+        }
+        crate::engine::validate::validate_quota_policy(
+            graph,
+            &run_config.quota_recovery,
+            self.config.profile_registry.as_deref(),
+        )?;
+
+        run_config.memory_store_path =
+            self.resolve_memory_store_path(run_config.memory_store_path.take());
+
+        // No registry wired keeps today's behavior unchanged — see
+        // `seed_profile_catalog`'s doc for what this seeds and why.
+        if task_context.is_none() {
+            self.seed_profile_catalog(&mut run_config).await?;
+        }
+
+        crate::engine::validate::validate_loop_seeds(graph, &run_config.seed_artifacts)?;
+
+        if self.runs.read().await.contains_key(&run_id) {
+            return Err(EngineError::RunAlreadyActive(run_id));
+        }
+
+        if !worktree_path.exists() {
+            return Err(EngineError::WorktreeMissing(worktree_path.to_path_buf()));
+        }
+
+        let writer = if claim.is_some()
+            && self
+                .storage
+                .get_run(&run_id)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+                .is_some()
+        {
+            let inspected = self
+                .storage
+                .inspect_run(run_id)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+            if !matches!(inspected.database, surge_persistence::runs::inspection::RunDatabaseInspection::Present{ref events} if events.is_empty())
+            {
+                return Err(EngineError::Storage(
+                    "task start refuses nonempty existing journal".into(),
+                ));
+            }
+            self.storage
+                .open_run_writer(run_id)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+        } else {
+            self.storage
+                .create_run(run_id, worktree_path, None)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+        };
+        self.spawn_event_forwarder(run_id, &writer);
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
+
+        let mut events = self
+            .build_startup_events(&artifact_store, run_id, graph, worktree_path, &run_config)
+            .await?;
+        if let Some(context) = task_context {
+            if let Some(claim) = claim {
+                self.storage
+                    .work_items()
+                    .validate_claim(claim)
+                    .map_err(|error| EngineError::Storage(error.to_string()))?;
+            }
+            append_task_binding(&artifact_store, run_id, context, &mut events).await?;
+        }
+        writer
+            .append_events(events)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        Ok((writer, artifact_store, run_config))
+    }
+
     /// Resolve the per-run MCP registry: prefer the run-config-supplied list
     /// over the engine-level fallback. If `mcp_servers` is non-empty a fresh
     /// `McpRegistry` is built for this run; otherwise fall back to the
@@ -451,15 +587,25 @@ impl Engine {
         &self,
         mcp_servers: &[McpServerRef],
         worktree_path: &Path,
+        writer: &surge_persistence::runs::RunWriter,
     ) -> Option<Arc<surge_mcp::McpRegistry>> {
-        if mcp_servers.is_empty() {
-            self.mcp_registry.clone()
+        let configs = if mcp_servers.is_empty() {
+            self.mcp_registry
+                .as_ref()
+                .map(|registry| registry.configured_servers())?
         } else {
-            Some(Arc::new(surge_mcp::McpRegistry::from_config(
-                mcp_servers,
-                Some(worktree_path),
-            )))
-        }
+            mcp_servers.to_vec()
+        };
+        let observer: Arc<dyn surge_mcp::writer_observer::HostWriterObserver> =
+            Arc::new(crate::engine::writer_coverage::McpWriterObserver {
+                recorder: writer.event_recorder(),
+                invocation: surge_core::id::StageInvocationId::new(),
+            });
+        Some(Arc::new(surge_mcp::McpRegistry::from_config_owned(
+            &configs,
+            Some(worktree_path),
+            &observer,
+        )))
     }
 
     /// Resolve the effective memory-store override for a run: the per-run
@@ -564,6 +710,7 @@ impl Engine {
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
         let graph_hash = ContentHash::compute(&graph_bytes);
         let core_run_config = CoreRunConfig {
+            bootstrap_edit_loop_cap: Some(run_config.bootstrap.edit_loop_cap),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -608,6 +755,11 @@ impl Engine {
         }
         if let Some(event) =
             project_memory_artifact_event(artifact_store, run_id, run_config).await?
+        {
+            events.push(event);
+        }
+        if let Some(event) =
+            memory_claim_candidates_artifact_event(artifact_store, run_id, run_config).await?
         {
             events.push(event);
         }
@@ -688,22 +840,35 @@ impl Engine {
         Ok(inherited_events)
     }
 
-    /// Resume an existing run from its latest snapshot + event tail.
-    ///
-    /// Opens the persisted event log, replays snapshots and events to
-    /// reconstruct the last known cursor and memory, then resumes execution
-    /// from that point. Returns immediately if the run is already active in
-    /// this process.
-    #[allow(clippy::too_many_lines)]
-    pub async fn resume_run(
+    async fn prepare_run_resume(
         &self,
         run_id: RunId,
-        worktree_path: PathBuf,
-    ) -> Result<RunHandle, EngineError> {
-        use crate::engine::handle::RunHandle;
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<
+        (
+            surge_persistence::runs::run_writer::RunWriter,
+            super::replay::ReplayedState,
+            bool,
+        ),
+        EngineError,
+    > {
         use crate::engine::replay::replay;
-        use crate::engine::run_task::{RunTaskParams, execute};
-        use tokio::sync::broadcast;
+        if let Some(claim) = claim {
+            self.storage
+                .work_items()
+                .validate_claim(claim)
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+        } else if self
+            .storage
+            .work_items()
+            .for_run(run_id)
+            .map_err(|error| EngineError::Storage(error.to_string()))?
+            .is_some()
+        {
+            return Err(EngineError::Storage(
+                "task resume requires host ownership".into(),
+            ));
+        }
 
         tracing::info!(
             target: "surge.path.exercised",
@@ -802,22 +967,109 @@ impl Engine {
 
         let replayed = replay(&reader).await?;
 
+        Ok((writer, replayed, was_parked))
+    }
+
+    fn capacity_continue_reserved(&self, run_id: RunId) -> Result<bool, EngineError> {
+        Ok(self
+            .storage
+            .work_items()
+            .execution_control(run_id)
+            .map_err(|error| EngineError::Storage(error.to_string()))?
+            .is_some_and(|control| {
+                control.state
+                    == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
+                    && control.fence.as_ref().is_some_and(|fence| {
+                        matches!(
+                            fence.reason,
+                            surge_core::execution_recovery::SuspensionReason::Capacity { .. }
+                        )
+                    })
+            }))
+    }
+
+    /// Resume an existing run from its latest snapshot + event tail.
+    ///
+    /// Opens the persisted event log, replays snapshots and events to
+    /// reconstruct the last known cursor and memory, then resumes execution
+    /// from that point. Returns immediately if the run is already active in
+    /// this process.
+    #[allow(clippy::too_many_lines)]
+    pub async fn resume_run(
+        &self,
+        run_id: RunId,
+        worktree_path: PathBuf,
+    ) -> Result<RunHandle, EngineError> {
+        self.resume_run_owned(run_id, worktree_path, None).await
+    }
+
+    /// Validate the exact durable startup association before any host reconciliation.
+    pub async fn validate_work_item_startup(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<(), EngineError> {
+        super::work_items::validate_resume(&self.storage, claim)
+            .await
+            .map(|_| ())
+    }
+
+    /// Recover an initialized task run under host ownership. This is not a task Stop control.
+    pub async fn resume_work_item(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    ) -> Result<RunHandle, EngineError> {
+        let attempt = self
+            .storage
+            .work_items()
+            .validate_claim(claim)
+            .map_err(|error| EngineError::Storage(error.to_string()))?;
+        if attempt.state == surge_core::work_item::WorkItemAttemptState::Suspended {
+            let control = self
+                .storage
+                .work_items()
+                .execution_control(claim.run())
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+            if !control.is_some_and(|control| {
+                control.state
+                    == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
+                    && control.attempt_generation == claim.binding().generation
+            }) {
+                return Err(EngineError::Storage(
+                    "suspended task requires its durable Continue reservation".into(),
+                ));
+            }
+        }
+        let path = super::work_items::validate_resume(&self.storage, claim).await?;
+        self.resume_run_owned(claim.run(), path, Some(claim)).await
+    }
+
+    async fn resume_run_owned(
+        &self,
+        run_id: RunId,
+        worktree_path: PathBuf,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<RunHandle, EngineError> {
+        use crate::engine::run_task::{RunTaskParams, execute};
+        use tokio::sync::broadcast;
+        let capacity_continue = claim.is_some() && self.capacity_continue_reserved(run_id)?;
+        let (writer, mut replayed, was_parked) = self.prepare_run_resume(run_id, claim).await?;
+
         // If the run already reached a terminal state, return a handle that
         // resolves immediately without re-executing any stages.
         if let Some(terminal_outcome) = replayed.already_terminal {
-            // Drop the writer; we won't be writing anything.
             drop(writer);
-            let (event_tx, event_rx) = broadcast::channel(1);
-            // Immediately send the terminal event (best-effort; receiver may
-            // not be listening yet, which is fine — the future resolves).
-            let _ = event_tx.send(crate::engine::handle::EngineRunEvent::Terminal {
-                outcome: terminal_outcome.clone(),
-            });
-            let join = tokio::spawn(async move { terminal_outcome });
-            return Ok(RunHandle {
-                run_id,
-                events: event_rx,
-                completion: join,
+            return Ok(terminal_resume_handle(run_id, terminal_outcome));
+        }
+
+        // A committed unanswered gate survives an explicit Suspend/Continue
+        // with its original identity. After an unplanned owner loss, retire
+        // only unanswered HumanGate occurrences so a stale card cannot
+        // authorize the resumed run; normal stage execution emits a fresh ID.
+        if claim.is_none() {
+            replayed.memory.gate_decisions.retain(|_, decision| {
+                decision.response.is_some()
+                    || decision.suspended
+                    || decision.purpose != surge_core::run_state::GateDecisionPurpose::HumanGate
             });
         }
 
@@ -828,30 +1080,37 @@ impl Engine {
         // mcp_servers and the frozen budget survive a daemon restart + resume.
         // Falls back to defaults (empty mcp list, unlimited budget) for runs that
         // predate those fields.
-        let mut resume_run_config = EngineRunConfig::default();
+        let mut resume_run_config = if let Some(claim) = claim {
+            super::work_items::pinned(&self.storage, claim)?.3
+        } else {
+            EngineRunConfig::default()
+        };
         if let Some(persisted) = &replayed.run_config {
             resume_run_config
                 .mcp_servers
                 .clone_from(&persisted.mcp_servers);
             // Re-arm spend enforcement with the run's frozen budget.
             resume_run_config.budget = persisted.budget;
+            if let Some(cap) = persisted.bootstrap_edit_loop_cap {
+                resume_run_config.bootstrap.edit_loop_cap = cap;
+            }
         }
+        crate::engine::validate::validate_quota_policy(
+            &replayed.graph,
+            &resume_run_config.quota_recovery,
+            self.config.profile_registry.as_deref(),
+        )?;
         // Task 12 M4 review: `memory_store_path` is deliberately never
         // persisted (see `EngineRunConfig::memory_store_path`'s own doc),
         // so there is nothing to recover from `replayed.run_config` above —
         // this resumed run's only source for it is the engine-level
         // fallback, the same one `start_run` consults.
-        resume_run_config.memory_store_path = self.resolve_memory_store_path(None);
+        resume_run_config.memory_store_path =
+            self.resolve_memory_store_path(resume_run_config.memory_store_path.take());
 
         // Build a per-run McpRegistry exactly like start_run does.
-        let per_run_mcp_registry = if resume_run_config.mcp_servers.is_empty() {
-            self.mcp_registry.clone()
-        } else {
-            Some(Arc::new(surge_mcp::McpRegistry::from_config(
-                &resume_run_config.mcp_servers,
-                Some(worktree_path.as_path()),
-            )))
-        };
+        let per_run_mcp_registry =
+            self.resolve_run_mcp_registry(&resume_run_config.mcp_servers, &worktree_path, &writer);
         let mcp_servers_for_resume = resume_run_config.mcp_servers.clone();
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
@@ -862,6 +1121,8 @@ impl Engine {
         let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
         let run_agent_registry = self.agent_registry_for(&resume_run_config);
         let params = RunTaskParams {
+            work_item_claim: claim.cloned(),
+            pending_suspension: None,
             run_id,
             writer,
             artifact_store,
@@ -875,6 +1136,7 @@ impl Engine {
             cancel: registration.cancel,
             resume_cursor: Some(replayed.cursor),
             resume_memory: Some(replayed.memory),
+            resume_memory_applied_seq: Some(replayed.memory_applied_seq),
             resume_frames: Some(replayed.frames),
             resume_root_traversal_counts: Some(replayed.root_traversal_counts),
             resume_applied_graph_revision_seq: Some(replayed.applied_graph_revision_seq),
@@ -891,7 +1153,9 @@ impl Engine {
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
             storage: self.storage.clone(),
-            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(was_parked),
+            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(
+                was_parked || capacity_continue,
+            ),
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -1034,8 +1298,30 @@ impl Engine {
         request_id: surge_core::id::GateRequestId,
         response: serde_json::Value,
     ) -> Result<(), EngineError> {
+        if let Some(accepted) = self
+            .storage
+            .inspect_gate_answer(run_id, node.clone(), request_id)
+            .await
+            .map_err(|error| EngineError::Storage(error.to_string()))?
+        {
+            return if accepted == response {
+                Ok(())
+            } else {
+                Err(EngineError::StaleGateRequest)
+            };
+        }
         let runs = self.runs.read().await;
-        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let Some(active) = runs.get(&run_id) else {
+            drop(runs);
+            return super::gate_answers::resolve_suspended(
+                &self.storage,
+                run_id,
+                node,
+                request_id,
+                response,
+            )
+            .await;
+        };
         let outcome = response
             .get("outcome")
             .and_then(serde_json::Value::as_str)
@@ -1051,10 +1337,40 @@ impl Engine {
         {
             return Err(EngineError::StaleGateRequest);
         }
+        let pending = gates.get(&node).ok_or(EngineError::StaleGateRequest)?;
+        surge_core::human_gate_config::validate_gate_response(
+            &response,
+            &pending.allowed_outcomes,
+            pending.allow_freetext,
+        )
+        .map_err(|error| EngineError::Internal(error.to_string()))?;
+        if active.cancel.is_cancelled()
+            || (!pending.allow_freetext && !pending.allowed_outcomes.contains(&outcome))
+        {
+            return Err(EngineError::StaleGateRequest);
+        }
+        // Retain the waiter if durable acceptance is rejected. This capability
+        // uses the same writer as the stage and cannot open a second writer.
+        let committed_seq = pending
+            .recorder
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputResolved {
+                    node: node.clone(),
+                    call_id: Some(request_id.to_string()),
+                    response: response.clone(),
+                },
+            ))
+            .await
+            .map_err(|error| EngineError::Storage(error.to_string()))?
+            .as_u64();
         let pending = gates.remove(&node).ok_or(EngineError::StaleGateRequest)?;
         pending
             .sender
-            .send(crate::engine::stage::human_gate::HumanGateResolution { outcome, response })
+            .send(crate::engine::stage::human_gate::HumanGateResolution {
+                committed_seq: Some(committed_seq),
+                outcome,
+                response,
+            })
             .map_err(|_| EngineError::StaleGateRequest)
     }
 
@@ -1146,6 +1462,33 @@ impl Engine {
             .collect()
     }
 
+    /// Interrupt an owned attempt for its already durable suspension request.
+    /// Completion confirms the fence; returning here is not an acknowledgement.
+    pub async fn suspend_work_item(
+        &self,
+        run_id: RunId,
+        generation: u64,
+    ) -> Result<(), EngineError> {
+        let control = self
+            .storage
+            .work_items()
+            .execution_control(run_id)
+            .map_err(|error| EngineError::Internal(error.to_string()))?
+            .ok_or_else(|| EngineError::Internal("durable suspension request missing".into()))?;
+        if control.generation != generation
+            || control.state
+                != surge_core::execution_recovery::ExecutionControlState::SuspendRequested
+        {
+            return Err(EngineError::Internal(
+                "suspension control is obsolete".into(),
+            ));
+        }
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        active.cancel.cancel();
+        Ok(())
+    }
+
     /// Cancel an in-flight run. Signals the cancellation token so the run task
     /// will emit `RunAborted` and exit. Returns [`EngineError::RunNotFound`] if
     /// no run with `run_id` is currently active.
@@ -1166,6 +1509,18 @@ impl Engine {
             },
             None => Err(EngineError::RunNotFound(run_id)),
         }
+    }
+}
+
+fn terminal_resume_handle(run_id: RunId, outcome: crate::engine::RunOutcome) -> RunHandle {
+    let (event_tx, events) = tokio::sync::broadcast::channel(1);
+    let _ = event_tx.send(crate::engine::handle::EngineRunEvent::Terminal {
+        outcome: outcome.clone(),
+    });
+    RunHandle {
+        run_id,
+        events,
+        completion: tokio::spawn(async move { outcome }),
     }
 }
 
@@ -1249,6 +1604,35 @@ async fn project_memory_artifact_event(
     )))
 }
 
+async fn memory_claim_candidates_artifact_event(
+    artifact_store: &surge_persistence::artifacts::ArtifactStore,
+    run_id: RunId,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    let Some(candidates) = &run_config.memory_claim_candidates else {
+        return Ok(None);
+    };
+    let snapshot = crate::project_context::MemoryClaimSnapshot {
+        budget: run_config.context_pack.unwrap_or_default(),
+        claims: candidates.clone(),
+    };
+    let body = serde_json::to_vec(&snapshot).map_err(|error| {
+        EngineError::Internal(format!("memory claim snapshot serialize: {error}"))
+    })?;
+    let artifact = artifact_store
+        .put(run_id, MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME, &body)
+        .await
+        .map_err(|error| EngineError::Storage(error.to_string()))?;
+    let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
+        .map_err(|error| EngineError::Internal(format!("project memory producer key: {error}")))?;
+    Ok(Some(artifact_produced_event(
+        producer,
+        artifact.hash,
+        artifact.path,
+        MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME,
+    )))
+}
+
 async fn run_seed_artifact_events(
     run_id: RunId,
     worktree_path: &Path,
@@ -1278,6 +1662,34 @@ async fn run_seed_artifact_events(
         ));
     }
     Ok(events)
+}
+
+async fn append_task_binding(
+    store: &surge_persistence::artifacts::ArtifactStore,
+    run: RunId,
+    context: surge_core::work_item::WorkItemContext,
+    events: &mut Vec<VersionedEventPayload>,
+) -> Result<(), EngineError> {
+    let bytes = serde_json::to_vec(context.requirements())
+        .map_err(|error| EngineError::Internal(error.to_string()))?;
+    let artifact = store
+        .put(run, "accepted_requirements", &bytes)
+        .await
+        .map_err(|error| EngineError::Storage(error.to_string()))?;
+    events.push(artifact_produced_event(
+        "task_requirements"
+            .parse()
+            .map_err(|error: surge_core::keys::KeyParseError| {
+                EngineError::Internal(error.to_string())
+            })?,
+        artifact.hash,
+        artifact.path,
+        "accepted_requirements",
+    ));
+    events.push(VersionedEventPayload::new(
+        EventPayload::WorkItemAttemptBound { context },
+    ));
+    Ok(())
 }
 
 async fn initial_prompt_artifact_event(
@@ -1405,6 +1817,9 @@ pub(crate) const PROJECT_CONTEXT_ARTIFACT_NAME: &str = "project_context";
 /// Canonical artifact name for the accumulating project memory captured at
 /// run start (`.surge/memory/`).
 pub(crate) const PROJECT_MEMORY_ARTIFACT_NAME: &str = "project_memory";
+
+/// Artifact containing immutable source claims for per-node context packs.
+pub const MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME: &str = "memory_claim_candidates";
 
 /// Canonical artifact name for the resolved profile-registry catalogue
 /// (`profile_loader::render_profile_catalog`) seeded at run start.
@@ -1585,6 +2000,41 @@ mod exhausted_reason_tests {
         assert!(
             exhausted_reason(&unknown, now).is_some(),
             "no reset hint: still exhausted"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_claim_snapshot_artifact_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn frozen_candidates_are_stored_as_a_reportable_run_artifact() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = surge_persistence::artifacts::ArtifactStore::new(temp.path());
+        let run_id = RunId::new();
+        let config = EngineRunConfig {
+            memory_claim_candidates: Some(Vec::new()),
+            ..EngineRunConfig::default()
+        };
+
+        let event = memory_claim_candidates_artifact_event(&store, run_id, &config)
+            .await
+            .unwrap()
+            .unwrap();
+        let surge_core::run_event::EventPayload::ArtifactProduced { artifact, name, .. } =
+            event.payload
+        else {
+            panic!("candidate snapshot must be linked into replay as an artifact event");
+        };
+        assert_eq!(name, MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME);
+        let bytes = store.open(run_id, artifact).await.unwrap();
+        let snapshot: crate::project_context::MemoryClaimSnapshot =
+            serde_json::from_slice(&bytes).unwrap();
+        assert!(snapshot.claims.is_empty());
+        assert_eq!(
+            snapshot.budget,
+            surge_core::context_pack::ContextPackConfig::default()
         );
     }
 }

@@ -272,6 +272,23 @@ async fn scenario_a_start_happy_path() {
     assert_eq!(engine_state.start_calls.lock().unwrap().len(), 1);
     // 2. ticket_index reached Completed (via TicketStateSync after engine emits terminal).
     assert_eq!(fetch_state(&storage, "mock:t#1"), TicketState::Completed);
+    // The standalone inbox scaffold does not run main's shared outbox worker.
+    // Start that actual consumer against the same registry to deliver its queued
+    // terminal comment, also exercising inbox-only startup delivery.
+    let mut sources: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
+    sources.insert("mock:t".into(), mock.clone());
+    let conn = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
+    let (tx, rx) = broadcast::channel(8);
+    drop(tx);
+    surge_daemon::intake_completion::spawn(
+        rx,
+        Arc::new(sources),
+        Arc::new(tokio::sync::Mutex::new(conn)),
+        storage.clone(),
+    )
+    .await
+    .unwrap();
+
     // 3. Tracker comments contain start + completion.
     let comments = mock.posted_comments().await;
     assert!(

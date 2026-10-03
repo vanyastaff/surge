@@ -254,6 +254,11 @@ impl BootstrapSupervisor {
         admission_order: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<(), Attention> {
         let record = self.record(id).map_err(|_| Attention::StorageUnconfirmed)?;
+        if let BootstrapStoredPayload::V1 { capture, .. } = &record.payload
+            && capture.fields().bootstrap_edit_loop_cap.is_none()
+        {
+            return Err(Attention::MissingBootstrapPolicy);
+        }
         let launch = expected(&record).map_err(|_| Attention::PartialStartup)?;
         if self
             .services
@@ -459,6 +464,10 @@ impl BootstrapSupervisor {
             agent_registry: Some(runtime.agents()),
             ..Default::default()
         };
+        config.bootstrap.edit_loop_cap = capture
+            .fields()
+            .bootstrap_edit_loop_cap
+            .ok_or(Attention::MissingBootstrapPolicy)?;
         let graph = if let Some(child) = &record.child {
             let checked = crate::bootstrap_continuation::load_child(
                 &self.services.storage,
@@ -674,6 +683,7 @@ fn expected(record: &Record) -> Result<ExpectedBootstrapRun, BootstrapStoreError
         },
         initial_prompt: intent.prompt().into(),
         config: surge_core::run_event::RunConfig {
+            bootstrap_edit_loop_cap: pins.bootstrap_edit_loop_cap,
             sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
             approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
             auto_pr: false,

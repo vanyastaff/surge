@@ -75,6 +75,8 @@ async fn report_agent_outcome(
         outcome: OutcomeKey::try_from(outcome).unwrap(),
         summary: "scripted".into(),
         artifacts_produced: artifacts.iter().map(|a| (*a).into()).collect(),
+
+        verification_report: None,
     })
     .await;
     mock.pump_scripted_events().await;

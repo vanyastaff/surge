@@ -133,6 +133,15 @@ pub fn capture(worktree: &Path, run: RunId, seq: u64) -> Result<Option<Oid>, Git
     Ok(Some(commit))
 }
 
+/// Read a retained checkpoint tree without mutating repository state.
+pub fn tree_identity(checkpoint: &WorkspaceCheckpoint) -> Result<String, GitError> {
+    let repo = Repository::open(&checkpoint.git_common_dir)?;
+    Ok(repo
+        .find_commit(Oid::from_str(&checkpoint.commit)?)?
+        .tree_id()
+        .to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

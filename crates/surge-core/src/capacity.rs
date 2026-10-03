@@ -197,7 +197,7 @@ impl TryFrom<f64> for RemainingShare {
 pub struct InvalidRemainingShare(f64);
 
 /// Word/phrase patterns that mark a free-text error/response as a
-/// rate-limit (or capacity-exhaustion) signal, case-insensitive. Plain
+/// rate-limit signal, case-insensitive. Plain
 /// substring patterns only — the standalone HTTP `429` status code is
 /// handled separately by [`has_standalone_429`], because a bare `"429"`
 /// substring also matches a byte count, a millisecond duration, a port
@@ -232,11 +232,11 @@ pub struct InvalidRemainingShare(f64);
 ///   deliberately omitted: `"rate_limit"` already matches it as a
 ///   substring, and a redundant pattern that can never independently fire
 ///   is dead weight a test would not catch drifting);
-/// - four real provider error shapes neither classifier recognized before
+/// - five real provider error shapes neither classifier recognized before
 ///   this module existed (`rate_limit_error` and `rate_limit_exceeded`,
 ///   named in the brief that first motivated this list, were already
 ///   covered by pool's pre-existing `"rate_limit"` substring — the actual
-///   net-new set is exactly these four), added so an unrecognized shape
+///   net-new set is exactly these five), added so an unrecognized shape
 ///   does not read as "nothing happened" (see
 ///   [`CapacityWindow::from_observed_error`]'s doc and
 ///   `CapacityStatus::Unclassified`).
@@ -250,7 +250,6 @@ const RATE_LIMIT_PATTERNS: &[&str] = &[
     // Real provider shapes neither classifier recognized before.
     "insufficient_quota",          // OpenAI
     "resource_exhausted",          // Google (`RESOURCE_EXHAUSTED`; matched lowercased)
-    "overloaded_error",            // Anthropic
     "usage limit reached",         // prose
     "you've hit your limit",       // Claude ACP subscription quota (observed live)
     "you've hit your usage limit", // Codex ACP subscription quota (observed live)
@@ -275,10 +274,11 @@ fn has_standalone_429(lower: &str) -> bool {
     false
 }
 
-/// Case-insensitive detection of an HTTP 429 / rate-limit / quota-exhaustion
-/// signal in a free-text error/response message. See [`RATE_LIMIT_PATTERNS`]
-/// and [`has_standalone_429`] for the exact rules and why each earns its
-/// place.
+/// Case-insensitive detection of an HTTP 429 / rate-limit signal in a
+/// free-text error/response message. Textual quota labels without an
+/// explicit rate-limit signal are deliberately not enough to claim a zero
+/// remaining share or trigger automatic parking. See
+/// [`RATE_LIMIT_PATTERNS`] and [`has_standalone_429`] for the exact rules.
 #[must_use]
 pub fn looks_like_rate_limit(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -771,13 +771,17 @@ pub struct WorkEstimate {
     /// Expected wall-clock duration for one dispatch of the node this
     /// estimate is for.
     duration: Duration,
+    cost_micros_usd: Option<u64>,
 }
 
 impl WorkEstimate {
     /// Build an estimate from a learned duration.
     #[must_use]
     pub fn new(duration: Duration) -> Self {
-        Self { duration }
+        Self {
+            duration,
+            cost_micros_usd: None,
+        }
     }
 
     /// Expected wall-clock duration for one dispatch.
@@ -785,6 +789,30 @@ impl WorkEstimate {
     pub fn duration(&self) -> Duration {
         self.duration
     }
+
+    /// Attach the learned median cost in micros USD.
+    #[must_use]
+    pub fn with_cost_micros_usd(mut self, cost: Option<u64>) -> Self {
+        self.cost_micros_usd = cost;
+        self
+    }
+
+    /// Learned median cost in micros USD, if available.
+    #[must_use]
+    pub fn cost_micros_usd(&self) -> Option<u64> {
+        self.cost_micros_usd
+    }
+}
+
+/// Human-authored estimate metadata retained for artifact compatibility.
+/// The capacity scheduler does not substitute it for missing observations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkEstimateConfig {
+    /// Expected median duration in seconds.
+    pub median_duration_seconds: u64,
+    /// Optional median spend in micros USD (integer avoids float persistence).
+    #[serde(default)]
+    pub median_cost_micros_usd: Option<u64>,
 }
 
 /// R41 seam (rotate to another configured agent runtime instead of parking
@@ -807,13 +835,10 @@ impl WorkEstimate {
 pub enum RotationPolicy {
     /// No rotation candidate configured, or rotation disabled.
     Disabled,
-    /// A candidate profile believed to target a different agent runtime.
-    /// Carried for the seam's shape only in this delivery — see the type
-    /// doc: `decide` never acts on this variant yet.
-    Enabled {
-        /// The profile `decide` would rotate to, once rotation is live.
-        to: crate::keys::ProfileKey,
-    },
+    /// A configured profile to try when the current account is exhausted.
+    /// The orchestrator resolves and validates it against the current
+    /// profile before permitting rotation.
+    Candidate { profile: String },
 }
 
 /// Why a [`Decision::Dispatch`] is going ahead despite something less than
@@ -1005,8 +1030,7 @@ pub struct CapacityPolicy {
     /// anyway, flagged [`Degraded::ExhaustedNoResetTime`], rather than
     /// inventing a duration.
     pub blind_backoff: Option<Duration>,
-    /// R41 seam. See [`RotationPolicy`]'s doc: `decide` never emits
-    /// [`Decision::Rotate`] from this field in this delivery.
+    /// Optional account rotation policy.
     pub rotation: RotationPolicy,
     /// Upper bound on the deterministic, per-run "herd" offset
     /// [`Self::apply_park_jitter`] adds to a [`Decision::Park`]'s `wake_at`
@@ -1030,6 +1054,14 @@ impl CapacityPolicy {
         status: &CapacityStatus,
         now: DateTime<Utc>,
     ) -> Decision {
+        if let RotationPolicy::Candidate { profile } = &self.rotation
+            && let Some(window) = status.window()
+            && window.is_exhausted()
+            && let Ok(to) = crate::keys::ProfileKey::try_from(profile.as_str())
+        {
+            return Decision::Rotate { to };
+        }
+
         if let Some(window) = status.window()
             && window.is_exhausted()
         {
@@ -1213,6 +1245,26 @@ mod tests {
     }
 
     #[test]
+    fn from_observed_error_accepts_subscription_quota_but_not_transient_529_overload() {
+        let quota =
+            CapacityWindow::from_observed_error("claude", "You've hit your limit", Utc::now());
+        assert!(
+            quota.is_some(),
+            "ACP subscription quota is the available signal"
+        );
+
+        let overload = CapacityWindow::from_observed_error(
+            "claude",
+            "Overloaded {\"type\":\"overloaded_error\"}",
+            Utc::now(),
+        );
+        assert!(
+            overload.is_none(),
+            "529 transient overload is not quota exhaustion"
+        );
+    }
+
+    #[test]
     fn from_observed_error_resolves_reset_time_through_parse_reset_hint_not_just_retry_after_secs()
     {
         // Review finding #1: `from_observed_error` must route through
@@ -1225,7 +1277,7 @@ mod tests {
         let observed_at = Utc::now();
         let google_body = r#"{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]}}"#;
         let window = CapacityWindow::from_observed_error("gemini", google_body, observed_at)
-            .expect("RESOURCE_EXHAUSTED must still classify as a rate limit");
+            .expect("an explicit Google HTTP 429 must still classify as a rate limit");
         assert_eq!(
             window.resets_at(),
             Some(observed_at + chrono::Duration::seconds(30)),
@@ -1509,14 +1561,14 @@ mod tests {
 
     #[test]
     fn looks_like_rate_limit_matches_real_provider_shapes() {
-        // These four are the actual net-new coverage this module adds:
+        // These five are the actual net-new coverage this module adds:
         // `rate_limit_error`/`rate_limit_exceeded` were already reachable
         // through pool's pre-existing `"rate_limit"` substring (see the
         // test above) — claiming otherwise here would be exactly the kind
         // of overstated test-comment a later audit should catch.
         assert!(looks_like_rate_limit("insufficient_quota")); // OpenAI
         assert!(looks_like_rate_limit("RESOURCE_EXHAUSTED")); // Google (any case)
-        assert!(looks_like_rate_limit("overloaded_error")); // Anthropic
+        assert!(!looks_like_rate_limit("overloaded_error")); // Anthropic 529 overload, not quota exhaustion
         assert!(looks_like_rate_limit(
             "Usage limit reached for this workspace"
         ));
@@ -2037,43 +2089,23 @@ mod tests {
     }
 
     #[test]
-    fn decide_never_rotates_even_when_rotation_policy_is_enabled() {
-        // Task 12 revision 6 (§1(3c), §3 M1): the seam exists on the type,
-        // but `decide` structurally refuses to act on it in this delivery —
-        // pin the refusal, not a (not-yet-live) rotation behavior.
+    fn decide_rotates_to_configured_profile_when_window_is_exhausted() {
         let now = t("2026-01-01T00:00:00Z");
-        let rotation = RotationPolicy::Enabled {
-            to: crate::keys::ProfileKey::try_from("implementer@1.0").unwrap(),
-        };
-
-        let window = CapacityWindow::observed_429("claude-acp", None, now);
-        let parking_policy = CapacityPolicy {
+        let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(60)),
-            rotation: rotation.clone(),
+            rotation: RotationPolicy::Candidate {
+                profile: "backup@1.0".into(),
+            },
             jitter_max: Duration::ZERO,
         };
+        let window = CapacityWindow::observed_429("claude-acp", None, now);
         assert_eq!(
-            parking_policy.decide(None, &CapacityStatus::Known(window.clone()), now),
-            Decision::Park {
-                wake_at: now + chrono::Duration::seconds(60),
-                basis: WakeBasis::PolicyBackoff,
-            }
-        );
-
-        let dispatching_policy = CapacityPolicy {
-            blind_backoff: None,
-            rotation,
-            jitter_max: Duration::ZERO,
-        };
-        assert_eq!(
-            dispatching_policy.decide(None, &CapacityStatus::Known(window), now),
-            Decision::Dispatch {
-                degraded: Some(Degraded::ExhaustedNoResetTime)
+            policy.decide(None, &CapacityStatus::Known(window), now),
+            Decision::Rotate {
+                to: crate::keys::ProfileKey::try_from("backup@1.0").unwrap()
             }
         );
     }
-
-    // ── `CapacityPolicy::apply_park_jitter` (Task 12 M4, ADR-0016 §14) ──
 
     #[test]
     fn park_jitter_is_deterministic_for_the_same_run_id() {

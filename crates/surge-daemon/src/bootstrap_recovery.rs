@@ -223,6 +223,7 @@ mod tests {
             worktree: PathBuf::from("/exact/planning"),
             initial_prompt: "build\nthis exactly".into(),
             config: RunConfig {
+                bootstrap_edit_loop_cap: None,
                 sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
                 approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
                 auto_pr: false,

@@ -136,6 +136,11 @@ impl BootstrapRuntime {
             implementation_branch: implementation.branch(),
             graph: runtime.graph_reference()?,
             project_context: context.as_ref().map(context_ref),
+            bootstrap_edit_loop_cap: Some(
+                surge_orchestrator::engine::EngineRunConfig::default()
+                    .bootstrap
+                    .edit_loop_cap,
+            ),
             runtime_identity: runtime.runtime_identity()?,
             configuration,
             credential_refs: runtime.validate_graph(&runtime.graph)?,

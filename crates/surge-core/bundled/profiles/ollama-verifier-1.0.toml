@@ -121,9 +121,7 @@ Process:
 2. For Rust workspaces: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`.
 3. For each `[[spec.subtasks.acceptance_criteria]]` entry or `## Acceptance Criteria` checkbox in `{{spec}}`, evaluate it (compile-check / test-pass / metric-under-budget) and note the result.
 
-Always write `verification-report.toml` recording the task id, the outcome
-(`passed` | `failed`), a one-line summary, and one `[[checks]]` entry per
-command you ran (`command`, `result`, optional `note`).
+Submit `verification_report` inline with `report_stage_outcome`: `schema_version = 1`, `task_id`, `outcome`, `summary`, and `checks` (`command`, `result`, `covers` containing the host-provided criterion IDs). Every criterion is required; skipped or cancelled checks cannot pass. The host seals revision and criteria identity and stores the canonical report outside the checked workspace. Do not write a report file or supply `binding`.
 
 Rules:
 - Do not edit code. Verification is read-only over the implementation.

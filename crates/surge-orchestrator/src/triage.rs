@@ -326,6 +326,10 @@ async fn try_one_attempt(
     bindings.insert("intake.attempt".into(), attempt.to_string());
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::ClaudeCode {
@@ -351,7 +355,8 @@ async fn try_one_attempt(
     let session_id = bridge
         .open_session(cfg)
         .await
-        .map_err(|e| AttemptError::Bridge(format!("open_session: {e}")))?;
+        .map_err(|e| AttemptError::Bridge(format!("open_session: {e}")))?
+        .session;
 
     bridge
         .send_message(session_id, MessageContent::Text(prompt_text))

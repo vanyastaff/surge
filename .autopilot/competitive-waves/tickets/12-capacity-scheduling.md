@@ -4,7 +4,16 @@
 **Blocked by:** 11
 **Зона:** `crates/surge-orchestrator/src/engine/engine.rs` · `crates/surge-daemon/src/`
 **Волна:** 4
-**Status:** ready
+**Status:** in repair — archetype estimator implemented; rotation and end-to-end lifecycle gate remain open
+
+### Checkpoint 2026-10-03
+
+`cargo test -p surge-daemon --test quota_recovery_route_test` passes both
+real daemon/ACP cases: typed exhaustion routes A→B in the same workspace, and
+exhausted candidates park before the scheduler wakes the same task. The fixtures
+require `cargo build -p surge-acp --bin mock_acp_agent` and
+`cargo build -p surge-cli --bin surge` for the stage MCP helper. This verifies
+reactive task-owned recovery; pre-dispatch capacity rotation remains open.
 
 ## Что должно заработать
 
@@ -37,6 +46,42 @@
 `test-engineer` — тесты, `rust-reviewer` — ревью. Гейт: `cargo clippy --workspace
 --all-targets --all-features -- -D warnings` + `cargo nextest run` + `cargo fmt` — все зелёные.
 Отсутствующая зависимость или инструмент → верни `BLOCKED`, не устанавливай.
+
+## Реализация: сверка M3 (2026-10-03)
+
+- Перед каждым agent dispatch работает `CapacityPolicy::decide`; отсутствие
+  наблюдения или оценки не блокирует первый dispatch. Доказательство production
+  пути: `engine_capacity_park_test::estimate_none_and_never_observed_does_not_block_dispatch`.
+- На повторной сверке прежняя оценка по узлу в текущем ране была удалена: она не
+  отвечала критерию §19 и могла выдать нерелевантную историю за archetype estimate.
+- `RunHistoryWorkEstimator` читает завершённые раны того же archetype из
+  `PipelineMaterialized` и медианы строк `stage_executions`; выборка ограничена
+  1000 последними завершёнными ранами. Миграция 0007 привязывает usage-сессии к
+  попытке узла; 0008 хранит известную стоимость отдельно от неизвестной. Если
+  хотя бы одно usage-событие не содержит цены, стоимость этой попытки исключается
+  из spend median. Без archetype metadata/history estimate остаётся `None`.
+- Тест проверяет фильтр архетипа, median времени, median известной стоимости,
+  исключение незавершённых ран и отсутствие подмены отсутствующей цены нулём.
+
+Проверки текущей сверки: `cargo test -p surge-orchestrator --lib` — 410 passed;
+`cargo test -p surge-orchestrator --test engine_capacity_park_test` — 13 passed;
+`cargo test -p surge-persistence --lib` — 433 passed; `cargo check --workspace`,
+`cargo clippy -p surge-persistence -p surge-orchestrator --all-targets
+--all-features -- -D warnings`, `cargo fmt --all -- --check` и `git diff --check`
+— passed.
+
+До durable account/profile handoff `Decision::Rotate` теперь возвращается к
+настроенной политике парковки: без reset используется `blind_backoff`, а без
+него не изобретается время пробуждения. Engine test фиксирует 77 секунд при
+включённом, но ещё не реализованном rotation candidate.
+
+Открыто: критерий ротации профиля пока не работает в production dispatch path;
+движковый тест полного цикла `exhaustion → rotate/park → wake → resume` ещё не
+закрывает все ветки.
+
+Проверки: `cargo test -j2 -p surge-orchestrator --lib run_history_estimator` — 2
+passed; `cargo test -j2 -p surge-orchestrator --test engine_capacity_park_test
+estimate_none_and_never_observed_does_not_block_dispatch` — 1 passed.
 
 ## Перенесено из ревью таска 11 (2026-09-06) — читать до начала работы
 

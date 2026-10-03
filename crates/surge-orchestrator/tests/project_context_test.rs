@@ -151,6 +151,8 @@ async fn describe_project_with_bridge_invokes_project_context_author() {
         outcome: OutcomeKey::from_str("drafted").unwrap(),
         summary: "drafted project context".into(),
         artifacts_produced: vec!["authored-project.md".into()],
+
+        verification_report: None,
     })
     .await;
 
@@ -214,6 +216,8 @@ async fn describe_project_with_bridge_rejects_artifacts_outside_project_root() {
         outcome: OutcomeKey::from_str("drafted").unwrap(),
         summary: "drafted project context".into(),
         artifacts_produced: vec![outside.path().display().to_string()],
+
+        verification_report: None,
     })
     .await;
 

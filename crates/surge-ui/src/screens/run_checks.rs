@@ -6,6 +6,7 @@ use gpui_kit::component::{Icon, IconName, Sizable, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_core::artifact_contract::{ArtifactKind, validate_artifact_text};
+use surge_core::roadmap::VerificationCheckResult;
 use surge_core::{
     ContentHash, EventPayload, RunId, VerificationReportArtifact, VerificationReportOutcome,
 };
@@ -82,21 +83,28 @@ enum Verdict {
     Unverified,
 }
 
-fn verdict(result: &str) -> Verdict {
-    match result.trim().to_ascii_lowercase().as_str() {
-        "passed" | "pass" | "ok" => Verdict::Passed,
-        "failed" | "fail" => Verdict::Failed,
-        _ => Verdict::Unverified,
+fn verdict(result: &VerificationCheckResult) -> Verdict {
+    match result {
+        VerificationCheckResult::Passed => Verdict::Passed,
+        VerificationCheckResult::Failed => Verdict::Failed,
+        VerificationCheckResult::Skipped | VerificationCheckResult::Cancelled => {
+            Verdict::Unverified
+        },
     }
 }
 
-/// The report says "passed" while one of its own checks says "failed".
+fn result_label(result: &VerificationCheckResult) -> &'static str {
+    match result {
+        VerificationCheckResult::Passed => "passed",
+        VerificationCheckResult::Failed => "failed",
+        VerificationCheckResult::Skipped => "skipped",
+        VerificationCheckResult::Cancelled => "cancelled",
+    }
+}
+
+/// A passed report fails the shared report contract.
 fn contradiction(report: &VerificationReportArtifact) -> bool {
-    report.outcome == VerificationReportOutcome::Passed
-        && report
-            .checks
-            .iter()
-            .any(|check| verdict(&check.result) == Verdict::Failed)
+    report.outcome == VerificationReportOutcome::Passed && !report.validate().is_empty()
 }
 
 /// Where a saved report came from.
@@ -303,7 +311,7 @@ impl ChecksView {
                         .text_size(px(11.5))
                         .text_color(theme::text_primary())
                         .child(
-                            "Contradiction: the report says passed, but one of its own checks failed. \
+                            "Contradiction: the report says passed, but its recorded checks do not support a pass. \
                              Treat this run as unverified.",
                         ),
                 )
@@ -352,7 +360,7 @@ impl ChecksView {
                             )
                             .child(div().flex_1())
                             .child(ui::pill(
-                                check.result.trim().to_string(),
+                                result_label(&check.result).to_string(),
                                 tone,
                                 theme::tint(tone),
                             )),
@@ -599,6 +607,8 @@ mod tests {
             kind: "SessionOpened".into(),
             payload: surge_core::VersionedEventPayload::new(
                 surge_core::EventPayload::SessionOpened {
+                    opened: None,
+                    handoff: None,
                     node: node.try_into().unwrap(),
                     session: surge_core::SessionId::new(),
                     agent: "review@2".into(),
@@ -648,26 +658,36 @@ mod tests {
     }
 
     #[test]
-    fn checks_preserve_unknown_results_and_flag_contradiction() {
-        let report = super::parse_report(
-            FAILED
-                .replace("outcome = 'failed'", "outcome = 'passed'")
-                .as_bytes(),
-        )
-        .unwrap();
-        assert!(super::contradiction(&report));
-        let report = super::parse_report(
-            FAILED
-                .replace("result = 'failed'", "result = 'unverified'")
-                .as_bytes(),
-        )
-        .unwrap();
-        // An unknown result is kept as unverified, never rounded to a pass.
-        assert_eq!(report.checks[0].result, "unverified");
-        assert_eq!(
-            super::verdict(&report.checks[0].result),
-            super::Verdict::Unverified
+    fn checks_preserve_nonpassed_results_and_reject_contradiction() {
+        assert!(
+            super::parse_report(
+                FAILED
+                    .replace("outcome = 'failed'", "outcome = 'passed'")
+                    .as_bytes(),
+            )
+            .is_err()
         );
-        assert!(!super::contradiction(&report));
+        for result in ["skipped", "cancelled"] {
+            let report = super::parse_report(
+                FAILED
+                    .replace("result = 'failed'", &format!("result = '{result}'"))
+                    .as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(
+                super::verdict(&report.checks[0].result),
+                super::Verdict::Unverified
+            );
+            assert_eq!(super::result_label(&report.checks[0].result), result);
+            assert!(!super::contradiction(&report));
+        }
+        assert!(
+            super::parse_report(
+                FAILED
+                    .replace("result = 'failed'", "result = 'unverified'")
+                    .as_bytes(),
+            )
+            .is_err()
+        );
     }
 }

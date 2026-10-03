@@ -30,6 +30,18 @@ pub enum RunOutcome {
         /// Reason string supplied by the caller of `stop_run`.
         reason: String,
     },
+    /// Restore could not safely proceed; the attempt remains nonterminal.
+    RecoveryRequired {
+        /// Durable control whose continuation was refused.
+        control_generation: u64,
+        /// Actionable reason for explicit recovery.
+        diagnostic: String,
+    },
+    /// Execution stopped at a durable nonterminal suspension fence.
+    Suspended {
+        /// Exact saved phase and cleanup acknowledgement.
+        fence: Box<surge_core::execution_recovery::SuspensionFence>,
+    },
     /// The run task exited cleanly to park — a provider rate-limit window
     /// is exhausted (`CapacityPolicy::decide` returned `Decision::Park`,
     /// Task 12 R37/R37.1). Not a final outcome the way the other three

@@ -130,19 +130,20 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
     let (config, project_root) = load_project_config_for_current_repo()?;
     let worktree = existing_bootstrap_worktree(&bootstrap_run_id, worktree_root, &config)?;
     let (engine, storage) = build_local_engine(&worktree, &config).await?;
-    let after_seq = storage
-        .open_run_reader(bootstrap_run_id)
-        .await?
-        .current_seq()
-        .await?
-        .as_u64();
+    let reader = storage.open_run_reader(bootstrap_run_id).await?;
+    let after_seq = reader.current_seq().await?.as_u64();
     let events = engine.subscribe_tap();
     let handle = engine
         .resume_run(bootstrap_run_id, worktree.clone())
         .await?;
-    let outcome = drive_run_handle(engine.clone(), handle, events, after_seq, |prompt| {
-        prompt_for_gate_decision(None, prompt)
-    })
+    let outcome = drive_run_handle(
+        engine.clone(),
+        handle,
+        events,
+        after_seq,
+        Vec::new(),
+        |prompt| prompt_for_gate_decision(None, prompt),
+    )
     .await?;
     match outcome {
         RunOutcome::Completed { .. } => {},
@@ -189,7 +190,7 @@ async fn start_followup_run(
             ),
         )
         .await?;
-    let outcome = drive_run_handle(engine, handle, events, 0, |prompt| {
+    let outcome = drive_run_handle(engine, handle, events, 0, Vec::new(), |prompt| {
         prompt_for_gate_decision(None, prompt)
     })
     .await?;
@@ -234,6 +235,7 @@ async fn drive_run_handle<D>(
     handle: surge_orchestrator::engine::handle::RunHandle,
     events: tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
     after_seq: u64,
+    mut pending_before_resume: Vec<(surge_core::keys::NodeKey, Option<String>)>,
     decide: D,
 ) -> Result<RunOutcome>
 where
@@ -246,6 +248,12 @@ where
         Some(events),
         true,
         |event| {
+            let process_request = match &event {
+                EngineRunEvent::Persisted { seq, payload } => {
+                    resume_gate_is_actionable(*seq, after_seq, payload, &mut pending_before_resume)
+                },
+                _ => false,
+            };
             let engine = engine.clone();
             async move {
                 if let EngineRunEvent::Persisted { seq, payload } = event {
@@ -253,7 +261,9 @@ where
                     // A resumed tap replays the entire log. Only newly emitted
                     // requests belong to this execution; replayed answers must
                     // never be submitted to a different pending gate.
-                    if seq <= after_seq {
+                    if !matches!(payload.as_ref(), EventPayload::HumanInputRequested { .. })
+                        || !process_request
+                    {
                         return Ok(());
                     }
                     if let EventPayload::HumanInputRequested {
@@ -280,6 +290,30 @@ where
         |reason| engine.stop_run(run_id, reason),
     )
     .await
+}
+
+fn resume_gate_is_actionable(
+    seq: u64,
+    after_seq: u64,
+    payload: &EventPayload,
+    pending_before_resume: &mut Vec<(surge_core::keys::NodeKey, Option<String>)>,
+) -> bool {
+    if seq > after_seq {
+        return matches!(payload, EventPayload::HumanInputRequested { .. });
+    }
+    let EventPayload::HumanInputRequested { node, call_id, .. } = payload else {
+        return false;
+    };
+    let request = (node.clone(), call_id.clone());
+    if let Some(index) = pending_before_resume
+        .iter()
+        .position(|pending| pending == &request)
+    {
+        pending_before_resume.remove(index);
+        true
+    } else {
+        false
+    }
 }
 
 async fn poll_console_approvals(
@@ -706,14 +740,8 @@ mod tests {
         assert!(handle.completion.await.unwrap_err().is_cancelled());
         drop(engine);
         let resumed_engine = build_engine();
-        let after_seq = storage
-            .open_run_reader(id)
-            .await
-            .unwrap()
-            .current_seq()
-            .await
-            .unwrap()
-            .as_u64();
+        let reader = storage.open_run_reader(id).await.unwrap();
+        let after_seq = reader.current_seq().await.unwrap().as_u64();
         let events = resumed_engine.subscribe_tap();
         let handle = resumed_engine
             .resume_run(id, temp.path().to_path_buf())
@@ -722,14 +750,25 @@ mod tests {
         let prompts = std::sync::Mutex::new(Vec::new());
         let outcome = tokio::time::timeout(
             Duration::from_secs(5),
-            drive_run_handle(resumed_engine, handle, events, after_seq, |prompt| {
-                prompts.lock().unwrap().push(prompt.to_string());
-                Ok(serde_json::json!({"outcome": "approve"}))
-            }),
+            drive_run_handle(
+                resumed_engine,
+                handle,
+                events,
+                after_seq,
+                Vec::new(),
+                |prompt| {
+                    prompts.lock().unwrap().push(prompt.to_string());
+                    Ok(serde_json::json!({"outcome": "approve"}))
+                },
+            ),
         )
-        .await
-        .unwrap();
+        .await;
         let prompts = prompts.into_inner().unwrap();
+        assert!(
+            outcome.is_ok(),
+            "resume timed out after prompts {prompts:?}"
+        );
+        let outcome = outcome.unwrap();
         assert_eq!(prompts.len(), 1, "{prompts:?}; outcome: {outcome:?}");
         assert!(prompts[0].contains("second"), "{prompts:?}");
         assert!(matches!(outcome.unwrap(), RunOutcome::Completed { .. }));

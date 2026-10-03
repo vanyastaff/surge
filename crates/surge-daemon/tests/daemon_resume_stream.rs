@@ -126,8 +126,24 @@ impl BridgeFacade for ParkOnce {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, _: SessionConfig) -> Result<SessionId, OpenSessionError> {
-        Ok(SessionId::new())
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
+        Ok(surge_core::execution_recovery::OpenedSession::new(
+            SessionId::new(),
+            surge_core::execution_recovery::ProviderSessionDescriptor::new(
+                surge_core::execution_recovery::ProviderSessionId::new("park-once".into()).unwrap(),
+                config.invocation,
+                config.runtime,
+                surge_core::ContentHash::compute(b"park-once"),
+                config.working_dir,
+                Default::default(),
+            )
+            .unwrap(),
+            surge_core::execution_recovery::SessionOpenMode::New,
+        )
+        .unwrap())
     }
     async fn send_message(
         &self,
@@ -146,6 +162,8 @@ impl BridgeFacade for ParkOnce {
                 outcome: OutcomeKey::try_new("done").unwrap(),
                 summary: "resumed".into(),
                 artifacts_produced: vec![],
+
+                verification_report: None,
             })
             .unwrap();
         Ok(())

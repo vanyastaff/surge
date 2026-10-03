@@ -48,6 +48,12 @@ pub enum OpenError {
 /// Failure modes for reads and writes against an open run.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    /// A durable operation was rejected without terminating the writer.
+    #[error("journal operation rejected: {0}")]
+    OperationRejected(String),
+    /// Persistent-task ownership could not be read; generic hosts fail closed.
+    #[error("task ownership journal: {0}")]
+    WorkItemJournal(#[from] crate::work_items::WorkItemError),
     /// Durable bootstrap ownership could not be read; legacy launchers must fail closed.
     #[error("bootstrap ownership journal: {0}")]
     BootstrapJournal(#[from] super::bootstrap_operations::BootstrapStoreError),
@@ -95,6 +101,9 @@ pub enum StorageError {
 /// internal type carried over the oneshot reply channel.
 #[derive(Debug, Error)]
 pub enum WriterError {
+    /// A stale or invalid durable operation was rejected before commit.
+    #[error("operation rejected: {0}")]
+    OperationRejected(String),
     /// SQLite-level error.
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),

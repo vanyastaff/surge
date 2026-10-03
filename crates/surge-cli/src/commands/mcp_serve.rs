@@ -149,7 +149,15 @@ struct ToolSpec {
 /// ([`SurgeMcpServer::begin_mutation`]); a test checks the table against the
 /// registered router (names and `read_only_hint`), so a tool cannot be added
 /// to one and not the other.
-const TOOLS: [ToolSpec; 10] = [
+const TOOLS: [ToolSpec; 12] = [
+    ToolSpec {
+        name: "surge_task_read",
+        mutating: false,
+    },
+    ToolSpec {
+        name: "surge_task_control",
+        mutating: true,
+    },
     ToolSpec {
         name: "surge_inbox",
         mutating: false,
@@ -341,6 +349,73 @@ fn to_json<T: serde::Serialize>(value: &T) -> Result<Value, ToolError> {
 }
 
 /// Arguments of `surge_inbox`.
+/// Bounded persistent-task query.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum TaskReadParams {
+    Show {
+        item: surge_core::id::WorkItemId,
+    },
+    List {
+        after: Option<String>,
+        limit: u32,
+    },
+    Revisions {
+        item: surge_core::id::WorkItemId,
+        after: Option<String>,
+        limit: u32,
+    },
+    Discussion {
+        item: surge_core::id::WorkItemId,
+        after: Option<String>,
+        limit: u32,
+    },
+    Attempts {
+        item: surge_core::id::WorkItemId,
+        after: Option<String>,
+        limit: u32,
+    },
+}
+/// Agent controls cannot accept amended requirements; propose through discussion.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum TaskControlParams {
+    Create {
+        operation: surge_core::id::WorkItemOperationId,
+        title: String,
+        text: String,
+        criteria: Vec<String>,
+    },
+    Discuss {
+        operation: surge_core::id::WorkItemOperationId,
+        item: surge_core::id::WorkItemId,
+        version: u64,
+        body: String,
+        proposal_text: Option<String>,
+        proposal_criteria: Option<Vec<String>>,
+    },
+    Start {
+        operation: surge_core::id::WorkItemOperationId,
+        item: surge_core::id::WorkItemId,
+        version: u64,
+        flow_toml: String,
+        #[serde(default)]
+        quota_recovery: Option<serde_json::Value>,
+    },
+    Archive {
+        operation: surge_core::id::WorkItemOperationId,
+        item: surge_core::id::WorkItemId,
+        version: u64,
+    },
+    AttachPr {
+        operation: surge_core::id::WorkItemOperationId,
+        item: surge_core::id::WorkItemId,
+        version: u64,
+        repository: String,
+        number: u64,
+    },
+}
+
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct InboxParams {
     /// List the Done group in full (default: only its count).
@@ -598,6 +673,8 @@ impl SurgeMcpServer {
         let mut needs_input = Vec::new();
         let mut working = Vec::new();
         let mut waiting = Vec::new();
+        let mut recovery = Vec::new();
+        let mut unknown = Vec::new();
         let mut done = Vec::new();
         let mut done_total = 0_usize;
         for entry in &entries {
@@ -605,6 +682,8 @@ impl SurgeMcpServer {
                 AttentionGroup::NeedsInput => needs_input.push(to_json(entry)?),
                 AttentionGroup::Working => working.push(to_json(entry)?),
                 AttentionGroup::Waiting => waiting.push(to_json(entry)?),
+                AttentionGroup::Recovery => recovery.push(to_json(entry)?),
+                AttentionGroup::Unknown => unknown.push(to_json(entry)?),
                 AttentionGroup::Done => {
                     done_total += 1;
                     if params.include_done && done.len() < limit {
@@ -614,10 +693,12 @@ impl SurgeMcpServer {
             }
         }
         let summary = format!(
-            "{} need input, {} working, {} waiting, {done_total} done",
+            "{} need input, {} working, {} waiting, {} recovery, {} unconfirmed, {done_total} done",
             needs_input.len(),
             working.len(),
             waiting.len(),
+            recovery.len(),
+            unknown.len(),
         );
         let mut done_group = json!({
             "count": done.len(),
@@ -633,6 +714,8 @@ impl SurgeMcpServer {
                 "needs_input": needs_input,
                 "working": working,
                 "waiting": waiting,
+                "recovery": recovery,
+                "unknown": unknown,
                 "done": done_group,
             }),
         })
@@ -760,6 +843,127 @@ impl SurgeMcpServer {
         Ok(ToolOutput {
             summary: format!("run {run_id}: OTLP trace with {spans} span(s)"),
             data: json!({ "trace": trace }),
+        })
+    }
+
+    async fn task_read_impl(&self, params: TaskReadParams) -> ToolResult {
+        use surge_core::work_item::WorkItemCommand as C;
+        let command = match params {
+            TaskReadParams::Show { item } => C::Show { item },
+            TaskReadParams::List { after, limit } => C::List { after, limit },
+            TaskReadParams::Revisions { item, after, limit } => C::Revisions { item, after, limit },
+            TaskReadParams::Discussion { item, after, limit } => {
+                C::Discussion { item, after, limit }
+            },
+            TaskReadParams::Attempts { item, after, limit } => C::Attempts { item, after, limit },
+        };
+        let result = self
+            .storage()
+            .await?
+            .work_items()
+            .query(&command)
+            .map_err(|e| ToolError::Failed(anyhow::Error::new(e)))?;
+        Ok(ToolOutput {
+            summary: "persistent task state".into(),
+            data: to_json(&result)?,
+        })
+    }
+    async fn task_control_impl(&self, client: &str, params: TaskControlParams) -> ToolResult {
+        use surge_core::work_item::{WorkItemCommand as C, WorkItemPr, WorkItemRequirements as R};
+        let audit = self.begin_mutation("surge_task_control", client)?;
+        let invalid = |error: String| ToolError::InvalidArgument(error);
+        let command = match params {
+            TaskControlParams::Create {
+                operation,
+                title,
+                text,
+                criteria,
+            } => C::Create {
+                operation_id: operation,
+                project: self.inner.options.project_root.clone(),
+                title,
+                requirements: R::new(text, criteria).map_err(invalid)?,
+            },
+            TaskControlParams::Discuss {
+                operation,
+                item,
+                version,
+                body,
+                proposal_text,
+                proposal_criteria,
+            } => {
+                let proposal = match (proposal_text, proposal_criteria) {
+                    (None, None) => None,
+                    (Some(text), Some(criteria)) => Some(R::new(text, criteria).map_err(invalid)?),
+                    _ => {
+                        return Err(invalid(
+                            "proposal text and criteria must be supplied together".into(),
+                        ));
+                    },
+                };
+                C::Discuss {
+                    operation_id: operation,
+                    item,
+                    expected_version: version,
+                    body,
+                    proposal,
+                }
+            },
+            TaskControlParams::Start {
+                operation,
+                item,
+                version,
+                flow_toml,
+                quota_recovery,
+            } => C::Start {
+                operation_id: operation,
+                item,
+                expected_version: version,
+                graph: Box::new(toml::from_str(&flow_toml).map_err(|e| invalid(e.to_string()))?),
+                quota_recovery,
+            },
+            TaskControlParams::Archive {
+                operation,
+                item,
+                version,
+            } => C::Archive {
+                operation_id: operation,
+                item,
+                expected_version: version,
+            },
+            TaskControlParams::AttachPr {
+                operation,
+                item,
+                version,
+                repository,
+                number,
+            } => C::AttachPr {
+                operation_id: operation,
+                item,
+                expected_version: version,
+                pr: WorkItemPr {
+                    provider: "github".into(),
+                    url: format!("https://github.com/{repository}/pull/{number}"),
+                    repository,
+                    number,
+                },
+            },
+        };
+        audit.record(
+            command
+                .operation_id()
+                .map_or_else(|| "query".into(), |id| id.to_string()),
+            "persistent task control",
+        );
+        let result = self
+            .daemon()
+            .await?
+            .work_item(command)
+            .await
+            .map_err(|error| ToolError::Rejected(error.to_string()))?;
+        Ok(ToolOutput {
+            summary: "persistent task operation committed".into(),
+            data: to_json(&result)?,
         })
     }
 
@@ -1173,6 +1377,28 @@ fn client_name(peer: &Peer<RoleServer>) -> String {
 
 #[tool_router]
 impl SurgeMcpServer {
+    #[tool(
+        description = "Read persistent tasks, accepted revisions, discussion, attempts and cumulative usage with bounded cursor pages.",
+        annotations(read_only_hint = true)
+    )]
+    async fn surge_task_read(
+        &self,
+        Parameters(params): Parameters<TaskReadParams>,
+    ) -> CallToolResult {
+        into_call_result(self.task_read_impl(params).await)
+    }
+    #[tool(
+        description = "Create, discuss/propose, start, archive or attach the same PR to a persistent task. Requires --allow-write and daemon. Amended requirements are accepted only by explicit human CLI control; active tasks cannot be archived.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn surge_task_control(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(params): Parameters<TaskControlParams>,
+    ) -> CallToolResult {
+        into_call_result(self.task_control_impl(&client_name(&peer), params).await)
+    }
+
     #[tool(
         description = "Fleet inbox: every run grouped by what it needs from the operator \
                        (needs_input / working / waiting / done), blocked-first. Runs in needs_input \

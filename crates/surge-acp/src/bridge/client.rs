@@ -79,6 +79,17 @@ fn permission_outcome(
 }
 
 impl BridgeClient {
+    fn require_live_ingress(&self) -> AcpResult<()> {
+        let state = self.state.borrow();
+        if !state.live_ingress || state.closing {
+            return Err(agent_client_protocol::schema::v1::Error::new(
+                -32000,
+                "historical or closed session has no execution authority",
+            ));
+        }
+        Ok(())
+    }
+
     /// Park the permission request in `SessionStateInner::pending_permissions`,
     /// broadcast a `PermissionRequested` event, and await the engine's
     /// decision via `reply_to_permission`.
@@ -211,6 +222,11 @@ impl BridgeClient {
         &self,
         req: RequestPermissionRequest,
     ) -> AcpResult<RequestPermissionResponse> {
+        if self.require_live_ingress().is_err() {
+            return Ok(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled,
+            ));
+        }
         let tool_name = req.tool_call.fields.title.clone().unwrap_or_default();
         let mcp_id: Option<String> = None;
         let decision = self.sandbox.allows_tool(&tool_name, mcp_id.as_deref());
@@ -247,6 +263,7 @@ impl BridgeClient {
         &self,
         req: WriteTextFileRequest,
     ) -> AcpResult<WriteTextFileResponse> {
+        self.require_live_ingress()?;
         let safe_path = match resolve_for_write(&self.worktree_root, &req.path) {
             Ok(p) => p,
             Err(e) => {
@@ -280,6 +297,7 @@ impl BridgeClient {
         &self,
         req: ReadTextFileRequest,
     ) -> AcpResult<ReadTextFileResponse> {
+        self.require_live_ingress()?;
         ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
             warn!(
                 session = %self.session_id,
@@ -305,6 +323,7 @@ impl BridgeClient {
         &self,
         req: CreateTerminalRequest,
     ) -> AcpResult<CreateTerminalResponse> {
+        self.require_live_ingress()?;
         // Convert ACP EnvVariable list to the (name, value) tuples legacy Terminals expects.
         let env: Vec<(String, String)> = req
             .env

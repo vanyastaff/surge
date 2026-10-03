@@ -396,6 +396,8 @@ mod tests {
         let mut budget = BudgetGuard::default();
         budget.limits.tokens = Some(100);
         let mut events = vec![event(EventPayload::SessionOpened {
+            handoff: None,
+            opened: None,
             node: NodeKey::try_new("planner").unwrap(),
             session,
             agent: "planner".into(),

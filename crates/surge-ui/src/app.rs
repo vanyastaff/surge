@@ -744,11 +744,14 @@ impl SurgeApp {
                         Ok(events) => cx.update(|cx| {
                             let _ = state.update(cx, |s, cx| {
                                 let stream = s.run_streams.entry(run_id).or_default();
+                                stream.begin_display_history(run_id, None);
+                                let through_seq = events.last().map_or(0, |event| event.seq.as_u64());
                                 for event in events {
                                     stream.apply_recorded(&surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
                                         seq: event.seq.as_u64(), payload: Box::new(event.payload.payload),
                                     }, event.timestamp_ms);
                                 }
+                                stream.finish_display_history(through_seq);
                                 cx.notify();
                             });
                         }),
@@ -779,6 +782,10 @@ impl SurgeApp {
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             tracing::warn!(run_id = %run_id, dropped = n, "run stream lagged");
+                            cx.update(|cx| { let _ = state.update(cx, |s, cx| {
+                                s.run_streams.entry(run_id).or_default().invalidate_display();
+                                cx.notify();
+                            }); });
                         },
                     }
                 }
@@ -1091,26 +1098,41 @@ impl SurgeApp {
                         for mut summary in summaries {
                             match surge_persistence::runs::Storage::inspect_existing_run_events(home.join("runs"), summary.id).await {
                                 Ok(events) => cx.update(|cx| { let _ = state_for_task.update(cx, |state, cx| {
-                                    if let Some(event) = events.iter().rev().find(|event| matches!(event.payload.payload,
-                                        surge_core::EventPayload::RunCompleted { .. } | surge_core::EventPayload::RunFailed { .. } | surge_core::EventPayload::RunAborted { .. })) {
-                                        summary.status = match event.payload.payload {
-                                            surge_core::EventPayload::RunCompleted { .. } => surge_core::RunStatus::Completed,
-                                            surge_core::EventPayload::RunFailed { .. } => surge_core::RunStatus::Failed,
-                                            _ => surge_core::RunStatus::Aborted,
+                                    let display = surge_persistence::runs::query::aggregate_status(summary.id, &events).display;
+                                    if let surge_core::run_display::RunDisplayState::Done(kind) = display {
+                                        summary.status = match kind {
+                                            surge_core::TerminalReason::Completed => surge_core::RunStatus::Completed,
+                                            surge_core::TerminalReason::Failed => surge_core::RunStatus::Failed,
+                                            surge_core::TerminalReason::Aborted => surge_core::RunStatus::Aborted,
                                         };
-                                        summary.ended_at_ms = Some(event.timestamp_ms);
+                                        summary.ended_at_ms = events.last().map(|event| event.timestamp_ms);
                                     }
                                     state.restore_finished_runs(std::slice::from_ref(&summary));
                                     let stream = state.run_streams.entry(summary.id).or_default();
+                                    stream.run_path = Some(summary.project_path.clone());
+                                    stream.git_common_dir = crate::project::git_common_dir(&summary.project_path);
+                                    stream.begin_display_history(summary.id, Some(summary.status));
+                                    let through_seq = events.last().map_or(0, |event| event.seq.as_u64());
                                     for event in events {
                                         stream.apply_recorded(&surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
                                             seq: event.seq.as_u64(), payload: Box::new(event.payload.payload),
                                         }, event.timestamp_ms);
                                     }
+                                    stream.finish_display_history(through_seq);
                                     stream.live = false;
                                     cx.notify();
                                 }); }),
-                                Err(error) => tracing::warn!(%error, run_id = %summary.id, "could not read finished run history"),
+                                Err(error) => {
+                                    tracing::warn!(%error, run_id = %summary.id, "could not read finished run history");
+                                    cx.update(|cx| { let _ = state_for_task.update(cx, |state, cx| {
+                                        let stream = state.run_streams.entry(summary.id).or_default();
+                                        stream.run_path = Some(summary.project_path.clone());
+                                        stream.git_common_dir = crate::project::git_common_dir(&summary.project_path);
+                                        stream.begin_display_history(summary.id, Some(summary.status));
+                                        stream.invalidate_display();
+                                        cx.notify();
+                                    }); });
+                                },
                             }
                         }
                     },

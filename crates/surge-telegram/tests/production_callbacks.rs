@@ -51,6 +51,11 @@ id = "edit"
 description = "Revise"
 edge_kind_hint = "backtrack"
 is_terminal = false
+[[nodes.gate.declared_outcomes]]
+id = "reject"
+description = "Reject"
+edge_kind_hint = "forward"
+is_terminal = false
 [nodes.gate.config]
 node_kind = "human_gate"
 delivery_channels = []
@@ -64,6 +69,9 @@ label = "Approve"
 [[nodes.gate.config.options]]
 outcome = "edit"
 label = "Edit"
+[[nodes.gate.config.options]]
+outcome = "reject"
+label = "Reject"
 [[edges]]
 id = "approved"
 to = "end"
@@ -74,6 +82,15 @@ outcome = "approve"
 [edges.policy]
 on_max_exceeded = "escalate"
 [[edges]]
+id = "rejected"
+to = "rejected"
+kind = "forward"
+[edges.from]
+node = "gate"
+outcome = "reject"
+[edges.policy]
+on_max_exceeded = "fail"
+[[edges]]
 id = "again"
 to = "gate"
 kind = "backtrack"
@@ -83,6 +100,18 @@ outcome = "edit"
 [edges.policy]
 max_traversals = 3
 on_max_exceeded = "fail"
+
+[nodes.rejected]
+id = "rejected"
+declared_outcomes = []
+[nodes.rejected.position]
+x = 0.0
+y = 0.0
+[nodes.rejected.config]
+node_kind = "terminal"
+[nodes.rejected.config.kind]
+type = "failure"
+exit_code = 1
 "#;
 
 fn routes(storage: &Arc<Storage>, engine: Arc<Engine>, bot: teloxide::Bot) -> ProductionRoutes {

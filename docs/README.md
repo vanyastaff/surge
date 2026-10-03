@@ -21,6 +21,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Product strategy](product-strategy.md) | Positioning, research-backed bets (completion machinery, fleet interaction), build-don't-bridge principle, sequencing, metrics |
 | [Developer Vibe Coding Harness](vibe-coding-harness.md) | Agentlas source audit, Factory documentation comparison, application-creation journey and measurable completion criteria |
 | [Factory product model](factory-product-model.md) | Detailed primary-documentation research on context, authority, validation, recovery, readiness and costs |
+| [SuperPlane-informed improvements](superplane-improvements.md) | Accepted six-phase product plan, completion reliability and revision-bound verification |
 | [Native UI automation](ui-automation-evaluation.md) | Observed GPUI/egui Computer Use results, limitations and migration decision criteria |
 | [Agent OS and coding-agent landscape](agent-os-landscape.md) | Market survey: Pi, Herdr, BridgeMind, Factory Droid, Devin, Codex, Claude Code, 2026 manager-view convergence, orchestrator graveyard |
 | [Migrate `.spec.toml` → `flow.toml`](migrate-spec-to-flow.md) | Auto-translator (`surge migrate-spec`) reference and manual-edit guidance for the legacy pipeline retirement |

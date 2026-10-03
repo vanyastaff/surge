@@ -29,6 +29,10 @@ async fn inner_test() {
     let mut sids: Vec<SessionId> = Vec::with_capacity(5);
     for _ in 0..5 {
         let cfg = SessionConfig {
+            writer_id: surge_core::id::ExecutionWriterId::new(),
+            invocation: surge_core::id::StageInvocationId::new(),
+            runtime: "fixture".into(),
+            opening: Default::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock {
@@ -44,7 +48,11 @@ async fn inner_test() {
             bindings: BTreeMap::new(),
             env: Default::default(),
         };
-        let sid = bridge.open_session(cfg).await.expect("open session");
+        let sid = bridge
+            .open_session(cfg)
+            .await
+            .expect("open session")
+            .session;
         sids.push(sid);
     }
     assert_eq!(

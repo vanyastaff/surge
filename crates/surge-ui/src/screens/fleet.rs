@@ -9,11 +9,35 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use surge_orchestrator::engine::handle::RunStatus;
 
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
+
+struct TaskDraft {
+    comment: Entity<TextareaState>,
+    requirements: Entity<TextareaState>,
+    criteria: Entity<TextareaState>,
+    flow: Entity<TextareaState>,
+    version: u64,
+    revision: u64,
+    accepted_hash: surge_core::ContentHash,
+}
+
+struct NewTaskDraft {
+    title: Entity<InputState>,
+    requirements: Entity<TextareaState>,
+    criteria: Entity<TextareaState>,
+}
 
 use crate::app_state::AppState;
 use crate::theme;
 use crate::ui;
+
+#[path = "task_create.rs"]
+mod durable_create;
+#[path = "task_detail.rs"]
+mod durable_tasks;
+#[cfg(all(test, unix))]
+#[path = "task_ui_tests.rs"]
+mod task_ui_tests;
 
 /// What the operator can trigger from the Fleet surface.
 #[derive(Clone)]
@@ -129,12 +153,57 @@ pub struct FleetScreen {
     pending: Option<(surge_core::RunId, String)>,
     submission_error: Option<String>,
     clear_accepted: Option<String>,
+    selected_item: Option<surge_core::id::WorkItemId>,
+    task_submissions:
+        std::collections::HashMap<surge_core::id::WorkItemId, crate::work_items::TaskSubmission>,
+    task_busy: bool,
+    task_error: Option<String>,
+    task_rejections: std::collections::HashSet<surge_core::id::WorkItemId>,
+    task_refresh_identity: Option<(usize, Option<std::path::PathBuf>)>,
+    task_drafts: std::collections::HashMap<surge_core::id::WorkItemId, TaskDraft>,
+    task_feedback: std::collections::HashMap<surge_core::id::WorkItemId, String>,
+    task_clear_comment: std::collections::HashMap<surge_core::id::WorkItemId, String>,
+    session_pages: std::collections::HashMap<surge_core::RunId, usize>,
+    new_task_draft: Option<NewTaskDraft>,
+    creating_task: bool,
+    creation_submission: Option<crate::work_items::TaskSubmission>,
+    creation_project: Option<std::path::PathBuf>,
+    creation_busy: bool,
+    creation_error: Option<String>,
+    task_last_render: Option<std::time::Instant>,
 }
 
 impl FleetScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         // Re-render when the run list / daemon link changes.
-        cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
+        cx.observe(&state, |this, _state, cx| {
+            this.refresh_tasks_if_changed(cx);
+            cx.notify();
+        })
+        .detach();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(5))
+                    .await;
+                let alive = this.update(cx, |this, cx| {
+                    let visible = this
+                        .task_last_render
+                        .is_some_and(|time| time.elapsed() < std::time::Duration::from_secs(6));
+                    if visible
+                        && !this.task_busy
+                        && !this.creation_busy
+                        && !this.state.read(cx).tasks.loading
+                    {
+                        this.refresh_durable_tasks(cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             state,
             filter: TaskFilter::All,
@@ -143,6 +212,23 @@ impl FleetScreen {
             pending: None,
             submission_error: None,
             clear_accepted: None,
+            selected_item: None,
+            task_submissions: std::collections::HashMap::new(),
+            task_busy: false,
+            task_error: None,
+            task_rejections: std::collections::HashSet::new(),
+            task_refresh_identity: None,
+            task_drafts: std::collections::HashMap::new(),
+            task_feedback: std::collections::HashMap::new(),
+            task_clear_comment: std::collections::HashMap::new(),
+            session_pages: std::collections::HashMap::new(),
+            new_task_draft: None,
+            creating_task: false,
+            creation_submission: None,
+            creation_project: None,
+            creation_busy: false,
+            creation_error: None,
+            task_last_render: None,
         }
     }
 
@@ -205,6 +291,33 @@ impl FleetScreen {
 
     fn tasks(&self, cx: &App) -> Vec<WorkTask> {
         let state = self.state.read(cx);
+        let task_runs: std::collections::HashSet<_> =
+            state
+                .tasks
+                .records
+                .iter()
+                .filter_map(|item| item.active_run)
+                .chain(
+                    state.tasks.histories.values().flat_map(|history| {
+                        history.attempts.entries.iter().map(|attempt| attempt.run)
+                    }),
+                )
+                .chain(state.run_streams.iter().filter_map(|(run, stream)| {
+                    let item = stream.trusted_work_item()?;
+                    state
+                        .tasks
+                        .records
+                        .iter()
+                        .any(|record| {
+                            record.id == item
+                                && state.run_in_project(run)
+                                && stream.git_common_dir.as_ref().is_none_or(|repository| {
+                                    repository == &record.workspace.repository
+                                })
+                        })
+                        .then_some(*run)
+                }))
+                .collect();
         let decisions: std::collections::HashSet<_> = state
             .pending_decisions()
             .into_iter()
@@ -219,6 +332,7 @@ impl FleetScreen {
         state
             .project_runs()
             .into_iter()
+            .filter(|run| !task_runs.contains(&run.run_id))
             .map(|run| WorkTask {
                 run: run.clone(),
                 request: state.run_prompt(&run.run_id).map(str::to_owned),
@@ -227,13 +341,56 @@ impl FleetScreen {
             .collect()
     }
 
+    fn includes_durable(
+        &self,
+        filter: TaskFilter,
+        item: &surge_core::work_item::WorkItemRecord,
+        cx: &Context<Self>,
+    ) -> bool {
+        let status = self.durable_status(item, cx);
+        match filter {
+            TaskFilter::All => true,
+            TaskFilter::NeedsDecision => {
+                status == "Attention"
+                    || item.active_run.is_some_and(|run| {
+                        self.state
+                            .read(cx)
+                            .pending_decisions()
+                            .iter()
+                            .any(|(id, _)| *id == run)
+                    })
+            },
+            TaskFilter::Running => matches!(
+                status,
+                "Running"
+                    | "Suspending"
+                    | "Continuing"
+                    | "Waiting for capacity"
+                    | "Waiting for human input"
+            ),
+            TaskFilter::Finished => status == "Completed",
+            TaskFilter::Stopped => matches!(
+                status,
+                "Failed" | "Stopped" | "Aborted" | "Rejected" | "Suspended"
+            ),
+        }
+    }
+
     fn render_filters(&self, tasks: &[WorkTask], cx: &mut Context<Self>) -> Div {
         div()
             .h_flex()
             .flex_wrap()
             .gap(px(6.0))
             .children(TaskFilter::ALL.into_iter().map(|filter| {
-                let count = tasks.iter().filter(|task| filter.includes(task)).count();
+                let count = tasks.iter().filter(|task| filter.includes(task)).count()
+                    + self
+                        .state
+                        .read(cx)
+                        .tasks
+                        .records
+                        .iter()
+                        .filter(|item| self.includes_durable(filter, item, cx))
+                        .count();
                 gpui_kit::component::button::Button::new(filter.id())
                     .ghost()
                     .label(format!("{}  {count}", filter.label()))
@@ -250,6 +407,15 @@ impl FleetScreen {
             }))
     }
 
+    fn run_ownership_unconfirmed(&self, run: surge_core::RunId, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        !state.tasks.records.is_empty()
+            && !state
+                .run_streams
+                .get(&run)
+                .is_some_and(|stream| stream.task_ownership_confirmed())
+    }
+
     fn render_task_row(&self, task: &WorkTask, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let run_id = task.run.run_id;
         let selected = self.selected == Some(run_id);
@@ -259,6 +425,7 @@ impl FleetScreen {
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected = Some(run_id);
+                this.selected_item = None;
                 cx.notify();
             }))
             .v_flex()
@@ -296,6 +463,7 @@ impl FleetScreen {
                         .text_size(px(15.0))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.selected = Some(run_id);
+                            this.selected_item = None;
                             cx.notify();
                         })),
                     ),
@@ -305,6 +473,17 @@ impl FleetScreen {
                     .h_flex()
                     .gap(px(12.0))
                     .child(ui::pill(task.status(), task.color(), theme::panel()))
+                    .when(self.run_ownership_unconfirmed(run_id, cx), |row| {
+                        row.child(
+                            ui::meta("Task ownership unconfirmed")
+                                .id(SharedString::from(format!(
+                                    "ownership-unconfirmed-{run_id}"
+                                )))
+                                .test_support()
+                                .aria_label("Task ownership unconfirmed")
+                                .debug_selector(move || format!("ownership-unconfirmed-{run_id}")),
+                        )
+                    })
                     .child(
                         div()
                             .text_size(px(12.0))
@@ -544,6 +723,26 @@ impl FleetScreen {
 
 impl Render for FleetScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.task_last_render = Some(std::time::Instant::now());
+        self.refresh_tasks_if_changed(cx);
+        let durable_all = self.state.read(cx).tasks.records.clone();
+        let durable: Vec<_> = durable_all
+            .into_iter()
+            .filter(|item| self.includes_durable(self.filter, item, cx))
+            .collect();
+        if self.selected_item.is_some_and(|item| {
+            self.state
+                .read(cx)
+                .tasks
+                .records
+                .iter()
+                .any(|record| record.id == item)
+                && !durable.iter().any(|record| record.id == item)
+        }) {
+            self.selected_item = None;
+        }
+        let task_cache_error = self.state.read(cx).tasks.error.clone();
+        let task_cache_stale = !self.state.read(cx).tasks.fresh && !durable.is_empty();
         let tasks = self.tasks(cx);
         let visible: Vec<_> = tasks
             .iter()
@@ -561,26 +760,60 @@ impl Render for FleetScreen {
             .copied();
         let live = self.state.read(cx).daemon_state.facade().is_some();
         let project_error = self.state.read(cx).project_load_error.clone();
+        let durable_detail = self
+            .selected_item
+            .map(|item| self.render_durable_detail(item, window, cx));
+        let creation_form = if self.creating_task {
+            Some(self.render_task_creation(window, cx))
+        } else {
+            None
+        };
         div().v_flex().size_full().bg(theme::surface()).text_color(theme::text_primary())
             .child(div().h_flex().items_center().flex_shrink_0().gap(px(16.0)).p(px(24.0))
                 .child(div().v_flex().gap(px(6.0)).flex_1()
                     .child(div().text_size(px(26.0)).font_weight(FontWeight::BOLD).child("Your work"))
                     .child(ui::meta("Follow task progress, review results, and make decisions.")))
-                .child(gpui_kit::component::button::Button::new("fleet-new-task").primary().label("New task")
+                .child(gpui_kit::component::button::Button::new("new-durable-task").primary().label("New task")
+                    .on_click(cx.listener(|this, _, _, cx| { this.creating_task = !this.creating_task; cx.notify(); })))
+                .child(gpui_kit::component::button::Button::new("fleet-new-task").label("Plan application")
                     .accessibility_id("fleet-new-task").on_click(cx.listener(|_, _, _, cx| cx.emit(FleetAction::NewTask)))))
             .when(!live, |screen| screen.child(div().px(px(24.0)).py(px(8.0)).text_size(px(13.0)).text_color(theme::text_muted())
                 .child("Daemon offline · showing last known tasks. Start the daemon from the sidebar to begin work.")))
             .when_some(project_error, |screen, error| screen.child(div().px(px(24.0)).py(px(8.0)).text_color(theme::error()).child(error)))
+            .children(creation_form)
+            .child(gpui_kit::component::button::Button::new("refresh-durable-tasks").label("Refresh tasks")
+                .on_click(cx.listener(|this, _, _, cx| { this.refresh_durable_tasks(cx); if let Some(item) = this.selected_item { this.select_item(item, cx); } })))
+            .when(task_cache_stale, |screen| screen.child(ui::meta("Task information may be out of date.")))
+            .when_some(task_cache_error, |screen, error| screen.child(ui::meta(error)))
+            .when_some(self.task_error.clone(), |screen, error| screen.child(ui::meta(error)))
+            .when(self.task_busy, |screen| screen.child(ui::meta("Task operation pending…")))
+            .when(self.selected_item.is_some_and(|item| self.task_rejections.contains(&item)) && !self.task_busy, |screen| screen.child(
+                gpui_kit::component::button::Button::new("discard-rejected-task-operation")
+                    .label("Dismiss rejected operation; keep draft")
+                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_rejected_task_operation(cx))),
+            ))
+            .when(self.selected_item.is_some_and(|item| self.task_submissions.contains_key(&item)) && !self.task_busy, |screen| screen.child(
+                gpui_kit::component::button::Button::new("retry-task-operation").label("Retry task operation")
+                    .on_click(cx.listener(|this, _, _, cx| this.retry_task(cx)))))
             .child(div().h_flex().items_stretch().flex_1().min_h(px(0.0))
                 .child(div().v_flex().flex_1().min_h(px(0.0)).min_w(px(0.0))
                     .child(div().px(px(20.0)).pb(px(16.0)).child(self.render_filters(&tasks, cx)))
+                    .when(self.state.read(cx).tasks.next_cursor.is_some(), |list| list.child(
+                        div().px(px(20.0)).pb(px(8.0)).child(ui::meta("Counts cover loaded items. Load more to include older tasks."))))
                     .child(div().id("task-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
-                        .when(visible.is_empty(), |list| list.child(div().id("fleet-empty").test_support().aria_label("Create your first application")
+                        .children(durable.iter().map(|item| self.render_durable_row(item, cx)))
+                        .when(self.state.read(cx).tasks.next_cursor.is_some(), |list| list.child(
+                            gpui_kit::component::button::Button::new("more-durable-tasks").label("Load more tasks")
+                                .disabled(self.state.read(cx).tasks.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.load_durable_tasks(true, cx)))))
+                        .when(!tasks.is_empty() && !durable.is_empty(), |list| list.child(ui::meta("Additional run history")))
+                        .when(visible.is_empty() && durable.is_empty(), |list| list.child(div().id("fleet-empty").test_support().aria_label("Create your first application")
                             .v_flex().p(px(32.0)).gap(px(12.0))
                             .child(div().text_size(px(20.0)).font_weight(FontWeight::BOLD).child(if tasks.is_empty() { "Create your first application" } else { "No tasks in this view" }))
                             .child(ui::meta(if tasks.is_empty() { "Describe what you want to build below, then select Start." } else { "Choose another filter to see more tasks." }))))
                         .children(visible.iter().map(|task| self.render_task_row(task, cx)))))
-                .children(selected.map(|task| self.render_detail(task, cx))))
+                .children(durable_detail)
+                .when(self.selected_item.is_none(), |screen| screen.children(selected.map(|task| self.render_detail(task, cx)))))
             .child(self.render_command_bar(window, cx))
     }
 }
@@ -593,6 +826,191 @@ mod accessibility_tests {
     use gpui_kit::{AppContext, SharedString, TestAppContext, WindowOptions};
     use std::{cell::Cell, rc::Rc};
     use surge_orchestrator::engine::handle::RunStatus;
+
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn durable_task_without_runs_arrives_through_real_facade(cx: &mut TestAppContext) {
+        use surge_core::id::{WorkItemId, WorkItemProjectId};
+        use surge_core::work_item::{
+            WorkItemPage, WorkItemRecord, WorkItemResult, WorkItemWorkspace,
+        };
+        use surge_orchestrator::engine::ipc::{DaemonRequest, DaemonResponse};
+        let home = tempfile::tempdir().unwrap();
+        let repository = home.path().join("repository.git");
+        let item = WorkItemRecord {
+            id: WorkItemId::new(),
+            project: WorkItemProjectId::new(),
+            title: "Retained zero-run task".into(),
+            accepted_revision: 1,
+            version: 1,
+            archived_at_ms: None,
+            active_run: None,
+            generation: 0,
+            workspace: WorkItemWorkspace {
+                repository: repository.clone(),
+                checkout: home.path().join("project"),
+                path: home.path().join("task-workspace"),
+                ownership: "task-test".into(),
+                branch: "task/test".into(),
+                base_commit: "a".repeat(40),
+            },
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let records = runtime.block_on(async {
+            let socket = home.path().join("task.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let served = item.clone();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut reader = tokio::io::BufReader::new(read);
+                let Some(DaemonRequest::WorkItem {
+                    request_id,
+                    command,
+                }) = surge_orchestrator::engine::ipc::read_request_frame(&mut reader)
+                    .await
+                    .unwrap()
+                else {
+                    panic!("expected task request");
+                };
+                assert!(matches!(
+                    *command,
+                    surge_core::work_item::WorkItemCommand::List { after: None, .. }
+                ));
+                surge_orchestrator::engine::ipc::write_frame(
+                    &mut write,
+                    &DaemonResponse::WorkItemOk {
+                        request_id,
+                        result: Box::new(WorkItemResult::Items(WorkItemPage {
+                            entries: vec![served],
+                            next_cursor: None,
+                        })),
+                    },
+                )
+                .await
+                .unwrap();
+            });
+            let facade =
+                surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket)
+                    .await
+                    .unwrap();
+            let records = crate::work_items::list_project_tasks(&facade, &repository, None)
+                .await
+                .unwrap();
+            server.await.unwrap();
+            records
+        });
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            let scope = state.tasks.begin(repository);
+            state.tasks.apply_page(&scope, records, false);
+            state
+        });
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                cx.new(|cx| FleetScreen::new(state.clone(), cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window
+                    .find(SharedString::from(format!("work-item-{}", item.id)))
+                    .label(),
+                Some(item.title.as_str()),
+                "a durable task must exist before its first run"
+            );
+            assert_eq!(
+                window.find("filter-all").label(),
+                Some("All  1"),
+                "the task count includes the real zero-run task"
+            );
+        })
+        .unwrap();
+
+        // Fixed independent count: two known attempts belong to ONE durable task;
+        // one unrelated legacy run remains a second visible task.
+        let first = surge_core::RunId::new();
+        let second = surge_core::RunId::new();
+        let unrelated = surge_core::RunId::new();
+        state.update(cx, |state, _| {
+            use surge_core::work_item::{
+                AcceptedRevisionRelation, WorkItemAttempt, WorkItemAttemptState, WorkItemBinding,
+                WorkItemRequirements,
+            };
+            let requirements =
+                WorkItemRequirements::new("Retained".into(), vec!["Checked".into()]).unwrap();
+            let attempts = [first, second]
+                .into_iter()
+                .enumerate()
+                .map(|(index, run)| WorkItemAttempt {
+                    item: item.id,
+                    run,
+                    ordinal: index as u64 + 1,
+                    binding: WorkItemBinding {
+                        item: item.id,
+                        revision: 1,
+                        requirements_hash: requirements.hash().unwrap(),
+                        generation: index as u64 + 1,
+                    },
+                    accepted_revision_relation: AcceptedRevisionRelation::MatchesCurrent,
+                    graph: Box::new(
+                        toml::from_str(include_str!(
+                            "../../../../examples/flow_terminal_only.toml"
+                        ))
+                        .unwrap(),
+                    ),
+                    config: "{}".into(),
+                    state: WorkItemAttemptState::Completed,
+                    diagnostic: None,
+                    usage_seq: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    known_cost_usd: 0.0,
+                    usage_unknown: true,
+                })
+                .collect();
+            state.tasks.histories.insert(
+                item.id,
+                crate::work_items::TaskHistory {
+                    attempts: WorkItemPage {
+                        entries: attempts,
+                        next_cursor: None,
+                    },
+                    discussion: WorkItemPage {
+                        entries: vec![],
+                        next_cursor: None,
+                    },
+                    revisions: WorkItemPage {
+                        entries: vec![],
+                        next_cursor: None,
+                    },
+                },
+            );
+            for run_id in [first, second, unrelated] {
+                state.runs.push(crate::app_state::UiRun {
+                    run_id,
+                    status: RunStatus::Completed,
+                    started_at: chrono::Utc::now(),
+                    last_event_seq: None,
+                    ended_at: None,
+                });
+            }
+        });
+        cx.update_window(handle, |_, window, cx| {
+            assert_eq!(
+                view.read(cx).tasks(cx).len(),
+                1,
+                "only the unrelated legacy run is separate"
+            );
+            window.render_frame(cx);
+            assert_eq!(window.find("filter-all").label(), Some("All  2"));
+            assert_eq!(window.find("filter-finished").label(), Some("Finished  2"));
+        })
+        .unwrap();
+    }
 
     #[gpui_kit::test]
     fn empty_fleet_contains_no_invented_runs(cx: &mut TestAppContext) {

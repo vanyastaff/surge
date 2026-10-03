@@ -589,6 +589,7 @@ mod tests {
                     project_path: PathBuf::from("/p"),
                     initial_prompt: String::new(),
                     config: surge_core::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
                         approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,

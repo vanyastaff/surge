@@ -88,3 +88,107 @@ async fn call_echo_round_trips() {
         "echo response did not contain 'hello': {content_text:?}"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires mock_mcp_server example built"]
+async fn outstanding_live_service_is_reported_as_unconfirmed_cleanup() {
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("echo-entered");
+    let release = home.path().join("echo-release");
+    let config = McpServerRef::new(
+        "mock".into(),
+        McpTransportConfig::stdio(
+            mock_server_path(),
+            vec![],
+            HashMap::from([
+                (
+                    "SURGE_MCP_TEST_ECHO_MARKER".into(),
+                    marker.display().to_string(),
+                ),
+                (
+                    "SURGE_MCP_TEST_ECHO_RELEASE".into(),
+                    release.display().to_string(),
+                ),
+            ]),
+        ),
+        None,
+        Duration::from_secs(5),
+        false,
+    );
+    let connection = std::sync::Arc::new(McpServerConnection::new(config, None));
+    let caller = connection.clone();
+    let in_flight = tokio::spawn(async move {
+        caller
+            .call_tool("echo", serde_json::json!({"text":"still-owned"}))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let error = connection.shutdown().await.unwrap_err();
+    assert!(matches!(
+        error,
+        surge_mcp::cleanup::CleanupError::OutstandingHandle { .. }
+    ));
+    std::fs::write(&release, b"release").unwrap();
+    // The old service really remains usable; a disconnected registry label
+    // therefore cannot be promoted to a writer-disappearance proof.
+    let result = in_flight.await.unwrap().unwrap();
+    assert!(!result.is_error.unwrap_or(false));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejected_ownership_intent_prevents_actual_mcp_child_spawn() {
+    use surge_mcp::writer_observer::{HostWriterObserver, WriterObservationError};
+    struct Reject;
+    #[async_trait::async_trait]
+    impl HostWriterObserver for Reject {
+        async fn before_child(
+            &self,
+            _: &str,
+        ) -> Result<surge_core::id::ExecutionWriterId, WriterObservationError> {
+            Err(WriterObservationError(
+                "journal deliberately rejected ownership".into(),
+            ))
+        }
+        async fn child_started(
+            &self,
+            _: surge_core::id::ExecutionWriterId,
+            _: Option<u32>,
+        ) -> Result<(), WriterObservationError> {
+            panic!("rejected launch must not reach process observation")
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("must-not-spawn");
+    let config = McpServerRef::new(
+        "rejected".into(),
+        McpTransportConfig::stdio(
+            PathBuf::from("sh"),
+            vec![
+                "-c".into(),
+                format!("printf effect > '{}'", marker.display()),
+            ],
+            HashMap::new(),
+        ),
+        None,
+        Duration::from_secs(2),
+        false,
+    );
+    let connection = McpServerConnection::new_owned(
+        config,
+        Some(home.path().into()),
+        std::sync::Arc::new(Reject),
+    );
+    let result = connection.list_tools().await;
+    assert!(
+        matches!(result, Err(surge_mcp::McpError::StartFailed { reason, .. })
+        if reason.contains("journal deliberately rejected"))
+    );
+    assert!(!marker.exists());
+}

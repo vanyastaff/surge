@@ -37,6 +37,10 @@ async fn inner_test() {
     // the child and emits SessionEnded::Timeout. The result is
     // GracefulTimedOut { killed: true }.
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -53,7 +57,7 @@ async fn inner_test() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.unwrap();
+    let sid = bridge.open_session(cfg).await.unwrap().session;
     let _ = timeout(Duration::from_secs(2), events.recv()).await;
 
     // close_session will block ~5s waiting for the frozen child to exit, then

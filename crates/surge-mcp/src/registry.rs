@@ -89,6 +89,17 @@ pub struct McpRegistry {
 }
 
 impl McpRegistry {
+    /// Immutable server contracts for creating an independent run-owned registry.
+    #[must_use]
+    pub fn configured_servers(&self) -> Vec<McpServerRef> {
+        let mut configs: Vec<_> = self
+            .servers
+            .values()
+            .map(|server| server.configuration())
+            .collect();
+        configs.sort_by(|left, right| left.name.cmp(&right.name));
+        configs
+    }
     /// Build a registry from a slice of [`McpServerRef`]. Connections
     /// are not eagerly opened — first use of each server triggers
     /// the spawn via [`McpServerConnection::list_tools`] /
@@ -109,6 +120,33 @@ impl McpRegistry {
                 )),
             );
         }
+        Self {
+            servers,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            monitors_started: AtomicBool::new(false),
+        }
+    }
+
+    /// Build lazy run-owned connections whose launches are durably observed.
+    #[must_use]
+    pub fn from_config_owned(
+        refs: &[McpServerRef],
+        cwd: Option<&Path>,
+        observer: &Arc<dyn crate::writer_observer::HostWriterObserver>,
+    ) -> Self {
+        let servers = refs
+            .iter()
+            .map(|config| {
+                (
+                    config.name.clone(),
+                    Arc::new(McpServerConnection::new_owned(
+                        config.clone(),
+                        cwd.map(Path::to_path_buf),
+                        observer.clone(),
+                    )),
+                )
+            })
+            .collect();
         Self {
             servers,
             cancel_token: tokio_util::sync::CancellationToken::new(),
@@ -156,10 +194,10 @@ impl McpRegistry {
 
     /// Deterministically tear down every connection and cancel the
     /// health-monitor token. Called by the engine on run terminal
-    /// outcome (before the `Arc<McpRegistry>` drops) so no MCP child is
-    /// orphaned. Each connection's teardown is time-bounded so a hung
-    /// child cannot wedge the registry; idempotent.
-    pub async fn shutdown(&self) {
+    /// outcome (before the `Arc<McpRegistry>` drops). Every connection is
+    /// bounded and every unconfirmed service result is returned to the host.
+    /// Host process/effect disappearance requires separate writer evidence.
+    pub async fn shutdown(&self) -> Result<(), crate::cleanup::RegistryCleanupError> {
         // Stop U11 health monitors first so they don't race a reconnect
         // against the teardown.
         self.cancel_token.cancel();
@@ -168,23 +206,28 @@ impl McpRegistry {
         for conn in self.servers.values() {
             let c = conn.clone();
             handles.push(tokio::spawn(async move {
-                if tokio::time::timeout(per_conn, c.shutdown()).await.is_err() {
-                    tracing::warn!(
-                        target: "mcp::supervisor",
-                        server = %c.name(),
-                        "mcp shutdown exceeded per-connection budget; abandoning child to RAII"
-                    );
+                match tokio::time::timeout(per_conn, c.shutdown()).await {
+                    Ok(result) => result,
+                    Err(_) => Err(crate::cleanup::CleanupError::Timeout {
+                        server: c.name().to_owned(),
+                    }),
                 }
             }));
         }
+        let mut failures = Vec::new();
         for h in handles {
-            if let Err(e) = h.await {
-                tracing::warn!(
-                    target: "mcp::supervisor",
-                    error = %e,
-                    "MCP per-connection shutdown task panicked"
-                );
+            match h.await {
+                Ok(Ok(())) => {},
+                Ok(Err(error)) => failures.push(error),
+                Err(error) => failures.push(crate::cleanup::CleanupError::WorkerJoin {
+                    reason: error.to_string(),
+                }),
             }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::cleanup::RegistryCleanupError { failures })
         }
     }
 

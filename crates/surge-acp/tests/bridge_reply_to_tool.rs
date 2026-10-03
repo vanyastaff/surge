@@ -48,6 +48,10 @@ async fn reply_to_unknown_call_id_within_session_returns_unknown_call_id() {
     // `echo` scenario doesn't fire any tool calls, so any call_id we pass is
     // guaranteed to be unknown.
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -64,7 +68,7 @@ async fn reply_to_unknown_call_id_within_session_returns_unknown_call_id() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.unwrap();
+    let sid = bridge.open_session(cfg).await.unwrap().session;
 
     let err = bridge
         .reply_to_tool(
@@ -93,6 +97,10 @@ async fn reply_to_observed_call_id_cannot_fabricate_tool_result() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -109,7 +117,7 @@ async fn reply_to_observed_call_id_cannot_fabricate_tool_result() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.unwrap();
+    let sid = bridge.open_session(cfg).await.unwrap().session;
     bridge
         .send_message(sid, MessageContent::Text("?".into()))
         .await

@@ -1,63 +1,10 @@
 //! Edge selection given (current node, outcome).
 
-use surge_core::edge::{Edge, EdgeKind, ExceededAction};
+use surge_core::edge::Edge;
 use surge_core::graph::Graph;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
-use thiserror::Error;
 
-/// Output of [`next_node_after_with_counters`].
-///
-/// Bundles the chosen target node together with the matching edge's id and
-/// kind so callers can emit `EventPayload::EdgeTraversed { kind, .. }` and
-/// drive backtrack-aware bookkeeping (e.g. `RunMemory.node_visits`) without
-/// re-scanning the graph for the same edge.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoutedEdge {
-    /// Target node the engine cursor advances to next.
-    pub target: NodeKey,
-    /// Identifier of the edge that produced this routing decision.
-    pub edge_id: EdgeKey,
-    /// Edge kind selected by the routing pass — `Forward` for normal
-    /// progression, `Backtrack` for `HumanGate` edit-loop re-entry,
-    /// `Escalate` reserved for max-traversal escalation paths.
-    pub kind: EdgeKind,
-}
-
-/// Errors that can occur when determining the next node after a stage outcome.
-#[derive(Debug, Error, PartialEq)]
-pub enum RoutingError {
-    /// No edge in the graph matches the `(from_node, outcome)` pair.
-    #[error("no edge from node {from} matches outcome {outcome}")]
-    NoMatchingEdge {
-        /// Source node key.
-        from: NodeKey,
-        /// Outcome key that produced no match.
-        outcome: OutcomeKey,
-    },
-    /// More than one edge matches — parallel fan-out requires M6.
-    #[error("multiple edges from node {from} match outcome {outcome} (parallel fan-out — M6)")]
-    MultipleMatches {
-        /// Source node key.
-        from: NodeKey,
-        /// Outcome key that matched multiple edges.
-        outcome: OutcomeKey,
-    },
-    /// Edge traversal limit (`EdgePolicy::max_traversals`) exceeded.
-    /// `action` reports which branch the routing path follows next:
-    /// `Escalate` (synthesise a `max_traversals_exceeded` outcome and
-    /// re-route) or `Fail` (halt the run).
-    #[error("edge {edge} max_traversals exceeded ({count}/{max}) — action: {action:?}")]
-    ExceededTraversal {
-        /// `EdgeKey` of the edge that exceeded the limit.
-        edge: EdgeKey,
-        /// Current traversal counter value (post-increment).
-        count: u32,
-        /// Configured maximum from `EdgePolicy::max_traversals`.
-        max: u32,
-        /// Action determined by `EdgePolicy::on_max_exceeded`.
-        action: ExceededAction,
-    },
-}
+pub use surge_core::route_selection::{RoutedEdge, RoutingError};
 
 /// Find the next node after `current` produces `outcome`.
 ///
@@ -105,46 +52,11 @@ pub fn next_node_after_with_counters(
     root_counts: &mut std::collections::HashMap<EdgeKey, u32>,
 ) -> Result<RoutedEdge, RoutingError> {
     let edges = active_edge_set(graph, frames);
-
-    let edge = edges
-        .iter()
-        .find(|e| &e.from.node == current && &e.from.outcome == outcome)
-        .ok_or_else(|| RoutingError::NoMatchingEdge {
-            from: current.clone(),
-            outcome: outcome.clone(),
-        })?;
-
-    // Clone edge metadata before dropping the immutable borrow on `edges`/`frames`,
-    // so that we can take a mutable borrow on `frames` (via `top_loop_mut`) next.
-    let edge_id = edge.id.clone();
-    let edge_to = edge.to.clone();
-    let edge_kind = edge.kind;
-    let max_traversals = edge.policy.max_traversals;
-    let on_max_exceeded = edge.policy.on_max_exceeded;
-
     let counts = match crate::engine::frames::top_loop_mut(frames) {
-        Some(lf) => &mut lf.traversal_counts,
+        Some(frame) => &mut frame.traversal_counts,
         None => root_counts,
     };
-    let count = counts.entry(edge_id.clone()).or_insert(0);
-    *count += 1;
-
-    if let Some(max) = max_traversals
-        && *count > max
-    {
-        return Err(RoutingError::ExceededTraversal {
-            edge: edge_id,
-            count: *count,
-            max,
-            action: on_max_exceeded,
-        });
-    }
-
-    Ok(RoutedEdge {
-        target: edge_to,
-        edge_id,
-        kind: edge_kind,
-    })
+    surge_core::route_selection::select_edge_with_counters(edges, current, outcome, counts)
 }
 
 /// Find the outgoing edge target for `(node, outcome)`. If no edge

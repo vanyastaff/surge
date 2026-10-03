@@ -30,7 +30,9 @@ use super::{
 };
 use surge_orchestrator::operator::{GateOption, PendingInput, PendingKind};
 
-const ALL_TOOLS: [&str; 10] = [
+const ALL_TOOLS: [&str; 12] = [
+    "surge_task_read",
+    "surge_task_control",
     "surge_inbox",
     "surge_run_status",
     "surge_ready_tasks",
@@ -108,6 +110,7 @@ fn expect_error(result: &CallToolResult, kind: &str) -> String {
 
 fn run_config() -> RunConfig {
     RunConfig {
+        bootstrap_edit_loop_cap: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
@@ -288,6 +291,10 @@ async fn read_only_server_refuses_every_mutating_tool() {
     let run_id = RunId::new().to_string();
 
     let cases = [
+        (
+            "surge_task_control",
+            json!({"action":"create","operation":surge_core::id::WorkItemOperationId::new(),"title":"Task","text":"Accepted requirements","criteria":["Works"]}),
+        ),
         ("surge_steer", json!({"run_id": run_id, "message": "hi"})),
         (
             "surge_resolve",
@@ -646,6 +653,30 @@ async fn listings_report_total_and_truncation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbox_summary_counts_recovery_and_unconfirmed_runs() {
+    let home = tempfile::tempdir().unwrap();
+    let recovering = seed_working_run(home.path()).await;
+    let storage = Storage::open(home.path()).await.unwrap();
+    storage
+        .set_run_status(&recovering, surge_core::RunStatus::Crashed, None)
+        .await
+        .unwrap();
+    let unknown = RunId::new();
+    storage
+        .create_run(unknown, home.path(), None)
+        .await
+        .unwrap()
+        .close()
+        .await
+        .unwrap();
+    let client = connect(home.path(), false).await;
+    let result = call(&client, "surge_inbox", json!({})).await;
+    assert_eq!(structured(&result)["recovery"].as_array().unwrap().len(), 1);
+    assert_eq!(structured(&result)["unknown"].as_array().unwrap().len(), 1);
+    assert!(text(&result).contains("1 recovery, 1 unconfirmed"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blank_arguments_are_invalid_arguments() {
     let home = tempfile::tempdir().unwrap();
     let run = seed_working_run(home.path()).await;
@@ -859,4 +890,106 @@ fn authorize_takes_free_form_answers_for_tool_calls_and_rejects_a_note() {
         matches!(blank, Err(ToolError::InvalidArgument(_))),
         "{blank:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persistent_task_mcp_writes_reach_daemon_and_amendments_remain_proposals() {
+    use std::sync::Arc;
+    use surge_orchestrator::engine::{
+        Engine, EngineConfig, facade::LocalEngineFacade, tools::worktree::WorktreeToolDispatcher,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(project.path()).unwrap();
+    let oid = repo.index().unwrap().write_tree().unwrap();
+    let tree = repo.find_tree(oid).unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.com").unwrap();
+    repo.commit(Some("HEAD"), &signature, &signature, "base", &tree, &[])
+        .unwrap();
+    drop(tree);
+    drop(repo);
+    let storage = Storage::open(home.path()).await.unwrap();
+    let engine = Arc::new(Engine::new(
+        Arc::new(surge_acp::bridge::acp_bridge::AcpBridge::with_defaults().unwrap()),
+        storage.clone(),
+        Arc::new(WorktreeToolDispatcher::new(project.path().into())),
+        EngineConfig::default(),
+    ));
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let socket = surge_daemon::pidfile::socket_path_in(home.path());
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let host = tokio::spawn(surge_daemon::run_runs_only(
+        surge_daemon::ServerConfig {
+            socket_path: socket.clone(),
+            max_active: 2,
+            max_queue: 2,
+        },
+        Arc::new(LocalEngineFacade::new(engine.clone())),
+        surge_daemon::tracked_run::TrackingContext::new(engine, storage.clone()),
+        Arc::new(surge_daemon::broadcast::BroadcastRegistry::new()),
+        Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
+        shutdown.clone(),
+    ));
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let options = ServeOptions {
+        home: home.path().into(),
+        project_root: project.path().into(),
+        allow_write: true,
+    };
+    let (client_io, server_io) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        let _ = serve(options, server_io).await;
+    });
+    let client = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("task-test", "0"),
+    )
+    .serve(client_io)
+    .await
+    .unwrap();
+    let created=call(&client,"surge_task_control",json!({"action":"create","operation":surge_core::id::WorkItemOperationId::new(),"title":"Persistent","text":"Accepted original","criteria":["Fixed criterion"]})).await;
+    assert!(!created.is_error.unwrap_or(false), "{created:?}");
+    let data = created.structured_content.unwrap();
+    let item = data["value"]["item"]["id"].clone();
+    let proposed=call(&client,"surge_task_control",json!({"action":"discuss","operation":surge_core::id::WorkItemOperationId::new(),"item":item,"version":1,"body":"Proposed change","proposal_text":"Unaccepted amendment","proposal_criteria":["Different criterion"]})).await;
+    assert!(!proposed.is_error.unwrap_or(false), "{proposed:?}");
+    let shown = call(
+        &client,
+        "surge_task_read",
+        json!({"action":"show","item":item}),
+    )
+    .await;
+    let data = shown.structured_content.unwrap();
+    assert_eq!(
+        data["value"]["revision"]["requirements"]["text"],
+        "Accepted original"
+    );
+    let attempts = call(
+        &client,
+        "surge_task_read",
+        json!({"action":"attempts","item":item,"after":null,"limit":2}),
+    )
+    .await;
+    assert_eq!(
+        attempts.structured_content.unwrap()["value"]["entries"],
+        json!([])
+    );
+    let rejected = client
+        .call_tool(
+            CallToolRequestParams::new("surge_task_control").with_arguments(
+                json!({"action":"edit","item":item,"requirements":{}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await;
+    assert!(rejected.is_err());
+    shutdown.cancel();
+    host.await.unwrap().unwrap();
 }

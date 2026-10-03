@@ -67,14 +67,30 @@ impl BridgeFacade for MockBridge {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, _config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         let id = self
             .pinned_session_ids
             .lock()
             .await
             .pop_front()
             .unwrap_or_else(SessionId::new);
-        Ok(id)
+        Ok(surge_core::execution_recovery::OpenedSession::new(
+            id,
+            surge_core::execution_recovery::ProviderSessionDescriptor::new(
+                surge_core::execution_recovery::ProviderSessionId::new("triage".into()).unwrap(),
+                config.invocation,
+                config.runtime,
+                surge_core::ContentHash::compute(b"triage"),
+                config.working_dir,
+                Default::default(),
+            )
+            .unwrap(),
+            surge_core::execution_recovery::SessionOpenMode::New,
+        )
+        .unwrap())
     }
 
     async fn send_message(
@@ -164,6 +180,8 @@ async fn triage_enqueued_yields_real_priority() {
                 outcome: OutcomeKey::from_str("enqueued").unwrap(),
                 summary: "agent completed triage".into(),
                 artifacts_produced: vec!["triage_decision.json".into()],
+
+                verification_report: None,
             })
             .await;
         bridge_drive.pump_scripted_events().await;

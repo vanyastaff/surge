@@ -127,35 +127,7 @@ pub fn render_bootstrap(card_id: &str, stage: BootstrapStage, stage_summary: &st
 /// invoked as a message command, not a button.
 #[must_use]
 pub fn render_status(run_id: &RunId, snapshot: &RunStatusSnapshot) -> RenderedCard {
-    let active = snapshot
-        .active_node
-        .as_deref()
-        .unwrap_or("(not yet started)");
-    let outcome = snapshot.last_outcome.as_deref().unwrap_or("—");
-    let attempt = snapshot
-        .last_attempt
-        .map_or_else(|| "—".to_owned(), |a| a.to_string());
-    let elapsed_s = snapshot
-        .elapsed_ms
-        .map_or_else(|| "—".to_owned(), |ms| format!("{}s", ms / 1_000));
-    let event_count = snapshot.event_count;
-    let terminal = if snapshot.terminal {
-        if snapshot.failed {
-            "❌ failed"
-        } else {
-            "✅ done"
-        }
-    } else {
-        "▶ running"
-    };
-    let body_md = format!(
-        "📊 *Run status* — `{run_id}`\n\n\
-         active node: `{active}`\n\
-         last outcome: `{outcome}` (attempt {attempt})\n\
-         elapsed: {elapsed_s}\n\
-         events: {event_count}\n\
-         state: {terminal}",
-    );
+    let body_md = crate::commands::status::render_snapshot_for(run_id, snapshot);
     finalize(CardKind::Status, body_md, Vec::new())
 }
 
@@ -352,6 +324,7 @@ mod tests {
     fn status_card_has_no_keyboard() {
         let run_id = RunId::new();
         let mut snap = RunStatusSnapshot::empty(run_id);
+        snap.display = surge_core::run_display::RunDisplayState::Working;
         snap.active_node = Some("approve_plan".into());
         snap.last_outcome = Some("approve".into());
         snap.last_attempt = Some(1);
@@ -365,17 +338,19 @@ mod tests {
         assert!(card.keyboard.is_empty(), "status card carries no buttons");
         assert!(card.body_md.contains("approve_plan"));
         assert!(card.body_md.contains("45s"));
-        assert!(card.body_md.contains("running"));
+        assert!(card.body_md.contains("Running"));
     }
 
     #[test]
     fn status_card_marks_failed_state() {
         let run_id = RunId::new();
         let mut snap = RunStatusSnapshot::empty(run_id);
+        snap.display =
+            surge_core::run_display::RunDisplayState::Done(surge_core::TerminalReason::Failed);
         snap.terminal = true;
         snap.failed = true;
         let card = render_status(&run_id, &snap);
-        assert!(card.body_md.contains("failed"));
+        assert!(card.body_md.contains("Failed"));
     }
 
     #[test]

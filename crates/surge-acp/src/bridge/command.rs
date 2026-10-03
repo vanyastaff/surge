@@ -21,11 +21,13 @@ pub enum BridgeCommand {
     /// Open a new session — see `AcpBridge::open_session`.
     OpenSession {
         /// Open-session parameters.
-        config: SessionConfig,
+        config: Box<SessionConfig>,
         /// Admission is acquired by the caller, outside the control loop.
         permit: tokio::sync::OwnedSemaphorePermit,
         /// Reply channel carrying the new `SessionId` or an `OpenSessionError`.
-        reply: oneshot::Sender<Result<SessionId, OpenSessionError>>,
+        reply: oneshot::Sender<
+            Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>,
+        >,
     },
     /// Send a message to an open session — see `AcpBridge::send_message`.
     SendMessage {

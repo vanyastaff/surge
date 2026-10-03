@@ -293,6 +293,8 @@ async fn pinned_skill_binds_and_instructions_reach_the_agent_prompt() {
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     let mock_for_pump = mock.clone();
@@ -384,6 +386,8 @@ async fn plugin_packaged_skill_binds_via_dot_claude_plugins_root() {
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     let mock_for_pump = mock.clone();
@@ -429,5 +433,255 @@ async fn plugin_packaged_skill_binds_via_dot_claude_plugins_root() {
         prompt.contains("Plugin-packaged review instructions."),
         "a skill packaged under .claude/plugins must still reach the agent's \
          prompt, got: {prompt}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_skill_completion_does_not_leave_a_human_gate_recovery_record() {
+    approved_skill_completion_fixture(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_skill_gate_does_not_leak_into_legitimate_stage_revisit() {
+    approved_skill_completion_fixture(true).await;
+}
+
+async fn approved_skill_completion_fixture(revisit: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_skill(
+        dir.path(),
+        "reviewer",
+        "code-reviewer",
+        "Only ever review; never edit files directly.",
+    );
+
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let dispatcher =
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+
+    // Auto-complete the agent stage once it opens a session, exactly like
+    // `engine_agent_stage_unit.rs` does — this test cares about what the
+    // prompt carried, not about driving a real ACP subprocess.
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::try_from(if revisit { "again" } else { "done" }).unwrap(),
+        summary: "ok".into(),
+        artifacts_produced: vec![],
+
+        verification_report: None,
+    })
+    .await;
+    let mock_for_pump = mock.clone();
+    let pump = tokio::spawn(async move {
+        mock_for_pump.pump_after_subscribe(1).await;
+    });
+
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+    let declared = vec![SkillRef {
+        name: "code-reviewer".into(),
+        provider: SkillProvider::ProjectDir,
+        version: None,
+        hash: None,
+    }];
+
+    let mut graph = graph_with_declared_skill(declared);
+    if revisit {
+        let node = NodeKey::try_from("implement").unwrap();
+        graph
+            .nodes
+            .get_mut(&node)
+            .unwrap()
+            .declared_outcomes
+            .push(OutcomeDecl {
+                id: "again".parse().unwrap(),
+                description: "revisit once".into(),
+                edge_kind_hint: EdgeKind::Backtrack,
+                is_terminal: false,
+                ledger_effect: Default::default(),
+            });
+        graph.edges.push(Edge {
+            id: "e_revisit".parse().unwrap(),
+            from: PortRef {
+                node: node.clone(),
+                outcome: "again".parse().unwrap(),
+            },
+            to: node,
+            kind: EdgeKind::Backtrack,
+            policy: EdgePolicy::default(),
+        });
+    }
+    let run_id = RunId::new();
+    let handle = engine
+        .start_run(
+            run_id,
+            graph,
+            dir.path().to_path_buf(),
+            EngineRunConfig::default(),
+        )
+        .await
+        .expect("start_run");
+
+    let request = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let reader = storage.open_run_reader(run_id).await.unwrap();
+            let events = reader
+                .read_events(
+                    surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(128),
+                )
+                .await
+                .unwrap();
+            if let Some((node, request)) =
+                events
+                    .iter()
+                    .find_map(|event| match event.payload.payload() {
+                        surge_core::EventPayload::HumanInputRequested {
+                            node,
+                            call_id: Some(id),
+                            ..
+                        } => surge_core::id::GateRequestId::from_event_call_id(id)
+                            .map(|request| (node.clone(), request)),
+                        _ => None,
+                    })
+            {
+                break (node, request);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    engine
+        .resolve_gate_input(
+            run_id,
+            request.0.clone(),
+            request.1,
+            serde_json::json!({"outcome": "approve"}),
+        )
+        .await
+        .unwrap();
+    if revisit {
+        let second = tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let reader = storage.open_run_reader(run_id).await.unwrap();
+                let events = reader
+                    .read_events(
+                        surge_persistence::runs::EventSeq(0)
+                            ..surge_persistence::runs::EventSeq(128),
+                    )
+                    .await
+                    .unwrap();
+                let requests: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event.payload.payload() {
+                        surge_core::EventPayload::HumanInputRequested {
+                            node,
+                            call_id: Some(id),
+                            ..
+                        } => surge_core::id::GateRequestId::from_event_call_id(id)
+                            .map(|request| (node.clone(), request)),
+                        _ => None,
+                    })
+                    .collect();
+                if requests.len() == 2 {
+                    break requests[1].clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            request.1, second.1,
+            "a legitimate revisit owns a new decision"
+        );
+        engine
+            .resolve_gate_input(
+                run_id,
+                request.0.clone(),
+                request.1,
+                serde_json::json!({"outcome":"approve"}),
+            )
+            .await
+            .unwrap();
+        let second_session = SessionId::new();
+        mock.pin_next_session_id(second_session).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: second_session,
+            outcome: "done".parse().unwrap(),
+            summary: "second stage".into(),
+            artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        let mock_for_pump = mock.clone();
+        tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(2).await;
+        });
+        engine
+            .resolve_gate_input(
+                run_id,
+                second.0,
+                second.1,
+                serde_json::json!({"outcome":"approve"}),
+            )
+            .await
+            .unwrap();
+    }
+    let outcome = handle.await_completion().await.unwrap();
+    pump.await.unwrap();
+    match outcome {
+        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+
+    let prompt = mock
+        .last_prompt()
+        .await
+        .expect("agent stage must have sent a prompt");
+    assert!(
+        prompt.contains("Only ever review; never edit files directly."),
+        "the bound skill's instructions must reach the agent's prompt, got: {prompt}"
+    );
+
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let events = reader
+        .read_events(surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64))
+        .await
+        .unwrap();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|re| re.payload.payload.discriminant_str())
+        .collect();
+    assert!(
+        kinds.contains(&"SkillBound"),
+        "the pinned skill must bind, got {kinds:?}"
+    );
+    assert!(kinds.contains(&"HumanInputRequested"));
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == "HumanInputRequested")
+            .count(),
+        if revisit { 2 } else { 1 }
+    );
+    assert_eq!(events.iter().filter(|event|matches!(event.payload.payload(), surge_core::EventPayload::StageEntered { node, .. } if node.as_str()=="implement")).count(), if revisit {2} else {1});
+    let mut memory = surge_core::run_state::RunMemory::default();
+    for event in events {
+        memory.apply_event(&surge_core::RunEvent {
+            run_id,
+            seq: event.seq.as_u64(),
+            timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
+            payload: event.payload.payload().clone(),
+        });
+    }
+    assert!(
+        memory.gate_decisions.is_empty(),
+        "completed skill approval is not an outstanding HumanGate route: {:?}",
+        memory.gate_decisions
     );
 }

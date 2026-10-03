@@ -38,7 +38,44 @@ pub struct RunWriter {
     pub(crate) closed: bool,
 }
 
+/// Append-only event capability for a run-owned child dispatcher.
+///
+/// This handle cannot close the writer or replace snapshots. Its sends fail
+/// when the owning writer shuts down; cloning it never transfers run ownership.
+#[derive(Clone, Debug)]
+pub struct RunEventRecorder {
+    writer_tx: mpsc::Sender<WriterCommand>,
+}
+
+impl RunEventRecorder {
+    /// Commit one audit event before permitting a child side effect.
+    pub async fn append_event(
+        &self,
+        payload: VersionedEventPayload,
+    ) -> Result<EventSeq, StorageError> {
+        let (reply, result) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::AppendEvent {
+                payload: Box::new(payload),
+                reply,
+            })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        result
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+}
+
 impl RunWriter {
+    /// Give a dispatcher append authority without writer-lifecycle authority.
+    #[must_use]
+    pub fn event_recorder(&self) -> RunEventRecorder {
+        RunEventRecorder {
+            writer_tx: self.writer_tx.clone(),
+        }
+    }
     /// Run id this writer is bound to.
     #[must_use]
     pub fn run_id(&self) -> &RunId {
@@ -139,7 +176,7 @@ impl RunWriter {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.writer_tx
             .send(WriterCommand::AppendEvent {
-                payload,
+                payload: Box::new(payload),
                 reply: reply_tx,
             })
             .await
@@ -198,6 +235,55 @@ impl RunWriter {
             .map_err(map_writer_err)
     }
 
+    /// Commit an original operator answer against the host-validated journal prefix.
+    pub async fn commit_gate_answer(
+        &self,
+        prefix: EventSeq,
+        request: surge_core::execution_recovery::gate_commit::GateCommitRequest,
+        response: serde_json::Value,
+    ) -> Result<EventSeq, WriterError> {
+        let (reply, received) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::CommitGateAnswer {
+                prefix,
+                request,
+                response,
+                reply,
+            })
+            .await
+            .map_err(|_| WriterError::Internal("writer channel closed".into()))?;
+        received
+            .await
+            .map_err(|_| WriterError::Internal("writer reply closed".into()))?
+    }
+
+    /// Atomically publish a stage's edge/completion events and its post-route snapshot.
+    ///
+    /// Events are `EdgeTraversed`, `StageCompleted`, and (for authenticated provider
+    /// stages) `StageRouteCommitted` bound to the accepted invocation. The snapshot
+    /// anchors the final event; a changed prefix or identity rejects the whole write.
+    /// No routing event or snapshot becomes visible unless the transaction commits.
+    pub async fn commit_stage_route(
+        &self,
+        prefix: EventSeq,
+        payloads: Vec<VersionedEventPayload>,
+        blob: Vec<u8>,
+    ) -> Result<EventSeq, WriterError> {
+        let (reply, received) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::CommitStageRoute {
+                prefix,
+                payloads,
+                blob,
+                reply,
+            })
+            .await
+            .map_err(|_| WriterError::Internal("writer channel closed".into()))?;
+        received
+            .await
+            .map_err(|_| WriterError::Internal("writer reply closed".into()))?
+    }
+
     /// Write a graph snapshot.
     ///
     /// `blob` is the caller-encoded representation of the run state (typically
@@ -225,7 +311,25 @@ impl RunWriter {
             .map_err(map_writer_err)
     }
 
-    /// Truncate all materialized view tables and rebuild from events.
+    /// Seal a suspension snapshot and its event in one prefix-checked transaction.
+    pub async fn seal_suspension(
+        &self,
+        fence: surge_core::execution_recovery::SuspensionFence,
+        blob: Vec<u8>,
+    ) -> Result<EventSeq, StorageError> {
+        self.ensure_open()?;
+        let (reply, receive) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::SealSuspension { fence, blob, reply })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        receive
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Rebuild recomputable event projections, preserving host-authored execution snapshots.
     ///
     /// Runs inside a single transaction; readers see pre-rebuild state until
     /// commit (WAL gives them a snapshot view), so there is no transient empty-
@@ -304,6 +408,7 @@ fn map_writer_err(e: WriterError) -> StorageError {
         WriterError::Io(i) => StorageError::Io(i),
         WriterError::Serialization(j) => StorageError::SerializationFailed(j),
         WriterError::Internal(_) => StorageError::WriterTaskDied,
+        WriterError::OperationRejected(message) => StorageError::OperationRejected(message),
     }
 }
 

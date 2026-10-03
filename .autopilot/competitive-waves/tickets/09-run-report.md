@@ -24,13 +24,22 @@
 
 ## Критерии приёмки
 
-- [ ] `RunReport::compile(events) -> RunReport` — **чистая функция от событий**, не источник состояния
-- [ ] Девять разделов названы полями типа: `nodes, outcomes, verdicts, evidence, cost, skills, memory_receipts, steers, approvals`
-- [ ] `surge run report <id> --format json|md|html`
-- [ ] HTML — один файл, стили и данные инлайном, **ни одной внешней ссылки и ни одного CDN**
-- [ ] Оборванный ран компилируется с явным «ран не завершён»
-- [ ] Тест компиляции из вектора событий-фикстур, без БД
-- [ ] ADR на решение «отчёт — проекция лога, а не состояние»
+- [x] `RunReport::compile(events) -> RunReport` — **чистая функция от событий**, не источник состояния
+- [x] Девять разделов названы полями типа: `nodes, outcomes, verdicts, evidence, cost, skills, memory_receipts, steers, approvals`
+- [x] `surge run report <id> --format json|md|html`
+- [x] HTML — один файл, стили и данные инлайном, **ни одной внешней ссылки и ни одного CDN**
+- [x] Оборванный ран компилируется с явным «ран не завершён»
+- [x] Тест компиляции из вектора событий-фикстур, без БД
+- [x] ADR на решение «отчёт — проекция лога, а не состояние»
+
+### Проверка критериев
+
+Все девять разделов проверены одной чистой event-fixture; CLI интеграция
+проверяет JSON, Markdown по умолчанию, HTML без внешних зависимостей и
+неполный/припаркованный ран: `cargo test -j2 -p surge-core --lib
+a_full_run_covers_all_nine_sections_end_to_end` и
+`cargo test -j2 -p surge-cli --test cli_run_report_test` (7 passed).
+Архитектурное решение записано в `docs/adr/0017-run-report-is-a-log-projection.md`.
 
 ## Исполнение
 

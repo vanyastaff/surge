@@ -50,6 +50,12 @@ pub enum ErrorCode {
     StorageError,
     /// Engine-level error (graph validation, run lifecycle, etc.).
     EngineError,
+    /// Definitive refusal of this task body before admission, or a stored inert rejection.
+    WorkItemConflict,
+    /// Definitive task ownership/admission refusal before an operation was committed.
+    WorkItemBusy,
+    /// Definitive task lookup refusal before admission.
+    WorkItemRejected,
     /// Unexpected internal failure not in the above buckets.
     Internal,
     /// The daemon is in graceful shutdown and refusing new work.
@@ -63,6 +69,13 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum DaemonRequest {
+    /// Durable persistent-task control.
+    WorkItem {
+        /// Request identity.
+        request_id: RequestId,
+        /// Typed task operation.
+        command: Box<surge_core::work_item::WorkItemCommand>,
+    },
     /// Health check + version handshake.
     Ping {
         /// Client-assigned identifier echoed in the response.
@@ -266,7 +279,8 @@ impl DaemonRequest {
     #[must_use]
     pub fn request_id(&self) -> RequestId {
         match self {
-            Self::Ping { request_id }
+            Self::WorkItem { request_id, .. }
+            | Self::Ping { request_id }
             | Self::StartBootstrap { request_id, .. }
             | Self::BootstrapStatus { request_id, .. }
             | Self::CancelBootstrap { request_id, .. }
@@ -332,6 +346,13 @@ impl McpProbeReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    /// Durable task operation result.
+    WorkItemOk {
+        /// Request identity.
+        request_id: RequestId,
+        /// Typed task result.
+        result: Box<surge_core::work_item::WorkItemResult>,
+    },
     /// Committed bootstrap operation status; never an execution acknowledgement.
     BootstrapOperation {
         /// Client request identity.
@@ -473,7 +494,8 @@ impl DaemonResponse {
     #[must_use]
     pub fn request_id(&self) -> RequestId {
         match self {
-            Self::BootstrapOperation { request_id, .. }
+            Self::WorkItemOk { request_id, .. }
+            | Self::BootstrapOperation { request_id, .. }
             | Self::PingOk { request_id, .. }
             | Self::StartRunOk { request_id, .. }
             | Self::StartRunQueued { request_id, .. }

@@ -509,6 +509,7 @@ pub fn fold(
                 session,
                 agent,
                 agent_id,
+                ..
             } => {
                 with_active_step(
                     &mut mission,
@@ -524,7 +525,7 @@ pub fn fold(
                     },
                 );
             },
-            EventPayload::StageInputsResolved { node, bindings } => {
+            EventPayload::StageInputsResolved { node, bindings, .. } => {
                 with_active_step(
                     &mut mission,
                     &placed,
@@ -929,6 +930,8 @@ mod tests {
                 task_id: "t1".into(),
                 node: key("verify_task"),
                 evidence: ContentHash::compute(b"r"),
+
+                report: None,
             },
             enter("task_end", 1),
             EventPayload::LoopIterationCompleted {
@@ -1131,6 +1134,8 @@ mod tests {
             task_id: "leaf".into(),
             node: key("verify_task"),
             evidence: ContentHash::compute(b"second child scoped"),
+
+            report: None,
         });
         let scoped = fold(&[], &scoped_events, None);
         assert!(!scoped.milestones[0].tasks[0].subtasks[0].verified);
@@ -1143,6 +1148,8 @@ mod tests {
             task_id: "leaf".into(),
             node: key("verify_task"),
             evidence: ContentHash::compute(b"ambiguous"),
+
+            report: None,
         });
         let late = fold(&[], &late_events, None);
         assert!(!late.milestones[0].tasks[0].subtasks[0].verified);
@@ -1332,16 +1339,20 @@ mod tests {
         session: surge_core::SessionId,
     ) -> EventPayload {
         EventPayload::SessionOpened {
+            opened: None,
+            handoff: None,
             node: key(node),
             session,
             agent: profile.into(),
             agent_id: runtime.map(str::to_string),
         }
     }
-    fn inputs(node: &str, name: &str) -> EventPayload {
+    fn inputs(node: &str, attempt: u32, name: &str) -> EventPayload {
         EventPayload::StageInputsResolved {
             node: key(node),
+            attempt,
             bindings: [(name.into(), ContentHash::compute(b"private input"))].into(),
+            memory_receipt: None,
         }
     }
     fn skill(node: &str, name: &str) -> EventPayload {
@@ -1374,7 +1385,7 @@ mod tests {
             iter("subtask_loop", "id = 'leaf'\ntitle = 'First child'", 0),
             enter("impl_task", 1),
             participant("impl_task", "implementer@1", Some("claude"), first),
-            inputs("impl_task", "old-context"),
+            inputs("impl_task", 1, "old-context"),
             skill("impl_task", "old-skill"),
             EventPayload::OutcomeReported {
                 node: key("impl_task"),
@@ -1397,24 +1408,24 @@ mod tests {
         assert!(child.summary.is_none());
         events.extend([
             participant("impl_task", "reviewer@2", None, retry),
-            inputs("impl_task", "new-context"),
+            inputs("impl_task", 2, "new-context"),
             skill("impl_task", "new-skill"),
             done("impl_task", "pass"),
             iteration_completed("subtask_loop"),
             enter("impl_task", 1),
             participant("impl_task", "parent-worker@1", Some("codex"), parent),
-            inputs("impl_task", "parent-context"),
+            inputs("impl_task", 1, "parent-context"),
             skill("impl_task", "parent-skill"),
             done("impl_task", "pass"),
             iteration_completed("task_loop"),
             iter("task_loop", "id = 't2'\ntitle = 'Second parent'", 1),
             // A node-only record before entry cannot overwrite the previous task.
-            inputs("impl_task", "unscoped-stale"),
+            inputs("impl_task", 1, "unscoped-stale"),
             skill("impl_task", "unscoped-stale"),
             iter("subtask_loop", "id = 'leaf'\ntitle = 'Second child'", 0),
             enter("impl_task", 1),
             participant("impl_task", "second-worker@1", Some("gemini"), second),
-            inputs("impl_task", "second-context"),
+            inputs("impl_task", 1, "second-context"),
             skill("impl_task", "second-skill"),
         ]);
         let mission = fold(&[], &events, None);

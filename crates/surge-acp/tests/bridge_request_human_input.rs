@@ -17,6 +17,10 @@ async fn request_human_input_notification_has_no_authority() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -33,7 +37,7 @@ async fn request_human_input_notification_has_no_authority() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.unwrap();
+    let sid = bridge.open_session(cfg).await.unwrap().session;
     bridge
         .send_message(sid, MessageContent::Text("?".into()))
         .await

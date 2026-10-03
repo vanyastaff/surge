@@ -9,9 +9,101 @@
 //! caller drops children into (or a finished atom). Interactivity is the
 //! caller's job (wrap in `.id(..).on_click(..)`).
 
+use gpui_kit::component::StyledExt;
 use gpui_kit::*;
 
 use crate::theme;
+
+pub const SESSIONS_PER_PAGE: usize = 20;
+
+/// Historical metadata, never evidence that a provider or all writers stopped.
+pub fn recorded_session_page(stream: &crate::run_stream::RunStreamState, page: usize) -> Div {
+    let mut panel = div()
+        .v_flex()
+        .gap(px(8.0))
+        .child(section_label("Recorded sessions"));
+    if !stream.session_history_confirmed() {
+        panel = panel.child(meta("Session history is incomplete or unconfirmed. The retained rows describe only its recorded prefix."));
+    }
+    if stream.sessions.is_empty() {
+        return panel.child(meta(if stream.session_history_confirmed() {
+            "No provider session opening recorded."
+        } else {
+            "Session metadata has not been confirmed."
+        }));
+    }
+    panel = panel.child(meta(format!(
+        "{} recorded openings · page {}",
+        stream.sessions.len(),
+        page + 1
+    )));
+    for record in stream
+        .sessions
+        .iter()
+        .rev()
+        .skip(page.saturating_mul(SESSIONS_PER_PAGE))
+        .take(SESSIONS_PER_PAGE)
+    {
+        let provider = record.opened.as_ref().map_or("unrecorded", |opened| {
+            opened.descriptor.provider_session_id().as_str()
+        });
+        let mut row = div()
+            .id(SharedString::from(format!(
+                "session-opening-{}",
+                record.seq
+            )))
+            .test_support()
+            .debug_selector({
+                let seq = record.seq;
+                move || format!("session-opening-{seq}")
+            })
+            .aria_label(SharedString::from(format!(
+                "Opening #{} · internal {} · provider {}",
+                record.seq, record.session, provider
+            )))
+            .v_flex()
+            .gap(px(3.0))
+            .child(meta(format!(
+                "Journal #{} · {} · {}",
+                record.seq, record.node, record.profile
+            )))
+            .child(meta(format!("Internal session {}", record.session)));
+        if let Some(opened) = &record.opened {
+            let mode = match opened.mode {
+                surge_core::execution_recovery::SessionOpenMode::New => "New",
+                surge_core::execution_recovery::SessionOpenMode::Resume => "Resume",
+                surge_core::execution_recovery::SessionOpenMode::Load => "Load",
+            };
+            row = row
+                .child(meta(format!(
+                    "{mode} · runtime {}",
+                    opened.descriptor.runtime()
+                )))
+                .child(meta(format!(
+                    "Provider session {}",
+                    opened.descriptor.provider_session_id().as_str()
+                )))
+                .child(meta(format!(
+                    "Invocation {}",
+                    opened.descriptor.invocation()
+                )));
+        } else {
+            row = row.child(meta(format!(
+                "Runtime {} · provider identity / opening mode unavailable",
+                record.runtime.as_deref().unwrap_or("unrecorded")
+            )));
+        }
+        if let Some(epoch) = record.handoff {
+            row = row.child(meta(format!("Opening epoch {epoch}")));
+        }
+        row = row.child(meta(match record.closed {
+            Some((seq, disposition)) => format!("Close recorded at #{seq}: {disposition:?}"),
+            None => "No close disposition recorded in this history".into(),
+        }));
+        panel = panel.child(row);
+    }
+    panel
+}
 
 /// Native sans-serif family for prose, controls, and navigation.
 #[cfg(target_os = "macos")]

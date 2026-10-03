@@ -17,6 +17,10 @@ pub(crate) struct SessionStateInner {
     /// ACP-side session string (from the agent's response to `session/new`).
     pub acp_session_id: String,
 
+    /// Callbacks have current execution authority only after the host dispatches a prompt.
+    /// Restored transcript callbacks received during session setup remain historical.
+    pub live_ingress: bool,
+
     /// Last cumulative token usage seen on a `SessionUpdate`. Flushed before
     /// `SessionEnded` (spec §5.7 ordering guarantee).
     pub last_token_usage: Option<TokenUsageSnapshot>,
@@ -50,6 +54,7 @@ impl SessionStateInner {
     pub(crate) fn new(acp_session_id: String) -> Self {
         Self {
             acp_session_id,
+            live_ingress: true,
             last_token_usage: None,
             // `false` matches the initial state where there is nothing to emit.
             // Phase 8.3 flush logic should be a no-op when `last_token_usage`

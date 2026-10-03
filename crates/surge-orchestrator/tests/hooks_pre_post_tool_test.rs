@@ -121,6 +121,8 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -147,10 +149,15 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -236,6 +243,8 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -261,10 +270,15 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],

@@ -53,18 +53,13 @@
 //! records, and stays outside `compile`'s reach) — see [`RunCompletion`]'s
 //! own doc for the boundary.
 //!
-//! ## A named limitation: `memory_receipts` is always empty today
+//! ## Legacy memory receipt coverage
 //!
 //! [`crate::context_pack::PackReceipt`] — what a context-pack selection kept,
-//! dropped, and why — exists and is computed at run-start
-//! (`surge-orchestrator::project_context`), but nothing yet appends it to the
-//! run event log (that module's own doc says so explicitly: "persisting it
-//! into the run event log ... [is a] separate concern owned elsewhere").
-//! `compile` reads only the event log, so [`RunReport::memory_receipts`] is
-//! the type `.autopilot/competitive-waves/spec.md` §18 requires, wired to the
-//! log — it is simply never populated until a future change emits an event
-//! carrying a `PackReceipt`. This is not a bug in this module; it is named
-//! here so nobody mistakes an empty list for "no memory was used."
+//! dropped, and why — is attached to each `StageInputsResolved` event whose
+//! resolved bindings include `project_memory`. Older journals decode with a
+//! missing receipt and retain a caveat; a new empty list means no stage in
+//! that journal recorded a memory binding.
 
 mod render;
 
@@ -116,6 +111,9 @@ pub struct RunReport {
     /// tasks (the registry's `task_ledger_index`) — see
     /// `surge_core::evidence`'s module doc for how the three line up.
     pub evidence_backed: Option<bool>,
+    /// Unknown for a pure historical report; the host enriches against current files.
+    #[serde(default)]
+    pub freshness: crate::verification_evidence::ProofFreshness,
     /// Every escalation the run raised, in event order — "why did this run
     /// stop making progress," which [`Self::completion`] alone cannot
     /// answer for an [`RunCompletion::Incomplete`] run.
@@ -143,9 +141,9 @@ pub struct RunReport {
     /// node's declaration (a declaration is a request; `SkillBound` is what
     /// actually happened).
     pub skills: Vec<SkillUsage>,
-    /// Context-pack selection receipts. See the module doc's "named
-    /// limitation" — always empty until a future event carries this.
-    pub memory_receipts: Vec<PackReceipt>,
+    /// Context-pack selection receipts attached to each node that actually
+    /// received a per-node `project_memory` binding and pack selection.
+    pub memory_receipts: Vec<NodeMemoryReceipt>,
     /// Operator steer messages delivered mid-run.
     pub steers: Vec<SteerEntry>,
     /// Every approval-shaped request/decision the run raised (skill trust
@@ -154,23 +152,15 @@ pub struct RunReport {
     pub approvals: Vec<ApprovalEntry>,
     /// Structural caveats about this report's own coverage — read by every
     /// renderer (`json`, `md`, `html` alike), so a machine consumer of the
-    /// JSON form sees the same "this section can't be trusted as complete"
-    /// warnings a human reading the Markdown or HTML form does, rather than
-    /// silently getting `"memory_receipts": []` and reading it as "memory
-    /// was not used." Always non-empty today: see the module doc's "named
-    /// limitation."
+    /// JSON form sees the same legacy-coverage warnings a human reading the
+    /// Markdown or HTML form does. This keeps journals without receipts distinguishable from
+    /// a run that did not bind project memory.
     pub caveats: Vec<String>,
 }
 
-/// Structural note: no `EventPayload` variant carries a
-/// [`crate::context_pack::PackReceipt`] into the log yet, so
-/// [`RunReport::memory_receipts`] is always empty. Pushed onto
-/// [`RunReport::caveats`] by every [`RunReport::compile`] call, in every
-/// format, so this is never mistaken for "no memory was used" — see the
-/// module doc's "named limitation."
-const MEMORY_RECEIPTS_CAVEAT: &str = "memory_receipts is always empty: no event in this log \
-     format carries a context-pack receipt yet (see surge_core::run_report's module doc) — \
-     this is a known coverage gap, not evidence memory went unused.";
+/// Legacy journals may predate per-node memory selection receipts.
+const MEMORY_RECEIPTS_CAVEAT: &str = "legacy journals may omit per-node memory selection receipts; \\
+     an absent receipt does not prove memory was unused.";
 
 impl RunReport {
     fn empty(run_id: RunId) -> Self {
@@ -179,6 +169,7 @@ impl RunReport {
             header: RunHeader::default(),
             completion: RunCompletion::Incomplete,
             evidence_backed: None,
+            freshness: crate::verification_evidence::ProofFreshness::Unknown,
             escalations: Vec::new(),
             nodes: Vec::new(),
             outcomes: Vec::new(),
@@ -241,7 +232,30 @@ impl RunReport {
             (RoadmapStatus, bool),
         > = std::collections::BTreeMap::new();
 
+        let mut verification = crate::verification_evidence::VerificationContext::default();
         for event in events {
+            use crate::verification_evidence::VerificationInvalidation;
+            let invalidated = verification.observe(&event.payload);
+            if let VerificationInvalidation::Task(task) = &invalidated {
+                ledger_task_ids
+                    .entry(task.clone())
+                    .or_insert((RoadmapStatus::Pending, false));
+            }
+            for (id, (_, verified)) in &mut ledger_task_ids {
+                if !(matches!(invalidated, VerificationInvalidation::All)
+                    || matches!(&invalidated, VerificationInvalidation::Task(task) if task == id))
+                {
+                    continue;
+                }
+                *verified = false;
+                if let Some(verdict) = report
+                    .verdicts
+                    .iter_mut()
+                    .find(|verdict| &verdict.task_id == id)
+                {
+                    verdict.result = VerdictResult::Superseded;
+                }
+            }
             // Positional header timestamps — every event updates these,
             // regardless of kind, so they stay meaningful even when
             // `RunStarted` itself is missing from a torn/partial slice.
@@ -401,16 +415,28 @@ impl RunReport {
                     task_id,
                     node,
                     evidence,
+                    report: sealed_report,
                 } => {
                     let authorized = active_graph
                         .as_ref()
                         .is_some_and(|graph| node_has_verification_authority(graph, node));
-                    let result = if authorized {
+                    let bound = crate::verification_evidence::accepts_claim(
+                        active_graph.as_ref(),
+                        node,
+                        task_id,
+                        *evidence,
+                        sealed_report.as_ref(),
+                        verification.subject.as_ref(),
+                        verification.criteria.get(task_id),
+                    );
+                    let result = if bound {
                         VerdictResult::Verified {
                             evidence: *evidence,
                         }
-                    } else {
+                    } else if !authorized {
                         VerdictResult::Unauthorized
+                    } else {
+                        VerdictResult::Superseded
                     };
                     // Mirrors `LedgerState::record_verified` exactly: an
                     // *unauthorized* verification does not touch the ledger
@@ -422,7 +448,7 @@ impl RunReport {
                     // evidence-backed bit, exactly as it does not in the
                     // live fold.
                     if authorized {
-                        ledger_task_ids.insert(task_id.clone(), (RoadmapStatus::Completed, true));
+                        ledger_task_ids.insert(task_id.clone(), (RoadmapStatus::Completed, bound));
                     }
                     upsert_verdict(
                         &mut report.verdicts,
@@ -604,6 +630,20 @@ impl RunReport {
                             decision: *decision,
                         });
                 },
+                EventPayload::StageInputsResolved {
+                    node,
+                    attempt,
+                    memory_receipt: Some(receipt),
+                    ..
+                } => report.memory_receipts.push(NodeMemoryReceipt {
+                    node: node.clone(),
+                    attempt: *attempt,
+                    receipt: receipt.clone(),
+                }),
+                EventPayload::StageInputsResolved {
+                    memory_receipt: None,
+                    ..
+                } => {},
                 // Deliberately not represented in any Run Report section —
                 // an exhaustive arm, not a wildcard, so a 58th `EventPayload`
                 // variant fails this match at compile time instead of
@@ -616,8 +656,7 @@ impl RunReport {
                 // `BootstrapTelemetry`), roadmap-amendment content events
                 // that are not themselves approvals (`RoadmapPatchDrafted`,
                 // `RoadmapPatchApplied`, `RoadmapUpdated`), stage-internal
-                // wiring (`StageInputsResolved`, `SessionOpened`,
-                // `SessionClosed`, `EdgeTraversed`), raw tool-call telemetry
+                // wiring (`SessionOpened`, `SessionClosed`, `EdgeTraversed`), raw tool-call telemetry
                 // (`ToolCalled`, `ToolResultReceived`, already summarized by
                 // `cost` and `evidence`), loop bookkeeping
                 // (`LoopIterationStarted`, `LoopIterationCompleted`,
@@ -635,7 +674,6 @@ impl RunReport {
                 | EventPayload::RoadmapPatchDrafted { .. }
                 | EventPayload::RoadmapPatchApplied { .. }
                 | EventPayload::RoadmapUpdated { .. }
-                | EventPayload::StageInputsResolved { .. }
                 | EventPayload::SessionOpened { .. }
                 | EventPayload::SessionClosed { .. }
                 | EventPayload::EdgeTraversed { .. }
@@ -652,7 +690,21 @@ impl RunReport {
                 | EventPayload::ForkCreated { .. }
                 | EventPayload::SubgraphEntered { .. }
                 | EventPayload::SubgraphExited { .. }
-                | EventPayload::NotifyDelivered { .. } => {},
+                | EventPayload::VerificationSubjectObserved { .. }
+                | EventPayload::VerificationCriteriaAccepted { .. }
+                | EventPayload::NotifyDelivered { .. }
+                | EventPayload::WorkItemAttemptBound { .. }
+                | EventPayload::ExecutionWriterIntent { .. }
+                | EventPayload::ExecutionWriterEstablished { .. }
+                | EventPayload::ExecutionWriterClosed { .. }
+                | EventPayload::SessionEstablishmentRequested { .. }
+                | EventPayload::RunSuspended { .. }
+                | EventPayload::RunRecoveryRequired { .. }
+                | EventPayload::RunContinued { .. }
+                | EventPayload::StageOutcomeCommitted { .. } => {},
+                EventPayload::StageRouteCommitted { .. }
+                | EventPayload::GateStageOutcomeCommitted { .. }
+                | EventPayload::GateStageRouteCommitted { .. } => {},
             }
         }
 
@@ -1098,6 +1150,17 @@ pub struct SkillUsage {
     pub hash: ContentHash,
     /// Whether the operator-approval trust gate was active for this bind.
     pub gate_enabled: bool,
+}
+
+/// Memory selection proof for one node-stage attempt's resolved inputs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeMemoryReceipt {
+    /// Node whose resolved bindings included `project_memory`.
+    pub node: NodeKey,
+    /// Attempt number, or zero for legacy events that predate attempt binding.
+    pub attempt: u32,
+    /// Selection receipt built specifically for this node-stage attempt.
+    pub receipt: PackReceipt,
 }
 
 /// One operator steer message delivered mid-run (`SteerDelivered`).

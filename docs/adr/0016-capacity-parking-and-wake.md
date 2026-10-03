@@ -129,7 +129,7 @@ about any specific runtime.
 | OpenAI `rate_limit_exceeded` (prose: *"Please try again in 20s"*) | yes | None — phrase not recognized |
 | OpenAI `insufficient_quota` | yes | None |
 | Google `RESOURCE_EXHAUSTED` | yes | None — a real `retryDelay` JSON field, if present, also would not be recognized (parser looks only for literal `"retry-after"`/`"retry after"` text) |
-| Anthropic `overloaded_error` | yes | None |
+| Anthropic `overloaded_error` (529 transient overload, not quota exhaustion) | no | N/A |
 | `"Claude AI usage limit reached\|<epoch>"` (subscription-style) | yes | None — epoch suffix not recognized |
 | Surge's own `SurgeError::RateLimit` Display shape (*"Rate limit exceeded ... retry after 30s"*) | yes | **Some(30s)** |
 | Bare *"please retry after 30s"* with no rate-limit keyword | **no** — never reaches the rate-limit arm | N/A |

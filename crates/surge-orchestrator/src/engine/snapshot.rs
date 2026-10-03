@@ -34,6 +34,9 @@ pub struct EngineSnapshot {
     pub applied_graph_revision_seq: u64,
     /// Non-`None` when the run was paused waiting for human input.
     pub pending_human_input: Option<PendingHumanInputSnapshot>,
+    /// Nonterminal continuation phase, including an already committed outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_stage: Option<surge_core::execution_recovery::PendingStagePhase>,
     /// Git checkpoint for the exact working files at this stage boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_checkpoint: Option<surge_git::checkpoint::WorkspaceCheckpoint>,
@@ -399,6 +402,7 @@ impl EngineSnapshot {
             applied_graph_revision_seq: 0,
             pending_human_input: None,
             workspace_checkpoint: None,
+            pending_stage: None,
         }
     }
 
@@ -433,6 +437,7 @@ impl EngineSnapshot {
                     applied_graph_revision_seq: 0,
                     pending_human_input: v1.pending_human_input,
                     workspace_checkpoint: None,
+                    pending_stage: None,
                 })
             },
             Some(2) => serde_json::from_value(value)

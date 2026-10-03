@@ -4,7 +4,7 @@
 **Blocked by:** —
 **Зона:** `crates/surge-core/src/skill/` · `crates/surge-core/tests/fixtures/skills/`
 **Волна:** 1
-**Status:** re-cut после ревью — см. D04 в манифесте
+**Status:** implemented; re-verification 2026-10-03
 
 ## Что должно заработать
 
@@ -42,3 +42,15 @@
 `test-engineer` — тесты, `rust-reviewer` — ревью. Гейт: `cargo clippy --workspace
 --all-targets --all-features -- -D warnings` + `cargo nextest run` + `cargo fmt` — все зелёные.
 Отсутствующая зависимость или инструмент → верни `BLOCKED`, не устанавливай.
+
+## Повторная проверка (2026-10-03)
+
+Ранее записанные хвосты D04 теперь отражены в реализации: scanner читает обе позиции
+Agent Plugins manifest (`.claude-plugin/plugin.json` и корневую `plugin.json`), парсер
+принимает и игнорирует block list/scalar под чужими frontmatter-ключами, ошибки чтения
+появляются из `resolve` как типизированный `SkillError::Io`, а версия вложенного skill
+наследуется из plugin manifest. Корпусный тест использует независимый `find` oracle и
+сверяет число обнаруженных паков с диском, затем разрешает каждый ref.
+
+Проверено: `cargo test -j2 -p surge-core --test skill_catalog` — 14 passed, включая
+`real_corpus_packs_resolve_without_rejection` на текущем локальном корпусе.

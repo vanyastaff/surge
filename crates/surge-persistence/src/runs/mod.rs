@@ -51,6 +51,7 @@ pub mod escalations;
 pub(crate) mod file_lock;
 pub mod inbox_queue;
 pub mod inspection;
+mod inspection_route;
 mod macros;
 pub mod migrations;
 pub mod pragmas;
@@ -64,7 +65,9 @@ pub mod seq;
 pub mod storage;
 pub mod subscribe;
 pub mod types;
+mod verification;
 pub mod views;
+pub use verification::VerificationProofRecord;
 pub mod writer;
 pub(crate) mod writer_slot;
 

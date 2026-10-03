@@ -46,6 +46,12 @@ pub struct StageExecution {
     pub outcome: Option<String>,
     /// Cumulative cost in USD attributed to this attempt.
     pub cost_usd: f64,
+    /// Cost in USD when every usage event reported known cost; absent otherwise.
+    #[serde(default)]
+    pub known_cost_usd: Option<f64>,
+    /// Whether any usage event for this attempt omitted its cost.
+    #[serde(default)]
+    pub cost_unknown: bool,
     /// Cumulative input tokens for this attempt.
     pub tokens_in: u64,
     /// Cumulative output tokens for this attempt.

@@ -4,7 +4,7 @@
 **Blocked by:** 05 · **вторая половина R21 — за 13**
 **Зона:** `crates/surge-cli/src/commands/memory.rs` · `crates/surge-persistence/src/memory/`
 **Волна:** 2
-**Status:** ready
+**Status:** implemented; acceptance rechecked 2026-10-03
 
 ## Что должно заработать
 
@@ -70,21 +70,11 @@
 по подстроке**. Есть тест-сторож, что MCP и bootstrap не принимаются за guard.
 Регулярками по `reason` больше не пользоваться нигде.
 
-**Но цену платишь ты, и она названа заранее — двумя ревьюерами независимо:**
+`read_escalations(&RunReader)` отвечает про один ран, с SQL-фильтром `kind` по
+`idx_events_kind`; атрибуция ноды — коррелированный подзапрос к
+`stage_executions.started_seq`. Полного сканирования событий в боевом пути нет.
 
-- `read_escalations(&RunReader)` отвечает про **один** ран и делает **полный проход
-  лога** — `read_events(EventSeq(0)..EventSeq(u64::MAX))` со свёрткой в Rust, при
-  живом индексе `idx_events_kind` (`0001_initial.sql:8`).
-- **Кросс-ранового входа нет.** Сигнатура берёт один `RunReader`; реестр
-  (`registry.rs`, `RunFilter`/`RunSummary`) не тронут. Вопрос «какие раны сняты
-  guard'ом» — во множественном числе — сегодня решается перебором **всех ранов ×
-  всех событий каждого**.
-
-→ Условия: (а) фильтр по `kind` уходит в SQL; (б) появляется кросс-рановый вход,
-либо в `interfaces.md` явно записано, что перебор — на стороне аудита, чтобы
-следующий не наткнулся на это в середине работы.
-
-**Сверено по коду перед перезапуском (2026-09-06): (а) закрыто, не делай его заново.**
+**Сверено по коду перед перезапуском (2026-09-06): не делай его заново.**
 `read_escalations` в `crates/surge-persistence/src/runs/escalations.rs` фильтрует
 `WHERE kind = 'EscalationRequested'` в SQL по `idx_events_kind` — полного прохода лога
 на боевом пути нет. `fold_escalations` рядом — **не** дубль, а чистая эталонная
@@ -92,7 +82,23 @@
 `query::aggregate_status` и `query::current_status`. Атрибуция ноды — коррелированный
 подзапрос к `stage_executions.started_seq`, без переигрывания событий.
 
-**(б) остаётся тебе целиком.** Сигнатура по-прежнему `read_escalations(&RunReader)` —
-вопрос **про один ран**. Твой вопрос — во множественном числе. Либо кросс-рановый вход
-рядом с реестром, либо явная запись в `interfaces.md`, что перебор ранов живёт на
-стороне аудита. Молча обойти все раны и не сказать об этом — не вариант.
+Межрановая выборка разрешена решением в `interfaces.md`: аудит перебирает переданный
+срез run summaries и применяет индексированный per-run query. Новый registry index
+сознательно не добавляется.
+
+## Повторная приёмка (2026-10-03)
+
+Условие (б) разрешено принятым решением в `interfaces.md`, раздел «Таск 08
+(перезапуск): вторая половина R21 закрыта»: аудит перебирает переданный срез run
+summaries и для каждого использует SQL-индексированный per-run запрос. Новый registry
+index сознательно не добавлялся. Остальные пункты старого долга уже отражены в коде и
+тестах: forward-slash Windows drive form, `file:///` включая content drift, ambiguous
+colon-path через проверку существования относительно project root, `$SURGE_HOME` для
+default memory path и typed guard correlation.
+
+Проверки:
+
+- `cargo test -j2 -p surge-persistence --lib memory::audit::tests` — 18 passed.
+- `cargo test -j2 -p surge-cli --test cli_memory_audit_test` — 2 passed (JSON и text).
+- `cargo test -j2 -p surge-persistence --lib add_claim_fails_on_duplicate_id` — 1 passed.
+- `cargo test -j2 -p surge-core --lib deserializing_verified_status_without_verified_provenance_fails` — 1 passed.

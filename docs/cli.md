@@ -354,3 +354,56 @@ scoped; to halt MCP activity in a live run, abort the run. Full reference:
 - [Artifact Conventions](conventions/README.md) — generated artifact contracts and validator examples
 - [Workflow](workflow.md) — how runs are bootstrapped, executed, and logged
 - [Architecture](ARCHITECTURE.md) — the canonical architecture document
+
+## Persistent tasks
+
+`surge task` owns one durable accepted task across run attempts. Its identifiers
+are distinct from tracker tickets and run-local roadmap task IDs. Commands send
+mutations to the daemon; they do not create another embedded engine.
+
+Requirements files contain an object such as:
+
+```json
+{"text":"Implement the accepted behavior","criteria":["The acceptance test passes"]}
+```
+
+Create with `surge task create --operation <work-item-op-id> --project <path>
+--title <title> --requirements <file>`. Inspect with `show <item>` or `list`.
+`revisions`, `discussion` and `attempts` take an item and optional `--after`
+cursor and `--limit` (1–100).
+
+All mutations require an operation ID; mutations of an existing item also require
+its current `--version`. Repeating the same operation and body returns the same
+result; changing that body conflicts. `edit --revision <accepted-revision>
+--requirements <file>` explicitly accepts a new revision. `discuss <body>
+--proposal <file>` records a proposal without accepting it; `accept-proposal
+--revision <accepted-revision> <discussion-sequence>` explicitly accepts it.
+Each accepted revision records its content hash and acceptance provenance.
+
+`start <item> <flow.toml> --operation <id> --version <version>` reserves one run
+before dispatch. Its accepted revision/hash/text are injected into agent prompts.
+An optional `--quota-recovery <policy.json>` supplies a frozen policy document
+with the persistence `FrozenQuotaPolicy` shape (`{"stages": [...]}`). The daemon
+validates it against the graph and the resolved primary runtime before creating
+the reservation; its exact body participates in operation replay identity. MCP
+`surge_task_control` accepts the same optional `quota_recovery` JSON value.
+Omitting it preserves the empty-policy behavior. Candidate routing/wake
+execution is still being wired; accepting and freezing this field does not yet
+enable provider fallback.
+Retrying an unresolved reservation uses that run; a terminal attempt requires a
+new operation. `attach-pr <item> <owner/repository> <number>` records a single
+GitHub PR identity. Subsequent attempts retain that PR and workspace, including
+dirty and untracked files. Creation requires a clean source Git checkout and
+fails explicitly on dirty input; the source checkout is never reset.
+
+`archive <item>` refuses an active task and deletes no workspace or branch.
+Accepted edits also refuse active tasks in this foundation. Durable discussion
+remains available. True suspension, provider-session continuation and desktop
+task controls are subsequent increments; these commands do not implement them.
+
+The MCP `surge_task_read` exposes the same paged records. `surge_task_control`
+requires the existing write authorization and audit and routes through the daemon.
+Its discussion proposals cannot accept requirements; explicit human CLI controls
+own acceptance. Historical attempts identify superseded accepted revisions;
+a run's historical verification cannot prove a newer task revision. Usage counts
+unique associated runs with known cost and unknown/incomplete counts separately.

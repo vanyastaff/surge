@@ -102,6 +102,10 @@ async fn exercise() -> String {
     let mut events = bridge.subscribe();
     let session = bridge
         .open_session(SessionConfig {
+            writer_id: surge_core::id::ExecutionWriterId::new(),
+            invocation: surge_core::id::StageInvocationId::new(),
+            runtime: "fixture".into(),
+            opening: Default::default(),
             config_selections: Vec::new(),
             stage_mcp: Some(Box::new(surge_acp::bridge::session::StageMcpConfig {
                 session: surge_core::SessionId::new(),
@@ -129,7 +133,8 @@ async fn exercise() -> String {
             env: BTreeMap::from([("SURGE_STAGE_MCP_AUTH".into(), literal.into())]),
         })
         .await
-        .unwrap();
+        .unwrap()
+        .session;
     let observed;
     {
         let prompt = bridge.send_message(session, MessageContent::Text("work".into()));

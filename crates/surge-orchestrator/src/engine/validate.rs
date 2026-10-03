@@ -17,6 +17,42 @@ use surge_core::edge::{Edge, EdgeKind};
 use surge_core::graph::Graph;
 use surge_core::keys::NodeKey;
 
+/// Bind every frozen quota policy to an actual agent node and its selected primary runtime.
+pub(crate) fn validate_quota_policy(
+    graph: &Graph,
+    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy,
+    profiles: Option<&crate::profile_loader::ProfileRegistry>,
+) -> Result<(), EngineError> {
+    for stage in policy.stages() {
+        let node = graph.nodes.get(stage.node()).ok_or_else(|| {
+            EngineError::GraphInvalid(format!(
+                "quota recovery references missing node {}",
+                stage.node()
+            ))
+        })?;
+        let surge_core::node::NodeConfig::Agent(config) = &node.config else {
+            return Err(EngineError::GraphInvalid(format!(
+                "quota recovery can only target agent nodes: {}",
+                stage.node()
+            )));
+        };
+        if let Some(primary) =
+            crate::engine::stage::agent::resolve_node_runtime_id(profiles, config)
+            && stage
+                .candidates()
+                .first()
+                .is_none_or(|candidate| candidate.candidate().runtime() != primary.as_str())
+        {
+            return Err(EngineError::GraphInvalid(format!(
+                "quota recovery primary candidate does not match node {} runtime {}",
+                stage.node(),
+                primary
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Reject profiles whose required prompt inputs are missing or ambiguous.
 pub(crate) fn validate_agent_inputs(
     config: &surge_core::agent_config::AgentConfig,
@@ -1420,6 +1456,7 @@ mod tests {
             name: ArchetypeName::MultiMilestone,
             milestones: Some(3),
             edit_loop_cap: None,
+            node_capacity_estimate: None,
         }
     }
 
@@ -1500,6 +1537,7 @@ mod tests {
                 name: variant,
                 milestones: None,
                 edit_loop_cap: None,
+                node_capacity_estimate: None,
             };
             let g = graph_with_archetype_and_loop(Some(meta), iterable.clone());
             assert!(
@@ -1520,6 +1558,7 @@ mod tests {
             name: ArchetypeName::Feature,
             milestones: None,
             edit_loop_cap: None,
+            node_capacity_estimate: None,
         };
         let g = graph_with_archetype_and_loop(Some(meta), iterable);
         match validate_archetype_topology(&g).unwrap_err() {
@@ -1558,6 +1597,7 @@ mod tests {
             name: ArchetypeName::BugFix,
             milestones: None,
             edit_loop_cap: None,
+            node_capacity_estimate: None,
         };
         let g = graph_with_archetype_and_loop(Some(meta), IterableSource::Static(vec![]));
         let advisories = archetype_advisories(&g);

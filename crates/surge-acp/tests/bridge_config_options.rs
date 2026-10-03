@@ -18,6 +18,10 @@ fn config(
     selections: Vec<ConfigSelection>,
 ) -> SessionConfig {
     SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: selections,
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -67,7 +71,7 @@ async fn chosen_model_and_reasoning_level_are_set_on_the_agent_session() {
         recorded.lines().collect::<Vec<_>>(),
         ["model=opus", "effort=high"]
     );
-    bridge.close_session(session).await.unwrap();
+    bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
 }
 
@@ -123,6 +127,6 @@ async fn a_best_effort_option_the_agent_does_not_offer_is_skipped() {
         .expect("a floor the agent lacks must not fail the session");
     let recorded = std::fs::read_to_string(&record).expect("the model was still set");
     assert_eq!(recorded.lines().collect::<Vec<_>>(), ["model=opus"]);
-    bridge.close_session(session).await.unwrap();
+    bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
 }

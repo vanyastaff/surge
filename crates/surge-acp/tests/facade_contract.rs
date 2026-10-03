@@ -23,8 +23,24 @@ struct MinimalMock;
 
 #[async_trait::async_trait]
 impl BridgeFacade for MinimalMock {
-    async fn open_session(&self, _: SessionConfig) -> Result<SessionId, OpenSessionError> {
-        Ok(SessionId::new())
+    async fn open_session(
+        &self,
+        _: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
+        Ok(surge_core::execution_recovery::OpenedSession::new(
+            SessionId::new(),
+            surge_core::execution_recovery::ProviderSessionDescriptor::new(
+                surge_core::execution_recovery::ProviderSessionId::new("fixture".into()).unwrap(),
+                surge_core::id::StageInvocationId::new(),
+                "fixture".into(),
+                surge_core::ContentHash::compute(b"fixture"),
+                std::path::PathBuf::from("/tmp/wt"),
+                Default::default(),
+            )
+            .unwrap(),
+            surge_core::execution_recovery::SessionOpenMode::New,
+        )
+        .unwrap())
     }
     async fn send_message(&self, _: SessionId, _: MessageContent) -> Result<(), SendMessageError> {
         Ok(())
@@ -60,6 +76,10 @@ impl BridgeFacade for MinimalMock {
 
 fn minimal_session_config() -> SessionConfig {
     SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock { args: vec![] },
@@ -78,7 +98,7 @@ fn minimal_session_config() -> SessionConfig {
 /// Generic contract: any BridgeFacade impl can be opened and closed.
 async fn open_and_close<B: BridgeFacade>(b: &B) -> bool {
     match b.open_session(minimal_session_config()).await {
-        Ok(id) => b.close_session(id).await.is_ok(),
+        Ok(opened) => b.close_session(opened.session).await.is_ok(),
         Err(_) => false,
     }
 }

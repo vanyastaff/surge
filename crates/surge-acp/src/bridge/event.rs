@@ -113,6 +113,8 @@ pub enum BridgeEvent {
         summary: String,
         /// File paths the agent created or modified, as reported.
         artifacts_produced: Vec<String>,
+        /// Inline checks associated with this exact outcome candidate.
+        verification_report: Option<Box<surge_core::roadmap::VerificationReportArtifact>>,
     },
 
     /// Engine-injected `request_human_input` was called.
@@ -279,6 +281,8 @@ mod tests {
             outcome: OutcomeKey::from_str("done").unwrap(),
             summary: "did it".into(),
             artifacts_produced: vec!["a.txt".into(), "b.txt".into()],
+
+            verification_report: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         let back: BridgeEvent = serde_json::from_str(&s).unwrap();
@@ -288,6 +292,7 @@ mod tests {
                 outcome,
                 summary,
                 artifacts_produced,
+                ..
             } => {
                 assert_eq!(s2, session);
                 assert_eq!(outcome.as_str(), "done");

@@ -93,6 +93,30 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0019-telegram-pairing-target",
         include_str!("migrations/registry/0019_telegram_pairing_target.sql"),
     ),
+    (
+        "registry-0020-terminal-comment-outbox",
+        include_str!("migrations/registry/0020_terminal_comment_outbox.sql"),
+    ),
+    (
+        "registry-0021-verification-binding",
+        include_str!("migrations/registry/0021_verification_binding.sql"),
+    ),
+    (
+        "registry-0022-work-items",
+        include_str!("migrations/registry/0022_work_items.sql"),
+    ),
+    (
+        "registry-0023-execution-controls",
+        include_str!("migrations/registry/0023_execution_controls.sql"),
+    ),
+    (
+        "registry-0024-recovery-cycles",
+        include_str!("migrations/registry/0024_recovery_cycles.sql"),
+    ),
+    (
+        "registry-0025-quota-handoffs",
+        include_str!("migrations/registry/0025_quota_handoffs.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -108,6 +132,26 @@ pub const PER_RUN_MIGRATIONS: MigrationSet = &[
     (
         "per-run-0003-task-ledger",
         include_str!("migrations/per_run/0003_task_ledger.sql"),
+    ),
+    (
+        "per-run-0004-verification-binding",
+        include_str!("migrations/per_run/0004_verification_binding.sql"),
+    ),
+    (
+        "per-run-0005-stage-outcome-commits",
+        include_str!("migrations/per_run/0005_stage_outcome_commits.sql"),
+    ),
+    (
+        "per-run-0006-gate-stage-commits",
+        include_str!("migrations/per_run/0006_gate_stage_commits.sql"),
+    ),
+    (
+        "per-run-0007-stage-session-attribution",
+        include_str!("migrations/per_run/0007_stage_session_attribution.sql"),
+    ),
+    (
+        "per-run-0008-stage-known-cost",
+        include_str!("migrations/per_run/0008_stage_known_cost.sql"),
     ),
 ];
 
@@ -357,5 +401,93 @@ mod tests {
             .execute("DELETE FROM events WHERE seq = 1", [])
             .unwrap_err();
         assert!(err.to_string().contains("append-only"));
+    }
+}
+
+#[cfg(test)]
+mod verification_upgrade_tests {
+    use super::*;
+    use crate::runs::clock::MockClock;
+    #[test]
+    fn upgrade_downgrades_old_registry_proof_without_any_new_run_event() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let binding_migration = REGISTRY_MIGRATIONS
+            .iter()
+            .position(|(id, _)| *id == "registry-0021-verification-binding")
+            .expect("verification downgrade migration is registered");
+        let previous: MigrationSet = Box::leak(
+            REGISTRY_MIGRATIONS[..binding_migration]
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let clock = MockClock::new(100);
+        apply(&mut conn, previous, &clock).unwrap();
+        assert!(!conn.query_row("SELECT EXISTS(SELECT 1 FROM _migrations WHERE id='registry-0021-verification-binding')",[],|row|row.get::<_,bool>(0)).unwrap());
+        conn.execute("INSERT INTO task_ledger_index(run_id,task_id,project_path,status,verified,updated_seq,updated_at) VALUES ('legacy','t1','/repo','completed',1,1,1)",[]).unwrap();
+        apply(&mut conn, REGISTRY_MIGRATIONS, &clock).unwrap();
+        let verified: bool = conn
+            .query_row("SELECT verified FROM task_ledger_index", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(!verified);
+        apply(&mut conn, REGISTRY_MIGRATIONS, &clock).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM task_ledger_index", [], |row| row
+                .get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[cfg(test)]
+mod work_item_upgrade_tests {
+    use super::*;
+    use crate::runs::clock::MockClock;
+    #[test]
+    fn adding_persistent_tasks_preserves_existing_registry_rows_without_association() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let previous: MigrationSet = Box::leak(
+            REGISTRY_MIGRATIONS[..REGISTRY_MIGRATIONS.len() - 1]
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let clock = MockClock::new(100);
+        apply(&mut conn, previous, &clock).unwrap();
+        conn.execute("INSERT INTO runs(id,project_path,status,started_at) VALUES ('legacy-run','/repo','completed',1)",[]).unwrap();
+        conn.execute("INSERT INTO ticket_index(task_id,source_id,provider,run_id,state,first_seen,last_seen) VALUES ('tracker-7','source','github','legacy-run','completed','1','1')",[]).unwrap();
+        apply(&mut conn, REGISTRY_MIGRATIONS, &clock).unwrap();
+        apply(&mut conn, REGISTRY_MIGRATIONS, &clock).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_path FROM runs WHERE id='legacy-run'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "/repo"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT run_id FROM ticket_index WHERE task_id='tracker-7'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "legacy-run"
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM work_items", [], |row| row
+                .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM work_item_attempts", [], |row| row
+                .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
     }
 }

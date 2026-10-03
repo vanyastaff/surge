@@ -109,7 +109,15 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
             if let Some(prompt) = &e.prompt {
                 let _ = writeln!(out, "      ↳ {}", first_line(prompt));
             }
+            print_display_action(out, e);
             print_capacity_line(out, e);
+        }
+    }
+
+    for group in [AttentionGroup::Recovery, AttentionGroup::Unknown] {
+        for e in entries.iter().filter(|e| e.attention == group) {
+            let _ = writeln!(out, "\n⚠ {}  {}", short_run(e.run_id), e.display.label());
+            print_display_action(out, e);
         }
     }
 
@@ -119,6 +127,7 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
             let node = e.active_node.as_deref().unwrap_or("-");
             let _ = writeln!(out, "  {}  @{}", short_run(e.run_id), node);
             let _ = writeln!(out, "      ↻ {}", format_wake_line(e));
+            print_display_action(out, e);
             print_capacity_line(out, e);
         }
     }
@@ -175,6 +184,13 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
 /// `entry.wake_at`/`wake_basis` are set together or not at all (see
 /// `classify`'s `Attention::Waiting` arm), so the `None` arms below are
 /// defensive, not an expected split state.
+fn print_display_action(out: &mut impl std::io::Write, entry: &InboxEntry) {
+    let _ = writeln!(out, "      {}", entry.display.label());
+    if let Some(action) = entry.display.next_action() {
+        let _ = writeln!(out, "      {action}");
+    }
+}
+
 fn format_wake_line(entry: &InboxEntry) -> String {
     let basis_label = match entry.wake_basis {
         Some(WakeBasis::ObservedReset) => "observed provider reset",
@@ -249,6 +265,26 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn recovery_and_unknown_are_visible_without_all_and_explain_next_action() {
+        use surge_core::run_display::{RunDisplayState, WaitingReason};
+        let mut entry = done_entry(RunId::new(), None);
+        entry.done_reason = None;
+        entry.attention = AttentionGroup::Recovery;
+        entry.display = RunDisplayState::Waiting(WaitingReason::RecoveryRequired);
+        let mut unknown = done_entry(RunId::new(), None);
+        unknown.done_reason = None;
+        unknown.attention = AttentionGroup::Unknown;
+        unknown.display = RunDisplayState::Unknown;
+        let mut bytes = Vec::new();
+        print_inbox_to(&mut bytes, &[entry, unknown], false);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("Recovery requires an operator"));
+        assert!(text.contains("Inspect the run and choose whether to resume or abort."));
+        assert!(text.contains("Run state is unconfirmed"));
+        assert!(text.contains("Inspect the run journal before taking action."));
+    }
+
+    #[test]
     fn print_inbox_waiting_group_shows_wake_time_and_basis() {
         // Mutation coverage (Task 12 M5 acceptance): before this test, the
         // entire `if !waiting.is_empty() { .. }` block in `print_inbox_to`
@@ -262,6 +298,13 @@ mod tests {
         let entry = InboxEntry {
             run_id: RunId::new(),
             project_path: PathBuf::from("/proj"),
+            display: surge_core::run_display::RunDisplayState::Waiting(
+                surge_core::run_display::WaitingReason::Capacity {
+                    until: wake_at,
+                    basis: WakeBasis::ObservedReset,
+                    runtime: None,
+                },
+            ),
             attention: AttentionGroup::Waiting,
             done_reason: None,
             active_node: Some("plan".into()),
@@ -295,6 +338,9 @@ mod tests {
         InboxEntry {
             run_id,
             project_path: PathBuf::from("/proj"),
+            display: surge_core::run_display::RunDisplayState::Done(
+                surge_core::TerminalReason::Completed,
+            ),
             attention: AttentionGroup::Done,
             done_reason: Some(DoneReason::Completed),
             active_node: None,

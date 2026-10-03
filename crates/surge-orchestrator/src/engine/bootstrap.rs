@@ -10,10 +10,9 @@
 //!   original outcome continues routing forward as declared.
 //! - On parse / validation failure the engine appends `BootstrapEditRequested`
 //!   (so [`surge_core::run_state::RunMemory::bootstrap_edit_counts`] increments
-//!   via the existing fold rule) followed by a synthetic `OutcomeReported`
-//!   carrying the [`VALIDATION_FAILED_OUTCOME`] key — the bundled bootstrap
-//!   graph (Task 17) wires that key to a `Backtrack` edge that re-enters the
-//!   Flow Generator agent.
+//!   via the existing fold rule). The agent stage commits the validation-failure
+//!   outcome together with its other stage effects, and the bundled bootstrap
+//!   graph wires that key to a `Backtrack` edge that re-enters the Flow Generator.
 //! - When the per-stage edit-loop cap (`EngineRunConfig.bootstrap.edit_loop_cap`)
 //!   is already exhausted the hook short-circuits with `EscalationRequested`,
 //!   mirroring the human-gate cap behaviour wired in Task 9.
@@ -22,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
-use surge_core::keys::{NodeKey, OutcomeKey};
+use surge_core::keys::NodeKey;
 use surge_core::run_event::{BootstrapStage, EscalationCause, EventPayload, VersionedEventPayload};
 use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
@@ -125,10 +124,9 @@ pub enum FlowValidationDecision {
     /// outcome.
     Materialized,
     /// Parse or validation failed and the per-stage edit-loop cap still has
-    /// budget left. The engine has appended `BootstrapEditRequested` and a
-    /// synthetic `OutcomeReported` carrying [`VALIDATION_FAILED_OUTCOME`];
-    /// the caller must override the routing outcome to that key so the
-    /// bootstrap graph's `Backtrack` edge re-enters the Flow Generator.
+    /// budget left. The engine has appended `BootstrapEditRequested`; the
+    /// caller must commit [`VALIDATION_FAILED_OUTCOME`] as the stage outcome so
+    /// the bootstrap graph's `Backtrack` edge re-enters the Flow Generator.
     EditRequested {
         /// Operator-readable feedback text appended to `BootstrapEditRequested`.
         feedback: String,
@@ -164,9 +162,9 @@ fn locate_flow_artifact(memory: &RunMemory, worktree: &Path) -> Option<PathBuf> 
 
 /// Run the Flow Generator post-processing hook.
 ///
-/// `node` is the Flow Generator agent node key; the synthetic `OutcomeReported`
-/// emitted on failure is attributed to it so routing dispatches `(node,
-/// validation_failed)` to the Backtrack edge.
+/// `node` is the Flow Generator agent node key. The caller records the returned
+/// validation-failure outcome in the same durable stage-effects batch as its
+/// invocation commit.
 ///
 /// `memory` is the run state observed BEFORE the post-processing pass — the
 /// `bootstrap_edit_counts[Flow]` snapshot drives the cap check, mirroring the
@@ -321,8 +319,7 @@ fn validate_generated_graph(
     validate_archetype_topology(graph).map_err(|e| format!("archetype topology check failed: {e}"))
 }
 
-/// Persist the failure-path event suffix (`BootstrapEditRequested` + synthetic
-/// `OutcomeReported`) when the cap still has budget, or `EscalationRequested`
+/// Persist `BootstrapEditRequested` when the cap still has budget, or `EscalationRequested`
 /// when it doesn't. Centralises the cap accounting so the success path stays
 /// linear above.
 async fn route_validation_failure(
@@ -392,17 +389,6 @@ async fn route_validation_failure(
         .await
         .map_err(|e| StageError::Storage(format!("append BootstrapEditRequested: {e}")))?;
 
-    let synthetic_outcome = OutcomeKey::try_from(VALIDATION_FAILED_OUTCOME)
-        .map_err(|e| StageError::Internal(format!("validation retry outcome key: {e}")))?;
-    writer
-        .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
-            node: node.clone(),
-            outcome: synthetic_outcome,
-            summary: format!("Flow Generator validation retry: {feedback}"),
-        }))
-        .await
-        .map_err(|e| StageError::Storage(format!("append synthetic OutcomeReported: {e}")))?;
-
     Ok(FlowValidationDecision::EditRequested { feedback })
 }
 
@@ -415,8 +401,8 @@ mod tests {
     use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
     use surge_core::graph::{GraphMetadata, SCHEMA_VERSION};
     use surge_core::id::RunId;
+    use surge_core::keys::OutcomeKey;
     use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
-    use surge_core::run_event::EventPayload;
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::{EventSeq, Storage};
     use tempfile::TempDir;
@@ -544,6 +530,7 @@ mod tests {
             name: surge_core::ArchetypeName::Linear3,
             milestones: None,
             edit_loop_cap: None,
+            node_capacity_estimate: None,
         });
         let graph = surge_core::graph::Graph {
             schema_version: SCHEMA_VERSION,
@@ -586,18 +573,6 @@ mod tests {
             .iter()
             .map(|e| e.payload.payload.discriminant_str())
             .collect()
-    }
-
-    async fn synthetic_outcome_value(storage: &Arc<Storage>, run_id: RunId) -> Option<String> {
-        let reader = storage.open_run_reader(run_id).await.expect("open reader");
-        let events = reader
-            .read_events(EventSeq(0)..EventSeq(64))
-            .await
-            .expect("read_events");
-        events.iter().find_map(|e| match &e.payload.payload {
-            EventPayload::OutcomeReported { outcome, .. } => Some(outcome.as_str().to_owned()),
-            _ => None,
-        })
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -687,7 +662,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn parse_failure_emits_edit_requested_and_synthetic_outcome() {
+    async fn parse_failure_emits_edit_request_before_stage_outcome_is_committed() {
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -723,19 +698,11 @@ mod tests {
             .iter()
             .position(|k| *k == "BootstrapEditRequested")
             .expect("BootstrapEditRequested missing");
-        let outcome_index = kinds
-            .iter()
-            .position(|k| *k == "OutcomeReported")
-            .expect("synthetic OutcomeReported missing");
         assert!(
-            edit_index < outcome_index,
-            "BootstrapEditRequested must precede synthetic OutcomeReported (kinds = {kinds:?})"
+            !kinds.contains(&"OutcomeReported"),
+            "post-processing must leave the stage outcome to its owning invocation batch (kinds = {kinds:?})"
         );
-
-        let synthetic = synthetic_outcome_value(&storage, run_id)
-            .await
-            .expect("synthetic OutcomeReported missing");
-        assert_eq!(synthetic, VALIDATION_FAILED_OUTCOME);
+        assert_eq!(kinds[edit_index], "BootstrapEditRequested");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -842,6 +809,7 @@ mod tests {
             name: surge_core::ArchetypeName::MultiMilestone,
             milestones: Some(3),
             edit_loop_cap: None,
+            node_capacity_estimate: None,
         });
         toml::to_string(&graph).unwrap()
     }

@@ -21,6 +21,7 @@ pub mod broadcast;
 pub mod error;
 pub mod inbox;
 pub mod intake_completion;
+mod intake_delivery;
 pub mod lifecycle;
 pub mod pidfile;
 pub mod recovery;
@@ -32,3 +33,5 @@ pub use error::DaemonError;
 pub use server::{
     ServerConfig, run_runs_only, run_synthetic as run_synthetic_server, run_with_supervisor,
 };
+
+mod work_items;

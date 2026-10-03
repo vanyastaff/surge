@@ -34,6 +34,7 @@
 pub mod audit;
 pub mod checkpoint;
 pub mod cleanup;
+pub mod fingerprint;
 pub mod orphan;
 pub mod run_worktree;
 pub mod worktree;
@@ -87,3 +88,6 @@ pub(crate) mod test_helpers {
         (dir, path)
     }
 }
+
+/// Retained task workspace provisioning with pinned creation ownership.
+pub mod task_workspace;

@@ -32,6 +32,7 @@ async fn legacy_recovery_excludes_both_reserved_ids_even_for_future_payloads() {
             digest: ContentHash::compute(b"graph"),
         },
         project_context: None,
+        bootstrap_edit_loop_cap: None,
         runtime_identity: ContentHash::compute(b"runtime"),
         configuration: vec![],
         credential_refs: vec![],

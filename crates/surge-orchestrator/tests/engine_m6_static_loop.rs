@@ -20,6 +20,193 @@ use surge_persistence::runs::seq::EventSeq;
 mod static_loop_graph;
 use static_loop_graph::build_static_loop_graph;
 
+async fn execute_trusted_scope(graph: surge_core::Graph) -> Vec<EventPayload> {
+    let validation = surge_core::validate(&graph);
+    assert!(
+        !validation.has_errors(),
+        "scope graph must be valid: {validation:?}"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let run = RunId::new();
+    let mut tap = engine.subscribe_tap();
+    let handle = engine
+        .start_run(run, graph, dir.path().into(), EngineRunConfig::default())
+        .await
+        .unwrap();
+    let mut completion = handle.completion;
+    let outcome=tokio::time::timeout(std::time::Duration::from_secs(8),async {
+        loop {
+            tokio::select! {
+                outcome=&mut completion => break outcome.unwrap(),
+                event=tap.recv() => {
+                    if let Ok(event)=event {
+                        if event.run_id != run { continue; }
+                        if let EventPayload::HumanInputRequested {node,call_id:Some(call_id),session:None,..}=event.event.payload.payload {
+                            engine.resolve_gate_input(run,node,surge_core::id::GateRequestId::from_event_call_id(&call_id).unwrap(),serde_json::json!({"outcome":"completed"})).await.unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }).await.unwrap();
+    if !matches!(outcome, RunOutcome::Completed { .. }) {
+        let events = storage
+            .open_run_reader(run)
+            .await
+            .unwrap()
+            .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+            .await
+            .unwrap();
+        panic!("scope fixture did not complete: {outcome:?}; actual journal: {events:?}");
+    }
+    storage
+        .inspect_folded_run(run)
+        .await
+        .expect("actual routing scope must remain trusted");
+    storage
+        .open_run_reader(run)
+        .await
+        .unwrap()
+        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| event.payload.payload)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn empty_loop_completion_has_no_pushed_frame_and_remains_trusted() {
+    let mut graph = build_static_loop_graph();
+    let node = graph.nodes.get_mut(&graph.start).unwrap();
+    let NodeConfig::Loop(config) = &mut node.config else {
+        panic!("loop");
+    };
+    config.iterates_over = IterableSource::Static(vec![]);
+    let mut empty = node.declared_outcomes[0].clone();
+    empty.id = "loop_empty".parse().unwrap();
+    node.declared_outcomes.push(empty);
+    let mut skip = graph.edges[0].clone();
+    skip.id = "empty_skip".parse().unwrap();
+    skip.from.outcome = "loop_empty".parse().unwrap();
+    graph.edges.push(skip);
+    let events = execute_trusted_scope(graph).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, EventPayload::LoopIterationStarted { .. }))
+            .count(),
+        0
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                EventPayload::LoopCompleted {
+                    completed_iterations: 0,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, EventPayload::RunCompleted { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nested_subgraph_loop_retains_counter_and_declared_synthetic_route() {
+    use std::collections::BTreeMap;
+    use surge_core::agent_config::ArtifactSource;
+    use surge_core::graph::Subgraph;
+    use surge_core::subgraph_config::{SubgraphConfig, SubgraphOutput};
+    let mut graph = build_static_loop_graph();
+    let body_key: surge_core::keys::SubgraphKey = "body_sg".parse().unwrap();
+    let mut body = graph.subgraphs[&body_key].clone();
+    let call_key: NodeKey = "nested_call".parse().unwrap();
+    let inner_key: surge_core::keys::SubgraphKey = "nested_inner".parse().unwrap();
+    let mut terminal = body.nodes[&body.start].clone();
+    terminal.id = "nested_terminal".parse().unwrap();
+    let mut call = graph.nodes[&graph.start].clone();
+    call.id = call_key.clone();
+    call.config = NodeConfig::Subgraph(SubgraphConfig {
+        inner: inner_key.clone(),
+        inputs: vec![],
+        outputs: vec![SubgraphOutput {
+            inner_artifact: ArtifactSource::Static {
+                content: "ok".into(),
+            },
+            outer_outcome: "completed".parse().unwrap(),
+        }],
+    });
+    let gate_key: NodeKey = "nested_gate".parse().unwrap();
+    let mut gate = call.clone();
+    gate.id = gate_key.clone();
+    gate.config=serde_json::from_value(serde_json::json!({"node_kind":"human_gate","delivery_channels":[],"summary":{"title":"Nested gate","body":"Original recorded decision"},"options":[{"outcome":"completed","label":"Continue"}],"allow_freetext":false})).unwrap();
+    let mut exceeded = gate.declared_outcomes[0].clone();
+    exceeded.id = "max_traversals_exceeded".parse().unwrap();
+    exceeded.edge_kind_hint = EdgeKind::Escalate;
+    gate.declared_outcomes.push(exceeded);
+    let mut edge = graph.edges[0].clone();
+    edge.id = "nested_forward".parse().unwrap();
+    edge.from.node = gate_key.clone();
+    edge.to = terminal.id.clone();
+    edge.policy.max_traversals = Some(2);
+    edge.policy.on_max_exceeded = surge_core::edge::ExceededAction::Escalate;
+    let mut escalation = edge.clone();
+    escalation.id = "nested_escalation".parse().unwrap();
+    escalation.from.outcome = "max_traversals_exceeded".parse().unwrap();
+    escalation.kind = EdgeKind::Escalate;
+    escalation.policy = EdgePolicy::default();
+    let mut call_return = graph.edges[0].clone();
+    call_return.id = "nested_return".parse().unwrap();
+    call_return.from.node = call_key.clone();
+    call_return.to = body.start.clone();
+    body.nodes.insert(call_key.clone(), call);
+    body.start = call_key.clone();
+    body.edges = vec![call_return];
+    graph.subgraphs.insert(body_key, body);
+    graph.subgraphs.insert(
+        inner_key,
+        Subgraph {
+            start: gate_key.clone(),
+            nodes: BTreeMap::from([(terminal.id.clone(), terminal), (gate_key.clone(), gate)]),
+            edges: vec![edge, escalation],
+        },
+    );
+    let events = execute_trusted_scope(graph).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(
+                |event| matches!(event,EventPayload::SubgraphEntered {outer,..} if outer==&call_key)
+            )
+            .count(),
+        3
+    );
+    assert_eq!(events.iter().filter(|event|matches!(event,EventPayload::EdgeTraversed {from,kind:EdgeKind::Forward,..} if from==&gate_key)).count(),2);
+    assert_eq!(events.iter().filter(|event|matches!(event,EventPayload::EdgeTraversed {from,kind:EdgeKind::Escalate,..} if from==&gate_key)).count(),1);
+    assert_eq!(events.iter().filter(|event|matches!(event,EventPayload::HumanInputRequested {node,..} if node==&gate_key)).count(),3);
+    assert_eq!(events.iter().filter(|event|matches!(event,EventPayload::HumanInputResolved {node,..} if node==&gate_key)).count(),3);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, EventPayload::RunCompleted { .. }))
+            .count(),
+        1
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_iteration_static_loop_completes() {
     let dir = tempfile::tempdir().unwrap();
@@ -45,6 +232,10 @@ async fn three_iteration_static_loop_completes() {
         RunOutcome::Completed { .. } => {},
         other => panic!("expected Completed, got {other:?}"),
     }
+    storage
+        .inspect_folded_run(run_id)
+        .await
+        .expect("actual repeated loop journal must retain trusted routing scope");
 
     // Read the full event log.
     let reader = storage.open_run_reader(run_id).await.unwrap();
@@ -156,6 +347,8 @@ system = "Process the current iteration."
                     outcome: OutcomeKey::try_from("done").unwrap(),
                     summary: "iteration complete".into(),
                     artifacts_produced: vec![],
+
+                    verification_report: None,
                 })
                 .await;
             pumping.pump_scripted_events().await;

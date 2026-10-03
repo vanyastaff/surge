@@ -31,6 +31,48 @@ pub struct HumanGateConfig {
     pub mode: HumanGateMode,
 }
 
+/// A response that does not satisfy the original host-issued gate schema.
+#[derive(Debug, thiserror::Error)]
+pub enum HumanGateResponseError {
+    /// Every host gate requires a string outcome.
+    #[error("human gate response requires a string outcome")]
+    MissingOutcome,
+    /// Outcome identifiers retain their normal syntax invariant.
+    #[error("invalid human gate outcome: {0}")]
+    InvalidOutcome(String),
+    /// Listed gates cannot accept an unlisted outcome.
+    #[error("human gate response is outside the original allowed outcomes")]
+    UnlistedOutcome,
+    /// An optional comment must be a string when present.
+    #[error("human gate comment must be a string")]
+    InvalidComment,
+}
+
+/// Validate the host gate's response schema, preserving optional comments and free outcomes.
+/// Extra properties remain allowed, as in the original generated JSON schema.
+pub fn validate_gate_response(
+    response: &serde_json::Value,
+    outcomes: &[OutcomeKey],
+    allow_freetext: bool,
+) -> Result<OutcomeKey, HumanGateResponseError> {
+    let text = response
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(HumanGateResponseError::MissingOutcome)?;
+    let outcome = OutcomeKey::try_from(text)
+        .map_err(|error| HumanGateResponseError::InvalidOutcome(error.to_string()))?;
+    if !allow_freetext && !outcomes.contains(&outcome) {
+        return Err(HumanGateResponseError::UnlistedOutcome);
+    }
+    if response
+        .get("comment")
+        .is_some_and(|comment| !comment.is_string())
+    {
+        return Err(HumanGateResponseError::InvalidComment);
+    }
+    Ok(outcome)
+}
+
 /// Operating mode for a `HumanGateConfig`. See the `mode` field.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

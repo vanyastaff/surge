@@ -33,6 +33,10 @@ async fn denied_tool_does_not_appear_in_visible_list() {
     let sandbox = DenyListSandbox::deny_tools(["shell_exec"]);
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -49,7 +53,7 @@ async fn denied_tool_does_not_appear_in_visible_list() {
         env: Default::default(),
     };
 
-    let _sid = bridge.open_session(cfg).await.unwrap();
+    let _sid = bridge.open_session(cfg).await.unwrap().session;
 
     let ev = timeout(Duration::from_secs(3), events.recv())
         .await

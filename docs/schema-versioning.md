@@ -8,7 +8,7 @@ memory database versions independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **9** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **11** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **2** (see below) |
 
 ## `surge.toml` (config)
@@ -34,6 +34,13 @@ reachability, edge kinds, profile/template references) — see
 unsupported `schema_version` is rejected at load.
 
 ## Event payloads (run log)
+
+Version 10 adds host-bound verification and source/criteria observations. Version 11
+adds `WorkItemAttemptBound`, the immutable persistent-task association committed in
+one startup batch with `RunStarted`, `PipelineMaterialized`, and accepted requirement
+artifact identity. Earlier payloads remain readable through identity migrations;
+readers supporting at most version 10 reject version 11 before decoding.
+
 
 The per-run event log is the durable source of truth (it drives crash
 recovery — see [`docs/crash-recovery.md`](crash-recovery.md)). Each event is

@@ -151,6 +151,16 @@ impl WakeScheduler {
                 return;
             },
         };
+        let quota_due = match self.storage.work_items().due_recovery_wakes(now_ms, 100) {
+            Ok(cycles) => cycles
+                .into_iter()
+                .map(|cycle| cycle.run)
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                warn!(%error, "due quota wake query failed; retaining parked-run wakes");
+                Vec::new()
+            },
+        };
         let owned = match self.storage.bootstrap_operation_store().reserved_run_ids() {
             Ok(owned) => owned,
             Err(error) => {
@@ -158,11 +168,19 @@ impl WakeScheduler {
                 return;
             },
         };
+        let mut run_ids = Vec::new();
         for run in due {
-            if owned.contains(&run.id) {
-                continue;
+            if !owned.contains(&run.id) && !run_ids.contains(&run.id) {
+                run_ids.push(run.id);
             }
-            self.wake_one(run.id, now_ms).await;
+        }
+        for run in quota_due {
+            if !owned.contains(&run) && !run_ids.contains(&run) {
+                run_ids.push(run);
+            }
+        }
+        for run_id in run_ids {
+            self.wake_one(run_id, now_ms).await;
         }
     }
 
@@ -194,7 +212,14 @@ impl WakeScheduler {
                 .await;
         }
 
-        let Some(worktree_path) = snapshot.parked_worktree else {
+        let task_worktree = match self.task_worktree(run_id) {
+            Ok(path) => path,
+            Err(error) => {
+                warn!(target: "surge.wake_scheduler", %run_id, %error, "failed to read task workspace");
+                return;
+            },
+        };
+        let Some(worktree_path) = snapshot.parked_worktree.or(task_worktree) else {
             warn!(
                 target: "surge.wake_scheduler",
                 %run_id,
@@ -220,6 +245,35 @@ impl WakeScheduler {
             self.fail_honestly(run_id, "worktree lost; cannot resume", now_ms)
                 .await;
             return;
+        }
+
+        let task_resume = crate::work_items::resume_parked_work_item(
+            run_id,
+            now_ms,
+            &self.tracking,
+            &self.admission,
+            &self.broadcast,
+        )
+        .await;
+        match task_resume {
+            Ok(true) => {
+                info!(
+                    target: "surge.wake_scheduler",
+                    %run_id,
+                    "woke parked work item through its durable task claim"
+                );
+                return;
+            },
+            Err(error) => {
+                warn!(
+                    target: "surge.wake_scheduler",
+                    %run_id,
+                    %error,
+                    "claim-fenced work-item wake failed; leaving it parked for a later tick"
+                );
+                return;
+            },
+            Ok(false) => {},
         }
 
         match crate::server::resume_run_tracked(
@@ -256,6 +310,20 @@ impl WakeScheduler {
         surge_persistence::runs::current_status(&reader, run_id)
             .await
             .map_err(|e| e.to_string())
+    }
+
+    fn task_worktree(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<std::path::PathBuf>, surge_persistence::work_items::WorkItemError> {
+        let Some((_, storage)) = self.tracking.task_sources() else {
+            return Ok(None);
+        };
+        let store = storage.work_items();
+        let Some(attempt) = store.for_run(run_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(store.show(attempt.item)?.item.workspace.path))
     }
 
     /// Raise the blind-park-limit escalation exactly once per streak:
@@ -522,6 +590,113 @@ mod tests {
         );
         let summary = storage.get_run(&run_id).await.unwrap().unwrap();
         assert_eq!(summary.status, surge_core::RunStatus::Parked);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn due_parked_task_in_attention_never_falls_through_to_generic_resume() {
+        use surge_core::{
+            id::WorkItemOperationId,
+            work_item::{
+                WorkItemAttemptState, WorkItemCommand, WorkItemRequirements, WorkItemResult,
+                WorkItemWorkspace,
+            },
+        };
+
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let worktree = home.path().join("retained-task-worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let workspace = WorkItemWorkspace {
+            repository: project.path().join(".git"),
+            checkout: project.path().to_path_buf(),
+            path: worktree.clone(),
+            ownership: "fixture-owner".into(),
+            branch: "fixture-branch".into(),
+            base_commit: "a".repeat(40),
+        };
+        let requirements = WorkItemRequirements::new(
+            "Keep this task under its durable owner".into(),
+            vec!["Do not use an unowned generic resume".into()],
+        )
+        .unwrap();
+        let create = WorkItemCommand::Create {
+            operation_id: WorkItemOperationId::new(),
+            project: project.path().to_path_buf(),
+            title: "Parked task recovery".into(),
+            requirements,
+        };
+        let WorkItemResult::Detail(detail) = storage
+            .work_items()
+            .mutate(&create, Some(&workspace), None, "fixture", NOW)
+            .unwrap()
+        else {
+            panic!("task create did not return detail")
+        };
+        let graph: surge_core::graph::Graph =
+            toml::from_str(include_str!("../../../examples/flow_terminal_only.toml")).unwrap();
+        let frozen = serde_json::to_string(&EngineRunConfig::default()).unwrap();
+        let start = WorkItemCommand::Start {
+            operation_id: WorkItemOperationId::new(),
+            item: detail.item.id,
+            expected_version: detail.item.version,
+            graph: Box::new(graph),
+            quota_recovery: None,
+        };
+        let WorkItemResult::Attempt(attempt) = storage
+            .work_items()
+            .mutate(&start, None, Some(&frozen), "fixture", NOW + 1)
+            .unwrap()
+        else {
+            panic!("task start did not reserve an attempt")
+        };
+        storage
+            .create_run(attempt.run, project.path(), None)
+            .await
+            .unwrap();
+        storage
+            .work_items()
+            .settle(
+                attempt.run,
+                attempt.binding.generation,
+                WorkItemAttemptState::Attention,
+                Some("fixture preserves uncertain task ownership".into()),
+            )
+            .unwrap();
+        park(&storage, attempt.run, &worktree, NOW - 1).await;
+
+        let engine = Arc::new(surge_orchestrator::engine::Engine::new(
+            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+            storage.clone(),
+            Arc::new(
+                surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                    project.path().to_path_buf(),
+                ),
+            ),
+            surge_orchestrator::engine::EngineConfig::default(),
+        ));
+        let stub = Arc::new(StubFacade::default());
+        let facade: Arc<dyn EngineFacade> = stub.clone();
+        let clock = Arc::new(MockClock::new(NOW));
+        let mut sched = scheduler(storage.clone(), facade, clock);
+        sched.tracking = crate::tracked_run::TrackingContext::new(engine, storage.clone());
+
+        sched.tick().await;
+
+        assert!(
+            stub.resume_calls.lock().unwrap().is_empty(),
+            "a task-owned Attention state must never bypass its durable owner via generic resume"
+        );
+        assert_eq!(
+            storage
+                .work_items()
+                .for_run(attempt.run)
+                .unwrap()
+                .unwrap()
+                .state,
+            WorkItemAttemptState::Attention,
+            "wake must preserve the task's explicit recovery decision"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

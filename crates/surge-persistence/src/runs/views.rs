@@ -46,7 +46,42 @@ pub fn maintain(
         StageInputsResolved, SteerDelivered, SubgraphEntered, SubgraphExited, TaskDiscovered,
         TaskStatusChanged, TaskVerified, TokensConsumed, ToolCalled, ToolResultReceived,
     };
+    let accepted_verification = super::verification::maintain(tx, seq.0, payload)?;
     match payload {
+        EventPayload::GateStageOutcomeCommitted { commit } => {
+            let original = commit.answer().request();
+            tx.execute("INSERT INTO gate_stage_commits(request_id,stage_entry_seq,committed_seq,node_id,outcome,disposition) VALUES(?,?,?,?,?,?)",
+                rusqlite::params![original.request().as_ulid().to_string(),original.stage_entry_seq(),seq.as_u64(),original.node().as_str(),commit.answer().outcome().as_str(),serde_json::to_string(&commit.disposition())?])?;
+        },
+        EventPayload::GateStageRouteCommitted {
+            request,
+            stage_entry_seq,
+            outcome_commit_seq,
+        } => {
+            let affected = tx.execute("UPDATE gate_stage_commits SET routed_seq=? WHERE request_id=? AND stage_entry_seq=? AND committed_seq=? AND disposition=? AND routed_seq IS NULL",
+                rusqlite::params![seq.as_u64(),request.as_ulid().to_string(),stage_entry_seq,outcome_commit_seq,"\"route\""])?;
+            if affected != 1 {
+                return Err(WriterError::OperationRejected(
+                    "gate route has no matching unconsumed routable decision".into(),
+                ));
+            }
+        },
+        EventPayload::StageOutcomeCommitted { commit } => {
+            tx.execute("INSERT INTO stage_outcome_commits(invocation,committed_seq,node_id,outcome) VALUES(?,?,?,?)",
+                rusqlite::params![commit.invocation().as_ulid().to_string(), seq.as_u64(), commit.context().node.as_str(), commit.outcome().as_str()])?;
+        },
+        EventPayload::StageRouteCommitted {
+            invocation,
+            outcome_commit_seq,
+        } => {
+            let affected = tx.execute("UPDATE stage_outcome_commits SET routed_seq=? WHERE invocation=? AND committed_seq=? AND routed_seq IS NULL",
+                rusqlite::params![seq.as_u64(), invocation.as_ulid().to_string(), outcome_commit_seq])?;
+            if affected != 1 {
+                return Err(WriterError::OperationRejected(
+                    "stage route has no matching unconsumed outcome commit".into(),
+                ));
+            }
+        },
         StageEntered { node, attempt } => {
             // INSERT OR IGNORE — Loop body nodes re-enter the same (node_id, attempt)
             // on each iteration (M6). The first entry's data is preserved; subsequent
@@ -114,12 +149,17 @@ pub fn maintain(
             )?;
         },
         TokensConsumed {
+            session,
             prompt_tokens,
             output_tokens,
             cache_hits,
             cost_usd,
             ..
         } => {
+            tx.execute(
+                "UPDATE stage_executions SET cost_usd = cost_usd + ?, known_cost_usd = CASE WHEN ? IS NULL THEN known_cost_usd ELSE COALESCE(known_cost_usd, 0) + ? END, cost_unknown = CASE WHEN ? IS NULL THEN 1 ELSE cost_unknown END, tokens_in = tokens_in + ?, tokens_out = tokens_out + ? WHERE session_id = ?",
+                rusqlite::params![cost_usd.unwrap_or(0.0), cost_usd, cost_usd, cost_usd, i64::from(*prompt_tokens), i64::from(*output_tokens), session.as_ulid().to_string()],
+            )?;
             upsert_metric(tx, "tokens_in", f64::from(*prompt_tokens), timestamp_ms)?;
             upsert_metric(tx, "tokens_out", f64::from(*output_tokens), timestamp_ms)?;
             upsert_metric(tx, "cache_hits", f64::from(*cache_hits), timestamp_ms)?;
@@ -363,8 +403,7 @@ pub fn maintain(
                  VALUES (?, ?, 0, ?, ?)
                  ON CONFLICT(task_id) DO UPDATE SET
                     status = excluded.status,
-                    verified = CASE WHEN excluded.status = 'completed'
-                                    THEN task_ledger.verified ELSE 0 END,
+                    verified = 0,
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![
@@ -390,30 +429,29 @@ pub fn maintain(
             )?;
         },
         TaskVerified { task_id, node, .. } => {
-            // The per-run view (and the cross-run index mirrored from it by
-            // `sync_task_ledger_index`) TRUSTS engine-emitted TaskVerified: the
-            // engine enforces verification authority before emit (the sealed
-            // gate in M3), so a normal run never produces an unauthorized one.
-            //
-            // The graph-aware authority rejection in `run_state::LedgerState`
-            // (`node_has_verification_authority`) applies only to the LIVE
-            // folded state — it is NOT re-applied here, and rebuild replays
-            // through this same `maintain` path (no graph). Re-checking here
-            // isn't possible today because the fold drops its ledger memory at
-            // the terminal transition, which is exactly why this persisted view
-            // exists. So a forged log would surface as verified in the CLI
-            // index; hardening that (fold-with-graph up to the last
-            // non-terminal cursor at mirror time) is a tracked follow-up.
+            if accepted_verification
+                == Some(surge_core::verification_evidence::VerificationClaim::Unauthorized)
+            {
+                return Ok(());
+            }
+            let verified = accepted_verification
+                == Some(surge_core::verification_evidence::VerificationClaim::Verified);
             tx.execute(
                 "INSERT INTO task_ledger
                     (task_id, status, verified, last_authority_node, updated_seq)
-                 VALUES (?, 'completed', 1, ?, ?)
+                 VALUES (?, 'completed', ?, ?, ?)
                  ON CONFLICT(task_id) DO UPDATE SET
                     status = 'completed',
-                    verified = 1,
+                    verified = excluded.verified,
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
-                rusqlite::params![task_id.as_str(), node.as_str(), seq.0 as i64],
+                rusqlite::params![task_id.as_str(), verified, node.as_str(), seq.0 as i64],
+            )?;
+        },
+        SessionOpened { node, session, .. } => {
+            tx.execute(
+                "UPDATE stage_executions SET session_id = ? WHERE node_id = ? AND attempt = (SELECT MAX(attempt) FROM stage_executions WHERE node_id = ?)",
+                rusqlite::params![session.as_ulid().to_string(), node.as_str(), node.as_str()],
             )?;
         },
         // All other variants currently produce no view changes. Every
@@ -448,10 +486,19 @@ pub fn maintain(
         | BootstrapApprovalRequested { .. }
         | BootstrapApprovalDecided { .. }
         | BootstrapEditRequested { .. }
+        | EventPayload::VerificationSubjectObserved { .. }
+        | EventPayload::VerificationCriteriaAccepted { .. }
         | PipelineMaterialized { .. }
         | GraphRevisionAccepted { .. }
         | StageInputsResolved { .. }
-        | SessionOpened { .. }
+        | EventPayload::WorkItemAttemptBound { .. }
+        | EventPayload::ExecutionWriterIntent { .. }
+        | EventPayload::ExecutionWriterEstablished { .. }
+        | EventPayload::ExecutionWriterClosed { .. }
+        | EventPayload::SessionEstablishmentRequested { .. }
+        | EventPayload::RunSuspended { .. }
+        | EventPayload::RunRecoveryRequired { .. }
+        | EventPayload::RunContinued { .. }
         | EventPayload::StageToolReceipt { .. }
         | ToolCalled { .. }
         | ToolResultReceived { .. }
@@ -593,16 +640,23 @@ const fn pickup_label(policy: ActivePickupPolicy) -> &'static str {
     }
 }
 
-/// Truncate all materialized view tables. Called at the start of `RebuildViews`.
+/// Truncate recomputable materialized views before replay.
+///
+/// Host-authored graph snapshots are durable execution checkpoints, not event
+/// projections: their nested frames and cursor must survive view rebuilding.
 pub fn rebuild(tx: &Transaction<'_>) -> Result<(), WriterError> {
     tx.execute_batch(
         "DELETE FROM stage_executions;
          DELETE FROM artifacts;
          DELETE FROM pending_approvals;
          DELETE FROM cost_summary;
-         DELETE FROM graph_snapshots;
          DELETE FROM roadmap_patches;
-         DELETE FROM task_ledger;",
+         DELETE FROM task_ledger;
+         DELETE FROM verification_criteria;
+         DELETE FROM verification_proofs;
+         DELETE FROM stage_outcome_commits;
+         DELETE FROM gate_stage_commits;
+         UPDATE verification_context SET subject_json=NULL,graph_json=NULL,updated_seq=0;",
     )?;
     Ok(())
 }
@@ -677,6 +731,8 @@ mod tests {
                             outcome: o("done"),
                             summary: "proposed".into(),
                             artifacts_produced: vec![],
+
+                            verification_report: None,
                         },
                     },
                 },
@@ -1474,7 +1530,7 @@ mod tests {
 
         let mut conn = fresh_db();
         let tx = conn.transaction().unwrap();
-        // Discover a task, move it to ready_for_verification, then verify it.
+        // A legacy claim without graph authority/binding must not certify the task.
         maintain(
             &tx,
             EventSeq(1),
@@ -1506,6 +1562,8 @@ mod tests {
                 task_id: "m1-t1".into(),
                 node: n("verify_1"),
                 evidence: ContentHash::compute(b"report"),
+
+                report: None,
             },
         )
         .unwrap();
@@ -1525,12 +1583,12 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .unwrap();
-        assert_eq!(status, "completed");
-        assert_eq!(verified, 1);
+        assert_eq!(status, "ready_for_verification");
+        assert_eq!(verified, 0);
         // discovered_from survives later status/verify upserts.
         assert_eq!(discovered_from.as_deref(), Some("seed"));
-        assert_eq!(authority.as_deref(), Some("verify_1"));
-        assert_eq!(updated_seq, 3);
+        assert_eq!(authority.as_deref(), Some("impl_1"));
+        assert_eq!(updated_seq, 2);
     }
 
     #[test]

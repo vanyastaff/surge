@@ -185,6 +185,7 @@ enum ConnState {
 /// first [`call_tool`](McpServerConnection::call_tool) or
 /// [`list_tools`](McpServerConnection::list_tools) call.
 pub struct McpServerConnection {
+    writer_observer: Option<Arc<dyn crate::writer_observer::HostWriterObserver>>,
     config: McpServerRef,
     /// Working directory pinned for the child process. `Some` for
     /// run-scoped connections (the run worktree); `None` for daemon
@@ -208,6 +209,7 @@ impl McpServerConnection {
     #[must_use]
     pub fn new(config: McpServerRef, cwd: Option<PathBuf>) -> Self {
         Self {
+            writer_observer: None,
             config,
             cwd,
             state: Mutex::new(ConnState::Disconnected),
@@ -215,10 +217,28 @@ impl McpServerConnection {
         }
     }
 
+    /// Construct a run-owned connection with pre-launch durable observation.
+    #[must_use]
+    pub fn new_owned(
+        config: McpServerRef,
+        cwd: Option<PathBuf>,
+        observer: Arc<dyn crate::writer_observer::HostWriterObserver>,
+    ) -> Self {
+        let mut connection = Self::new(config, cwd);
+        connection.writer_observer = Some(observer);
+        connection
+    }
+
     /// Server name as declared in the configuration.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.config.name
+    }
+
+    /// Immutable configured server contract, independent of connection health.
+    #[must_use]
+    pub fn configuration(&self) -> McpServerRef {
+        self.config.clone()
     }
 
     /// Drive state to `Running`. Returns the `RunningService` `Arc` on
@@ -315,6 +335,19 @@ impl McpServerConnection {
     /// connection state — `ensure_connected` owns the state machine and
     /// the backoff policy.
     async fn spawn_and_serve(&self) -> Result<RunningService<RoleClient, ()>, McpError> {
+        let writer = if let Some(observer) = &self.writer_observer {
+            Some(
+                observer
+                    .before_child(&self.config.name)
+                    .await
+                    .map_err(|error| McpError::StartFailed {
+                        server: self.config.name.clone(),
+                        reason: error.to_string(),
+                    })?,
+            )
+        } else {
+            None
+        };
         // Build the child command with env / cwd hygiene, then spawn via
         // the stderr-capturing builder.
         let (transport, stderr) = match &self.config.transport {
@@ -334,6 +367,8 @@ impl McpServerConnection {
                 if let Some(dir) = &self.cwd {
                     tokio_cmd.current_dir(dir);
                 }
+                #[cfg(unix)]
+                tokio_cmd.process_group(0);
                 TokioChildProcess::builder(tokio_cmd)
                     .stderr(Stdio::piped())
                     .spawn()
@@ -351,6 +386,16 @@ impl McpServerConnection {
                 });
             },
         };
+
+        if let (Some(observer), Some(writer)) = (&self.writer_observer, writer) {
+            observer
+                .child_started(writer, transport.id())
+                .await
+                .map_err(|error| McpError::StartFailed {
+                    server: self.config.name.clone(),
+                    reason: error.to_string(),
+                })?;
+        }
 
         // Forward child stderr to `tracing` + a bounded, redacted,
         // run-scoped file. The task ends when the pipe closes (child
@@ -584,40 +629,45 @@ impl McpServerConnection {
 
     /// Deterministically tear the connection down.
     ///
-    /// rmcp's `Drop` is async best-effort and can orphan the child if
-    /// the runtime is shutting down; an explicit `cancel().await`
-    /// guarantees the child is reaped. Idempotent: a `Disconnected`
-    /// connection is a no-op. After this the connection is
-    /// `Disconnected` (restart bookkeeping reset — reuse is allowed).
-    pub async fn shutdown(&self) {
+    /// Reports outstanding handles and cancellation failures rather than
+    /// treating best-effort Drop as settlement. A successful service result
+    /// is distinct from host confirmation that child writers/effects are gone.
+    /// A disconnected service is a no-op; durable writer evidence remains the
+    /// host's responsibility across retries and process death.
+    pub async fn shutdown(&self) -> Result<(), crate::cleanup::CleanupError> {
         let taken = {
             let mut g = self.state.lock().await;
             std::mem::replace(&mut *g, ConnState::Disconnected)
         };
         if let ConnState::Running(arc) = taken {
-            match Arc::into_inner(arc) {
-                Some(svc) => {
-                    if let Err(e) = svc.cancel().await {
-                        tracing::warn!(
-                            target: "mcp::supervisor",
-                            server = %self.config.name,
-                            error = %e,
-                            "mcp shutdown: join error while cancelling service"
-                        );
-                    }
-                },
-                None => {
-                    // An in-flight call still holds a clone. We cannot
-                    // consume the service to cancel it; fall back to
-                    // rmcp's best-effort Drop when the last clone drops.
+            if let Some(svc) = Arc::into_inner(arc) {
+                if let Err(e) = svc.cancel().await {
                     tracing::warn!(
                         target: "mcp::supervisor",
                         server = %self.config.name,
-                        "mcp shutdown: outstanding in-flight handle; relying on Drop"
+                        error = %e,
+                        "mcp shutdown: join error while cancelling service"
                     );
-                },
+                    return Err(crate::cleanup::CleanupError::ServiceJoin {
+                        server: self.config.name.clone(),
+                        reason: e.to_string(),
+                    });
+                }
+            } else {
+                // An in-flight call still holds a clone. We cannot
+                // consume the service to cancel it; fall back to
+                // rmcp's best-effort Drop when the last clone drops.
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    server = %self.config.name,
+                    "mcp shutdown: outstanding in-flight handle; relying on Drop"
+                );
+                return Err(crate::cleanup::CleanupError::OutstandingHandle {
+                    server: self.config.name.clone(),
+                });
             }
         }
+        Ok(())
     }
 }
 

@@ -251,6 +251,16 @@ bump» здесь не применяется, и раздел про памят
 диспатче нет. Почему так: единственная честная оценка — наблюдённая; выдуманная
 константа начнёт врать в сторону отказа.
 
+**Реализационное решение T12 (2026-10-03).** Архетип остаётся свойством
+материализованного графа, а попытки и usage — строками существующей таблицы
+`stage_executions`; межрановая выборка связывает их через `PipelineMaterialized`
+каждого завершённого рана. Миграции 0007/0008 добавляют session attribution и
+отдельное поле известной стоимости. Событие usage без цены делает стоимость
+попытки неизвестной, а не нулевой. Оценщик берёт медианы длительности и только
+полностью известной стоимости по завершённым ранам того же архетипа; выборка
+ограничена 1000 последними завершёнными ранами. Без метаданных или истории
+оценки нет, и та же нода в текущем ране не подменяет выборку архетипа.
+
 **§20. Аккаунт — это уже настроенный профиль, а не новая сущность.**
 `CapacityWindow.account` ссылается на идентификатор аккаунта агента из
 существующей конфигурации профилей. Триггер ротации: окно исчерпано **и**
@@ -437,7 +447,7 @@ broadcast при 58 % меньшем числе вызовов.
 | `surge-core::context_pack` | сборкой контекста под бюджет и **порядком отбора по `Confidence`** | `ContextPack::build(claims, budget) -> (ContextPack, PackReceipt)`, `PackReceipt{selected,dropped,reason,budget,used}` | оценку токенов и тай-брейк внутри одного уровня доверия |
 | `surge-core::run_report` | формой и рендерингом отчёта — девять разделов §18 | `RunReport::compile(events) -> RunReport` с полями `nodes,outcomes,verdicts,evidence,cost,skills,memory_receipts,steers,approvals`, `render_json/md/html(&RunReport)` | шаблоны и инлайн-стили |
 | `surge-core::evidence` | предикатом доказанности | `is_evidence_backed(&NodeOutcome) -> bool` | правило «верификатор — единственный путь к done» |
-| `surge-core::capacity` | моделью окна ёмкости | `CapacityWindow{account,window,remaining,resets_at,source}`, `NodeEstimate` (медиана по архетипу, §19), `CapacityPolicy::decide(estimate,&window) -> Dispatch\|Park{wake_at}` | обучение окна из наблюдений |
+| `surge-core::capacity` | моделью окна ёмкости | `CapacityWindow{account,window,remaining,resets_at,source}`, `WorkEstimate` (см. реализационную границу §19), `CapacityPolicy::decide(estimate,&window) -> Dispatch\|Park{wake_at}` | обучение окна из наблюдений |
 | `surge-orchestrator::guard` | гигиеной цикла ноды | `LoopGuard::observe(tool_call) -> Verdict`, `LoopGuard::deadline(node)` | окно повторов и счётчики |
 | `surge-orchestrator::spill` | политикой большого вывода | `spill_if_oversized(output, cap, &artifact_store) -> ToolOutput` | пороги и форму локатора |
 | `surge-persistence` | event log и хранением памяти | запись новых событий, выборка для `RunReport::compile` | схему таблиц |

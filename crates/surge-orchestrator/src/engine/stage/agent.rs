@@ -7,6 +7,7 @@
 //! Phase 6.4: binding resolution + template substitution for the agent prompt.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use surge_acp::bridge::event::ToolResultPayload as AcpResultPayload;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
 use surge_acp::client::PermissionPolicy;
-use surge_core::agent_config::AgentConfig;
+use surge_core::agent_config::{AgentConfig, ArtifactSource};
 use surge_core::artifact_contract::{ArtifactDiagnosticSeverity, validate_artifact};
 use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
@@ -43,12 +44,27 @@ use crate::prompt::PromptRenderer;
 
 /// Parameters for executing a single agent stage.
 pub struct AgentStageParams<'a> {
+    /// One-shot opening authority for a task-owned fallback candidate.
+    pub quota_opening: Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
+    /// Recovery state carried when this stage is being retried on a frozen fallback.
+    pub quota_cycle: Option<TaskQuotaCycle>,
+    /// Persistent-task quota owner and the frozen policy for this agent node.
+    /// Ordinary runs have no task-owned quota cycle.
+    pub quota_owner: Option<(
+        surge_persistence::work_items::WorkItemStore,
+        surge_persistence::work_items::WorkItemLaunchClaim,
+        surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
+    )>,
+    /// Current host-authorized continuation, distinct from the attempt binding.
+    pub continuation: Option<surge_core::execution_recovery::WorkItemExecutionControl>,
     /// Active execution frames supplying the current loop items to the agent.
     pub frames: &'a [crate::engine::frames::Frame],
     /// Run cancellation, observed between durable writes and during approval waits.
     pub cancel: tokio_util::sync::CancellationToken,
     /// Key of the node being executed (used for tracing; wired to events in 6.2).
     pub node: &'a NodeKey,
+    /// Current durable stage-attempt number from the run cursor.
+    pub attempt: u32,
     /// Operator steer messages drained for this stage. When non-empty they are
     /// prepended to the prompt and each is recorded via a `SteerDelivered`
     /// event (Phase 2 B2). Empty on the common path.
@@ -130,6 +146,125 @@ pub struct AgentStageParams<'a> {
     /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
     /// emits the matching task-ledger event. `None` outside a task loop.
     pub active_task_id: Option<RoadmapTaskId>,
+}
+
+/// Durable position for one logical stage's ordered provider recovery cycle.
+pub struct TaskQuotaCycle {
+    cycle: surge_persistence::work_items::recovery_cycles::RecoveryCycle,
+    reservation: surge_persistence::work_items::recovery_cycles::CandidateReservation,
+    opening_seq: u64,
+}
+impl TaskQuotaCycle {
+    pub(crate) fn from_automatic_wake(
+        cycle: surge_persistence::work_items::recovery_cycles::RecoveryCycle,
+        reservation: surge_persistence::work_items::recovery_cycles::CandidateReservation,
+    ) -> Self {
+        Self {
+            cycle,
+            reservation,
+            opening_seq: 0,
+        }
+    }
+}
+
+fn initialize_task_quota_cycle(
+    store: &surge_persistence::work_items::WorkItemStore,
+    claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
+    invocation: surge_core::id::StageInvocationId,
+    opening_seq: u64,
+    control_generation: u64,
+) -> Result<TaskQuotaCycle, surge_persistence::work_items::WorkItemError> {
+    let bound = store.bind_quota_stage(claim, invocation, opening_seq)?;
+    if &bound != policy {
+        return Err(surge_persistence::work_items::WorkItemError::Conflict(
+            "persisted quota stage changed after opening".into(),
+        ));
+    }
+    let cycle = store.begin_recovery_cycle(claim, &invocation.to_string(), control_generation)?;
+    let primary = policy.candidates().first().ok_or_else(|| {
+        surge_persistence::work_items::WorkItemError::Invalid(
+            "frozen quota primary is absent".into(),
+        )
+    })?;
+    let reservation = store.reserve_recovery_candidate(claim, &cycle, primary.candidate())?;
+    let cycle = store.recovery_cycle(claim.run(), &invocation.to_string(), cycle.generation)?;
+    Ok(TaskQuotaCycle {
+        cycle,
+        reservation,
+        opening_seq,
+    })
+}
+
+fn record_task_quota_rate_limit(
+    store: &surge_persistence::work_items::WorkItemStore,
+    claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
+    quota: &TaskQuotaCycle,
+    invocation: surge_core::id::StageInvocationId,
+    session: surge_core::SessionId,
+    error: &surge_acp::bridge::error::SendMessageError,
+) -> Result<
+    surge_persistence::work_items::recovery_cycles::RecoveryCycle,
+    surge_persistence::work_items::WorkItemError,
+> {
+    let surge_acp::bridge::error::SendMessageError::RateLimited {
+        retry_after,
+        details,
+    } = error
+    else {
+        return Ok(quota.cycle.clone());
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let delay_ms = retry_after
+        .map(|delay| {
+            i64::try_from(delay.as_millis()).map_err(|_| {
+                surge_persistence::work_items::WorkItemError::Invalid(
+                    "quota retry delay overflow".into(),
+                )
+            })
+        })
+        .transpose()?;
+    let expires_at_ms = now
+        .checked_add(policy.observation_ttl_ms())
+        .ok_or_else(|| {
+            surge_persistence::work_items::WorkItemError::Invalid(
+                "quota observation expiry overflow".into(),
+            )
+        })?;
+    let reset_at_ms = match delay_ms {
+        Some(delay) => Some(now.checked_add(delay).ok_or_else(|| {
+            surge_persistence::work_items::WorkItemError::Invalid("quota reset overflow".into())
+        })?),
+        None => None,
+    };
+    let retry_after_ms = delay_ms.map(u64::try_from).transpose().map_err(|_| {
+        surge_persistence::work_items::WorkItemError::Invalid(
+            "quota retry delay is negative".into(),
+        )
+    })?;
+    let source = surge_persistence::work_items::recovery_cycles::QuotaRateLimitSource::new(
+        quota.opening_seq,
+        invocation,
+        session,
+        retry_after_ms,
+        details.clone(),
+    )?;
+    let observation = surge_persistence::work_items::recovery_cycles::QuotaObservation::new(
+        surge_persistence::work_items::recovery_cycles::QuotaEvidence::Observed {
+            observed_at_ms: now,
+            expires_at_ms,
+            available: false,
+            reset_at_ms,
+        },
+    )?;
+    store.record_selected_rate_limit(
+        claim,
+        &quota.cycle,
+        &quota.reservation.receipt,
+        &source,
+        &observation,
+    )
 }
 
 fn append_completion_contract(mut prompt: String, outcomes: &[OutcomeKey]) -> String {
@@ -367,7 +502,7 @@ async fn append_loop_escalations(
 /// an outcome.
 /// Returns [`StageError::Storage`] if event persistence fails.
 #[allow(clippy::too_many_lines)]
-pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
+pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
     let mut targets = BTreeSet::new();
     for binding in &p.agent_config.bindings {
         if !targets.insert(&binding.target.0) {
@@ -380,10 +515,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
     // Phase 6.4: resolve bindings and prompt BEFORE building SessionConfig so
     // we can wire them into the config (not just the first message).
-    let resolved_bindings =
+    let mut resolved_bindings =
         resolve_bindings(&p.agent_config.bindings, p.run_memory, p.worktree_path)
             .await
             .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
+    let memory_receipt = apply_memory_claim_pack(&p, &mut resolved_bindings).await?;
 
     // Resolve the profile once (when a registry is wired) so we can use
     // its `runtime.agent_id` to derive `AgentKind` AND fall back to its
@@ -460,7 +596,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // registry keep working. The registry is the merged catalog (user
     // `[agents.*]` over builtins), so a custom provider resolves exactly
     // like a builtin one.
-    let agent_launch = match resolved_profile.as_ref() {
+    let mut agent_launch = match resolved_profile.as_ref() {
         Some(rp) => derive_agent_kind_from_id(
             profile_str,
             effective_agent_id(p.agent_config, rp),
@@ -472,6 +608,28 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             settings_files: Vec::new(),
         },
     };
+    if let Some(permit) = &p.quota_opening {
+        let launch = permit.launch();
+        if launch.mode() != surge_core::execution_recovery::SessionOpenMode::New {
+            return Err(StageError::Internal(
+                "quota fallback currently requires a new provider session".into(),
+            ));
+        }
+        let runtime = launch.candidate().candidate().runtime();
+        if resolved_profile.is_none() {
+            return Err(StageError::Internal(
+                "quota fallback requires a resolved profile".into(),
+            ));
+        }
+        agent_launch =
+            derive_agent_kind_from_id(profile_str, runtime, p.agent_registry.as_deref())?;
+        let actual_hash = ContentHash::compute(format!("{:?}", agent_launch.kind).as_bytes());
+        if &actual_hash != launch.candidate().launch_hash() {
+            return Err(StageError::Internal(
+                "quota candidate launch fingerprint differs from frozen policy".into(),
+            ));
+        }
+    }
     let AgentLaunch {
         kind: agent_kind,
         env: agent_env,
@@ -494,6 +652,24 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .await;
     }
 
+    // Pin after trusted provider setup has finished writing its settings, but
+    // before the agent can inspect or mutate the checked workspace.
+    let verification_input_seq = p
+        .writer
+        .current_seq()
+        .await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    let verification_input = super::verification::begin(&p).await?;
+    let mut prompt_text = prompt_text;
+    if let Some(input) = &verification_input {
+        let _ = write!(
+            prompt_text,
+            "\nVerification criteria (every ID required): {:?}. Submit verification_report inline to report_stage_outcome with task_id={:?}, outcome=passed, summary and checks (command, result, covers=[IDs]); do not write a report file or supply binding.\n",
+            input.criteria.definitions,
+            p.active_task_id.as_ref().map_or("", |id| id.as_str())
+        );
+    }
+
     // Derive declared outcomes from the node's OutcomeDecl list.
     // Fall back to ["done"] when the node has no declared_outcomes so the
     // session is always valid (SessionConfig::validate requires at least one).
@@ -503,6 +679,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         p.declared_outcomes.iter().map(|d| d.id.clone()).collect()
     };
 
+    let prompt_text = if let Some(context) = &p.run_memory.work_item {
+        format!("{}\n\n{}", context.prompt(), prompt_text)
+    } else {
+        prompt_text
+    };
     let prompt_text = append_completion_contract(prompt_text, &declared_outcomes);
 
     // Derive allows_escalation from approvals_override.
@@ -676,7 +857,52 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
     // Build SessionConfig from derived values.
     let sandbox = build_sandbox(Some(&sandbox_cfg));
+    let mut config_selections = node_config_selections(
+        p.agent_config,
+        resolved_profile
+            .as_ref()
+            .and_then(|resolved| resolved.profile.role.min_effort.as_deref()),
+    );
+    if let Some(model) = p
+        .quota_opening
+        .as_ref()
+        .and_then(|permit| permit.launch().candidate().model())
+    {
+        let selection = surge_acp::bridge::session::ConfigSelection {
+            category: surge_acp::bridge::session::ConfigCategory::Model,
+            value: model.to_owned(),
+            best_effort: false,
+        };
+        if let Some(existing) = config_selections
+            .iter_mut()
+            .find(|choice| choice.category == surge_acp::bridge::session::ConfigCategory::Model)
+        {
+            *existing = selection;
+        } else {
+            config_selections.push(selection);
+        }
+    }
     let mut session_config = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: p
+            .quota_opening
+            .as_ref()
+            .map_or_else(surge_core::id::StageInvocationId::new, |permit| {
+                permit.launch().provider_invocation()
+            }),
+        runtime: p.quota_opening.as_ref().map_or_else(
+            || {
+                resolved_profile.as_ref().map_or_else(
+                    || agent_kind.label().into(),
+                    |profile| canonical_runtime_id_for(p.agent_config, profile).into_string(),
+                )
+            },
+            |permit| permit.launch().candidate().candidate().runtime().to_owned(),
+        ),
+        opening: p.quota_opening.as_ref().map_or_else(
+            surge_core::execution_recovery::SessionOpening::default,
+            |_| surge_core::execution_recovery::SessionOpening::New,
+        ),
         stage_mcp: None,
         agent_kind,
         working_dir: p.worktree_path.to_path_buf(),
@@ -690,13 +916,29 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         env: agent_env,
         // Per-step model / reasoning level chosen by the operator; applied
         // through the agent's standard ACP session options.
-        config_selections: node_config_selections(
-            p.agent_config,
-            resolved_profile
-                .as_ref()
-                .and_then(|resolved| resolved.profile.role.min_effort.as_deref()),
-        ),
+        config_selections,
     };
+
+    if p.quota_opening.is_none()
+        && let Some(fence) = &p.run_memory.suspension
+        && let surge_core::execution_recovery::PendingStagePhase::Interrupted { node, invocation } =
+            &fence.pending_stage
+        && node == p.node
+    {
+        let saved = p.run_memory.provider_sessions.get(invocation)
+                    .and_then(|history| history.last())
+                    .ok_or_else(|| StageError::Bridge("saved invocation has no durable provider identity; explicit recovery choice required".into()))?;
+        session_config.invocation = *invocation;
+        session_config.opening = if p
+            .continuation
+            .as_ref()
+            .is_some_and(|control| control.allow_new_session)
+        {
+            surge_core::execution_recovery::SessionOpening::New
+        } else {
+            surge_core::execution_recovery::SessionOpening::Continue(saved.descriptor.clone())
+        };
+    }
 
     // Persist the complete resolved inputs, independently of the capped ACP echo.
     // This proves resolution for this attempt, before a session can be opened.
@@ -704,12 +946,14 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .append_event(VersionedEventPayload::new(
             EventPayload::StageInputsResolved {
                 node: p.node.clone(),
+                attempt: p.attempt,
                 bindings: resolved_bindings
                     .iter()
                     .map(|(target, content)| {
                         (target.0.clone(), ContentHash::compute(content.as_bytes()))
                     })
                     .collect(),
+                memory_receipt,
             },
         ))
         .await
@@ -734,19 +978,75 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     let max_outcome_rejections: u32 = p.agent_config.limits.max_retries;
     let mut outcome_rejection_attempts: u32 = 0;
 
-    let session_id = match p.bridge.open_session(session_config).await {
+    let execution_writer = session_config.writer_id;
+    p.writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::ExecutionWriterIntent {
+                intent: surge_core::execution_recovery::process::ExecutionWriterIntent {
+                    writer: execution_writer,
+                    invocation: session_config.invocation,
+                    kind: surge_core::execution_recovery::process::ExecutionWriterKind::Provider,
+                    owner: surge_acp::process_evidence::observe(std::process::id())
+                        .ok()
+                        .map(|(identity, _)| identity),
+                    local_effects: true,
+                },
+            },
+        ))
+        .await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    p.writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::SessionEstablishmentRequested {
+                authority: Some(stage_calls.context.clone()),
+                node: p.node.clone(),
+                invocation: session_config.invocation,
+                restore: matches!(
+                    session_config.opening,
+                    surge_core::execution_recovery::SessionOpening::Continue(_)
+                ),
+            },
+        ))
+        .await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+
+    let logical_invocation = session_config.invocation;
+    let logical_runtime = session_config.runtime.clone();
+    let quota_opening = p.quota_opening.take();
+    let is_quota_fallback = quota_opening.is_some();
+    let quota_handoff = quota_opening.map(|permit| permit.into_opening().0);
+    let is_new_opening = matches!(
+        session_config.opening,
+        surge_core::execution_recovery::SessionOpening::New
+    );
+    let opened = match p.bridge.open_session(session_config).await {
         Ok(session) => session,
         Err(error) => {
             let cleanup = stage_endpoint.close().await;
-            return Err(StageError::Bridge(format!(
-                "open_session: {error}; stage endpoint cleanup: {cleanup:?}"
-            )));
+            let diagnostic = format!("open_session: {error}; stage endpoint cleanup: {cleanup:?}");
+            return Err(if p.continuation.as_ref().is_some_and(|control|control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved) {
+                StageError::RecoveryRequired(diagnostic)
+            } else { StageError::Bridge(diagnostic) });
         },
     };
 
+    if opened
+        .execution_writer
+        .as_ref()
+        .is_some_and(|observed| observed.writer() != execution_writer)
+    {
+        let endpoint_cleanup = stage_endpoint.close().await;
+        let cleanup = p.bridge.close_session(opened.session).await;
+        return Err(StageError::Bridge(format!(
+            "provider writer identity mismatched its durable intent; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+        )));
+    }
+    let session_id = opened.session;
     let opened = p
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
+            handoff: quota_handoff,
+            opened: Some(opened),
             node: p.node.clone(),
             session: session_id,
             agent: p.agent_config.profile.to_string(),
@@ -793,9 +1093,13 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             // historical data if it must collapse aliases there too — a
             // fact for that reader to state, not something this write-site
             // can undo.
-            agent_id: resolved_profile
-                .as_ref()
-                .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string()),
+            agent_id: if is_quota_fallback {
+                Some(logical_runtime.clone())
+            } else {
+                resolved_profile
+                    .as_ref()
+                    .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string())
+            },
         }))
         .await;
     if let Err(error) = opened {
@@ -804,6 +1108,133 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         return Err(StageError::Storage(format!(
             "SessionOpened: {error}; cleanup: {cleanup:?}; stage endpoint: {endpoint_cleanup:?}"
         )));
+    }
+
+    let mut task_quota_cycle = p.quota_cycle.take();
+    if let Some(operation) = quota_handoff {
+        let sequence = opened.as_ref().map_err(|error| {
+            StageError::Storage(format!("quota opening sequence unavailable: {error}"))
+        })?;
+        let Some((store, claim, _)) = &p.quota_owner else {
+            let endpoint_cleanup = stage_endpoint.close().await;
+            let cleanup = p.bridge.close_session(session_id).await;
+            return Err(StageError::RecoveryRequired(format!(
+                "quota opening has no task owner; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+            )));
+        };
+        if let Err(error) = store.confirm_provider_open(claim, operation, sequence.0) {
+            let endpoint_cleanup = stage_endpoint.close().await;
+            let cleanup = p.bridge.close_session(session_id).await;
+            return Err(StageError::RecoveryRequired(format!(
+                "quota opening confirmation failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+            )));
+        }
+        if let Some(quota) = &mut task_quota_cycle {
+            quota.opening_seq = sequence.0;
+        }
+    }
+
+    // Bind the actual first provider opening to the task's frozen quota policy
+    // before prompting. This is evidence only: the primary ACP opening above
+    // is already complete, while every later candidate still needs its own
+    // persisted one-shot opening permit.
+    if is_new_opening
+        && !is_quota_fallback
+        && task_quota_cycle.is_none()
+        && let Some((store, claim, policy)) = &p.quota_owner
+    {
+        let sequence = opened.as_ref().map_err(|error| {
+            StageError::Storage(format!("quota opening sequence unavailable: {error}"))
+        })?;
+        let control_generation = p
+            .continuation
+            .as_ref()
+            .map_or(0, |control| control.generation);
+        match initialize_task_quota_cycle(
+            store,
+            claim,
+            policy,
+            logical_invocation,
+            sequence.0,
+            control_generation,
+        ) {
+            Ok(cycle) => task_quota_cycle = Some(cycle),
+            Err(error) => {
+                let endpoint_cleanup = stage_endpoint.close().await;
+                let cleanup = p.bridge.close_session(session_id).await;
+                return Err(StageError::RecoveryRequired(format!(
+                    "task quota cycle initialization failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                )));
+            },
+        }
+    }
+
+    if let Some(control) = &p.continuation
+        && control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
+    {
+        let continued_seq = match p
+            .writer
+            .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
+                control_generation: control.generation,
+            }))
+            .await
+        {
+            Ok(sequence) => sequence.0,
+            Err(error) => {
+                let endpoint_cleanup = stage_endpoint.close().await;
+                let cleanup = p.bridge.close_session(session_id).await;
+                return Err(StageError::RecoveryRequired(format!(
+                    "RunContinued: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                )));
+            },
+        };
+        if let (Some(operation), Some((store, claim, _))) = (quota_handoff, &p.quota_owner)
+            && store
+                .quota_handoff(operation)
+                .is_ok_and(|handoff| handoff.is_automatic_wake())
+            && let Err(error) =
+                store.authorize_automatic_wake_prompt(claim, operation, continued_seq)
+        {
+            let endpoint_cleanup = stage_endpoint.close().await;
+            let cleanup = p.bridge.close_session(session_id).await;
+            return Err(StageError::RecoveryRequired(format!(
+                "automatic quota prompt authorization failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+            )));
+        }
+    }
+
+    if is_quota_fallback
+        && let (Some(operation), Some((store, claim, _))) = (quota_handoff, &p.quota_owner)
+    {
+        let handoff = match store.quota_handoff(operation) {
+            Ok(handoff) => handoff,
+            Err(error) => {
+                let endpoint_cleanup = stage_endpoint.close().await;
+                let cleanup = p.bridge.close_session(session_id).await;
+                return Err(StageError::RecoveryRequired(format!(
+                    "read quota prompt handoff: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                )));
+            },
+        };
+        if !handoff.is_automatic_wake() {
+            let opened_seq = match opened.as_ref() {
+                Ok(sequence) => sequence.0,
+                Err(error) => {
+                    let endpoint_cleanup = stage_endpoint.close().await;
+                    let cleanup = p.bridge.close_session(session_id).await;
+                    return Err(StageError::Storage(format!(
+                        "quota opening sequence unavailable: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                    )));
+                },
+            };
+            if let Err(error) = store.authorize_fallback_prompt(claim, operation, opened_seq) {
+                let endpoint_cleanup = stage_endpoint.close().await;
+                let cleanup = p.bridge.close_session(session_id).await;
+                return Err(StageError::RecoveryRequired(format!(
+                    "fallback quota prompt authorization failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                )));
+            }
+        }
     }
 
     // Prepend any queued operator steer messages to this turn's prompt (B2).
@@ -935,8 +1366,21 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             },
             joined = &mut prompt_task, if !prompt_joined => {
                 prompt_joined = true;
-                joined.map_err(|error| StageError::Bridge(format!("prompt task: {error}")))?
-        .map_err(|e| match e {
+                let sent = joined.map_err(|error| StageError::Bridge(format!("prompt task: {error}")))?;
+                if let Err(error @ surge_acp::bridge::error::SendMessageError::RateLimited { .. }) = &sent
+                    && let (Some((store, claim, policy)), Some(quota)) =
+                        (&p.quota_owner, &mut task_quota_cycle)
+                {
+                    match record_task_quota_rate_limit(
+                        store, claim, policy, quota, logical_invocation, session_id, error,
+                    ) {
+                        Ok(cycle) => quota.cycle = cycle,
+                        Err(storage_error) => return Err(StageError::RecoveryRequired(format!(
+                            "typed quota exhaustion could not be durably recorded: {storage_error}"
+                        ))),
+                    }
+                }
+                sent.map_err(|e| match e {
             surge_acp::bridge::error::SendMessageError::RateLimited {
                 retry_after,
                 details,
@@ -1028,12 +1472,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 outcome,
                 summary,
                 artifacts_produced,
+                verification_report,
                 ..
             } => {
+                let mut outcome = outcome;
+                let mut summary = summary;
                 // on_outcome hook chain runs BEFORE OutcomeReported is persisted.
                 // A rejecting hook lets the agent attempt a different outcome
                 // until `limits.max_retries` is exhausted.
                 let hook_ctx = HookContext::for_node(p.node)
+                    .with_writer(p.writer, logical_invocation)
                     .with_worktree_path(p.worktree_path)
                     .with_session(session_id)
                     .with_outcome(&outcome);
@@ -1098,12 +1546,28 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     continue;
                 }
 
+                let accepted_report = if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified && p.active_task_id.is_none() && verification_report.is_none()
+                    && resolved_profile.as_ref().is_some_and(|profile| profile.profile.outcomes.iter().any(|declaration| declaration.id == outcome && declaration.produced_artifacts.iter().any(|artifact| artifact.contract.kind == ArtifactKind::VerificationReport))) {
+                    None // Historical file audit: the existing profile contract still validates it.
+                } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified {
+                    match super::verification::seal(&p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
+                        Ok(report) => Some(report),
+                        Err(reason) => {
+                            record_outcome_rejection(RejectionRecordParams { writer: p.writer, bridge: p.bridge, node: p.node, session_id, outcome: &outcome, hook_id: "verification_binding", reason: &reason, source: "verification binding", max_rejections: max_outcome_rejections }, &mut outcome_rejection_attempts).await?;
+                            retry_feedback = Some(validation_retry_prompt(&reason));
+                            continue;
+                        }
+                    }
+                } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::FailedVerification {
+                    verification_report.map(|report| super::verification::seal_failure(&p, verification_input.as_ref(), *report)).transpose().map_err(StageError::Internal)?
+                } else { None };
                 if let Some(rejection) = validate_profile_artifact_contracts(
                     resolved_profile.as_ref(),
                     p.agent_config.profile.as_str(),
                     &outcome,
                     &artifacts_produced,
                     p.worktree_path,
+                    accepted_report.is_some(),
                 )
                 .await?
                 {
@@ -1238,14 +1702,52 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     }
                 }
 
-                p.writer
-                    .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
-                        node: p.node.clone(),
-                        outcome: outcome.clone(),
-                        summary,
-                    }))
-                    .await
-                    .map_err(|e| StageError::Storage(e.to_string()))?;
+                if let Some(report) = &accepted_report {
+                    let bytes = toml::to_string(report).map_err(|error| StageError::Storage(error.to_string()))?.into_bytes();
+                    let artifact = p.artifact_store.put(p.run_id, "verification-report", &bytes).await.map_err(|error| StageError::Storage(error.to_string()))?;
+                    produced_hashes.insert("verification-report".into(), artifact.hash);
+                    p.writer.append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced { node: p.node.clone(), artifact: artifact.hash, path: artifact.path, name: "verification-report".into(), source_path: None })).await.map_err(|error| StageError::Storage(error.to_string()))?;
+                }
+                if verification_input.is_some() || p.active_task_id.is_some() || p.run_memory.verification.subject.is_some() {
+                    super::verification::observe_after(p.writer, p.worktree_path, verification_input.as_ref().map(|input| &input.subject).or(p.run_memory.verification.subject.as_ref())).await?;
+                }
+                if crate::engine::bootstrap::is_flow_generator_profile(
+                    p.agent_config.profile.as_str(),
+                ) {
+                    match crate::engine::bootstrap::run_flow_generator_post_processing_with_registry(
+                        p.node,
+                        p.run_memory,
+                        p.run_memory.bootstrap_edit_loop_cap.unwrap_or(0),
+                        p.worktree_path,
+                        p.writer,
+                        p.profile_registry.as_deref(),
+                    )
+                    .await?
+                    {
+                        crate::engine::bootstrap::FlowValidationDecision::Materialized => {},
+                        crate::engine::bootstrap::FlowValidationDecision::EditRequested { feedback } => {
+                            outcome = OutcomeKey::try_from(
+                                crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
+                            )
+                            .map_err(|error| StageError::Internal(format!("validation retry outcome key: {error}")))?;
+                            summary = format!("Flow Generator validation retry: {feedback}");
+                        },
+                        crate::engine::bootstrap::FlowValidationDecision::CapExceeded { cap } => {
+                            return Err(StageError::EditLoopCapExceeded {
+                                stage: surge_core::run_event::BootstrapStage::Flow,
+                                cap,
+                            });
+                        },
+                        crate::engine::bootstrap::FlowValidationDecision::MissingArtifact => {
+                            return Err(StageError::Internal(
+                                "Flow Generator stage finished without producing flow.toml".into(),
+                            ));
+                        },
+                    }
+                }
+                let mut committed = vec![VersionedEventPayload::new(EventPayload::OutcomeReported {
+                    node: p.node.clone(), outcome: outcome.clone(), summary,
+                })];
 
                 // Task ledger: when this stage runs inside a task loop and the
                 // reported outcome carries a ledger effect, append the matching
@@ -1253,23 +1755,32 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // sealed-verifier gate above guarantees a `Verified` effect
                 // only reaches here from a read-only sandbox.
                 if let Some(task_id) = p.active_task_id.as_ref() {
-                    emit_ledger_event(
-                        p.writer,
+                    if let Some(payload) = ledger_event(
                         p.node,
                         p.run_memory,
                         task_id,
                         outcome_ledger_effect(p.declared_outcomes, &outcome),
                         &produced_hashes,
-                    )
-                    .await?;
+                        accepted_report,
+                    )? {
+                        committed.push(VersionedEventPayload::new(payload));
+                    }
                     // Capture any work the agent discovered mid-task into the
                     // ledger as pending tasks, each with a discovered_from edge
                     // to the current task. A malformed artifact is logged and
                     // skipped — it never fails the stage.
                     if let Some(bytes) = discovered_tasks_bytes.as_deref() {
-                        emit_discovered_tasks(p.writer, p.node, task_id, bytes).await?;
+                        committed.extend(discovered_task_events(p.node, task_id, bytes).into_iter().map(VersionedEventPayload::new));
                     }
                 }
+                let effects_hash = ContentHash::compute(&serde_json::to_vec(&committed)
+                    .map_err(|error| StageError::Storage(error.to_string()))?);
+                let effects_count = u32::try_from(committed.len()).map_err(|_| StageError::Internal("stage effects batch is too large".into()))?;
+                let commit = surge_core::execution_recovery::commit::StageOutcomeCommit::new(
+                    stage_calls.context.clone(), session_id, logical_invocation, outcome.clone(), effects_count, effects_hash,
+                ).map_err(|error| StageError::Internal(error.to_string()))?;
+                committed.push(VersionedEventPayload::new(EventPayload::StageOutcomeCommitted { commit }));
+                p.writer.append_events(committed).await.map_err(|error| StageError::Storage(error.to_string()))?;
                 break outcome;
             },
             BridgeEvent::PermissionRequested {
@@ -1325,6 +1836,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     arguments,
                 };
                 let ctx = ToolDispatchContext {
+                    writer: Some(p.writer),
+                    invocation: Some(logical_invocation),
                     run_id: p.run_id,
                     session_id,
                     worktree_root: p.worktree_path,
@@ -1335,6 +1848,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // the call: we send a synthetic tool-error reply and continue
                 // the agent loop without invoking the dispatcher.
                 let hook_ctx = HookContext::for_node(p.node)
+                    .with_writer(p.writer, logical_invocation)
                     .with_worktree_path(p.worktree_path)
                     .with_session(session_id)
                     .with_tool(tool.as_str(), Some(args_redacted_json.as_str()));
@@ -1664,7 +2178,166 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             "stage endpoint cleanup: {error}; stage: {stage_result:?}"
         ))
     })?;
+    if matches!(stage_result, Err(StageError::RateLimited { .. }))
+        && let (Some(quota), Some((store, claim, policy))) =
+            (task_quota_cycle.as_ref(), p.quota_owner.as_ref())
+    {
+        let next = store
+            .reserve_next_candidate_after_exhaustion(claim, &quota.cycle, policy)
+            .map_err(|error| {
+                StageError::RecoveryRequired(format!("reserve next quota candidate: {error}"))
+            })?;
+        if let Some(reservation) = next {
+            if reservation.disposition
+                != surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved
+            {
+                return Err(StageError::RecoveryRequired(
+                    "next quota candidate reservation was already consumed".into(),
+                ));
+            }
+            let frozen_candidate = policy
+                .candidates()
+                .iter()
+                .find(|candidate| candidate.candidate() == &reservation.candidate)
+                .cloned()
+                .ok_or_else(|| {
+                    StageError::RecoveryRequired(
+                        "reserved quota candidate is absent from frozen launch policy".into(),
+                    )
+                })?;
+            let provider_invocation = surge_core::id::StageInvocationId::new();
+            let launch = surge_persistence::work_items::recovery_cycles::QuotaLaunchContract::new(
+                frozen_candidate,
+                provider_invocation,
+                surge_core::execution_recovery::SessionOpenMode::New,
+                None,
+            )
+            .map_err(|error| {
+                StageError::RecoveryRequired(format!("build quota launch contract: {error}"))
+            })?;
+            let selected_cycle = store
+                .recovery_cycle(claim.run(), &quota.cycle.invocation, quota.cycle.generation)
+                .map_err(|error| {
+                    StageError::RecoveryRequired(format!("read selected quota cycle: {error}"))
+                })?;
+            let handoff = store
+                .reserve_quota_open(claim, &selected_cycle, &reservation, launch)
+                .map_err(|error| {
+                    StageError::RecoveryRequired(format!("reserve quota opening: {error}"))
+                })?;
+            let permit = store
+                .admit_provider_open(claim, handoff.operation())
+                .map_err(|error| {
+                    StageError::RecoveryRequired(format!("admit quota opening: {error}"))
+                })?;
+            let next_cycle = store
+                .recovery_cycle(claim.run(), &quota.cycle.invocation, quota.cycle.generation)
+                .map_err(|error| {
+                    StageError::RecoveryRequired(format!("read fallback quota cycle: {error}"))
+                })?;
+            p.quota_cycle = Some(TaskQuotaCycle {
+                cycle: next_cycle,
+                reservation,
+                opening_seq: quota.opening_seq,
+            });
+            p.quota_opening = Some(permit);
+            return Box::pin(execute_agent_stage(p)).await;
+        }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let marker = store
+            .typed_rate_limit(&quota.reservation.receipt)
+            .map_err(|error| {
+                StageError::RecoveryRequired(format!("read typed quota exhaustion: {error}"))
+            })?
+            .ok_or_else(|| {
+                StageError::RecoveryRequired("exhausted quota candidate has no typed origin".into())
+            })?;
+        let reset_at_ms = match marker.observation().evidence() {
+            surge_persistence::work_items::recovery_cycles::QuotaEvidence::Observed {
+                reset_at_ms,
+                ..
+            } => *reset_at_ms,
+            _ => None,
+        };
+        let (origin, due_at_ms) = match reset_at_ms.filter(|reset| *reset > now_ms) {
+            Some(reset) => (
+                surge_persistence::work_items::recovery_cycles::WakeOrigin::ObservedReset,
+                reset,
+            ),
+            None => (
+                surge_persistence::work_items::recovery_cycles::WakeOrigin::PolicyBackoff,
+                now_ms
+                    .checked_add(policy.policy_backoff_ms())
+                    .ok_or_else(|| {
+                        StageError::RecoveryRequired("quota wake time overflow".into())
+                    })?,
+            ),
+        };
+        let wake = surge_persistence::work_items::recovery_cycles::RecoveryWake::new(
+            surge_core::RunId::new().to_string(),
+            origin,
+            now_ms,
+            due_at_ms,
+        )
+        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
+        let scheduled = store
+            .arm_recovery_wake(claim, &quota.cycle, &quota.reservation.receipt, &wake)
+            .map_err(|error| StageError::RecoveryRequired(format!("arm quota wake: {error}")))?;
+        store
+            .request_capacity_suspend(claim, &scheduled, &quota.reservation.receipt, now_ms)
+            .map_err(|error| {
+                StageError::RecoveryRequired(format!("reserve quota suspension: {error}"))
+            })?;
+    }
     stage_result
+}
+
+async fn apply_memory_claim_pack(
+    p: &AgentStageParams<'_>,
+    resolved: &mut [(surge_core::agent_config::TemplateVar, String)],
+) -> Result<Option<surge_core::context_pack::PackReceipt>, StageError> {
+    let has_memory_binding = p.agent_config.bindings.iter().any(|binding| {
+        matches!(
+            &binding.source,
+            ArtifactSource::RunArtifact { name } if name == "project_memory"
+        )
+    });
+    if !has_memory_binding {
+        return Ok(None);
+    }
+    let Some(snapshot_ref) = p
+        .run_memory
+        .artifacts
+        .get(crate::engine::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME)
+    else {
+        return Ok(None);
+    };
+    let bytes = p
+        .artifact_store
+        .open(p.run_id, snapshot_ref.hash)
+        .await
+        .map_err(|error| StageError::Storage(format!("memory candidate snapshot read: {error}")))?;
+    let snapshot: crate::project_context::MemoryClaimSnapshot = serde_json::from_slice(&bytes)
+        .map_err(|error| {
+            StageError::Internal(format!("memory candidate snapshot decode: {error}"))
+        })?;
+    let (body, receipt) =
+        crate::project_context::render_memory_claims_pack(snapshot.claims, snapshot.budget);
+    if let Some(body) = body {
+        for (binding, (_, value)) in p.agent_config.bindings.iter().zip(resolved.iter_mut()) {
+            if matches!(
+                &binding.source,
+                ArtifactSource::RunArtifact { name } if name == "project_memory"
+            ) {
+                if !value.is_empty() {
+                    value.push('\n');
+                }
+                value.push_str(&body);
+            }
+        }
+    }
+    Ok(Some(receipt))
 }
 
 /// Look up the [`LedgerEffect`] declared for `outcome` on this node, defaulting
@@ -1681,22 +2354,21 @@ fn outcome_ledger_effect(declared: &[OutcomeDecl], outcome: &OutcomeKey) -> Ledg
 /// - `ReadyForVerification` / `FailedVerification` → `TaskStatusChanged` (the
 ///   `from` status is read from the folded ledger, defaulting to `Pending`).
 /// - `Verified` → `TaskVerified` with `evidence` = the produced
-///   `verification-report` artifact hash; failing that, any one produced
-///   artifact (the lowest logical name, since `produced_hashes` is keyed by
-///   name); failing that, a deterministic hash of the task id.
+///   host-sealed `verification-report` hash and its exact bound report.
+///   Missing reports are rejected; other artifacts cannot substitute as proof.
 /// - `None` → no event.
-async fn emit_ledger_event(
-    writer: &RunWriter,
+fn ledger_event(
     node: &NodeKey,
     memory: &surge_core::run_state::RunMemory,
     task_id: &RoadmapTaskId,
     effect: LedgerEffect,
     produced_hashes: &BTreeMap<String, ContentHash>,
-) -> Result<(), StageError> {
+    sealed_report: Option<surge_core::roadmap::VerificationReportArtifact>,
+) -> Result<Option<EventPayload>, StageError> {
     use surge_core::roadmap::RoadmapStatus;
 
     let payload = match effect {
-        LedgerEffect::None => return Ok(()),
+        LedgerEffect::None => return Ok(None),
         LedgerEffect::ReadyForVerification | LedgerEffect::FailedVerification => {
             let to = if matches!(effect, LedgerEffect::ReadyForVerification) {
                 RoadmapStatus::ReadyForVerification
@@ -1718,21 +2390,18 @@ async fn emit_ledger_event(
         LedgerEffect::Verified => {
             let evidence = produced_hashes
                 .get("verification-report")
-                .or_else(|| produced_hashes.values().next())
                 .copied()
-                .unwrap_or_else(|| ContentHash::compute(task_id.as_str().as_bytes()));
+                .ok_or_else(|| StageError::Internal("missing sealed verification report".into()))?;
             EventPayload::TaskVerified {
                 task_id: task_id.clone(),
                 node: node.clone(),
                 evidence,
+
+                report: sealed_report,
             }
         },
     };
-    writer
-        .append_event(VersionedEventPayload::new(payload))
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-    Ok(())
+    Ok(Some(payload))
 }
 
 /// True when `relative_path` is an agent-authored project-memory note
@@ -1767,12 +2436,11 @@ fn stamp_memory_bytes(
 /// Lenient: a malformed or invalid artifact is logged and skipped rather than
 /// failing the stage — discovered work is advisory, and an AFK run should not
 /// abort because a side artifact was ill-formed.
-async fn emit_discovered_tasks(
-    writer: &RunWriter,
+fn discovered_task_events(
     node: &NodeKey,
     discovered_from: &RoadmapTaskId,
     bytes: &[u8],
-) -> Result<(), StageError> {
+) -> Vec<EventPayload> {
     let text = match std::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {
@@ -1782,7 +2450,7 @@ async fn emit_discovered_tasks(
                 err = %error,
                 "discovered-tasks artifact is not UTF-8 — skipping"
             );
-            return Ok(());
+            return Vec::new();
         },
     };
     let artifact: surge_core::DiscoveredTasksArtifact = match toml::from_str(text) {
@@ -1794,7 +2462,7 @@ async fn emit_discovered_tasks(
                 err = %error,
                 "discovered-tasks artifact failed to parse — skipping"
             );
-            return Ok(());
+            return Vec::new();
         },
     };
     let issues = artifact.validate();
@@ -1805,19 +2473,17 @@ async fn emit_discovered_tasks(
             issues = ?issues,
             "discovered-tasks artifact is invalid — skipping"
         );
-        return Ok(());
+        return Vec::new();
     }
-    for entry in artifact.tasks {
-        writer
-            .append_event(VersionedEventPayload::new(EventPayload::TaskDiscovered {
-                task_id: entry.id,
-                discovered_from: discovered_from.clone(),
-                title: entry.title,
-            }))
-            .await
-            .map_err(|e| StageError::Storage(e.to_string()))?;
-    }
-    Ok(())
+    artifact
+        .tasks
+        .into_iter()
+        .map(|entry| EventPayload::TaskDiscovered {
+            task_id: entry.id,
+            discovered_from: discovered_from.clone(),
+            title: entry.title,
+        })
+        .collect()
 }
 
 struct RejectionRecordParams<'a> {
@@ -1926,6 +2592,7 @@ async fn validate_profile_artifact_contracts(
     outcome: &OutcomeKey,
     artifacts_produced: &[String],
     worktree_path: &Path,
+    inline_verification: bool,
 ) -> Result<Option<ArtifactContractRejection>, StageError> {
     let Some(profile) = resolved_profile else {
         return Ok(None);
@@ -1951,6 +2618,9 @@ async fn validate_profile_artifact_contracts(
         .collect();
 
     for declaration in &profile_outcome.produced_artifacts {
+        if inline_verification && declaration.contract.kind == ArtifactKind::VerificationReport {
+            continue;
+        }
         let matching_paths: Vec<&PathBuf> = produced_paths
             .iter()
             .filter(|path| artifact_declaration_matches_path(declaration, path))
@@ -1975,6 +2645,16 @@ async fn validate_profile_artifact_contracts(
                 )));
             };
             let content = String::from_utf8_lossy(&validation_input.bytes);
+            if declaration.contract.kind == ArtifactKind::VerificationReport
+                && toml::from_str::<surge_core::roadmap::VerificationReportArtifact>(&content)
+                    .is_ok_and(|report| report.binding.is_some())
+            {
+                return Ok(Some(artifact_contract_rejection(
+                    ArtifactKind::VerificationReport,
+                    "worktree reports cannot supply host binding".into(),
+                )));
+            }
+
             // Flow-generator output is validated by the bootstrap post-processor,
             // which persists diagnostics and routes the bounded edit loop. Keep
             // path/readability checks here, but do not consume its retry there.
@@ -3137,6 +3817,7 @@ mod tests {
             &outcome,
             &artifacts,
             directory.path(),
+            false,
         )
         .await
         .unwrap();
@@ -3147,6 +3828,7 @@ mod tests {
             &outcome,
             &artifacts,
             directory.path(),
+            false,
         )
         .await
         .unwrap();
@@ -3157,6 +3839,7 @@ mod tests {
             &outcome,
             &[],
             directory.path(),
+            false,
         )
         .await
         .unwrap();

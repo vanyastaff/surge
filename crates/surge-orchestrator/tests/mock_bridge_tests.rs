@@ -17,6 +17,10 @@ use surge_core::{OutcomeKey, SessionId};
 
 fn minimal_session_config() -> SessionConfig {
     SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock { args: vec![] },

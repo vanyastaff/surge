@@ -1,9 +1,22 @@
 ---
 source: crates/surge-core/tests/fold_hook_events.rs
-assertion_line: 236
+assertion_line: 238
 expression: memory
 ---
 RunMemory {
+    execution_writers: {},
+    provider_sessions: {},
+    session_establishments: {},
+    stage_occurrences: {
+        NodeKey("impl_1"): 11,
+    },
+    gate_recovery_error: None,
+    gate_decisions: {},
+    committed_stage_outcomes: {},
+    committed_gate_stages: {},
+    suspension: None,
+    control_generation: 0,
+    bootstrap_edit_loop_cap: None,
     artifacts: {},
     artifacts_by_node: {},
     outcomes: {
@@ -37,4 +50,55 @@ RunMemory {
         tasks: {},
         rejected_verifications: 0,
     },
+    verification: VerificationContext {
+        subject: None,
+        criteria: {},
+    },
+    verification_graph: Some(
+        Graph {
+            schema_version: 1,
+            metadata: GraphMetadata {
+                name: "fold-hook-events",
+                description: None,
+                template_origin: None,
+                created_at: 2026-05-06T00:00:00Z,
+                author: None,
+                archetype: None,
+            },
+            start: NodeKey("impl_1"),
+            nodes: {
+                NodeKey("end"): Node {
+                    id: NodeKey("end"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [],
+                    config: Terminal(
+                        TerminalConfig {
+                            kind: Success,
+                            message: None,
+                        },
+                    ),
+                },
+                NodeKey("impl_1"): Node {
+                    id: NodeKey("impl_1"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [],
+                    config: Terminal(
+                        TerminalConfig {
+                            kind: Success,
+                            message: None,
+                        },
+                    ),
+                },
+            },
+            edges: [],
+            subgraphs: {},
+        },
+    ),
+    work_item: None,
 }

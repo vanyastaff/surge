@@ -24,6 +24,7 @@ fn capture(root: &std::path::Path) -> BootstrapCapture {
             digest: ContentHash::compute(b"graph"),
         },
         project_context: None,
+        bootstrap_edit_loop_cap: None,
         runtime_identity: ContentHash::compute(b"runtime"),
         configuration: vec![],
         credential_refs: vec![],

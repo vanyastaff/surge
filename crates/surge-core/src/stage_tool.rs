@@ -62,6 +62,8 @@ pub struct StageOutcomeCandidate {
     pub summary: String,
     #[serde(default)]
     pub artifacts_produced: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_report: Option<crate::roadmap::VerificationReportArtifact>,
 }
 
 /// Durable result returned by an authenticated stage-tool call.
@@ -109,12 +111,17 @@ mod tests {
                         outcome: OutcomeKey::try_from("done").unwrap(),
                         summary: "candidate".into(),
                         artifacts_produced: vec![],
+
+                        verification_report: None,
                     },
                 },
             },
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 9);
+        assert_eq!(
+            wrapper.schema_version,
+            crate::migrations::MAX_SUPPORTED_VERSION
+        );
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert_eq!(
             crate::migrations::migrate_payload(9, &bytes).unwrap(),
@@ -139,7 +146,10 @@ mod tests {
             }
         );
         assert!(matches!(
-            crate::migrations::migrate_payload(10, &bytes),
+            crate::migrations::migrate_payload(
+                crate::migrations::MAX_SUPPORTED_VERSION + 1,
+                &bytes
+            ),
             Err(crate::SurgeError::SchemaTooNew { .. })
         ));
     }

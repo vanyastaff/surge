@@ -1266,9 +1266,9 @@ pub(crate) fn is_auth_failure(error_msg: &str) -> bool {
 /// observation classifier), even though the two questions look similar. An
 /// earlier revision of this module unified them, and a review round caught
 /// the consequence: `looks_like_rate_limit`'s wider set (it also recognizes
-/// `insufficient_quota`, `resource_exhausted`, `overloaded_error`, "usage
-/// limit reached" — real provider shapes this function never needed to act
-/// on) silently changed *this* function's answer for those four patterns,
+/// `insufficient_quota`, `resource_exhausted`, "usage limit reached" — real
+/// provider shapes this function never needed to act on) silently changed
+/// *this* function's answer for those three patterns,
 /// which changes what `send_prompt_with_retry` below does: this function
 /// returning `true` short-circuits the retry loop into an immediate
 /// `Err(SurgeError::RateLimit{..})` instead of the normal

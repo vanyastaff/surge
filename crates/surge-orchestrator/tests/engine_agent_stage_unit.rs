@@ -62,6 +62,8 @@ async fn agent_stage_loops_until_outcome_reported() {
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -107,10 +109,15 @@ async fn agent_stage_loops_until_outcome_reported() {
     outer.current_index = 0;
     frames.insert(0, milestone);
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &frames,
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],

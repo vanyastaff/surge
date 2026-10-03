@@ -112,6 +112,7 @@ pub struct ForkOutcome {
 /// of bounds, the inherited prefix does not begin with a `RunStarted` event, a
 /// pre-fork edit targets an unknown or non-Agent node, or persistence fails.
 pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcome, EngineError> {
+    reject_task_fork(storage, &req)?;
     let reader = storage
         .open_run_reader(req.parent)
         .await
@@ -439,6 +440,22 @@ fn apply_edits_to_graph(graph: &mut Graph, edits: &ForkEdits) -> Result<(), Engi
     Ok(())
 }
 
+fn reject_task_fork(storage: &Storage, req: &ForkRequest) -> Result<(), EngineError> {
+    for run in [req.parent, req.new_run] {
+        if storage
+            .work_items()
+            .for_run(run)
+            .map_err(|error| EngineError::Storage(error.to_string()))?
+            .is_some()
+        {
+            return Err(EngineError::ForkInvalid(
+                "task attempts cannot bypass ownership through generic fork".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,6 +548,7 @@ mod tests {
         let node = NodeKey::try_from("end").unwrap();
         let outcome = OutcomeKey::try_from("done").unwrap();
         let config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -617,6 +635,7 @@ mod tests {
         let graph = minimal_graph(); // start == "end"
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -684,6 +703,7 @@ mod tests {
         let graph = minimal_graph();
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -819,6 +839,7 @@ mod tests {
         let graph = agent_graph();
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,

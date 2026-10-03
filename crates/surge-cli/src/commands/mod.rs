@@ -62,3 +62,5 @@ pub fn load_spec_by_id(id: &str) -> anyhow::Result<crate::legacy_spec::LegacySpe
 
     anyhow::bail!("Spec '{}' not found in .surge/specs/", id)
 }
+
+pub mod task;

@@ -308,6 +308,8 @@ mod tests {
                 2,
                 2_000,
                 EventPayload::SessionOpened {
+                    handoff: None,
+                    opened: None,
                     node: node.clone(),
                     session: SessionId::new(),
                     agent: "claude-opus-4-7".into(),

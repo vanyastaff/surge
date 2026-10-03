@@ -134,6 +134,33 @@ pub async fn run_with_supervisor(
     .await
 }
 
+fn spawn_task_reconciliation(
+    tracking: &TrackingContext,
+    admission: &Arc<AdmissionController>,
+    broadcast: &Arc<BroadcastRegistry>,
+    shutdown: &CancellationToken,
+) {
+    let task_tracking = tracking.clone();
+    let task_admission = admission.clone();
+    let task_broadcast = broadcast.clone();
+    let task_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        let mut cursor = None;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                ()=task_shutdown.cancelled()=>break,
+                _=interval.tick()=>{
+                    match crate::work_items::reconcile_page(&task_tracking,&task_admission,&task_broadcast,cursor.as_deref()).await {
+                        Ok(next)=>cursor=next,
+                        Err(error)=>{tracing::warn!(%error,"task reconciliation page failed");cursor=None;},
+                    }
+                }
+            }
+        }
+    });
+}
+
 async fn run_host(
     cfg: ServerConfig,
     facade: Arc<dyn EngineFacade>,
@@ -144,6 +171,8 @@ async fn run_host(
     bootstrap: Option<Arc<BootstrapSupervisor>>,
 ) -> Result<(), DaemonError> {
     use interprocess::local_socket::ListenerOptions;
+
+    spawn_task_reconciliation(&tracking, &admission, &broadcast, &shutdown);
 
     let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
@@ -451,6 +480,22 @@ async fn dispatch(
     bootstrap: Option<&Arc<BootstrapSupervisor>>,
 ) -> Option<DaemonResponse> {
     match req {
+        DaemonRequest::WorkItem {
+            request_id,
+            command,
+        } => Some(
+            match crate::work_items::execute(&command, tracking, admission, broadcast).await {
+                Ok(result) => DaemonResponse::WorkItemOk {
+                    request_id,
+                    result: Box::new(result),
+                },
+                Err((code, error)) => DaemonResponse::Error {
+                    request_id,
+                    code,
+                    message: error.to_string(),
+                },
+            },
+        ),
         DaemonRequest::Ping { request_id } => Some(DaemonResponse::PingOk {
             request_id,
             version: env!("CARGO_PKG_VERSION").into(),
@@ -1059,14 +1104,20 @@ async fn dispatch(
                     .into_iter()
                     .find(|(n, _)| n == &srv.name)
                     .map_or("unknown", |(_, h)| mcp_health_label(h));
-                let (tool_count, error) = match probe {
+                let (tool_count, mut error) = match probe {
                     Ok(tools) => (
                         Some(tools.iter().filter(|t| t.server == srv.name).count()),
                         None,
                     ),
                     Err(e) => (None, Some(e.to_string())),
                 };
-                reg.shutdown().await;
+                if let Err(cleanup) = reg.shutdown().await {
+                    let diagnostic = cleanup.to_string();
+                    error = Some(error.map_or_else(
+                        || diagnostic.clone(),
+                        |prior| format!("{prior}; {diagnostic}"),
+                    ));
+                }
                 servers.push(McpProbeReport::new(
                     srv.name.clone(),
                     status.to_string(),

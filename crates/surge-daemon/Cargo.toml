@@ -53,6 +53,7 @@ tokio-stream = { workspace = true }
 nix.workspace = true
 
 [dev-dependencies]
+agent-client-protocol.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
 surge-orchestrator.workspace = true

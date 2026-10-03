@@ -49,6 +49,10 @@ pub enum ToolResultPayload {
 
 /// Per-call context handed to the dispatcher.
 pub struct ToolDispatchContext<'a> {
+    /// Append-only authority for durable host-writer coverage before dispatch.
+    pub writer: Option<&'a surge_persistence::runs::run_writer::RunWriter>,
+    /// Stable logical invocation whose authenticated tool request is executing.
+    pub invocation: Option<surge_core::id::StageInvocationId>,
     /// Identifier of the current run.
     pub run_id: RunId,
     /// Identifier of the ACP session that issued the tool call.
@@ -199,6 +203,8 @@ mod tests {
     async fn noop_dispatcher_returns_unsupported() {
         let d = NoOp;
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: Path::new("/tmp"),

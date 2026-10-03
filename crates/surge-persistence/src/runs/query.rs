@@ -11,7 +11,9 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use surge_core::id::RunId;
+use surge_core::run_display::RunDisplayState;
 use surge_core::run_event::{EscalationCause, EventPayload};
+use surge_core::run_state::{FoldError, RunState};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader::{ReadEvent, RunReader};
@@ -24,6 +26,8 @@ use crate::runs::seq::EventSeq;
 /// has been observed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunStatusSnapshot {
+    /// Canonical display facts from a contiguous, valid durable history.
+    pub display: RunDisplayState,
     /// The run this snapshot describes.
     pub run_id: RunId,
     /// Most-recent `StageEntered` node, or `None` before the first stage.
@@ -81,6 +85,7 @@ impl RunStatusSnapshot {
     #[must_use]
     pub fn empty(run_id: RunId) -> Self {
         Self {
+            display: RunDisplayState::Unknown,
             run_id,
             active_node: None,
             last_outcome: None,
@@ -105,6 +110,16 @@ impl RunStatusSnapshot {
 /// aggregation logic is unit-testable against synthetic event slices.
 #[must_use]
 pub fn aggregate_status(run_id: RunId, events: &[ReadEvent]) -> RunStatusSnapshot {
+    aggregate_status_with_registry(run_id, events, None)
+}
+
+/// Add independent registry crash evidence without changing scheduler counters.
+#[must_use]
+pub fn aggregate_status_with_registry(
+    run_id: RunId,
+    events: &[ReadEvent],
+    registry: Option<surge_core::RunStatus>,
+) -> RunStatusSnapshot {
     let mut snap = RunStatusSnapshot::empty(run_id);
     snap.event_count = events.len() as u64;
 
@@ -156,7 +171,44 @@ pub fn aggregate_status(run_id: RunId, events: &[ReadEvent]) -> RunStatusSnapsho
     if let (Some(start), Some(end)) = (snap.started_at_ms, snap.last_event_at_ms) {
         snap.elapsed_ms = Some(end.saturating_sub(start));
     }
+    let state = (!events.is_empty())
+        .then(|| fold_read_events(run_id, events).ok())
+        .flatten();
+    snap.display = RunDisplayState::from_state(state.as_ref(), registry);
     snap
+}
+
+/// Replay decoded durable rows through the core state machine, without a second rule set.
+/// Empty history has no evidence of active execution.
+pub fn fold_read_events(run_id: RunId, events: &[ReadEvent]) -> Result<RunState, FoldError> {
+    if let Some(first) = events.first()
+        && !matches!(first.payload.payload, EventPayload::RunStarted { .. })
+    {
+        return Err(FoldError::InvalidTransition {
+            from: "NotStarted",
+            event: first.payload.payload.discriminant_str(),
+        });
+    }
+    let mut state = RunState::NotStarted;
+    for (expected_seq, row) in (1u64..).zip(events) {
+        if row.seq.0 != expected_seq {
+            return Err(FoldError::CorruptedSequence {
+                expected_seq,
+                got_seq: row.seq.0,
+            });
+        }
+        state = surge_core::run_state::apply(
+            state,
+            &surge_core::RunEvent {
+                run_id,
+                seq: row.seq.0,
+                timestamp: chrono::DateTime::from_timestamp_millis(row.timestamp_ms)
+                    .unwrap_or_default(),
+                payload: row.payload.payload.clone(),
+            },
+        )?;
+    }
+    Ok(state)
 }
 
 /// Read the full event log for `run_id` and fold it into a
@@ -202,12 +254,104 @@ mod tests {
 
     fn run_config() -> RunConfig {
         RunConfig {
+            bootstrap_edit_loop_cap: None,
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
             mcp_servers: Vec::new(),
             budget: BudgetGuard::default(),
         }
+    }
+
+    #[test]
+    fn display_requires_valid_prefix_and_terminal_overrides_crash() {
+        let id = RunId::new();
+        let start = event(
+            1,
+            0,
+            EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: "/proj".into(),
+                initial_prompt: "work".into(),
+                config: run_config(),
+            },
+        );
+        assert_eq!(aggregate_status(id, &[]).display, RunDisplayState::Unknown);
+        assert_eq!(
+            aggregate_status(id, std::slice::from_ref(&start)).display,
+            RunDisplayState::Working
+        );
+        let abort = event(
+            2,
+            100,
+            EventPayload::RunAborted {
+                reason: "stop".into(),
+            },
+        );
+        assert_eq!(
+            aggregate_status_with_registry(
+                id,
+                &[start.clone(), abort],
+                Some(surge_core::RunStatus::Crashed)
+            )
+            .display,
+            RunDisplayState::Done(surge_core::TerminalReason::Aborted)
+        );
+        let gap = event(
+            3,
+            200,
+            EventPayload::RunAborted {
+                reason: "missing prefix".into(),
+            },
+        );
+        assert_eq!(
+            aggregate_status(id, &[start, gap]).display,
+            RunDisplayState::Unknown
+        );
+        assert_eq!(
+            aggregate_status_with_registry(id, &[], Some(surge_core::RunStatus::Crashed))
+                .display
+                .label(),
+            "Recovery requires an operator"
+        );
+    }
+
+    #[test]
+    fn display_rejects_non_start_origin_even_if_a_later_start_or_terminal_folds() {
+        let id = RunId::new();
+        let prefix = event(
+            1,
+            0,
+            EventPayload::StageEntered {
+                node: node("untrusted"),
+                attempt: 1,
+            },
+        );
+        let start = event(
+            2,
+            100,
+            EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: "/proj".into(),
+                initial_prompt: "late start".into(),
+                config: run_config(),
+            },
+        );
+        assert_eq!(
+            aggregate_status(id, &[prefix.clone(), start]).display,
+            RunDisplayState::Unknown
+        );
+        let terminal = event(
+            2,
+            100,
+            EventPayload::RunAborted {
+                reason: "suffix".into(),
+            },
+        );
+        assert_eq!(
+            aggregate_status(id, &[prefix, terminal]).display,
+            RunDisplayState::Unknown
+        );
     }
 
     fn event(seq: u64, timestamp_ms: i64, payload: EventPayload) -> ReadEvent {

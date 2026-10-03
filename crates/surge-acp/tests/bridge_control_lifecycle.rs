@@ -19,6 +19,10 @@ impl Sandbox for Elevate {
 }
 fn config(root: &Path, flags: &[&str]) -> SessionConfig {
     SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Custom {
@@ -110,7 +114,7 @@ async fn both_handshake_phases_have_deadlines_and_reap() {
 /// A launcher-started adapter that hangs once in `session/new` (observed live
 /// under load) is restarted once, and the session opens on the second launch.
 #[tokio::test(flavor = "multi_thread")]
-async fn transient_handshake_hang_is_retried_once_and_opens() {
+async fn initialize_only_handshake_hang_is_retried_once_and_opens() {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("stalled-once");
     let bridge = bridge();
@@ -119,14 +123,14 @@ async fn transient_handshake_hang_is_retried_once_and_opens() {
         Duration::from_secs(5),
         bridge.open_session(config(
             root.path(),
-            &["--stall-new-session-once", &marker_arg],
+            &["--stall-initialize-once", &marker_arg],
         )),
     )
     .await
     .expect("retry finishes within two handshake budgets")
     .expect("second launch opens the session");
     assert!(marker.exists(), "the first launch really stalled");
-    bridge.close_session(session).await.unwrap();
+    bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
     assert_reaped(root.path());
 }
@@ -139,7 +143,7 @@ async fn noisy_startup_is_drained_before_handshake() {
         .open_session(config(root.path(), &["--noisy-startup"]))
         .await
         .unwrap();
-    bridge.close_session(session).await.unwrap();
+    bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
     assert_reaped(root.path());
 }
@@ -157,7 +161,7 @@ async fn permission_reply_and_busy_response_work_during_prompt() {
         .await
         .unwrap();
     {
-        let prompt = bridge.send_message(session, MessageContent::Text("work".into()));
+        let prompt = bridge.send_message(session.session, MessageContent::Text("work".into()));
         tokio::pin!(prompt);
         let request_id = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -173,14 +177,14 @@ async fn permission_reply_and_busy_response_work_during_prompt() {
         tokio::time::sleep(Duration::from_millis(650)).await;
         assert!(matches!(
             bridge
-                .send_message(session, MessageContent::Text("second".into()))
+                .send_message(session.session, MessageContent::Text("second".into()))
                 .await,
             Err(SendMessageError::PromptAlreadyRunning { .. })
         ));
-        bridge.session_state(session).await.unwrap();
+        bridge.session_state(session.session).await.unwrap();
         bridge
             .reply_to_permission(
-                session,
+                session.session,
                 request_id,
                 RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
                     SelectedPermissionOutcome::new(PermissionOptionId::new("allow")),
@@ -193,7 +197,7 @@ async fn permission_reply_and_busy_response_work_during_prompt() {
             .unwrap()
             .unwrap();
     }
-    bridge.close_session(session).await.unwrap();
+    bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
     assert_reaped(root.path());
 }
@@ -208,7 +212,7 @@ async fn child_exit_during_prompt_does_not_panic_worker() {
         .unwrap();
     let result = tokio::time::timeout(
         Duration::from_secs(2),
-        bridge.send_message(session, MessageContent::Text("work".into())),
+        bridge.send_message(session.session, MessageContent::Text("work".into())),
     )
     .await
     .unwrap();
@@ -226,14 +230,14 @@ async fn concurrent_close_never_claims_reap_while_first_cleanup_pending() {
         .await
         .unwrap();
     {
-        let first = bridge.close_session(session);
+        let first = bridge.close_session(session.session);
         tokio::pin!(first);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), &mut first)
                 .await
                 .is_err()
         );
-        let second = bridge.close_session(session).await;
+        let second = bridge.close_session(session.session).await;
         assert!(
             matches!(
                 second,
@@ -279,7 +283,7 @@ async fn advertised_filesystem_capabilities_follow_permission_policy() {
         assert!(caps.fs.read_text_file, "read support must be advertised");
         assert_eq!(caps.fs.write_text_file, write);
         assert!(caps.terminal);
-        bridge.close_session(session).await.unwrap();
+        bridge.close_session(session.session).await.unwrap();
         bridge.shutdown().await.unwrap();
         assert_reaped(root.path());
     }
@@ -315,14 +319,14 @@ async fn close_prompt(ignore: bool) {
         .await
         .unwrap();
     {
-        let prompt = bridge.send_message(session, MessageContent::Text("work".into()));
+        let prompt = bridge.send_message(session.session, MessageContent::Text("work".into()));
         tokio::pin!(prompt);
         tokio::select! {
             result = &mut prompt => panic!("prompt ended before barrier: {result:?}"),
             () = wait_marker(&started) => {},
         }
         let start = std::time::Instant::now();
-        let closed = bridge.close_session(session).await;
+        let closed = bridge.close_session(session.session).await;
         assert!(
             cancelled.exists(),
             "agent never received wire session/cancel"
@@ -396,10 +400,13 @@ async fn spoofed_reserved_notification_has_no_outcome_authority() {
         .await
         .unwrap();
     bridge
-        .send_message(session, MessageContent::Text("spoof notification".into()))
+        .send_message(
+            session.session,
+            MessageContent::Text("spoof notification".into()),
+        )
         .await
         .unwrap();
-    bridge.close_session(session).await.unwrap();
+    bridge.close_session(session.session).await.unwrap();
     bridge.shutdown().await.unwrap();
     assert!(
         !std::iter::from_fn(|| events.try_recv().ok())
@@ -431,7 +438,7 @@ async fn overload_roundtrip() {
         .await
         .unwrap();
     {
-        let prompt = bridge.send_message(session, MessageContent::Text("work".into()));
+        let prompt = bridge.send_message(session.session, MessageContent::Text("work".into()));
         tokio::pin!(prompt);
         let mut pending = 0;
         tokio::time::timeout(Duration::from_secs(3), async {
@@ -448,14 +455,46 @@ async fn overload_roundtrip() {
             }
         }).await.unwrap();
         assert!(pending <= 32, "unbounded callback admission");
-        tokio::time::timeout(Duration::from_secs(3), bridge.close_session(session))
-            .await
-            .unwrap()
-            .unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            bridge.close_session(session.session),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(1), &mut prompt)
             .await
             .unwrap();
     }
     bridge.shutdown().await.unwrap();
+    assert_reaped(root.path());
+}
+
+/// Acceptance of session/new can occur before a timed-out response is observed.
+#[tokio::test(flavor = "multi_thread")]
+async fn uncertain_session_operation_is_never_automatically_reissued() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("accepted-operation");
+    let bridge = bridge();
+    let marker_arg = marker.display().to_string();
+    let result = bridge
+        .open_session(config(
+            root.path(),
+            &["--stall-new-session-once", &marker_arg],
+        ))
+        .await;
+    let repeated = result.is_ok();
+    if let Ok(session) = result {
+        bridge.close_session(session.session).await.unwrap();
+    }
+    bridge.shutdown().await.unwrap();
+    assert!(
+        marker.exists(),
+        "the real provider received the first session operation"
+    );
+    assert!(
+        !repeated,
+        "timeout after issuing session/new must be uncertain, not silently retried to a second session"
+    );
     assert_reaped(root.path());
 }

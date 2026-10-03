@@ -1,16 +1,21 @@
 //! `TicketStateSync` — drives `ticket_index` FSM from engine `RunHandle`
-//! events and posts tracker comments.
+//! events and atomically queues terminal tracker comments.
 
+use crate::intake_completion::{
+    durable_outcome, format_completion, post_comment_bounded, terminal_kind,
+};
 use std::sync::Arc;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
-use surge_persistence::intake::{IntakeRepo, TicketState};
+use surge_persistence::intake::IntakeRepo;
+use surge_persistence::intake_outbox;
 use surge_persistence::runs::storage::Storage;
+use surge_persistence::runs::{Clock, SystemClock};
 use tracing::{info, warn};
 
 /// Per-run subscriber that mirrors engine state into `ticket_index` and
-/// posts tracker comments on terminal events.
+/// enqueues terminal comments for the shared durable delivery worker.
 pub struct TicketStateSync {
     task_id: TaskId,
     storage: Arc<Storage>,
@@ -29,7 +34,7 @@ impl TicketStateSync {
     }
 
     /// Drive the loop: consume events from `handle.events`, apply FSM
-    /// transitions, and post tracker comments. Returns when the run
+    /// transitions, and enqueue terminal tracker comments. Returns when the run
     /// reaches a terminal state or the broadcast sender is dropped.
     pub async fn run(self, mut handle: RunHandle) {
         info!(task_id = %self.task_id, run_id = %handle.run_id, "TicketStateSync started");
@@ -37,121 +42,94 @@ impl TicketStateSync {
         loop {
             match handle.events.recv().await {
                 Ok(EngineRunEvent::Persisted { .. }) if !went_active => {
-                    if let Err(e) = self.set_state(TicketState::Active).await {
+                    if let Err(e) = self.set_active(&handle.run_id) {
                         warn!(error = %e, "transition to Active failed");
                     }
                     went_active = true;
                 },
                 Ok(EngineRunEvent::Terminal { outcome }) => {
-                    self.on_terminal(&outcome).await;
+                    self.on_terminal(&handle.run_id, &outcome).await;
                     return;
                 },
                 Ok(_) => {
                     // Unknown future variant — ignore and keep looping.
                 },
-                Err(_) => {
-                    // Sender dropped — engine has exited. We exit silently
-                    // (the engine will have written its own RunCompleted /
-                    // RunFailed event already if it terminated normally).
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!(
+                        skipped,
+                        "ticket subscriber lagged; checking durable run history"
+                    );
+                    if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
+                        self.on_terminal(&handle.run_id, &outcome).await;
+                        return;
+                    }
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
+                        self.on_terminal(&handle.run_id, &outcome).await;
+                    }
                     return;
                 },
             }
         }
     }
 
-    // `on_terminal` (the other FSM-transition method on this type) awaits
-    // real I/O (`self.source.post_comment(...)`); `async fn` here keeps both
-    // transition methods uniform rather than exposing which one happens to
-    // await nothing today.
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "matches `on_terminal`'s async signature on this type; `std::future::ready`/`async move` alternatives would make this eagerly evaluate the registry write instead of lazily-until-polled like its sibling"
-    )]
-    async fn set_state(&self, to: TicketState) -> Result<(), String> {
+    fn set_active(&self, run_id: &surge_core::RunId) -> Result<bool, String> {
         let conn = self
             .storage
             .acquire_registry_conn()
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| error.to_string())?;
         IntakeRepo::new(&conn)
-            .update_state_validated(self.task_id.as_str(), to)
-            .map_err(|e| e.to_string())
+            .mark_run_active(self.task_id.as_str(), &run_id.to_string())
+            .map_err(|error| error.to_string())
     }
 
-    async fn on_terminal(&self, outcome: &RunOutcome) {
-        let (state, comment): (Option<TicketState>, String) = match outcome {
-            RunOutcome::Completed { .. } => (
-                Some(TicketState::Completed),
-                "✅ Surge run complete.".to_string(),
-            ),
-            RunOutcome::Failed { error } => (
-                Some(TicketState::Failed),
-                format!("❌ Surge run failed: {error}"),
-            ),
-            RunOutcome::Aborted { reason } => (
-                Some(TicketState::Aborted),
-                format!("Surge run aborted: {reason}"),
-            ),
-            // Task 12 M3 (R37/R37.1): a parked run is not finished — it is
-            // paused on a provider rate-limit window and resumes on its
-            // own (Task 12 M4's wake scheduler; today, a manual
-            // `Engine::resume_run`). Reporting `Failed` here would tell the
-            // human the opposite of what happened: the system is working
-            // as designed, not broken.
-            //
-            // No `TicketState` variant represents "waiting, will resume on
-            // its own" today. `TicketState::Snoozed` is *not* it — that is
-            // a different mechanism entirely (`SnoozeScheduler`, driven by
-            // a ticket-level `snooze_until` an operator/automation set),
-            // not `RunStatus::Parked`/`wake_at`; the Task 12 plan names
-            // this exact non-overlap explicitly ("same shape, different
-            // subject — do not merge on the second occurrence"). Reusing
-            // it here would misrepresent this ticket the same way
-            // collapsing to `Failed` does. Until a real variant exists —
-            // an M4 decision, not this call site's — leaving the ticket's
-            // state untouched (it stays whatever it already was, typically
-            // `Active`) is the honest choice: true but incomplete beats
-            // false.
-            RunOutcome::Parked { wake_at } => (
-                None,
-                format!(
-                    "⏸ Surge run paused until {wake_at} (provider rate limit reached); it \
-                     will resume automatically once the window resets."
-                ),
-            ),
-            // Policy, stated once, shared with `intake_completion.rs`'s
-            // identical wildcard (Task 12 M3 review, "two tails now
-            // diverge"): a genuinely unrecognized future `RunOutcome`
-            // variant is treated the same way `Parked` is above — leave
-            // the ticket's state untouched rather than guess a terminal
-            // one. Guessing `Failed` (this arm's previous choice) or
-            // `Aborted` (the sibling file's) is a coin flip on a fact
-            // neither file has any way to know, and the `Parked` fix two
-            // arms up exists specifically because a wrong guess reads as
-            // an active lie, not a gap. `warn!`, not `info!`, because
-            // unlike a known, named `Parked` pause, this case really is
-            // unexpected — an operator should notice a build shipped a
-            // `RunOutcome` variant this code does not recognize yet.
-            _ => {
-                warn!(
-                    task_id = %self.task_id,
-                    "on_terminal: unrecognized RunOutcome variant; leaving ticket state \
-                     untouched rather than guessing a terminal one"
-                );
-                (
-                    None,
-                    "Surge run ended with an outcome this build does not recognize yet."
-                        .to_string(),
-                )
-            },
-        };
-        if let Some(state) = state
-            && let Err(e) = self.set_state(state).await
-        {
-            warn!(error = %e, ?state, "transition to terminal state failed");
+    async fn on_terminal(&self, run_id: &surge_core::RunId, outcome: &RunOutcome) {
+        let (comment, state, _) = format_completion(outcome);
+        if let Some(kind) = terminal_kind(outcome) {
+            let result = self
+                .storage
+                .acquire_registry_conn()
+                .map_err(|error| error.to_string())
+                .and_then(|mut conn| {
+                    intake_outbox::enqueue_terminal(
+                        &mut conn,
+                        self.task_id.as_str(),
+                        &run_id.to_string(),
+                        kind,
+                        &comment,
+                        SystemClock.now_ms(),
+                    )
+                    .map_err(|error| error.to_string())
+                });
+            if let Err(error) = result {
+                warn!(%error, "terminal ticket/comment transaction failed");
+            }
+            return;
         }
-        if let Err(e) = self.source.post_comment(&self.task_id, &comment).await {
-            warn!(error = %e, task_id = %self.task_id, "tracker comment on terminal failed");
+        {
+            let conn = match self.storage.acquire_registry_conn() {
+                Ok(conn) => conn,
+                Err(error) => {
+                    warn!(%error, "cannot check correlated ticket");
+                    return;
+                },
+            };
+            match IntakeRepo::new(&conn).fetch(self.task_id.as_str()) {
+                Ok(Some(row))
+                    if row.run_id.as_deref() == Some(&run_id.to_string())
+                        && matches!(
+                            row.state,
+                            surge_persistence::intake::TicketState::Active
+                                | surge_persistence::intake::TicketState::RunStarted
+                        ) => {},
+                _ => return,
+            }
+        }
+        if let Err(error) =
+            post_comment_bounded(self.source.as_ref(), &self.task_id, &comment).await
+        {
+            warn!(%error, task_id = %self.task_id, "tracker comment on terminal failed");
         }
         info!(task_id = %self.task_id, ?state, "TicketStateSync done");
     }
@@ -161,14 +139,22 @@ impl TicketStateSync {
 mod tests {
     use super::*;
     use surge_intake::testing::MockTaskSource;
-    use surge_persistence::intake::IntakeRow;
+    use surge_persistence::intake::{IntakeRow, TicketState};
 
     /// A `TicketStateSync` over a fresh registry DB with one seeded ticket
     /// already `Active` (mirroring what the real `run()` loop does on its
     /// first `Persisted` event, before any terminal outcome arrives).
-    async fn seeded_sync() -> (TicketStateSync, Arc<MockTaskSource>, Arc<Storage>) {
+    async fn seeded_sync() -> (
+        TicketStateSync,
+        Arc<MockTaskSource>,
+        Arc<Storage>,
+        surge_core::RunId,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::RunId::new();
+        let _writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
         let task_id = TaskId::try_new("mock:test#1").unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
@@ -177,11 +163,7 @@ mod tests {
                     task_id: task_id.as_str().to_string(),
                     source_id: "mock:test".into(),
                     provider: "mock".into(),
-                    // `None`, not a foreign-keyed `runs.id` — this test
-                    // drives `on_terminal` directly and never looks the
-                    // ticket up by run_id, so there is nothing to satisfy
-                    // the `runs` table's foreign key for.
-                    run_id: None,
+                    run_id: Some(run_id.to_string()),
                     triage_decision: Some("enqueued".into()),
                     duplicate_of: None,
                     priority: Some("medium".into()),
@@ -201,7 +183,7 @@ mod tests {
             storage.clone(),
             source.clone() as Arc<dyn TaskSource>,
         );
-        (sync, source, storage)
+        (sync, source, storage, run_id, dir)
     }
 
     /// Task 12 M3: the behavioral point of this whole change. Before the
@@ -211,12 +193,13 @@ mod tests {
     /// working as designed and resumes on its own.
     #[tokio::test(flavor = "multi_thread")]
     async fn on_terminal_parked_leaves_ticket_state_untouched_and_posts_a_pause_comment() {
-        let (sync, source, storage) = seeded_sync().await;
+        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
         let wake_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:05:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
 
-        sync.on_terminal(&RunOutcome::Parked { wake_at }).await;
+        sync.on_terminal(&run_id, &RunOutcome::Parked { wake_at })
+            .await;
 
         let comments = source.posted_comments().await;
         assert_eq!(comments.len(), 1, "expected exactly one comment");
@@ -248,18 +231,143 @@ mod tests {
     async fn on_terminal_completed_still_transitions_as_before() {
         // Regression guard: the `Option<TicketState>` refactor must not
         // have quietly turned the three real terminal outcomes into no-ops.
-        let (sync, source, storage) = seeded_sync().await;
-        sync.on_terminal(&RunOutcome::Completed {
-            terminal: surge_core::keys::NodeKey::try_from("end").unwrap(),
-        })
+        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        sync.on_terminal(
+            &run_id,
+            &RunOutcome::Completed {
+                terminal: surge_core::keys::NodeKey::try_from("end").unwrap(),
+            },
+        )
         .await;
 
-        assert_eq!(source.posted_comments().await.len(), 1);
+        assert!(source.posted_comments().await.is_empty());
         let conn = storage.acquire_registry_conn().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
         let row = IntakeRepo::new(&conn)
             .fetch("mock:test#1")
             .unwrap()
             .expect("ticket row must still exist");
         assert_eq!(row.state, TicketState::Completed);
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_handle_cannot_promote_or_complete_reassigned_ticket() {
+        let (sync, source, storage, old_run, _dir) = seeded_sync().await;
+        let new_run = surge_core::RunId::new();
+        let _writer = storage.create_run(new_run, "/new", None).await.unwrap();
+        {
+            let conn = storage.acquire_registry_conn().unwrap();
+            conn.execute(
+                "UPDATE ticket_index SET state = 'RunStarted', run_id = ?1",
+                [new_run.to_string()],
+            )
+            .unwrap();
+        }
+        assert!(!sync.set_active(&old_run).unwrap());
+        sync.on_terminal(
+            &old_run,
+            &RunOutcome::Failed {
+                error: "old failure".into(),
+            },
+        )
+        .await;
+        assert!(source.posted_comments().await.is_empty());
+        let conn = storage.acquire_registry_conn().unwrap();
+        let row = IntakeRepo::new(&conn)
+            .fetch("mock:test#1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, TicketState::RunStarted);
+        assert_eq!(row.run_id, Some(new_run.to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn completed_ticket_cannot_be_reactivated_or_announced_as_parked() {
+        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        sync.on_terminal(
+            &run_id,
+            &RunOutcome::Aborted {
+                reason: "stopped".into(),
+            },
+        )
+        .await;
+        assert!(!sync.set_active(&run_id).unwrap());
+        sync.on_terminal(
+            &run_id,
+            &RunOutcome::Parked {
+                wake_at: chrono::Utc::now(),
+            },
+        )
+        .await;
+        assert!(source.posted_comments().await.is_empty());
+        let conn = storage.acquire_registry_conn().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            IntakeRepo::new(&conn)
+                .fetch("mock:test#1")
+                .unwrap()
+                .unwrap()
+                .state,
+            TicketState::Aborted
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lagged_subscriber_continues_to_a_terminal_event() {
+        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        let (tx, rx) = tokio::sync::broadcast::channel(1);
+        for _ in 0..2 {
+            tx.send(EngineRunEvent::Persisted {
+                seq: 1,
+                payload: Box::new(surge_core::run_event::EventPayload::RunFailed {
+                    error: "dropped".into(),
+                }),
+            })
+            .unwrap();
+        }
+        tx.send(EngineRunEvent::Terminal {
+            outcome: RunOutcome::Aborted {
+                reason: "cancelled".into(),
+            },
+        })
+        .unwrap();
+        sync.run(RunHandle {
+            run_id,
+            events: rx,
+            completion: tokio::spawn(async {
+                RunOutcome::Aborted {
+                    reason: "cancelled".into(),
+                }
+            }),
+        })
+        .await;
+        assert!(source.posted_comments().await.is_empty());
+        let conn = storage.acquire_registry_conn().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            IntakeRepo::new(&conn)
+                .fetch("mock:test#1")
+                .unwrap()
+                .unwrap()
+                .state,
+            TicketState::Aborted
+        );
     }
 }

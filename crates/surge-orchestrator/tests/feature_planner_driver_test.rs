@@ -115,6 +115,8 @@ async fn feature_planner_driver_reuses_agent_stage_artifact_validation() {
         outcome: OutcomeKey::from_str("patched").unwrap(),
         summary: "patch drafted".into(),
         artifacts_produced: vec!["roadmap-patch.toml".into()],
+
+        verification_report: None,
     })
     .await;
 

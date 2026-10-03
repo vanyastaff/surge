@@ -73,7 +73,7 @@ fn default_jitter_max() -> Duration {
 /// field needs a `CONFIG_SCHEMA_VERSION` bump (`docs/schema-versioning.md`'s
 /// additive-field exception): a config missing this whole section decodes
 /// cleanly either way.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CapacityConfig {
     /// Blind-backoff duration for rules 2/3 of
     /// `CapacityPolicy::decide` — parked for this long when the runtime is
@@ -108,6 +108,11 @@ pub struct CapacityConfig {
     /// generated one.
     #[serde(default = "default_jitter_max", with = "humantime_serde")]
     pub jitter_max: Duration,
+    /// Optional configured profile to try when the current provider is exhausted.
+    /// The engine accepts this only when it resolves to a different configured
+    /// account of the same runtime; otherwise it parks as usual.
+    #[serde(default)]
+    pub rotation_profile: Option<String>,
 }
 
 impl Default for CapacityConfig {
@@ -116,6 +121,7 @@ impl Default for CapacityConfig {
             blind_backoff: Some(DEFAULT_BLIND_BACKOFF),
             blind_park_limit: default_blind_park_limit(),
             jitter_max: default_jitter_max(),
+            rotation_profile: None,
         }
     }
 }
@@ -206,7 +212,12 @@ impl From<&CapacityConfig> for crate::capacity::CapacityPolicy {
     fn from(cfg: &CapacityConfig) -> Self {
         Self {
             blind_backoff: cfg.blind_backoff,
-            rotation: crate::capacity::RotationPolicy::Disabled,
+            rotation: cfg.rotation_profile.as_ref().map_or(
+                crate::capacity::RotationPolicy::Disabled,
+                |profile| crate::capacity::RotationPolicy::Candidate {
+                    profile: profile.clone(),
+                },
+            ),
             jitter_max: cfg.jitter_max,
         }
     }
@@ -270,6 +281,7 @@ mod tests {
             blind_backoff: None,
             blind_park_limit: 0,
             jitter_max: default_jitter_max(),
+            rotation_profile: None,
         };
         assert!(cfg.validate().is_err());
     }
@@ -283,6 +295,7 @@ mod tests {
             blind_backoff: Some(Duration::from_secs(u64::MAX)),
             blind_park_limit: 1,
             jitter_max: default_jitter_max(),
+            rotation_profile: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -321,6 +334,7 @@ mod tests {
             blind_backoff: Some(Duration::from_secs(absurd_secs)),
             blind_park_limit: 1,
             jitter_max: default_jitter_max(),
+            rotation_profile: None,
         };
         let err = cfg
             .validate()
@@ -338,6 +352,7 @@ mod tests {
                 blind_backoff: Some(Duration::from_secs(secs)),
                 blind_park_limit: 1,
                 jitter_max: default_jitter_max(),
+                rotation_profile: None,
             };
             assert!(cfg.validate().is_ok(), "{secs}s should be a valid backoff");
         }
@@ -349,6 +364,7 @@ mod tests {
             blind_backoff: Some(Duration::from_secs(120)),
             blind_park_limit: 3,
             jitter_max: default_jitter_max(),
+            rotation_profile: None,
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
@@ -356,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn from_capacity_config_carries_blind_backoff_and_disables_rotation() {
+    fn from_capacity_config_carries_blind_backoff_and_rotation_candidate() {
         // Task 12 M3, acceptance criterion B's mapping half: a configured
         // `blind_backoff` must survive the conversion into
         // `CapacityPolicy` unchanged (this is the value the production
@@ -368,10 +384,16 @@ mod tests {
             blind_backoff: Some(Duration::from_secs(777)),
             blind_park_limit: 9,
             jitter_max: default_jitter_max(),
+            rotation_profile: Some("implementer@1.0".to_string()),
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.blind_backoff, Some(Duration::from_secs(777)));
-        assert_eq!(policy.rotation, crate::capacity::RotationPolicy::Disabled);
+        assert_eq!(
+            policy.rotation,
+            crate::capacity::RotationPolicy::Candidate {
+                profile: "implementer@1.0".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -384,6 +406,7 @@ mod tests {
             blind_backoff: None,
             blind_park_limit: 1,
             jitter_max: default_jitter_max(),
+            rotation_profile: None,
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.blind_backoff, None);
@@ -430,6 +453,7 @@ mod tests {
             blind_backoff: Some(Duration::from_secs(120)),
             blind_park_limit: 3,
             jitter_max: Duration::from_secs(45),
+            rotation_profile: None,
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
@@ -442,6 +466,7 @@ mod tests {
             blind_backoff: None,
             blind_park_limit: 1,
             jitter_max: Duration::from_secs(17),
+            rotation_profile: None,
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.jitter_max, Duration::from_secs(17));

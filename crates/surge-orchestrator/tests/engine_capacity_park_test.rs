@@ -226,6 +226,8 @@ async fn estimate_none_and_never_observed_does_not_block_dispatch() {
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -316,6 +318,7 @@ async fn configured_blind_backoff_reaches_the_park_decision_not_the_hardcoded_de
         // unrelated jitter default (see the M4 jitter tests in
         // `capacity.rs`/`capacity_config.rs` for jitter's own coverage).
         jitter_max: Duration::ZERO,
+        rotation_profile: None,
     };
     let capacity_policy: CapacityPolicy = (&capacity_config).into();
     assert_eq!(capacity_policy.rotation, RotationPolicy::Disabled);
@@ -597,9 +600,10 @@ async fn assert_rate_limited_agent_parks(
 /// `runtime_capacity` directly (as if a previous run or process already
 /// observed exhaustion), then starts a run whose first node targets that
 /// same runtime, and asserts it parks having never called `send_message`
-/// at all.
+/// at all. A configured but not yet durable rotation candidate must follow
+/// the configured 77s fallback, not an invented fixed delay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_runtime_exhausted_before_start_run_parks_with_zero_dispatches() {
+async fn rotation_without_durable_handoff_uses_configured_backoff() {
     let profiles_dir = tempfile::tempdir().unwrap();
     drop_profile(
         profiles_dir.path(),
@@ -615,8 +619,8 @@ async fn a_runtime_exhausted_before_start_run_parks_with_zero_dispatches() {
 
     // Seeded *before* `start_run` — this run never gets a chance to
     // observe anything itself. `resets_at: None` (never learned) so the
-    // default `blind_backoff` applies, matching the review's own probe
-    // shape (a stale-but-exhausted row with no usable reset time).
+    // `resets_at: None` (never learned), so the configured blind backoff
+    // applies, matching the review's stale-but-exhausted probe shape.
     storage
         .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
             "claude-acp",
@@ -630,6 +634,12 @@ async fn a_runtime_exhausted_before_start_run_parks_with_zero_dispatches() {
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
+    let capacity = CapacityConfig {
+        blind_backoff: Some(Duration::from_secs(77)),
+        blind_park_limit: 5,
+        jitter_max: Duration::ZERO,
+        rotation_profile: Some("alternate-role@1.0".into()),
+    };
     let engine = Engine::new_full(
         bridge,
         storage.clone(),
@@ -637,7 +647,10 @@ async fn a_runtime_exhausted_before_start_run_parks_with_zero_dispatches() {
         Arc::new(surge_notify::MultiplexingNotifier::new()),
         None,
         Some(registry),
-        EngineConfig::default(),
+        EngineConfig {
+            capacity: (&capacity).into(),
+            ..EngineConfig::default()
+        },
     );
 
     let run_id = RunId::new();
@@ -665,9 +678,13 @@ async fn a_runtime_exhausted_before_start_run_parks_with_zero_dispatches() {
         .expect("run must not hang")
         .expect("run handle join");
 
+    let RunOutcome::Parked { wake_at } = outcome else {
+        panic!("expected Parked (the pre-dispatch check), got {outcome:?}");
+    };
+    let seconds_until_wake = (wake_at - chrono::Utc::now()).num_seconds();
     assert!(
-        matches!(outcome, RunOutcome::Parked { .. }),
-        "expected Parked (the pre-dispatch check, not a reactive 429), got {outcome:?}"
+        (68..=77).contains(&seconds_until_wake),
+        "rotation fallback must honor configured 77s backoff, got {seconds_until_wake}s"
     );
     assert!(
         mock.recorded_calls.lock().await.is_empty(),
@@ -867,6 +884,8 @@ async fn resuming_a_parked_run_makes_one_real_attempt_and_clears_the_stale_row()
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok on resume".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -1060,6 +1079,8 @@ async fn resuming_a_parked_run_re_arms_its_frozen_token_budget() {
         outcome: OutcomeKey::try_from("done").unwrap(),
         summary: "ok on resume".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 

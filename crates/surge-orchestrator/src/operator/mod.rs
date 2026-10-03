@@ -36,3 +36,5 @@ pub use pending::{
 pub use report::{compile_report, compile_trace};
 pub use run_id::resolve_run_id;
 pub use steer::{cancel_steer, list_steers, queue_steer};
+
+mod verification;

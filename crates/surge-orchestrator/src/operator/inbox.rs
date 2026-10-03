@@ -1,10 +1,10 @@
 //! The fleet inbox: every run classified by what it needs from the operator
-//! right now (Needs input / Working / Waiting / Done).
+//! right now (Needs input / Working / Waiting / Recovery / Unknown / Done).
 //!
 //! There is no persisted "blocked on human" flag today, so attention is derived
-//! authoritatively by folding each non-terminal run's event log into a
-//! `RunState` and classifying it. Attention for a terminal run is read cheaply
-//! from the registry status alone (no fold).
+//! authoritatively by folding each run's trusted event log into a
+//! `RunState` and classifying it. Registry crash evidence is independent; terminal
+//! registry labels alone cannot establish durable completion.
 //!
 //! **The capacity column is a registry fact, not a run fact (Task 12 M5).**
 //! Before this milestone, a scan re-derived "is a rate limit in play" by
@@ -30,17 +30,18 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use surge_core::capacity::{CapacityStatus, WakeBasis};
-use surge_core::{Attention, RunId, RunState, RunStatus, TerminalReason};
+use surge_core::{Attention, RunId, RunState, TerminalReason};
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::registry::{RunFilter, RunSummary};
 use surge_persistence::task_ledger::TaskLedgerIndexFilter;
 
 use crate::engine::capacity::CanonicalRuntimeId;
 use crate::operator::error::OperatorError;
-use crate::operator::journal::fold_run_state;
+use surge_core::run_display::{RunDisplayState, WaitingReason};
+use surge_persistence::runs::inspection::RunDatabaseInspection;
 
 /// The inbox group a run belongs to. Serializes as the snake_case label
-/// (`needs_input` | `working` | `waiting` | `done`) `--json` has always used.
+/// (`needs_input`, `working`, `waiting`, `recovery`, `unknown`, `done`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionGroup {
@@ -52,6 +53,10 @@ pub enum AttentionGroup {
     Waiting,
     /// Reached a terminal state.
     Done,
+    /// Confirmed daemon loss requiring inspection.
+    Recovery,
+    /// Unreadable or missing journal evidence.
+    Unknown,
 }
 
 impl AttentionGroup {
@@ -62,12 +67,14 @@ impl AttentionGroup {
             Self::Working => "working",
             Self::Waiting => "waiting",
             Self::Done => "done",
+            Self::Recovery => "recovery",
+            Self::Unknown => "unknown",
         }
     }
 }
 
 /// Why a settled run is in the Done group. Serializes as the lowercase label
-/// (`completed` | `failed` | `aborted` | `crashed`) `--json` has always used.
+/// (`completed` | `failed` | `aborted`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DoneReason {
@@ -77,8 +84,6 @@ pub enum DoneReason {
     Failed,
     /// Aborted by the operator or the engine.
     Aborted,
-    /// The daemon that hosted it died without a terminal event.
-    Crashed,
 }
 
 impl DoneReason {
@@ -88,19 +93,6 @@ impl DoneReason {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Aborted => "aborted",
-            Self::Crashed => "crashed",
-        }
-    }
-
-    /// The reason for a terminal registry status; `None` while the run is
-    /// still active.
-    fn from_status(status: RunStatus) -> Option<Self> {
-        match status {
-            RunStatus::Completed => Some(Self::Completed),
-            RunStatus::Failed => Some(Self::Failed),
-            RunStatus::Aborted => Some(Self::Aborted),
-            RunStatus::Crashed => Some(Self::Crashed),
-            RunStatus::Bootstrapping | RunStatus::Running | RunStatus::Parked => None,
         }
     }
 }
@@ -118,6 +110,8 @@ impl From<TerminalReason> for DoneReason {
 /// One classified run for the inbox.
 #[derive(Debug, Serialize)]
 pub struct InboxEntry {
+    /// Shared reason and next-action projection, separate from control decisions.
+    pub display: RunDisplayState,
     /// The run. Serializes as its prefixed display form (`run-<ULID>`).
     #[serde(serialize_with = "serialize_display")]
     pub run_id: RunId,
@@ -133,7 +127,7 @@ pub struct InboxEntry {
     /// [`surge_core::evidence::is_evidence_backed`] predicate, read via
     /// [`surge_persistence::task_ledger::TaskLedgerIndexRecord::is_evidence_backed`]
     /// — the same predicate `surge run report` and `surge ledger` apply).
-    /// `None` for every other done reason (failed/aborted/crashed) and for
+    /// `None` for every other done reason (failed/aborted) and for
     /// every non-"done" attention: the question is only meaningful for a
     /// claimed success.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -220,55 +214,18 @@ pub async fn collect_entries(
     Ok(entries)
 }
 
-/// Classify one run. Terminal registry status short-circuits the *fold*
-/// (state derivation is cheap from the registry alone) — and, since Task 12
-/// M5, so does the capacity column: **every** `RunStatus` reads
-/// `CapacityStatus::NeverObserved` for it except the one class where a
-/// specific runtime is both cheaply known and actually relevant. Named per
-/// variant, not left to "the rest by construction carry no signal" (that
-/// reasoning was wrong once already for this exact column — see
-/// `surge-runstatus-crashed-filter-trap` in project memory):
-///
-/// - `Parked` (`Attention::Waiting`): **the only class that populates the
-///   column.** A parked run's own `RunParked.runtime` (already-canonical,
-///   folded into `Attention::Waiting.runtime`) says *which* runtime it is
-///   waiting on; [`runtime_capacity_status`] then asks the registry what it
-///   currently knows about that runtime. This is the class the signal is
-///   actually load-bearing for — it is *why* the run is in this group.
-/// - `Bootstrapping` / `Running`: reached only through the non-terminal
-///   branch below, folding to `Attention::Working` or `NeedsInput` in
-///   practice (parking only ever happens right before a pipeline node
-///   dispatch — see `engine::run_task`). Reads `NeverObserved`: the
-///   dispatch gate (`capacity_decision_for`) already runs before every
-///   agent stage, so a run that is *not* currently parked is, by that
-///   gate's own guarantee, not blocked by capacity right now — showing a
-///   runtime's exhaustion next to it would describe a different run's
-///   problem, not this one's.
-/// - `Failed` / `Aborted` / `Crashed`: **no longer scanned — a deliberate
-///   narrowing, not an oversight.** The old per-run scan treated these as
-///   its primary class (a run that failed *from* a 429 is `Failed` by
-///   construction); that reasoning conflated "this run's own dead history"
-///   with "the runtime's live status," which is exactly the two-homes bug
-///   this milestone closes (see the module doc). A terminal run gets no
-///   reader opened and no event read at all for this column now — there is
-///   no cheap, correct way to attribute a *specific* runtime to a run that
-///   will never dispatch again, and guessing one from a registry row that
-///   happens to exist would be the same unattributed inference the old scan
-///   is being replaced for. `Crashed` (a daemon-liveness label
-///   `Storage::list_runs` assigns, not a pipeline outcome) is named
-///   explicitly, not folded into "the rest," precisely because a prior
-///   round of this project got exactly that shortcut wrong.
-/// - `Completed`: `NeverObserved`, as before — a run that reached its own
-///   terminal success node needs no capacity accounting at all.
-///
-/// # Errors
-/// Returns [`OperatorError`] if a non-terminal run's event log cannot be
-/// opened, read or folded.
+/// Classify one run using durable state and independent registry evidence.
+/// Registry lifecycle labels cannot substitute for a readable journal. Crashed is
+/// not completion: read-only inspection may show a newer terminal event, otherwise
+/// recovery requires operator inspection. Missing, corrupt or invalid journals
+/// yield an Unknown entry without hiding healthy runs. Capacity is looked up
+/// only for the runtime recorded by this run's current parked event.
 pub async fn classify(
     storage: &Arc<Storage>,
     summary: &RunSummary,
 ) -> Result<InboxEntry, OperatorError> {
     let base = |attention: AttentionGroup, done_reason, active_node, prompt, capacity| InboxEntry {
+        display: RunDisplayState::Unknown,
         run_id: summary.id,
         project_path: summary.project_path.clone(),
         attention,
@@ -281,51 +238,46 @@ pub async fn classify(
         wake_at: None,
         wake_basis: None,
         // Set only for a "done"+"completed" entry, via struct-update syntax
-        // below (both branches that can produce one) — every other
+        // below — every other
         // attention/reason has no evidence-backing question to answer.
         evidence_backed: None,
         started_at_ms: summary.started_at_ms,
     };
 
-    if let Some(reason) = DoneReason::from_status(summary.status) {
-        // No reader opened, no event read, for any terminal status —
-        // `Failed`/`Aborted`/`Crashed` alike (see this fn's own doc for why
-        // that is a deliberate narrowing of the old scan's class, not a
-        // regression). `Completed` is the one exception: it costs one extra
-        // indexed registry query (not an event-log read) to answer spec
-        // §10/R30's "was this proven" question — see
-        // `evidence_backed_for_completed_run`.
-        if reason == DoneReason::Completed {
-            let evidence_backed = evidence_backed_for_completed_run(storage, summary.id).await;
-            return Ok(InboxEntry {
-                evidence_backed,
-                ..base(
-                    AttentionGroup::Done,
-                    Some(reason),
-                    None,
-                    None,
-                    CapacityStatus::NeverObserved,
-                )
-            });
-        }
+    // Inspect without creating/migrating absent journals. One bad run never hides its peers.
+    let state = match storage.inspect_run(summary.id).await {
+        Ok(inspection) => match inspection.database {
+            RunDatabaseInspection::Present { events } if !events.is_empty() => {
+                surge_persistence::runs::query::fold_read_events(summary.id, &events).ok()
+            },
+            _ => None,
+        },
+        Err(error) => {
+            tracing::warn!(run_id = %summary.id, %error, "inbox journal evidence unavailable");
+            None
+        },
+    };
+    let display = RunDisplayState::from_state(state.as_ref(), Some(summary.status));
+    let attention_group = match display {
+        RunDisplayState::Waiting(WaitingReason::RecoveryRequired) => Some(AttentionGroup::Recovery),
+        RunDisplayState::Unknown => Some(AttentionGroup::Unknown),
+        _ => None,
+    };
+    if let Some(group) = attention_group {
+        return Ok(InboxEntry {
+            display,
+            ..base(group, None, None, None, CapacityStatus::NeverObserved)
+        });
+    }
+    let Some(state) = state else {
         return Ok(base(
-            AttentionGroup::Done,
-            Some(reason),
+            AttentionGroup::Unknown,
+            None,
             None,
             None,
             CapacityStatus::NeverObserved,
         ));
-    }
-
-    // Non-terminal: fold the event log for the authoritative attention state.
-    let reader = storage
-        .open_run_reader(summary.id)
-        .await
-        .map_err(|source| OperatorError::OpenRun {
-            run_id: summary.id,
-            source,
-        })?;
-    let state = fold_run_state(&reader).await?;
+    };
     let active_node = active_node(&state);
     let attention = state.attention();
     // Capacity is a registry point-lookup keyed on *this run's own* parked
@@ -342,7 +294,7 @@ pub async fn classify(
         | Attention::Working
         | Attention::Done(_) => CapacityStatus::NeverObserved,
     };
-    Ok(match attention {
+    let mut entry = match attention {
         Attention::NeedsInput => base(
             AttentionGroup::NeedsInput,
             None,
@@ -367,9 +319,8 @@ pub async fn classify(
         // not the just-folded `state`: the fold's `RunMemory` (including its
         // `LedgerState`) is discarded the moment a terminal event lands
         // (`run_state::fold`'s own doc), so this queries the same registry
-        // index the terminal-status branch above does, for the same one
-        // reason (`Completed`) — matching it exactly keeps both `Done`
-        // sources of this entry answering spec §10/R30 the same way.
+        // index, for the one reason (`Completed`) where proof is meaningful.
+        // A stale registry lifecycle label cannot substitute for this fold.
         Attention::Done(reason) => {
             let evidence_backed = match reason {
                 TerminalReason::Completed => {
@@ -388,16 +339,18 @@ pub async fn classify(
                 )
             }
         },
-    })
+    };
+    entry.display = display;
+    Ok(entry)
 }
 
 /// Whether a `Completed` run's terminal success is backed by verifier
 /// evidence (spec §10/R30) — a cheap, indexed registry query (the same
 /// `task_ledger_index` `surge ledger` reads), not a full event-log read.
-/// `classify`'s terminal-status short-circuit exists precisely so a
-/// completed/failed/aborted/crashed run costs no reader open at all (see the
-/// module doc); this must not undo that for the one class ("completed") the
-/// question is even meaningful for.
+/// Classification has already established completion from a trusted journal.
+/// Verification remains a separate indexed fact: the terminal core state no
+/// longer retains its pipeline ledger, so success proof comes from the shared
+/// registry index instead of another event-log scan.
 ///
 /// Zero ledger rows for this run reads `Some(false)`, not `None`: a flow
 /// that never ran a verifier at all is exactly the "success without proof"
@@ -411,7 +364,7 @@ pub async fn classify(
 /// required alongside `all` because `all` on an empty iterator is vacuously
 /// `true`, which would contradict the zero-rows case above.
 async fn evidence_backed_for_completed_run(storage: &Arc<Storage>, run_id: RunId) -> Option<bool> {
-    let records = storage
+    let mut records = storage
         .task_ledger_store()
         .list(&TaskLedgerIndexFilter {
             status: None,
@@ -428,6 +381,12 @@ async fn evidence_backed_for_completed_run(storage: &Arc<Storage>, run_id: RunId
             );
         })
         .ok()?;
+    super::verification::enrich_records(storage, &mut records);
+    if records.iter().any(|record| {
+        record.freshness == surge_core::verification_evidence::ProofFreshness::Unknown
+    }) {
+        return None;
+    }
     Some(
         !records.is_empty()
             && records
@@ -479,6 +438,110 @@ fn active_node(state: &RunState) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn crashed_run_remains_actionable_when_done_history_is_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let id = RunId::new();
+        let writer = storage.create_run(id, dir.path(), None).await.unwrap();
+        append(&writer, vec![run_started()]).await;
+        writer.flush().await.unwrap();
+        storage
+            .set_run_status(&id, RunStatus::Crashed, None)
+            .await
+            .unwrap();
+        let entries = collect_entries(&storage, None, 0).await.unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "recovery is actionable, not capped done history"
+        );
+        assert_eq!(entries[0].attention.as_str(), "recovery");
+        assert!(entries[0].done_reason.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unreadable_peer_is_unknown_and_durable_terminal_overrides_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let broken = RunId::new();
+        let writer = storage.create_run(broken, dir.path(), None).await.unwrap();
+        drop(writer);
+        let db = storage
+            .home()
+            .join("runs")
+            .join(broken.to_string())
+            .join("events.sqlite");
+        std::fs::write(&db, b"corrupt journal").unwrap();
+        let terminal = RunId::new();
+        let writer = storage
+            .create_run(terminal, dir.path(), None)
+            .await
+            .unwrap();
+        append(
+            &writer,
+            vec![
+                run_started(),
+                EventPayload::RunAborted {
+                    reason: "stopped".into(),
+                },
+            ],
+        )
+        .await;
+        writer.flush().await.unwrap();
+        storage
+            .set_run_status(&terminal, RunStatus::Crashed, None)
+            .await
+            .unwrap();
+        let entries = collect_entries(&storage, None, 100).await.unwrap();
+        let unknown = entries.iter().find(|entry| entry.run_id == broken).unwrap();
+        assert_eq!(unknown.attention, AttentionGroup::Unknown);
+        assert_eq!(unknown.display.label(), "Run state is unconfirmed");
+        let done = entries
+            .iter()
+            .find(|entry| entry.run_id == terminal)
+            .unwrap();
+        assert_eq!(done.attention, AttentionGroup::Done);
+        assert_eq!(done.done_reason, Some(DoneReason::Aborted));
+        assert_eq!(std::fs::read(db).unwrap(), b"corrupt journal");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn registry_terminal_without_journal_is_unconfirmed_not_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        for status in [RunStatus::Completed, RunStatus::Failed, RunStatus::Aborted] {
+            let id = RunId::new();
+            let writer = storage.create_run(id, dir.path(), None).await.unwrap();
+            writer.flush().await.unwrap();
+            drop(writer);
+            storage.set_run_status(&id, status, Some(1)).await.unwrap();
+            std::fs::remove_file(
+                storage
+                    .home()
+                    .join("runs")
+                    .join(id.to_string())
+                    .join("events.sqlite"),
+            )
+            .unwrap();
+            let summary = storage.inspect_run(id).await.unwrap().registry.unwrap();
+            let entry = classify(&storage, &summary).await.unwrap();
+            assert_eq!(entry.display, RunDisplayState::Unknown);
+            assert_eq!(entry.attention, AttentionGroup::Unknown);
+            assert!(entry.done_reason.is_none());
+            let path = storage
+                .home()
+                .join("runs")
+                .join(id.to_string())
+                .join("events.sqlite");
+            std::fs::write(&path, b"unreadable terminal journal").unwrap();
+            let entry = classify(&storage, &summary).await.unwrap();
+            assert_eq!(entry.display, RunDisplayState::Unknown);
+            assert_eq!(std::fs::read(path).unwrap(), b"unreadable terminal journal");
+        }
+        assert_eq!(collect_entries(&storage, None, 0).await.unwrap().len(), 3);
+    }
     use std::collections::BTreeMap;
     use surge_core::approvals::ApprovalPolicy;
     use surge_core::content_hash::ContentHash;
@@ -528,6 +591,7 @@ mod tests {
             project_path: PathBuf::from("/proj"),
             initial_prompt: "x".into(),
             config: RunConfig {
+                bootstrap_edit_loop_cap: None,
                 budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
@@ -585,10 +649,19 @@ mod tests {
         append(&w2, vec![run_started(), pipeline_materialized()]).await;
         w2.flush().await.unwrap();
 
-        // Done run: registry status forced terminal (short-circuits the fold).
+        // Done run: durable completion is also mirrored in the registry.
         let done = RunId::new();
         let w3 = storage.create_run(done, &project, None).await.unwrap();
-        append(&w3, vec![run_started()]).await;
+        append(
+            &w3,
+            vec![
+                run_started(),
+                EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_from("plan").unwrap(),
+                },
+            ],
+        )
+        .await;
         w3.flush().await.unwrap();
         storage
             .set_run_status(&done, RunStatus::Completed, Some(1))
@@ -632,7 +705,7 @@ mod tests {
     /// over the registry's task-ledger index rather than a second, inbox-local
     /// copy of the rule.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn evidence_backed_distinguishes_a_verified_completion_from_an_unverified_one() {
+    async fn legacy_unbound_completion_and_registry_flags_do_not_prove_success() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
@@ -653,8 +726,17 @@ mod tests {
                     task_id: "t1".into(),
                     node: NodeKey::try_from("verify_1").unwrap(),
                     evidence: ContentHash::compute(b"verification-report"),
+
+                    report: None,
                 },
             ],
+        )
+        .await;
+        append(
+            &wv,
+            vec![EventPayload::RunCompleted {
+                terminal_node: NodeKey::try_from("plan").unwrap(),
+            }],
         )
         .await;
         wv.flush().await.unwrap();
@@ -674,6 +756,13 @@ mod tests {
             .await
             .unwrap();
         append(&wu, vec![run_started()]).await;
+        append(
+            &wu,
+            vec![EventPayload::RunCompleted {
+                terminal_node: NodeKey::try_from("plan").unwrap(),
+            }],
+        )
+        .await;
         wu.flush().await.unwrap();
         storage
             .sync_task_ledger_index(unverified_run, &project)
@@ -695,10 +784,21 @@ mod tests {
         // == Completed && verified` → `||` mutation would silently pass
         // through as evidence-backed.
         let boundary_run = RunId::new();
-        storage
+        let wb = storage
             .create_run(boundary_run, &project, None)
             .await
             .unwrap();
+        append(
+            &wb,
+            vec![
+                run_started(),
+                EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_from("plan").unwrap(),
+                },
+            ],
+        )
+        .await;
+        wb.flush().await.unwrap();
         storage
             .task_ledger_store()
             .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
@@ -727,7 +827,7 @@ mod tests {
                 .find(|e| e.run_id == id)
                 .unwrap_or_else(|| panic!("missing {id}"))
         };
-        assert_eq!(find(verified_run).evidence_backed, Some(true));
+        assert_ne!(find(verified_run).evidence_backed, Some(true));
         assert_eq!(find(unverified_run).evidence_backed, Some(false));
         assert_eq!(find(boundary_run).evidence_backed, Some(false));
     }
@@ -746,7 +846,18 @@ mod tests {
         let storage = Storage::open(dir.path()).await.unwrap();
 
         let mixed_run = RunId::new();
-        storage.create_run(mixed_run, &project, None).await.unwrap();
+        let wm = storage.create_run(mixed_run, &project, None).await.unwrap();
+        append(
+            &wm,
+            vec![
+                run_started(),
+                EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_from("plan").unwrap(),
+                },
+            ],
+        )
+        .await;
+        wm.flush().await.unwrap();
         storage
             .task_ledger_store()
             .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
@@ -796,7 +907,7 @@ mod tests {
     /// already recorded `RunCompleted` but whose registry `RunStatus`
     /// hasn't caught up yet (still non-terminal) takes the *fold* path
     /// (`Attention::Done`), not the terminal fast path
-    /// `evidence_backed_distinguishes_a_verified_completion_from_an_unverified_one`
+    /// `legacy_unbound_completion_and_registry_flags_do_not_prove_success`
     /// above exercises — a second, independent place `evidence_backed` gets
     /// computed. `cargo mutants` found this path uncovered: replacing
     /// `evidence_backed.flatten()`'s result with `None` in that arm survived
@@ -1186,8 +1297,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn inbox_terminal_failed_run_never_consults_the_registry() {
         // Task 12 M5, deliberate narrowing (see `classify`'s own doc): a
-        // terminal run gets no reader opened and no registry lookup for
-        // this column at all, even when a real, matching registry row
+        // terminal run gets no capacity registry lookup for this column,
+        // even when a real, matching registry row
         // exists — a dead run has no cheap, correct way to be attributed to
         // a specific runtime, so it must not *appear* to inherit one. This
         // is the mutation-sensitive half of the redesign: without the
@@ -1228,9 +1339,8 @@ mod tests {
         )
         .await;
         w.flush().await.unwrap();
-        // Every terminal status shares the same unconditional branch in
-        // `classify` (no per-variant match inside it) — `Failed` stands in
-        // for `Aborted`/`Crashed`/`Completed` alike; see that fn's doc.
+        // Durable failure, like other durable terminal outcomes, has no
+        // current parked runtime to correlate with a capacity registry row.
         storage
             .set_run_status(&run, RunStatus::Failed, Some(1))
             .await

@@ -70,6 +70,8 @@ async fn drive_one_attempt(
             outcome: OutcomeKey::from_str(outcome_key).unwrap(),
             summary: format!("agent picked {outcome_key}"),
             artifacts_produced: vec!["triage_decision.json".into(), "inbox_summary.md".into()],
+
+            verification_report: None,
         })
         .await;
     bridge.pump_scripted_events().await;
@@ -105,6 +107,8 @@ async fn drive_n_attempts(
                 outcome: OutcomeKey::from_str(outcome_key).unwrap(),
                 summary: format!("attempt {} → {outcome_key}", i + 1),
                 artifacts_produced: vec!["triage_decision.json".into()],
+
+                verification_report: None,
             })
             .await;
         bridge.pump_scripted_events().await;

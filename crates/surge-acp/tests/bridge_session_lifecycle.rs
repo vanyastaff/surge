@@ -20,6 +20,10 @@ async fn open_send_close_round_trip() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock {
@@ -36,7 +40,11 @@ async fn open_send_close_round_trip() {
         env: Default::default(),
     };
 
-    let sid = bridge.open_session(cfg).await.expect("open session");
+    let sid = bridge
+        .open_session(cfg)
+        .await
+        .expect("open session")
+        .session;
 
     // Expect SessionEstablished as first event.
     let ev = timeout(Duration::from_secs(3), events.recv())

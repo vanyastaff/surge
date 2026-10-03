@@ -54,6 +54,7 @@ pub mod health;
 pub mod onboarding;
 pub mod pool;
 pub mod process_tracker;
+pub mod quota_observation;
 pub mod registry;
 pub mod router;
 pub mod secrets;
@@ -86,3 +87,6 @@ pub use router::{AgentRouter, RouteDecision};
 pub use surge_core::SurgeEvent;
 
 mod sdk_v1;
+
+/// Read-only identity and conservative writer-liveness evidence.
+pub mod process_evidence;

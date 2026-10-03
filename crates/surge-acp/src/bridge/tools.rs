@@ -100,6 +100,27 @@ pub fn build_report_stage_outcome_tool(declared_outcomes: &[OutcomeKey]) -> Tool
                     "type": "string",
                     "description": "1-3 sentences explaining what you did and why this outcome"
                 },
+                "verification_report": {
+                    "type": "object",
+                    "description": "Inline verifier checks with authoritative criterion IDs; the host seals revision and criteria identity. Do not supply binding.",
+                    "required": ["schema_version", "task_id", "outcome", "checks"],
+                    "properties": {
+                        "schema_version": {"type":"integer", "enum":[1]},
+                        "task_id": {"type":"string"},
+                        "outcome": {"type":"string", "enum":["passed","failed"]},
+                        "summary": {"type":"string"},
+                        "evidence": {"type":"array", "items":{"type":"string"}},
+                        "checks": {"type":"array", "items": {
+                            "type":"object", "required":["command","result","covers"],
+                            "properties": {
+                                "command":{"type":"string"},
+                                "result":{"type":"string", "enum":["passed","failed","skipped","cancelled"]},
+                                "covers":{"type":"array", "items":{"type":"string"}},
+                                "note":{"type":"string"}
+                            }
+                        }}
+                    }
+                },
                 "artifacts_produced": {
                     "type": "array",
                     "items": { "type": "string" },

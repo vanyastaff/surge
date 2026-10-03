@@ -1,4 +1,5 @@
-//! `verification-report` artifact: a sealed verifier's record of its checks.
+//! `verification-report`: checks recorded by a verifier. Bound reports prove
+//! accepted tasks; generic workflow audits remain explicitly unbound.
 
 use super::*;
 
@@ -26,6 +27,9 @@ pub struct VerificationReportArtifact {
     /// Checks the verifier ran.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<VerificationCheck>,
+    /// Host-owned binding; absent on historical reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<crate::verification_evidence::VerificationBinding>,
     /// References to evidence (content hashes or artifact paths).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<String>,
@@ -47,20 +51,41 @@ impl VerificationReportArtifact {
                 self.task_id
             ));
         }
+        if self.outcome == VerificationReportOutcome::Passed && self.checks.is_empty() {
+            issues.push("passed verification requires actual checks".into());
+        }
         for (idx, check) in self.checks.iter().enumerate() {
             if check.command.trim().is_empty() {
                 issues.push(format!(
                     "verification-report check #{idx} has an empty command"
                 ));
             }
-            if check.result.trim().is_empty() {
+            if self.outcome == VerificationReportOutcome::Passed
+                && check.result != VerificationCheckResult::Passed
+            {
                 issues.push(format!(
-                    "verification-report check #{idx} ({:?}) has an empty result",
+                    "verification-report check #{idx} ({:?}) did not pass",
                     check.command
                 ));
             }
         }
         issues
+    }
+
+    /// Every authoritative criterion must be covered by a passing check.
+    #[must_use]
+    pub fn covers(&self, required: &[String]) -> bool {
+        !required.is_empty()
+            && required.iter().all(|id| {
+                self.checks.iter().any(|check| {
+                    check.result == VerificationCheckResult::Passed && check.covers.contains(id)
+                })
+            })
+            && self
+                .checks
+                .iter()
+                .flat_map(|check| &check.covers)
+                .all(|id| required.contains(id))
     }
 }
 
@@ -83,8 +108,21 @@ pub struct VerificationCheck {
     /// What was checked (e.g. `cargo nextest run`).
     pub command: String,
     /// `passed` | `failed` | `skipped`.
-    pub result: String,
+    pub result: VerificationCheckResult,
+    /// Host-declared criterion IDs covered by this check.
+    #[serde(default)]
+    pub covers: Vec<String>,
     /// Optional note / observed output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// A cancelled or skipped check is never a successful observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VerificationCheckResult {
+    Passed,
+    Failed,
+    Skipped,
+    Cancelled,
 }

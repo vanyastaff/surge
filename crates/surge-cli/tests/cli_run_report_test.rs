@@ -57,6 +57,7 @@ fn minimal_graph(node_name: &str) -> Graph {
 
 fn run_config() -> RunConfig {
     RunConfig {
+        bootstrap_edit_loop_cap: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
@@ -65,8 +66,7 @@ fn run_config() -> RunConfig {
     }
 }
 
-/// Seed a completed run exercising every report section but `memory_receipts`
-/// (which no event carries yet — see `surge_core::run_report`'s module doc):
+/// Seed a completed run exercising every report section but `memory_receipts`:
 /// a node with an attempt, a skill bind, an artifact, token spend, a
 /// declared outcome, a verifier verdict, an operator steer, and a
 /// `RunCompleted` terminal event.
@@ -235,16 +235,15 @@ async fn report_json_reconstructs_every_populated_section() {
         "header must carry the last event's timestamp"
     );
 
-    // Named limitation (module doc): no event carries a context-pack
-    // receipt yet, so this stays empty even on a rich, completed run.
+    // No resolved input event in this fixture carries a memory receipt.
     assert!(json["memory_receipts"].as_array().unwrap().is_empty());
-    // ...but the JSON form still names that gap explicitly, so a machine
-    // consumer cannot mistake the empty array for "memory was not used."
+    // The JSON form preserves the legacy-coverage caveat.
     let caveats = json["caveats"].as_array().expect("caveats array");
     assert!(
-        caveats
-            .iter()
-            .any(|c| c.as_str().unwrap_or_default().contains("memory_receipts")),
+        caveats.iter().any(|c| c
+            .as_str()
+            .unwrap_or_default()
+            .contains("legacy journals may omit per-node memory selection receipts")),
         "caveats: {caveats:?}"
     );
 }

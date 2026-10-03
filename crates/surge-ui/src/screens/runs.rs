@@ -141,6 +141,7 @@ struct RunRow {
     title: String,
     age: String,
     status_label: &'static str,
+    waiting_detail: Option<String>,
     color: Hsla,
     active: bool,
     /// 0 = needs-you first, then active, then the rest (rail ordering).
@@ -263,6 +264,7 @@ impl RunRow {
             ),
             age: humanize_age(run.started_at),
             status_label,
+            waiting_detail: None,
             color,
             active,
             rank,
@@ -290,6 +292,26 @@ impl RunRow {
     /// live stage pipeline, event log, token/cost counters.
     fn attach_stream(&mut self, stream: &crate::run_stream::RunStreamState) {
         self.live_stream = stream.live;
+        let display = stream.display();
+        self.status_label = display.label();
+        self.waiting_detail = display.next_action().map(ToOwned::to_owned);
+        if let Some((until, basis)) = display.wake()
+            && let Some(detail) = &mut self.waiting_detail
+        {
+            detail.push_str(&format!(
+                " Wake: {} ({})",
+                until.to_rfc3339(),
+                match basis {
+                    surge_core::capacity::WakeBasis::ObservedReset => "observed provider reset",
+                    surge_core::capacity::WakeBasis::PolicyBackoff => "policy backoff",
+                }
+            ));
+        }
+        if self.waiting_detail.is_some() {
+            self.color = theme::warning();
+            self.rank = 0;
+        }
+
         if let Some(prompt) = &stream.prompt {
             self.title = crate::ui::headline(prompt, 90);
         }
@@ -356,6 +378,7 @@ pub(crate) enum RunTab {
     Overview,
     Changes,
     Checks,
+    Sessions,
     /// Raw steps and events, for developers.
     Log,
 }
@@ -395,6 +418,7 @@ pub struct RunsScreen {
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
     tab: RunTab,
+    session_pages: HashMap<RunId, usize>,
     checks: Option<(RunId, Entity<run_checks::ChecksView>)>,
     changes: Option<(RunId, Entity<run_changes::ChangesView>)>,
     mission: Option<Entity<run_mission::MissionPanel>>,
@@ -436,6 +460,10 @@ fn attention_reason(
 ) -> (&'static str, &'static str) {
     use surge_core::bootstrap_operation::BootstrapAttentionReason as R;
     match reason {
+        R::MissingBootstrapPolicy => (
+            "Captured bootstrap policy is unavailable",
+            "Review recovery or capture a new planning operation; the current default cannot restore the original policy.",
+        ),
         R::ConfigurationChanged => (
             "Settings changed since this build started",
             "Restore the agent settings it started with, then retry.",
@@ -501,6 +529,7 @@ impl RunsScreen {
             controlled_guidance: None,
             action_note: None,
             tab: RunTab::Overview,
+            session_pages: HashMap::new(),
             checks: None,
             changes: None,
             mission: None,
@@ -981,6 +1010,11 @@ impl RunsScreen {
             Some(B::Cancelling { .. }) => ("cancelling".to_string(), theme::warning()),
             _ => (row.status_label.to_string(), row.color),
         };
+        let (status_text, status_color) = if row.waiting_detail.is_some() {
+            (row.status_label.to_string(), row.color)
+        } else {
+            (status_text, status_color)
+        };
         let cancellable = bootstrap
             .as_ref()
             .is_some_and(|(_, s)| s.state.phase().is_some() && !s.cancel_requested);
@@ -991,6 +1025,9 @@ impl RunsScreen {
             format!("{} elapsed", row.elapsed),
             format!("{} events", row.events),
         ];
+        if let Some(detail) = &row.waiting_detail {
+            facts.push(detail.clone());
+        }
         if let Some((tokens_in, tokens_out, cost)) = row.usage {
             facts.push(format!(
                 "{} in · {} out tokens",
@@ -1241,6 +1278,7 @@ impl RunsScreen {
             (RunTab::Changes, "Changes", Lucide::GitCompare),
             (RunTab::Checks, "Checks", Lucide::ShieldCheck),
             (RunTab::Log, "Log", Lucide::ScrollText),
+            (RunTab::Sessions, "Sessions", Lucide::ScrollText),
         ] {
             let active = self.tab == tab;
             tabs = tabs.child(
@@ -1276,6 +1314,53 @@ impl RunsScreen {
             );
         }
         tabs
+    }
+
+    fn render_sessions(&self, run: RunId, cx: &Context<Self>) -> impl IntoElement {
+        let panel = div()
+            .id("recorded-session-history")
+            .test_support()
+            .debug_selector(|| "recorded-session-history".into())
+            .v_flex()
+            .gap(px(8.0))
+            .p(px(16.0))
+            .overflow_y_scroll();
+        let state = self.state.read(cx);
+        let Some(stream) = state.run_streams.get(&run) else {
+            return panel.child(ui::meta(
+                "Session history has not been hydrated for this run.",
+            ));
+        };
+        let last_page = stream.sessions.len().saturating_sub(1) / ui::SESSIONS_PER_PAGE;
+        let page = self
+            .session_pages
+            .get(&run)
+            .copied()
+            .unwrap_or(0)
+            .min(last_page);
+        panel.child(ui::recorded_session_page(stream, page)).child(
+            div()
+                .h_flex()
+                .gap(px(8.0))
+                .child(
+                    gpui_kit::component::button::Button::new("run-newer-sessions")
+                        .label("Newer sessions")
+                        .disabled(page == 0)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.session_pages.insert(run, page.saturating_sub(1));
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    gpui_kit::component::button::Button::new("run-older-sessions")
+                        .label("Older sessions")
+                        .disabled(page >= last_page)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.session_pages.insert(run, page + 1);
+                            cx.notify();
+                        })),
+                ),
+        )
     }
 
     fn render_stage_chip(&self, stage: &Stage, last: bool) -> Div {
@@ -1631,6 +1716,11 @@ impl Render for RunsScreen {
                         .child(self.render_pipeline(row))
                         .child(self.render_event_log(row, cx));
                 },
+                RunTab::Sessions => {
+                    if let Some(run) = row.run_id {
+                        main = main.child(self.render_sessions(run, cx));
+                    }
+                },
                 RunTab::Overview => {
                     if let Some(runs) = self.mission_runs(row, cx) {
                         let stale = self
@@ -1910,6 +2000,151 @@ mod empty_state_tests {
             assert_eq!(selected, 0);
             assert!(!connected);
         });
+    }
+}
+
+#[cfg(test)]
+mod recorded_session_tests {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, TestAppContext};
+    use surge_core::run_event::{EventPayload, VersionedEventPayload};
+
+    #[test]
+    fn sessions_tab_reaches_oldest_stored_opening_beyond_log_limit() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let guard = runtime.enter();
+        let home = tempfile::tempdir().unwrap();
+        let run = surge_core::RunId::new();
+        let oldest = surge_core::SessionId::new();
+        let newest = surge_core::SessionId::new();
+        let events = runtime.block_on(async {
+            let storage = surge_persistence::runs::Storage::open(home.path())
+                .await
+                .unwrap();
+            let writer = storage.create_run(run, home.path(), None).await.unwrap();
+            let mut payloads = vec![EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: home.path().into(),
+                initial_prompt: "Inspect all recorded openings".into(),
+                config: surge_core::RunConfig {
+                    budget: Default::default(),
+                    sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                    approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                    mcp_servers: Vec::new(),
+                    bootstrap_edit_loop_cap: None,
+                },
+            }];
+            for index in 0..261 {
+                payloads.push(EventPayload::SessionOpened {
+                    node: surge_core::NodeKey::try_from("agent").unwrap(),
+                    session: if index == 0 {
+                        oldest
+                    } else if index == 260 {
+                        newest
+                    } else {
+                        surge_core::SessionId::new()
+                    },
+                    agent: "implementer@1.0".into(),
+                    agent_id: Some("recorded-runtime".into()),
+                    opened: None,
+                    handoff: None,
+                });
+            }
+            writer
+                .append_events(
+                    payloads
+                        .into_iter()
+                        .map(VersionedEventPayload::new)
+                        .collect(),
+                )
+                .await
+                .unwrap();
+            surge_persistence::runs::Storage::inspect_existing_run_events(
+                home.path().join("runs"),
+                run,
+            )
+            .await
+            .unwrap()
+        });
+        assert_eq!(events.len(), 262);
+        let mut stream = crate::run_stream::RunStreamState::default();
+        stream.begin_display_history(run, None);
+        for event in events {
+            stream.apply_recorded(
+                &surge_orchestrator::engine::handle::EngineRunEvent::Persisted {
+                    seq: event.seq.as_u64(),
+                    payload: Box::new(event.payload.payload),
+                },
+                0,
+            );
+        }
+        stream.finish_display_history(262);
+        assert!(stream.session_history_confirmed());
+        assert_eq!(stream.sessions.len(), 261);
+        assert_eq!(stream.sessions[0].session, oldest);
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        crate::theme::init();
+        let state = cx.new(|_| {
+            let mut state = crate::app_state::AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id: run,
+                status: surge_orchestrator::engine::handle::RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: Some(262),
+                ended_at: None,
+            });
+            state.run_streams.insert(run, stream);
+            state
+        });
+        let screen = cx.new(|cx| super::RunsScreen::new(state, cx));
+        screen.update(&mut cx, |screen, _| {
+            screen.selected = Some(run);
+            screen.tab = super::RunTab::Sessions;
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            gpui_kit::component::Root::new(screen.clone(), window, cx)
+        });
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("session-opening-262").label(),
+                Some(format!("Opening #262 · internal {newest} · provider unrecorded").as_str())
+            );
+            assert!(window.try_find("session-opening-2").is_none());
+        });
+        // Fixed 261-opening fixture requires thirteen actual pagination clicks.
+        for _ in 0..13 {
+            window.update(|window, cx| {
+                window.scroll(
+                    "recorded-session-history",
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                        gpui_kit::px(0.0),
+                        gpui_kit::px(-4000.0),
+                    )),
+                    cx,
+                );
+            });
+            window.update(|window, cx| {
+                window.click("run-older-sessions", cx);
+            });
+        }
+        window.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("session-opening-262").is_none());
+            assert_eq!(
+                window.find("session-opening-2").label(),
+                Some(format!("Opening #2 · internal {oldest} · provider unrecorded").as_str())
+            );
+        });
+        screen.update(window, |screen, _| {
+            assert_eq!(screen.session_pages.get(&run), Some(&13));
+        });
+        drop(screen);
+        drop(cx);
+        drop(guard);
     }
 }
 

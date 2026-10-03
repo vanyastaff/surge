@@ -28,7 +28,7 @@
 | R11 | «Resolve against the Agent Skills layout (`SKILL.md` + frontmatter)» | done | подтверждено самобрифингом | spec §3, ист.9 → T02 |
 | R12 | «…and the Agent Plugins package shape (`plugin.json` + `skills/`), so existing packs work unmodified» | done | подтверждено самобрифингом | spec §3, ист.9 → T02 |
 | R13 | «Emit `SkillBound { name, provider, hash }` events» | done | подтверждено самобрифингом | spec §4, ист.11 → T03 |
-| R14 | «the Run Report lists every skill a run used» | in-ticket | подтверждено самобрифингом | spec §9, ист.25 → T09 |
+| R14 | «the Run Report lists every skill a run used» | done | подтверждено Run Report из `SkillBound` event log и тестом всех разделов | spec §9, ист.25 → T09 |
 | R15 | «Trust gate: … an unpinned or unhashed skill requires explicit approval» (переиспользуя profile-trust, ADR-0002) | done | подтверждено самобрифингом | spec §5, ист.12-13 → T03 |
 | R16 | «`surge skill list\|show\|verify` for inspection» | done | подтверждено самобрифингом | spec ист.14 → T04 |
 | R17 | «Acceptance: a stock skill pack (`archify`, `go-modern-guidelines`) binds to a node and its use is reconstructable from the event log alone» | done | подтверждено самобрифингом | spec ист.11 → T03 |
@@ -40,24 +40,24 @@
 | R18 | «**Per-claim provenance**: every memory entry carries source path, content hash, the command that verified it, a timestamp, and a verification status» | done | подтверждено самобрифингом | spec §6, ист.16 → T05  |
 | R19 | «Entries ingested from transcripts are stored as *explicitly unverified*» | done | подтверждено самобрифингом | spec §6, ист.17 → T05  |
 | R20 | «**Confidence as a tag, not a boolean** — … so a node's context can order direct evidence ahead of low-trust recall» | done | подтверждено самобрифингом | spec §6, ист.16 → T05, T06  |
-| R21 | «`surge memory audit` — correlate entries with failed and looping runs, flag staleness against current file hashes, propose pruning» | partial — 08 закоммичен, вторая половина разблокирована 17, ждёт повторного запуска | подтверждено самобрифингом | spec §7, ист.18-19 → T08 |
-| R22 | «it now also ages only *eligible unverified* entries, never verified ones» | in-progress — 07 пишется | подтверждено самобрифингом | spec §7, ист.20 → T07 |
-| R23 | «**Write-back discipline** at run boundaries … root cause over symptom, update in place over near-duplicate, silence on a clean run, and never on the agent's own initiative — a memory write is a node outcome, not a side effect» | in-progress — 07 пишется | подтверждено самобрифингом | spec §8, ист.21-22 → T07 |
-| R24 | «**Context packs under a hard token budget**» | partial — 06 ждёт второго захода: PackReceipt в лог событий | подтверждено самобрифингом | spec §8, ист.23 → T06 |
-| R25 | «with a receipt recording what was selected, what was dropped, and why. The receipt is a Run Report input» | partial — 06, второй заход | подтверждено самобрифингом | spec §8-§9, ист.23-24 → T06 |
-| R26 | «Acceptance: a run that used memory can be replayed to show exactly which entries entered which node's context, and why each was chosen» | partial — 06, второй заход | подтверждено самобрифингом | spec ист.24 → T06 |
+| R21 | «`surge memory audit` — correlate entries with failed and looping runs, flag staleness against current file hashes, propose pruning» | partial — implementation/corrections for T08 are present; rerun its complete acceptance and engine-to-audit proof remains | подтверждено самобрифингом | spec §7, ист.18-19 → T08 |
+| R22 | «it now also ages only *eligible unverified* entries, never verified ones» | in-progress — implementation and safety tests present; full T07 acceptance still to reverify | подтверждено самобрифингом | spec §7, ист.20 → T07 |
+| R23 | «**Write-back discipline** at run boundaries … root cause over symptom, update in place over near-duplicate, silence on a clean run, and never on the agent's own initiative — a memory write is a node outcome, not a side effect» | in-progress — implementation and memory-writeback integration tests present; full T07 acceptance still to reverify | подтверждено самобрифингом | spec §8, ист.21-22 → T07 |
+| R24 | «**Context packs under a hard token budget**» | done | ContextPack property-тест + per-node selection на frozen startup claims | spec §8, ист.23 → T06 |
+| R25 | «with a receipt recording what was selected, what was dropped, and why. The receipt is a Run Report input» | done | `StageInputsResolved` и node-keyed Run Report projection; тесты логирования и рендера | spec §8-§9, ист.23-24 → T06 |
+| R26 | «Acceptance: a run that used memory can be replayed to show exactly which entries entered which node's context, and why each was chosen» | done | frozen claim artifact → per-node binding hashes + PackReceipt; legacy payload test | spec ист.24 → T06 |
 
 ## Волна 3 — Run Report как артефакт первого класса
 
 | ID | Из брифа (дословно) | Статус | Основание | Где |
 |----|---------------------|--------|-----------|-----|
-| R27 | «`RunReport` type in `surge-core`, compiled from the event log: nodes, outcomes, verifier verdicts, evidence artifacts, cost, skills bound, memory receipts, steers, approvals» | in-ticket | подтверждено самобрифингом | spec §9, ист.25,29 → T09 |
-| R28 | «`surge run report <run_id> --format json\|md\|html`» | in-ticket | подтверждено самобрифингом | spec ист.25 → T09 |
-| R29 | «The HTML form is a single self-contained file with no CDN» | in-ticket | подтверждено самобрифингом | spec §11, ист.26 → T09 |
-| R30 | «**Verified vs unverified rendering everywhere** — a terminal success reached without a verifier node must be visually distinct in the report, the inbox and the ledger» | in-ticket | подтверждено самобрифингом | spec §10, ист.27 → T10 |
-| R31 | «Optional PR attachment through the existing L3 merge gate» | in-ticket | подтверждено самобрифингом | spec ист.28 → T10 |
+| R27 | «`RunReport` type in `surge-core`, compiled from the event log: nodes, outcomes, verifier verdicts, evidence artifacts, cost, skills bound, memory receipts, steers, approvals» | done | pure event-log compiler; all nine sections covered in one fixture and CLI JSON integration | spec §9, ист.25,29 → T09 |
+| R28 | «`surge run report <run_id> --format json\|md\|html`» | done | CLI command and three-format integration tests | spec ист.25 → T09 |
+| R29 | «The HTML form is a single self-contained file with no CDN» | done | renderer and real CLI test assert no remote refs/scripts/stylesheets | spec §11, ист.26 → T09 |
+| R30 | «**Verified vs unverified rendering everywhere** — a terminal success reached without a verifier node must be visually distinct in the report, the inbox and the ledger» | done | общий core predicate; report/inbox/ledger показывают одинаковый смысл, покрыто surface tests | spec §10, ист.27 → T10 |
+| R31 | «Optional PR attachment through the existing L3 merge gate» | done | флаг `publish_run_report`, default-off и daemon merge-gate E2E | spec ист.28 → T10 |
 | R32 | «Stretch, only after the above: a **structure delta** section — the typed before/after of the changed public surface, in archify's Before/Delta/After shape, generated from our own Rust parse rather than a dependency» | deferred | план сам называет это stretch «only after the above» — за пределами волны 3 | отчёт |
-| R33 | «Acceptance: a reviewer can accept or reject a completed run from the report alone, without opening the transcript» | in-ticket | подтверждено самобрифингом | spec ист.30 → T09 |
+| R33 | «Acceptance: a reviewer can accept or reject a completed run from the report alone, without opening the transcript» | done | report includes completion, evidence-backed verdict, evidence artifacts and caveats; full-run fixture and CLI rendering | spec ист.30 → T09 |
 
 ## Волна 4 — Автономность с учётом ёмкости
 
@@ -66,11 +66,11 @@
 | R34 | «**Capacity model**: per-agent-account rate-limit window, remaining share, reset time» | in-repair — 11, круг 2 | подтверждено самобрифингом | spec §12, ист.31 → T11 |
 | R35 | «Populated from ACP usage signals where available … and from observed 429s otherwise» | in-repair — 11, круг 2 | **на приёмке закрывать как `done`, не `partial`**: «where available» выполнено пусто, ACP-источника не существует на 0.10.2/schema-0.11.2 (проверено по исходникам, не по отчёту). Иначе поздний читатель увидит `done` и решит, что ACP usage подключён | spec §12, ист.32-33 → T11 |
 | R36 | «Surfaced in `surge doctor` and the inbox» | in-repair — 11, круг 2 | подтверждено самобрифингом | spec ист.31 → T11 |
-| R37 | «**Scheduling policy**: before dispatching a node, refuse to start work that cannot finish inside the remaining window; park the run with a wake time instead of stalling» | in-ticket | подтверждено самобрифингом | spec §13, ист.34-35 → T12 |
-| R38 | «Optional rotation across configured accounts — Surge never copies or stores provider credentials» | in-ticket | подтверждено самобрифингом | spec §14, ист.36-37 → T12 |
+| R37 | «**Scheduling policy**: before dispatching a node, refuse to start work that cannot finish inside the remaining window; park the run with a wake time instead of stalling» | in-ticket — базовая парковка/пробуждение есть; archetype estimator из §19 не закрыт | подтверждено самобрифингом | spec §13, ист.34-35 → T12 |
+| R38 | «Optional rotation across configured accounts — Surge never copies or stores provider credentials» | in-ticket — live rotation не реализована; ADR-0016 фиксирует структурное ограничение launch model | подтверждено самобрифингом | spec §14, ист.36-37 → T12 |
 | R39 | «**Loop guards**: repeat-tool-call detection and per-node wall-clock policy at the engine level, raising `EscalationRequested` … rather than burning budget» | done | подтверждено самобрифингом | spec §15, ист.38 → T13 |
 | R40 | «**Output spill**: tool output over a configured cap goes to the artifact store; the node sees a bounded preview and a locator» | done | подтверждено самобрифингом | spec §16, ист.39 → T13 |
-| R41 | «Acceptance: a run that exhausts its provider window resumes automatically after reset with its frozen budget intact, and the pause is visible in the inbox» | in-ticket | подтверждено самобрифингом | spec ист.34-35 → T12 |
+| R41 | «Acceptance: a run that exhausts its provider window resumes automatically after reset with its frozen budget intact, and the pause is visible in the inbox» | in-ticket — проверить полный engine+daemon wake+budget e2e gate | подтверждено самобрифингом | spec ист.34-35 → T12 |
 
 ## Волна 5 — находки конкурентного опроса (добавлена 2026-09-07)
 

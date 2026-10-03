@@ -122,8 +122,8 @@ async fn filesystem_mcp_lists_tools_reads_a_file_and_shuts_down_cleanly() {
     );
 
     // Deterministic teardown: no orphaned child; idempotent.
-    registry.shutdown().await;
-    registry.shutdown().await;
+    registry.shutdown().await.unwrap();
+    registry.shutdown().await.unwrap();
     for (name, health) in registry.statuses().await {
         assert_eq!(
             health,

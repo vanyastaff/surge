@@ -50,6 +50,17 @@ async fn async_main() {
             &self,
             Parameters(EchoArgs { text }): Parameters<EchoArgs>,
         ) -> CallToolResult {
+            if let Ok(marker) = std::env::var("SURGE_MCP_TEST_ECHO_MARKER") {
+                std::fs::write(marker, std::process::id().to_string()).unwrap();
+                let release = std::env::var("SURGE_MCP_TEST_ECHO_RELEASE").unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while !std::path::Path::new(&release).exists() {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
             CallToolResult::success(vec![Content::text(text)])
         }
 

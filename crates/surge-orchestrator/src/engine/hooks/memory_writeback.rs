@@ -182,13 +182,14 @@ fn write_claim(
         .into_iter()
         .find(|claim| claim.is_aging_eligible() && claim.text().starts_with(&tag));
 
-    let Some(existing) = covering else {
-        store.add_claim(&MemoryClaim::from_transcript(text, source, hash))?;
-        return Ok(false);
-    };
+    let fresh = MemoryClaim::from_transcript(text, source, hash);
+    if let Some(existing) = covering {
+        let replacement = fresh.clone().with_id(existing.id());
+        if store.update_unverified_claim(&replacement)? {
+            return Ok(true);
+        }
+    }
 
-    store.delete_claim(existing.id())?;
-    let refreshed = MemoryClaim::from_transcript(text, source, hash).with_id(existing.id());
-    store.add_claim(&refreshed)?;
-    Ok(true)
+    store.add_claim(&fresh)?;
+    Ok(false)
 }

@@ -80,6 +80,16 @@ pub struct ProjectContextOutcome {
     pub skipped_files: Vec<SkippedFile>,
 }
 
+/// Frozen source claims and selection budget carried by the run artifact and
+/// consumed independently at each node's project-memory binding.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemoryClaimSnapshot {
+    /// Budget captured from the project's `surge.toml` at run admission.
+    pub budget: ContextPackConfig,
+    /// Claims captured from the memory store before execution begins.
+    pub claims: Vec<MemoryClaim>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectContextStatus {
     Drafted,
@@ -280,7 +290,8 @@ async fn invoke_project_context_author(
             prompt.clone(),
         )?)
         .await
-        .map_err(|e| ProjectContextError::Bridge(format!("open_session: {e}")))?;
+        .map_err(|e| ProjectContextError::Bridge(format!("open_session: {e}")))?
+        .session;
 
     bridge
         .send_message(session, MessageContent::Text(prompt))
@@ -347,6 +358,10 @@ fn project_context_session_config(
         ("agent".to_string(), invocation.normalized_agent_id.clone()),
     ]);
     Ok(SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: "fixture".into(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: invocation.agent_kind(),
@@ -419,11 +434,9 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
 /// - **`project_context`** — read from the configured `project.md` when
 ///   `init.project_context_auto_seed` is enabled and the run config
 ///   does not already carry one.
-/// - **`project_memory`** — repo-resident `.surge/memory/` notes, same as
-///   before, now with a confidence-ordered, budget-limited selection of
-///   memory claims from the claim store appended (`context_pack`'s
-///   selection — `.autopilot/competitive-waves/spec.md` §8, §23; see
-///   [`merged_project_memory_seed`]). Either half may be absent.
+/// - **`project_memory`** — repo-resident `.surge/memory/` notes captured as
+///   the stable run seed; claims from the memory store are snapshotted
+///   separately and packed at each node's binding boundary.
 /// - **`mcp_servers`** — cloned from `SurgeConfig::mcp_servers` so the
 ///   engine can build its `Arc<McpRegistry>` per run. This is a
 ///   structural copy (no I/O), but keeping it next to the file-backed
@@ -451,12 +464,18 @@ pub fn with_project_context_seed(
     if run_config.project_context.is_none() && config.init.project_context_auto_seed {
         run_config.project_context = load_project_context_seed(project_root, config);
     }
-    if run_config.project_memory.is_none() {
-        run_config.project_memory = merged_project_memory_seed(
-            project_root,
-            config,
-            run_config.memory_store_path.as_deref(),
-        );
+    if run_config.project_memory.is_none() || run_config.memory_claim_candidates.is_none() {
+        let (seed, candidates) =
+            merged_project_memory_seed(project_root, run_config.memory_store_path.as_deref());
+        if run_config.project_memory.is_none() {
+            run_config.project_memory = seed;
+        }
+        if run_config.memory_claim_candidates.is_none() {
+            run_config.memory_claim_candidates = candidates;
+        }
+    }
+    if run_config.context_pack.is_none() {
+        run_config.context_pack = Some(config.context_pack);
     }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
@@ -574,57 +593,42 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
     Some(ProjectContextSeed::new(dir, full))
 }
 
-/// Build the combined `project_memory` seed: repo-resident `.surge/memory/`
-/// notes ([`load_project_memory_seed`], unchanged) plus, appended, a
-/// confidence-ordered, budget-limited selection of memory claims from the
-/// claim store (`.autopilot/competitive-waves/spec.md` §8, §23 —
-/// `surge_core::context_pack::ContextPack::build`'s selection feeds this
-/// seed instead of a project accumulating unbounded raw notes as the only
-/// form of cross-run memory). Either half may be absent; the result is
-/// `None` only when both are.
+/// Build the run's `project_memory` seed from repo-resident `.surge/memory/`
+/// notes and separately snapshot raw memory claims for per-node selection.
+/// Selection runs in the agent stage, so each node has its own receipt and
+/// only frozen startup data is consulted after the run begins. Either half
+/// may be absent; the result is `None` only when both are.
 ///
 /// `store_path_override` is `EngineRunConfig::memory_store_path` forwarded
 /// unchanged from [`with_project_context_seed`]; see
 /// [`load_memory_claims_seed`] for how it is resolved.
 fn merged_project_memory_seed(
     project_root: &Path,
-    config: &surge_core::SurgeConfig,
     store_path_override: Option<&Path>,
-) -> Option<ProjectContextSeed> {
+) -> (Option<ProjectContextSeed>, Option<Vec<MemoryClaim>>) {
     let notes = load_project_memory_seed(project_root);
-    let claims_pack = load_memory_claims_seed(config, store_path_override);
-
-    let mut body = String::new();
-    if let Some(notes) = &notes {
-        body.push_str(&notes.content);
-    }
-    if let Some(claims_pack) = &claims_pack {
-        if !body.is_empty() {
-            body.push_str("\n\n");
-        }
-        body.push_str(claims_pack);
-    }
-    if body.is_empty() {
-        return None;
+    let candidates = load_memory_claims_seed(store_path_override);
+    if notes.is_none() && candidates.is_none() {
+        return (None, None);
     }
 
-    // The notes directory stays the seed's nominal `path` when notes
-    // contributed (unchanged from before this function existed); fall back
-    // to the project root when only the claims pack did.
-    let path = notes.map_or_else(|| project_root.join(PROJECT_MEMORY_DIR), |seed| seed.path);
-    Some(ProjectContextSeed::new(path, body))
+    let path = notes.as_ref().map_or_else(
+        || project_root.join(PROJECT_MEMORY_DIR),
+        |seed| seed.path.clone(),
+    );
+    let body = notes.map_or_else(String::new, |seed| seed.content);
+    (Some(ProjectContextSeed::new(path, body)), candidates)
 }
 
 /// Render a confidence-ordered, budget-limited selection of `claims` into
-/// the markdown block [`merged_project_memory_seed`] appends to the
-/// `project_memory` seed.
+/// the markdown block appended to a node's resolved `project_memory` binding.
 ///
 /// Pure: the actual selection is
 /// [`surge_core::context_pack::ContextPack::build`]; this only formats the
 /// result. Returns `None` for the body when nothing was selected (an empty
 /// `claims`, or a budget too small to admit even the cheapest candidate) —
 /// the receipt is still returned so the caller can log it either way.
-fn render_memory_claims_pack(
+pub(crate) fn render_memory_claims_pack(
     claims: Vec<MemoryClaim>,
     budget: ContextPackConfig,
 ) -> (Option<String>, PackReceipt) {
@@ -645,12 +649,7 @@ fn render_memory_claims_pack(
     (Some(body), receipt)
 }
 
-/// Load memory claims from the claim store and select them into a pack
-/// under `config.context_pack`'s budget. Tolerant of every failure — a
-/// missing/unreadable store yields no claims, exactly like
-/// [`load_project_memory_seed`] tolerates a missing `.surge/memory/`
-/// directory; memory-claim recall must never be the reason a run fails to
-/// start.
+/// Snapshot memory claims from the configured store for per-node selection.
 ///
 /// `store_path_override` mirrors
 /// `engine::hooks::memory_writeback::record_node_failure`'s parameter of
@@ -658,17 +657,13 @@ fn render_memory_claims_pack(
 /// `Some(path)` reads from there instead (test-only), `None` (every
 /// production run) resolves `MemoryStore::default_path()`.
 ///
-/// The receipt this produces is not yet persisted to the run event log
-/// (`surge_core::run_event` is out of scope for the task that added this —
-/// see `.autopilot/competitive-waves/tickets/06-context-pack.md`); it is
-/// logged here so it is at least operator-visible in the interim.
-fn load_memory_claims_seed(
-    config: &surge_core::SurgeConfig,
-    store_path_override: Option<&Path>,
-) -> Option<String> {
+fn load_memory_claims_seed(store_path_override: Option<&Path>) -> Option<Vec<MemoryClaim>> {
     let store_path = match store_path_override {
         Some(path) => path.to_path_buf(),
-        None => MemoryStore::default_path().ok()?,
+        None => match MemoryStore::default_path() {
+            Ok(path) => path,
+            Err(_) => return None,
+        },
     };
     if !store_path.exists() {
         return None;
@@ -677,27 +672,24 @@ fn load_memory_claims_seed(
         .inspect_err(
             |error| warn!(%error, "memory claim store unreadable; run starts without memory claims"),
         )
-        .ok()?;
+        .ok();
+    let store = store?;
     let claims = store
         .list_claims()
         .inspect_err(
             |error| warn!(%error, "failed to list memory claims; run starts without memory claims"),
         )
-        .ok()?;
+        .ok();
+    let claims = claims?;
     if claims.is_empty() {
         return None;
     }
 
-    let (body, receipt) = render_memory_claims_pack(claims, config.context_pack);
     info!(
-        selected = receipt.selected.len(),
-        dropped = receipt.dropped.len(),
-        reason = ?receipt.reason,
-        budget = receipt.budget,
-        used = receipt.used,
-        "context pack assembled from memory claims"
+        candidates = claims.len(),
+        "memory claims snapshotted for node-level context packs"
     );
-    body
+    Some(claims)
 }
 
 /// Load the configured project context file as a stable run seed.
@@ -1502,15 +1494,8 @@ mod render_memory_claims_pack_tests {
     }
 }
 
-/// Proves `ContextPack::build` is reachable from a real production entry
-/// point, not just called directly from a test: `with_project_context_seed`
-/// is the choke point all four run-start callers (CLI in-process, daemon
-/// IPC, daemon ticket launcher, and this crate's own tests above) funnel
-/// through, per its own doc comment. This test drives it end to end
-/// against a real, on-disk `MemoryStore` — the same one
-/// `load_memory_claims_seed` opens in production via
-/// `MemoryStore::default_path()` — rather than calling
-/// `ContextPack::build`/`render_memory_claims_pack` directly.
+/// Verifies that run admission freezes candidates and the config budget;
+/// agent stages then construct and receipt their own pack from the snapshot.
 #[cfg(test)]
 mod with_project_context_seed_memory_claims_tests {
     use super::*;
@@ -1549,20 +1534,19 @@ mod with_project_context_seed_memory_claims_tests {
     }
 
     #[test]
-    fn with_project_context_seed_folds_a_confidence_ordered_claims_pack_into_project_memory() {
+    fn with_project_context_seed_freezes_candidates_for_per_node_selection() {
         let memory_dir = tempfile::tempdir().unwrap();
         let store_path = memory_dir.path().join("memory.db");
         let project_root = tempfile::tempdir().unwrap();
 
         // Verified costs exactly 25 estimated tokens (100 chars / 4); the
         // cheap Asserted claim would fit the budget on its own, but must
-        // lose out once the verified claim is admitted first — proving
-        // the real store -> `ContextPack::build` -> seed path preserves
-        // confidence order, not just budget arithmetic.
+        // lose out once the verified claim is admitted first — proving the
+        // frozen candidate snapshot preserves confidence metadata.
         let verified = claim(&"v".repeat(100), Confidence::Verified);
         let asserted = claim("cheap and dropped", Confidence::Asserted);
-        let verified_text = verified.text().to_string();
-        let asserted_text = asserted.text().to_string();
+        let verified_id = verified.id();
+        let asserted_id = asserted.id();
 
         {
             let store = MemoryStore::open(&store_path).expect("open memory store");
@@ -1583,17 +1567,28 @@ mod with_project_context_seed_memory_claims_tests {
 
         let seed = seeded
             .project_memory
-            .expect("claims pack seeds project_memory");
+            .expect("claims require memory binding");
         assert!(
-            seed.content.contains(&verified_text),
-            "selected (verified) claim text missing from seed:\n{}",
-            seed.content
+            seed.content.is_empty(),
+            "claims are packed after per-node resolution"
         );
-        assert!(
-            !seed.content.contains(&asserted_text),
-            "dropped (over-budget) claim text must not appear in seed:\n{}",
-            seed.content
+        let candidates = seeded
+            .memory_claim_candidates
+            .expect("claims are snapshotted");
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().any(|claim| claim.id() == verified_id));
+        assert!(candidates.iter().any(|claim| claim.id() == asserted_id));
+        let (body, receipt) = render_memory_claims_pack(
+            candidates,
+            seeded.context_pack.expect("run config freezes pack budget"),
         );
+        let body = body.expect("selected claim is formatted for the node binding");
+        assert!(body.contains(verified.text()));
+        assert!(!body.contains(asserted.text()));
+        assert_eq!(receipt.selected, vec![verified.id()]);
+        assert_eq!(receipt.dropped, vec![asserted.id()]);
+        assert_eq!(receipt.budget, 25);
+        assert_eq!(receipt.used, 25);
     }
 
     #[test]
@@ -1620,6 +1615,7 @@ mod with_project_context_seed_memory_claims_tests {
             .expect("notes alone seed project_memory");
         assert!(seed.content.contains("a curated note"));
         assert!(!seed.content.contains("Memory claims"));
+        assert!(seeded.memory_claim_candidates.is_none());
     }
 }
 

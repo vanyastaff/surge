@@ -12,6 +12,7 @@ fn event_serde_roundtrip(c: &mut Criterion) {
         project_path: PathBuf::from("/work"),
         initial_prompt: "test".into(),
         config: RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,

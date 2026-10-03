@@ -95,7 +95,13 @@ fn print_ledger_table(out: &mut impl std::io::Write, records: &[TaskLedgerIndexR
             "{:<20} {:<22} {:<9} {:<16} {}",
             truncate(&r.task_id, 20),
             r.status.to_string(),
-            if r.is_evidence_backed() { "yes" } else { "no" },
+            if r.is_evidence_backed() {
+                "yes"
+            } else if r.freshness == surge_core::verification_evidence::ProofFreshness::Current {
+                "no"
+            } else {
+                r.freshness.label()
+            },
             r.discovered_from.as_deref().unwrap_or("-"),
             r.run_id,
         );
@@ -133,6 +139,11 @@ mod tests {
             last_authority_node: Some("verify_1".into()),
             updated_seq: 1,
             updated_at_ms: 0,
+            freshness: if verified {
+                surge_core::verification_evidence::ProofFreshness::Current
+            } else {
+                surge_core::verification_evidence::ProofFreshness::Unknown
+            },
         }
     }
 

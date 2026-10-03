@@ -50,7 +50,10 @@ impl BridgeFacade for AuthorBridge {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         let session = SessionId::new();
         let index = self
             .opened
@@ -58,8 +61,21 @@ impl BridgeFacade for AuthorBridge {
         self.sessions
             .lock()
             .await
-            .insert(session, (config.working_dir, index));
-        Ok(session)
+            .insert(session, (config.working_dir.clone(), index));
+        Ok(surge_core::execution_recovery::OpenedSession::new(
+            session,
+            surge_core::execution_recovery::ProviderSessionDescriptor::new(
+                surge_core::execution_recovery::ProviderSessionId::new("author".into()).unwrap(),
+                config.invocation,
+                config.runtime,
+                surge_core::ContentHash::compute(b"author"),
+                config.working_dir,
+                surge_core::execution_recovery::SessionRestoreCapabilities::default(),
+            )
+            .unwrap(),
+            surge_core::execution_recovery::SessionOpenMode::New,
+        )
+        .unwrap())
     }
     async fn send_message(
         &self,
@@ -88,6 +104,8 @@ impl BridgeFacade for AuthorBridge {
                 outcome: OutcomeKey::try_new("drafted").unwrap(),
                 summary: "fixture".into(),
                 artifacts_produced,
+
+                verification_report: None,
             })
             .unwrap();
         Ok(())

@@ -102,6 +102,10 @@ pub fn render_markdown(report: &RunReport) -> String {
     // not read the same as a verified one. `report.evidence_backed` is only
     // `Some(false)` here — `None` (non-`Completed` completions) renders
     // nothing extra.
+    out.push_str(&format!(
+        "> Evidence freshness: {} (journal verdicts describe their recorded revision).\n\n",
+        report.freshness.label()
+    ));
     if report.evidence_backed == Some(false) {
         out.push_str(&format!("> {UNVERIFIED_SUCCESS_BANNER}\n\n"));
     }
@@ -233,12 +237,16 @@ pub fn render_markdown(report: &RunReport) -> String {
         out.push_str("_None recorded — see the Caveats section above._\n\n");
     } else {
         for receipt in &report.memory_receipts {
+            let attempt = render_attempt(receipt.attempt);
             out.push_str(&format!(
-                "- selected {} / dropped {} (budget {}, used {})\n",
-                receipt.selected.len(),
-                receipt.dropped.len(),
-                receipt.budget,
-                receipt.used
+                "- `{}{}`: selected [{}] / dropped [{}] ({}; budget {}, used {})\n",
+                receipt.node,
+                attempt,
+                format_claim_ids(&receipt.receipt.selected, true),
+                format_claim_ids(&receipt.receipt.dropped, true),
+                drop_reason_label(receipt.receipt.reason),
+                receipt.receipt.budget,
+                receipt.receipt.used
             ));
         }
         out.push('\n');
@@ -270,6 +278,27 @@ pub fn render_markdown(report: &RunReport) -> String {
     }
 
     out
+}
+
+fn format_claim_ids(ids: &[crate::id::MemoryClaimId], markdown: bool) -> String {
+    ids.iter()
+        .map(|id| {
+            let value = id.to_string();
+            if markdown {
+                format!("`{value}`")
+            } else {
+                escape_html(&value)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn drop_reason_label(reason: Option<crate::context_pack::DropReason>) -> &'static str {
+    match reason {
+        Some(crate::context_pack::DropReason::OverBudget) => "over budget",
+        None => "no claims dropped",
+    }
 }
 
 /// `last - first`, formatted compactly (`"1h 02m 03s"`, dropping leading
@@ -581,6 +610,10 @@ pub fn render_html(report: &RunReport) -> String {
              for this report.</p>\n",
         );
     }
+    body.push_str(&format!(
+        "<p>Evidence freshness: {}. Journal verdicts describe their recorded revision.</p>",
+        escape_html(report.freshness.label())
+    ));
     if report.evidence_backed == Some(false) {
         body.push_str(&format!(
             "<p class=\"warn\">{}</p>\n",
@@ -849,15 +882,27 @@ fn render_memory_receipts_section(report: &RunReport) -> String {
     }
     let mut items = String::new();
     for receipt in &report.memory_receipts {
+        let attempt = render_attempt(receipt.attempt);
         items.push_str(&format!(
-            "<li>selected {} / dropped {} (budget {}, used {})</li>\n",
-            receipt.selected.len(),
-            receipt.dropped.len(),
-            receipt.budget,
-            receipt.used,
+            "<li><code>{}{}</code>: selected [{}] / dropped [{}] ({}; budget {}, used {})</li>\n",
+            escape_html(receipt.node.as_str()),
+            attempt,
+            format_claim_ids(&receipt.receipt.selected, false),
+            format_claim_ids(&receipt.receipt.dropped, false),
+            drop_reason_label(receipt.receipt.reason),
+            receipt.receipt.budget,
+            receipt.receipt.used,
         ));
     }
     format!("<h2>Memory receipts</h2>\n<ul>{items}</ul>\n")
+}
+
+fn render_attempt(attempt: u32) -> String {
+    if attempt == 0 {
+        "#?".to_string()
+    } else {
+        format!("#{attempt}")
+    }
 }
 
 fn render_steers_section(report: &RunReport) -> String {
@@ -951,6 +996,7 @@ mod tests {
                     project_path: "/p".into(),
                     initial_prompt: XSS_PAYLOAD.into(),
                     config: crate::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
                         approval_default: crate::approvals::ApprovalPolicy::OnRequest,
                         auto_pr: false,
@@ -1007,6 +1053,8 @@ mod tests {
                     task_id: XSS_PAYLOAD.into(),
                     node: node.clone(),
                     evidence: ContentHash::compute(b"e"),
+
+                    report: None,
                 },
             },
             RunEvent {
@@ -1124,6 +1172,60 @@ mod tests {
     }
 
     #[test]
+    fn memory_receipt_renderers_show_node_claim_ids_and_drop_reason() {
+        let mut report = sample_report();
+        let selected = crate::id::MemoryClaimId::new();
+        let dropped = crate::id::MemoryClaimId::new();
+        let selected_text = selected.to_string();
+        let dropped_text = dropped.to_string();
+        report
+            .memory_receipts
+            .push(super::super::NodeMemoryReceipt {
+                node: "implement".parse().unwrap(),
+                attempt: 3,
+                receipt: crate::context_pack::PackReceipt {
+                    selected: vec![selected],
+                    dropped: vec![dropped],
+                    reason: Some(crate::context_pack::DropReason::OverBudget),
+                    budget: 100,
+                    used: 90,
+                },
+            });
+
+        let markdown = render_markdown(&report);
+        assert!(markdown.contains(&selected_text));
+        assert!(markdown.contains(&dropped_text));
+        assert!(markdown.contains("`implement#3`"));
+        assert!(markdown.contains("over budget"));
+        let html = render_html(&report);
+        assert!(html.contains(&selected_text));
+        assert!(html.contains(&dropped_text));
+        assert!(html.contains("implement#3"));
+        assert!(html.contains("over budget"));
+    }
+
+    #[test]
+    fn memory_receipt_renderers_mark_legacy_attempt_as_unknown() {
+        let mut report = sample_report();
+        report
+            .memory_receipts
+            .push(super::super::NodeMemoryReceipt {
+                node: "implement".parse().unwrap(),
+                attempt: 0,
+                receipt: crate::context_pack::PackReceipt {
+                    selected: Vec::new(),
+                    dropped: Vec::new(),
+                    reason: None,
+                    budget: 100,
+                    used: 0,
+                },
+            });
+
+        assert!(render_markdown(&report).contains("`implement#?`"));
+        assert!(render_html(&report).contains("implement#?"));
+    }
+
+    #[test]
     fn markdown_flags_an_incomplete_run() {
         let run_id = RunId::new();
         let report = RunReport::compile(run_id, &[]);
@@ -1140,10 +1242,10 @@ mod tests {
     }
 
     #[test]
-    fn markdown_caveats_section_names_the_memory_receipts_gap() {
+    fn markdown_caveats_section_names_legacy_memory_receipt_coverage() {
         let md = render_markdown(&sample_report());
         assert!(md.contains("## Caveats"));
-        assert!(md.contains("memory_receipts is always empty"));
+        assert!(md.contains("legacy journals may omit per-node memory selection receipts"));
     }
 
     /// R29: the HTML output must not contain any externally-resolved
@@ -1375,6 +1477,7 @@ mod tests {
                     project_path: "/p".into(),
                     initial_prompt: forged_prompt.into(),
                     config: crate::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
                         approval_default: crate::approvals::ApprovalPolicy::OnRequest,
                         auto_pr: false,
@@ -1557,6 +1660,8 @@ mod tests {
                     task_id: "t1".into(),
                     node: verifier.clone(),
                     evidence: ContentHash::compute(b"evidence"),
+
+                    report: None,
                 },
             },
             RunEvent {
@@ -1568,7 +1673,8 @@ mod tests {
                 },
             },
         ];
-        let report = RunReport::compile(run_id, &events);
+        let report =
+            RunReport::compile(run_id, &crate::verification_evidence::bind_fixture(&events));
         assert_eq!(report.evidence_backed, Some(true));
 
         let html = render_html(&report);

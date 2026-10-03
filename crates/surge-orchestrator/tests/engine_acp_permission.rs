@@ -32,10 +32,14 @@ struct RealBridge {
     bridge: AcpBridge,
     pid_path: PathBuf,
     flags: Vec<String>,
+    verification_report: Option<String>,
 }
 #[async_trait::async_trait]
 impl BridgeFacade for RealBridge {
-    async fn open_session(&self, mut config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        mut config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         config.agent_kind = AgentKind::Custom {
             binary: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
                 "../../target/debug/mock_acp_agent{}",
@@ -55,6 +59,11 @@ impl BridgeFacade for RealBridge {
                 .display()
                 .to_string(),
         );
+        if let Some(report) = &self.verification_report {
+            config
+                .env
+                .insert("SURGE_TEST_VERIFICATION_REPORT".into(), report.clone());
+        }
         config.sandbox = Box::new(Elevate);
         self.bridge.open_session(config).await
     }
@@ -225,6 +234,12 @@ async fn roundtrip(root: PathBuf, mode: u8) {
     let bridge = Arc::new(RealBridge {
         bridge: AcpBridge::with_defaults().unwrap(),
         pid_path: root.join("child.pid"),
+        verification_report: (4..=5).contains(&mode).then(|| {
+            serde_json::json!({
+            "task_id":"task-under-verification", "outcome":"passed", "summary":"Acceptance checked",
+            "checks":[{"command":"acceptance", "result":"passed", "covers":["criterion:1"]}]
+        }).to_string()
+        }),
         flags: if mode >= 6 {
             let case = match mode {
                 7 => "duplicate",
@@ -633,8 +648,46 @@ async fn verify_failure(
         stage::agent::{AgentStageParams, execute_agent_stage},
     };
     let id = RunId::new();
-    let writer = storage.create_run(id, root, None).await.unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let worktree = workspace.path();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@example.com"],
+        vec!["commit", "--allow-empty", "-m", "fixture"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(worktree)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let writer = storage.create_run(id, worktree, None).await.unwrap();
     let artifacts = surge_persistence::artifacts::ArtifactStore::new(root.join("runs"));
+    let item: toml::Value = toml::from_str("id='task-under-verification'\ntitle='Acceptance'\nacceptance_criteria=['Acceptance works']\n").unwrap();
+    let frames = [surge_orchestrator::engine::frames::Frame::Loop(
+        surge_orchestrator::engine::frames::LoopFrame {
+            loop_node: "tasks".parse().unwrap(),
+            config: surge_core::loop_config::LoopConfig {
+                iterates_over: surge_core::loop_config::IterableSource::Static(vec![item.clone()]),
+                body: "body".parse().unwrap(),
+                iteration_var_name: "task".into(),
+                exit_condition: surge_core::loop_config::ExitCondition::AllItems,
+                on_iteration_failure: Default::default(),
+                parallelism: Default::default(),
+                gate_after_each: false,
+            },
+            items: vec![item],
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: "end".parse().unwrap(),
+            traversal_counts: Default::default(),
+        },
+    )];
     let config = AgentConfig {
         profile: surge_core::ProfileKey::try_from("implementer@1.0").unwrap(),
         sandbox_override: Some(SandboxConfig {
@@ -660,12 +713,17 @@ async fn verify_failure(
     let node = surge_core::NodeKey::try_from("verify").unwrap();
     let memory = surge_core::run_state::RunMemory::default();
     let dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> =
-        Arc::new(WorktreeToolDispatcher::new(root.into()));
+        Arc::new(WorktreeToolDispatcher::new(worktree.into()));
     let bridge: Arc<dyn BridgeFacade> = bridge;
     let result = execute_agent_stage(AgentStageParams {
-        frames: &[],
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
+        frames: &frames,
         cancel: tokio_util::sync::CancellationToken::new(),
         node: &node,
+        attempt: 1,
         steers: vec![],
         agent_config: &config,
         bound_skills: &[],
@@ -673,7 +731,7 @@ async fn verify_failure(
         bridge: &bridge,
         writer: &writer,
         artifact_store: &artifacts,
-        worktree_path: root,
+        worktree_path: worktree,
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
         run_id: id,
@@ -747,7 +805,13 @@ struct SpoofedBroadcast {
 }
 #[async_trait::async_trait]
 impl BridgeFacade for SpoofedBroadcast {
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
+        use surge_core::execution_recovery::{
+            OpenedSession, ProviderSessionDescriptor, ProviderSessionId, SessionOpenMode,
+        };
         let session = config
             .stage_mcp
             .expect("Engine must prepare authenticated MCP")
@@ -766,9 +830,24 @@ impl BridgeFacade for SpoofedBroadcast {
                 outcome: surge_core::OutcomeKey::try_from("done").unwrap(),
                 summary: "spoof".into(),
                 artifacts_produced: vec![],
+
+                verification_report: None,
             })
             .unwrap();
-        Ok(session)
+        Ok(OpenedSession::new(
+            SessionId::new(),
+            ProviderSessionDescriptor::new(
+                ProviderSessionId::new("spoofed-broadcast".into()).unwrap(),
+                config.invocation,
+                config.runtime,
+                surge_core::ContentHash::compute(b"spoofed-broadcast"),
+                config.working_dir,
+                Default::default(),
+            )
+            .unwrap(),
+            SessionOpenMode::New,
+        )
+        .unwrap())
     }
     async fn send_message(&self, _: SessionId, _: MessageContent) -> Result<(), SendMessageError> {
         Ok(())

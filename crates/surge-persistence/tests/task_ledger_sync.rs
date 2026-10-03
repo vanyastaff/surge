@@ -28,6 +28,7 @@ async fn sync_mirrors_run_ledger_into_registry_index() {
             project_path: project.clone(),
             initial_prompt: "ledger sync".into(),
             config: RunConfig {
+                bootstrap_edit_loop_cap: None,
                 budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
@@ -50,6 +51,8 @@ async fn sync_mirrors_run_ledger_into_registry_index() {
             task_id: "m1-t1".into(),
             node: NodeKey::try_from("verify_1").unwrap(),
             evidence: ContentHash::compute(b"report"),
+
+            report: None,
         },
     ];
     for payload in &events {
@@ -76,9 +79,11 @@ async fn sync_mirrors_run_ledger_into_registry_index() {
     assert_eq!(rows.len(), 2);
 
     let t1 = rows.iter().find(|r| r.task_id == "m1-t1").expect("t1");
-    assert_eq!(t1.status, RoadmapStatus::Completed);
-    assert!(t1.verified);
-    assert_eq!(t1.last_authority_node.as_deref(), Some("verify_1"));
+    // An unbound, unauthorized historical claim cannot become current proof.
+    assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
+    assert!(!t1.verified);
+    assert!(!t1.is_evidence_backed());
+    assert_eq!(t1.last_authority_node.as_deref(), Some("impl_1"));
     assert_eq!(t1.project_path, PathBuf::from(&project));
 
     let t2 = rows.iter().find(|r| r.task_id == "m1-t2").expect("t2");

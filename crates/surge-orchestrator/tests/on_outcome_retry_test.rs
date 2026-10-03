@@ -143,6 +143,8 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
         outcome: OutcomeKey::from_str("pass").unwrap(),
         summary: "first try".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     mock.enqueue_event(BridgeEvent::OutcomeReported {
@@ -150,6 +152,8 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
         outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
         summary: "fallback".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -166,10 +170,15 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -253,6 +262,8 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
         outcome: OutcomeKey::from_str("pass").unwrap(),
         summary: "profile hook rejects this".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     mock.enqueue_event(BridgeEvent::OutcomeReported {
@@ -260,6 +271,8 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
         outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
         summary: "fallback".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -276,10 +289,15 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -348,6 +366,8 @@ async fn retry_budget_exhausted_emits_stage_failed() {
             outcome: OutcomeKey::from_str("pass").unwrap(),
             summary: "again".into(),
             artifacts_produced: vec![],
+
+            verification_report: None,
         })
         .await;
     }
@@ -366,10 +386,15 @@ async fn retry_budget_exhausted_emits_stage_failed() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],

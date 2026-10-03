@@ -65,8 +65,8 @@ fn parse_retry_after(error: &str) -> Option<u64> {
 /// this function's three patterns, that list additionally recognizes: a
 /// bare `"rate_limit"` substring (so `rate_limit_error` — Anthropic's
 /// actual error `type` — and `rate_limit_exceeded`), `"quota exceeded"`,
-/// `"insufficient_quota"`, `"resource_exhausted"`, `"overloaded_error"`, and
-/// "usage limit reached". Letting any of those six additionally flip
+/// `"insufficient_quota"`, `"resource_exhausted"`, and "usage limit reached".
+/// Letting any of those five additionally flip
 /// `rate_limited` would be a real, silent change to which agents
 /// `resolve_agent` routes away from — exactly the kind of side effect a
 /// prior round of review caught happening to `surge-acp::pool`'s own
@@ -308,7 +308,7 @@ impl HealthTracker {
         // `is_rate_limited_for_routing`'s narrow classifier;
         // `self.capacity` is set by `record_failure`'s wider one (see its
         // doc). A message matching the wide classifier but not the narrow
-        // one (`overloaded_error`, `resource_exhausted`, ...) produces
+        // one (`resource_exhausted`, ...) produces
         // `Known(_)` with `rate_limited` never becoming `true` at all — the
         // `if health.rate_limited` guard this clearing previously lived
         // inside would then never run, and that window would report
@@ -363,8 +363,8 @@ impl HealthTracker {
             // above — a provider shape the narrow routing classifier
             // doesn't recognize (`rate_limit_error` — Anthropic's actual
             // error `type`, `rate_limit_exceeded`, `quota exceeded`,
-            // `insufficient_quota`, `resource_exhausted`, `overloaded_error`,
-            // "usage limit reached") still populates this. Gated on
+            // `insufficient_quota`, `resource_exhausted`, "usage limit
+            // reached") still populates this. Gated on
             // registration like every other field on `health`, above.
             //
             // **Stale-rationale warning, corrected by Task 12 (M5):** this
@@ -618,10 +618,10 @@ mod tests {
     }
 
     #[test]
-    fn test_record_connect_failure_still_classifies_a_real_capacity_shape() {
+    fn test_record_connect_failure_still_classifies_subscription_quota_shape() {
         let mut monitor = HealthTracker::new();
         monitor.register("claude");
-        monitor.record_connect_failure("claude", "overloaded_error");
+        monitor.record_connect_failure("claude", "You've hit your limit");
         assert!(matches!(
             monitor.capacity_status("claude"),
             surge_core::capacity::CapacityStatus::Known(_)
@@ -813,6 +813,18 @@ mod tests {
         let mut monitor = HealthTracker::new();
         monitor.register("claude");
         monitor.record_failure("claude", "internal server error");
+        assert_eq!(
+            monitor.capacity_status("claude"),
+            surge_core::capacity::CapacityStatus::Unclassified
+        );
+    }
+
+    #[test]
+    fn anthropic_overload_is_unclassified_instead_of_quota_exhaustion() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_failure("claude", "overloaded_error: API overloaded");
+
         assert_eq!(
             monitor.capacity_status("claude"),
             surge_core::capacity::CapacityStatus::Unclassified

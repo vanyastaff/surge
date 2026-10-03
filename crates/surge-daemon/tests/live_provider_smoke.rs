@@ -649,6 +649,8 @@ fn valid_evidence(run: RunId, nonce: &str) -> Vec<EventPayload> {
     };
     vec![
         EventPayload::SessionOpened {
+            handoff: None,
+            opened: None,
             node: node.clone(),
             session,
             agent: "smoke".into(),
@@ -679,6 +681,8 @@ fn valid_evidence(run: RunId, nonce: &str) -> Vec<EventPayload> {
                     outcome: "done".parse().unwrap(),
                     summary: nonce.into(),
                     artifacts_produced: vec![],
+
+                    verification_report: None,
                 },
             },
         ),

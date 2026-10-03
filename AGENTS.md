@@ -82,10 +82,30 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-cli/src/commands/` | Other per-subcommand modules. |
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
 | `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
+| `crates/surge-core/src/verification_evidence.rs` | Shared revision/criteria claim gate and invalidation projection. |
+| `crates/surge-git/src/fingerprint.rs` | Read-only identity of current working files, including dirty and untracked code. |
+| `crates/surge-orchestrator/src/engine/stage/verification.rs` | Host-owned verification input and inline report sealing. |
+| `crates/surge-persistence/src/runs/verification.rs` | Transactional normalized verification context and stored-proof inspection. |
+| `crates/surge-core/src/work_item.rs` | Persistent work-item identities, immutable accepted requirements, attempts and typed controls. |
+| `crates/surge-core/src/execution_recovery.rs` | Validated provider session identity, opening metadata and recoverable execution contracts. |
+| `crates/surge-core/src/execution_recovery/gate_commit.rs` | Validated human-decision occurrence, response/effect hashes and journal-derived gate commit records. |
+| `crates/surge-acp/src/process_evidence.rs` | Read-only host process identity and writer-liveness evidence, with Linux/macOS implementations. |
+| `crates/surge-acp/src/quota_observation.rs` | Typed subscription quota evidence; distinguishes unsupported probes, unknown availability and actual rate-limit observations. |
+| `crates/surge-persistence/src/work_items.rs` | Registry-owned task history, idempotent reservations, launch fencing and paged cumulative usage. |
+| `crates/surge-persistence/src/work_items/control.rs` | Generation-fenced task suspension/continuation intents and acknowledgments. |
+| `crates/surge-persistence/src/work_items/recovery_cycles.rs` | Durable quota candidates, observations, reservation receipts and generation-fenced wake cycles; `recovery_cycles/policy.rs` and `handoffs.rs` contain frozen policy and provider opening capability types. |
+| `crates/surge-orchestrator/src/engine/writer_coverage.rs` | Run-scoped pre-dispatch ownership records for executable writers and external effects. |
+| `crates/surge-mcp/src/writer_observer.rs` | Injected host observation boundary for MCP child ownership without ACP/storage dependencies. |
+| `crates/surge-git/src/task_workspace.rs` | Retained task workspace planning and original-owner reconciliation. |
+| `crates/surge-daemon/src/work_items.rs` | Durable task controls, engine admission and restart reconciliation. |
+| `crates/surge-cli/src/commands/task.rs` | `surge task` controls routed to the durable daemon owner. |
 | `crates/surge-git/src/checkpoint.rs` | Immutable Git snapshots of stage-boundary working files, preserving the user index and HEAD. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
 | `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
 | `crates/surge-ui/src/project_init.rs` | Empty-folder desktop project initialization: Git base commit and ignored local runtime configuration. |
+| `crates/surge-ui/src/work_items.rs` | Desktop task cache, project-scoped daemon queries and immutable operation retries. |
+| `crates/surge-ui/src/screens/task_create.rs` | Task creation form and preserved input drafts. |
+| `crates/surge-ui/src/screens/task_detail.rs` | Task discussion, revision and workflow-start input state. |
 | `crates/surge-orchestrator/src/project_context.rs` | Deterministic project scan, `project.md` generation, and run-level context seeding helpers. |
 | `surge.toml` / `surge.example.toml` | User-facing runtime configuration. The `.example` file documents every field. |
 | `project.md` | Generated stable project summary captured into new runs as `project_context` when present. |
@@ -110,6 +130,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Agent OS Landscape | `docs/agent-os-landscape.md` | Research note on adjacent agent tools, Agent OS patterns, and Surge product direction. |
 | Developer Vibe Coding Harness | `docs/vibe-coding-harness.md` | Agentlas/Factory comparison, interface direction and application-creation acceptance criteria. |
 | Factory Product Model | `docs/factory-product-model.md` | Detailed Factory documentation evidence and testable implications for Surge. |
+| SuperPlane Improvements | `docs/superplane-improvements.md` | Accepted improvement sequence, completion reliability and revision-bound verification. |
 | Native UI Automation | `docs/ui-automation-evaluation.md` | GPUI/egui native interaction evidence and migration criteria. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
@@ -128,6 +149,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 
 ## Agent Rules
 
+- **Commit completed stages as you go.** The user authorized local commits for this work. Include the full dependency closure of each stage, record the checks actually run, and keep unfinished requirements open. A combined checkpoint is allowed for already intertwined changes; subsequent work should use stage-sized commits. Do not infer permission to push or merge from local commit authorization.
 - **Decompose multi-step shell commands** into independent steps so the user can review each one. Never combine git or build commands with `&&` / `||` / `;` in a single tool call.
   - Incorrect (combined): `git checkout main && git pull`
   - Correct (decomposed): first `git checkout main`, then `git pull origin main`

@@ -92,8 +92,12 @@ pub fn query_ready(
         })
         .map_err(OperatorError::TaskLedger)?;
 
+    super::verification::enrich_records(storage, &mut records);
     if query.status.is_none() {
-        records.retain(|r| !is_settled(r.status));
+        records.retain(|r| {
+            !is_settled(r.status)
+                || (r.status == RoadmapStatus::Completed && !r.is_evidence_backed())
+        });
         records.truncate(query.limit);
     }
     Ok(records)
@@ -109,7 +113,7 @@ pub fn query_ledger(
     storage: &Storage,
     query: &LedgerQuery,
 ) -> Result<Vec<TaskLedgerIndexRecord>, OperatorError> {
-    storage
+    let mut records = storage
         .task_ledger_store()
         .list(&TaskLedgerIndexFilter {
             status: None,
@@ -118,7 +122,9 @@ pub fn query_ledger(
             discovered_only: false,
             limit: Some(query.limit),
         })
-        .map_err(OperatorError::TaskLedger)
+        .map_err(OperatorError::TaskLedger)?;
+    super::verification::enrich_records(storage, &mut records);
+    Ok(records)
 }
 
 /// A task is settled when no further work is expected on it.

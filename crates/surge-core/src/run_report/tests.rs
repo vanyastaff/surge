@@ -111,6 +111,7 @@ fn run_started(seq: u64) -> RunEvent {
             project_path: PathBuf::from("/project"),
             initial_prompt: "build it".into(),
             config: RunConfig {
+                bootstrap_edit_loop_cap: None,
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,
@@ -124,7 +125,7 @@ fn run_started(seq: u64) -> RunEvent {
 #[test]
 fn empty_event_slice_compiles_to_an_incomplete_empty_report() {
     let run_id = RunId::new();
-    let report = RunReport::compile(run_id, &[]);
+    let report = compile_bound(run_id, &[]);
 
     assert_eq!(report.run_id, run_id);
     assert_eq!(report.completion, RunCompletion::Incomplete);
@@ -156,7 +157,7 @@ fn a_torn_run_with_no_terminal_event_compiles_as_incomplete() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.completion, RunCompletion::Incomplete);
     assert_eq!(report.nodes.len(), 1);
     assert_eq!(report.nodes[0].status, NodeStatus::InProgress);
@@ -174,7 +175,7 @@ fn run_completed_is_reflected_in_completion() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(
         report.completion,
         RunCompletion::Completed {
@@ -187,7 +188,7 @@ fn run_completed_is_reflected_in_completion() {
 #[test]
 fn run_failed_and_aborted_are_distinguished() {
     let run_id = RunId::new();
-    let failed = RunReport::compile(
+    let failed = compile_bound(
         run_id,
         &[event(
             1,
@@ -203,7 +204,7 @@ fn run_failed_and_aborted_are_distinguished() {
         }
     );
 
-    let aborted = RunReport::compile(
+    let aborted = compile_bound(
         run_id,
         &[event(
             1,
@@ -255,7 +256,7 @@ fn node_tracks_attempts_and_last_status_across_a_retry() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.nodes.len(), 1, "one node, not one row per attempt");
     assert_eq!(report.nodes[0].attempts, 2);
     assert_eq!(
@@ -285,7 +286,7 @@ fn nodes_stay_in_first_seen_execution_order() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     let order: Vec<&str> = report.nodes.iter().map(|n| n.node.as_str()).collect();
     assert_eq!(
         order,
@@ -305,7 +306,7 @@ fn outcome_reported_appends_an_outcome_entry() {
             summary: "looks good".into(),
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.outcomes.len(), 1);
     assert_eq!(report.outcomes[0].node, node_key("impl_1"));
     assert_eq!(report.outcomes[0].outcome, outcome_key("approve"));
@@ -331,16 +332,25 @@ fn task_verified_by_an_authorized_node_is_verified() {
                 task_id: "t1".into(),
                 node: verifier.clone(),
                 evidence: evidence_hash,
+
+                report: None,
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.verdicts.len(), 1);
     assert_eq!(report.verdicts[0].task_id, "t1");
     assert_eq!(
         report.verdicts[0].result,
         VerdictResult::Verified {
-            evidence: evidence_hash
+            evidence: match &crate::verification_evidence::bind_fixture(&events)
+                .last()
+                .unwrap()
+                .payload
+            {
+                EventPayload::TaskVerified { evidence, .. } => *evidence,
+                _ => panic!("fixture"),
+            }
         }
     );
 }
@@ -369,10 +379,12 @@ fn task_verified_by_an_unauthorized_node_is_flagged_not_verified() {
                 task_id: "t1".into(),
                 node: impostor,
                 evidence: ContentHash::compute(b"forged"),
+
+                report: None,
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.verdicts.len(), 1);
     assert_eq!(report.verdicts[0].result, VerdictResult::Unauthorized);
 }
@@ -388,9 +400,11 @@ fn task_verified_with_no_graph_at_all_is_unauthorized_not_verified() {
             task_id: "t1".into(),
             node: node_key("verify_1"),
             evidence: ContentHash::compute(b"evidence"),
+
+            report: None,
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.verdicts[0].result, VerdictResult::Unauthorized);
 }
 
@@ -406,7 +420,7 @@ fn failed_verification_status_change_is_a_rejected_verdict() {
             authority_node: node_key("verify_1"),
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.verdicts.len(), 1);
     assert_eq!(report.verdicts[0].result, VerdictResult::Rejected);
 }
@@ -435,7 +449,7 @@ fn completed_run_with_no_verdicts_at_all_is_not_evidence_backed() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.evidence_backed, Some(false));
 }
 
@@ -457,6 +471,8 @@ fn completed_run_with_an_authorized_verdict_is_evidence_backed() {
                 task_id: "t1".into(),
                 node: verifier,
                 evidence: ContentHash::compute(b"verification-report"),
+
+                report: None,
             },
         ),
         event(
@@ -466,7 +482,7 @@ fn completed_run_with_an_authorized_verdict_is_evidence_backed() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.evidence_backed, Some(true));
 }
 
@@ -493,6 +509,8 @@ fn completed_run_with_only_an_unauthorized_verdict_is_not_evidence_backed() {
                 task_id: "t1".into(),
                 node: impostor,
                 evidence: ContentHash::compute(b"forged"),
+
+                report: None,
             },
         ),
         event(
@@ -502,7 +520,7 @@ fn completed_run_with_only_an_unauthorized_verdict_is_not_evidence_backed() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.evidence_backed, Some(false));
 }
 
@@ -513,7 +531,7 @@ fn completed_run_with_only_an_unauthorized_verdict_is_not_evidence_backed() {
 #[test]
 fn a_failed_run_carries_no_evidence_backed_question() {
     let run_id = RunId::new();
-    let report = RunReport::compile(
+    let report = compile_bound(
         run_id,
         &[event(
             1,
@@ -562,6 +580,8 @@ fn status_change_after_verified_revokes_the_stale_verdict() {
                 task_id: "t1".into(),
                 node: verifier.clone(),
                 evidence: ContentHash::compute(b"evidence"),
+
+                report: None,
             },
         ),
         event(
@@ -580,7 +600,7 @@ fn status_change_after_verified_revokes_the_stale_verdict() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.verdicts.len(), 1);
     assert_eq!(
         report.verdicts[0].result,
@@ -615,6 +635,8 @@ fn one_verified_and_one_superseded_after_verification_is_not_evidence_backed() {
                 task_id: "t1".into(),
                 node: verifier.clone(),
                 evidence: ContentHash::compute(b"t1-evidence"),
+
+                report: None,
             },
         ),
         event(
@@ -623,6 +645,8 @@ fn one_verified_and_one_superseded_after_verification_is_not_evidence_backed() {
                 task_id: "t2".into(),
                 node: verifier.clone(),
                 evidence: ContentHash::compute(b"t2-evidence"),
+
+                report: None,
             },
         ),
         event(
@@ -641,7 +665,7 @@ fn one_verified_and_one_superseded_after_verification_is_not_evidence_backed() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(
         report.verdicts.len(),
         2,
@@ -675,6 +699,8 @@ fn one_verified_among_several_rejected_verdicts_is_not_evidence_backed() {
                 task_id: "t1".into(),
                 node: verifier.clone(),
                 evidence: ContentHash::compute(b"evidence"),
+
+                report: None,
             },
         ),
     ];
@@ -696,7 +722,7 @@ fn one_verified_among_several_rejected_verdicts_is_not_evidence_backed() {
         },
     ));
 
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.verdicts.len(), 5);
     assert_eq!(report.evidence_backed, Some(false));
 }
@@ -730,6 +756,8 @@ fn task_discovered_with_no_verdict_at_all_still_counts_against_evidence_backed()
                 task_id: "t1".into(),
                 node: verifier.clone(),
                 evidence: ContentHash::compute(b"evidence"),
+
+                report: None,
             },
         ),
         event(
@@ -747,7 +775,7 @@ fn task_discovered_with_no_verdict_at_all_still_counts_against_evidence_backed()
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(
         report.verdicts.len(),
         1,
@@ -768,7 +796,7 @@ fn task_discovered_with_no_verdict_at_all_still_counts_against_evidence_backed()
 /// a second, `Completed`-targeted status change after `TaskVerified` for
 /// the same task_id.
 #[test]
-fn redundant_completed_status_change_does_not_clear_verified() {
+fn completed_result_change_invalidates_verified() {
     let run_id = RunId::new();
     let verifier = node_key("verify_1");
     let events = vec![
@@ -785,6 +813,8 @@ fn redundant_completed_status_change_does_not_clear_verified() {
                 task_id: "t1".into(),
                 node: verifier.clone(),
                 evidence: ContentHash::compute(b"evidence"),
+
+                report: None,
             },
         ),
         event(
@@ -803,12 +833,11 @@ fn redundant_completed_status_change_does_not_clear_verified() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(
         report.evidence_backed,
-        Some(true),
-        "a redundant TaskStatusChanged{{to: Completed}} must not clear an \
-         already-verified task's evidence-backed bit"
+        Some(false),
+        "a changed result must re-earn verification even when it still claims Completed"
     );
 }
 
@@ -837,7 +866,7 @@ fn artifact_produced_and_bootstrap_artifact_are_both_evidence() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.evidence.len(), 2);
     assert_eq!(
         report.evidence[0].origin,
@@ -894,7 +923,7 @@ fn cost_sums_tokens_and_dollars_across_multiple_events() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.cost.prompt_tokens, 1_200);
     assert_eq!(report.cost.output_tokens, 550);
     assert_eq!(report.cost.cache_hits, 100);
@@ -920,7 +949,7 @@ fn skill_bound_events_are_listed_verbatim() {
             gate_enabled: true,
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.skills.len(), 1);
     assert_eq!(report.skills[0].name, "code-reviewer");
     assert_eq!(report.skills[0].provider, SkillProvider::ProjectDir);
@@ -939,7 +968,7 @@ fn steer_delivered_appends_a_steer_entry() {
             message: "focus on the edge cases".into(),
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.steers.len(), 1);
     assert_eq!(report.steers[0].id, "steer-1");
     assert_eq!(report.steers[0].message, "focus on the edge cases");
@@ -968,7 +997,7 @@ fn human_input_request_resolve_and_timeout_all_appear_as_approvals() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.approvals.len(), 2);
     assert!(matches!(
         report.approvals[0],
@@ -1000,7 +1029,7 @@ fn sandbox_elevation_lifecycle_appears_as_approvals() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.approvals.len(), 2);
     assert!(matches!(
         report.approvals[1],
@@ -1036,7 +1065,7 @@ fn bootstrap_and_roadmap_patch_approvals_appear() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.approvals.len(), 2);
     assert!(matches!(
         report.approvals[0],
@@ -1079,7 +1108,7 @@ fn legacy_approval_requested_decided_events_are_ignored() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert!(
         report.approvals.is_empty(),
         "the dead ApprovalRequested/Decided pair must not appear in the report"
@@ -1087,22 +1116,38 @@ fn legacy_approval_requested_decided_events_are_ignored() {
 }
 
 #[test]
-fn memory_receipts_is_always_empty_today_no_event_carries_it_yet() {
-    // Named limitation (see module doc): no `EventPayload` variant
-    // carries a `PackReceipt` yet, so this is the correct, honest
-    // output — not a bug in this compiler.
+fn memory_receipts_are_projected_per_node_from_resolved_input_events() {
     let run_id = RunId::new();
-    let report = RunReport::compile(run_id, &[run_started(1)]);
-    assert!(report.memory_receipts.is_empty());
+    let node = node_key("implement");
+    let receipt = PackReceipt {
+        selected: Vec::new(),
+        dropped: Vec::new(),
+        reason: None,
+        budget: 2000,
+        used: 0,
+    };
+    let events = [
+        run_started(1),
+        event(
+            2,
+            EventPayload::StageInputsResolved {
+                node: node.clone(),
+                attempt: 2,
+                bindings: Default::default(),
+                memory_receipt: Some(receipt.clone()),
+            },
+        ),
+    ];
+    let report = compile_bound(run_id, &events);
+    assert_eq!(report.memory_receipts.len(), 1);
+    assert_eq!(report.memory_receipts[0].node, node);
+    assert_eq!(report.memory_receipts[0].attempt, 2);
+    assert_eq!(report.memory_receipts[0].receipt, receipt);
 }
 
-/// Covers eight of the nine named sections plus header/escalations —
-/// `memory_receipts` is the sole section this fixture leaves empty,
-/// and that is asserted explicitly (not left to a stray missing
-/// assertion) because no event carries a `PackReceipt` yet (see
-/// `memory_receipts_is_always_empty_today_no_event_carries_it_yet`).
+/// Covers all nine named sections plus header/escalations from one event slice.
 #[test]
-fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
+fn a_full_run_covers_all_nine_sections_end_to_end() {
     let run_id = RunId::new();
     let node = node_key("implement");
     let events = vec![
@@ -1122,7 +1167,7 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
             },
         ),
         event(
-            4,
+            5,
             EventPayload::SkillBound {
                 node: node.clone(),
                 name: "archify".into(),
@@ -1132,7 +1177,37 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
             },
         ),
         event(
-            5,
+            6,
+            EventPayload::StageInputsResolved {
+                node: node.clone(),
+                attempt: 1,
+                bindings: Default::default(),
+                memory_receipt: Some(PackReceipt {
+                    selected: Vec::new(),
+                    dropped: Vec::new(),
+                    reason: None,
+                    budget: 2000,
+                    used: 0,
+                }),
+            },
+        ),
+        event(
+            7,
+            EventPayload::StageInputsResolved {
+                node: node.clone(),
+                attempt: 2,
+                bindings: Default::default(),
+                memory_receipt: Some(PackReceipt {
+                    selected: Vec::new(),
+                    dropped: Vec::new(),
+                    reason: None,
+                    budget: 2000,
+                    used: 0,
+                }),
+            },
+        ),
+        event(
+            8,
             EventPayload::ArtifactProduced {
                 node: node.clone(),
                 artifact: ContentHash::compute(b"diff"),
@@ -1142,7 +1217,7 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
             },
         ),
         event(
-            6,
+            9,
             EventPayload::TokensConsumed {
                 session: crate::id::SessionId::new(),
                 prompt_tokens: 500,
@@ -1153,7 +1228,7 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
             },
         ),
         event(
-            7,
+            10,
             EventPayload::OutcomeReported {
                 node: node.clone(),
                 outcome: outcome_key("done"),
@@ -1161,22 +1236,24 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
             },
         ),
         event(
-            8,
+            11,
             EventPayload::TaskVerified {
                 task_id: "t1".into(),
                 node: node.clone(),
                 evidence: ContentHash::compute(b"verification"),
+
+                report: None,
             },
         ),
         event(
-            9,
+            12,
             EventPayload::StageCompleted {
                 node: node.clone(),
                 outcome: outcome_key("done"),
             },
         ),
         event(
-            10,
+            13,
             EventPayload::SteerDelivered {
                 id: "steer-1".into(),
                 node: node.clone(),
@@ -1184,21 +1261,21 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
             },
         ),
         event(
-            11,
+            14,
             EventPayload::SandboxElevationRequested {
                 node: node.clone(),
                 capability: "network: api.example.com".into(),
             },
         ),
         event(
-            12,
+            15,
             EventPayload::RunCompleted {
                 terminal_node: node.clone(),
             },
         ),
     ];
 
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert!(report.completion.is_terminal());
     assert_eq!(report.header.initial_prompt.as_deref(), Some("build it"));
     assert!(report.header.first_event_at.is_some());
@@ -1209,6 +1286,16 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
     assert_eq!(report.verdicts.len(), 1);
     assert_eq!(report.evidence.len(), 1);
     assert_eq!(report.skills.len(), 1);
+    assert_eq!(report.memory_receipts.len(), 2);
+    assert!(
+        report
+            .memory_receipts
+            .iter()
+            .all(|entry| entry.node == node)
+    );
+    assert_eq!(report.memory_receipts[0].attempt, 1);
+    assert_eq!(report.memory_receipts[1].attempt, 2);
+    assert_eq!(report.memory_receipts[0].attempt, 1);
     assert_eq!(report.steers.len(), 1);
     assert_eq!(
         report.approvals.len(),
@@ -1216,9 +1303,6 @@ fn a_full_run_covers_eight_of_nine_sections_end_to_end() {
         "SandboxElevationRequested must appear in approvals"
     );
     assert!(report.cost.prompt_tokens > 0);
-    // The one section this fixture deliberately leaves empty — see the
-    // module doc's "named limitation" and the dedicated test above.
-    assert!(report.memory_receipts.is_empty());
 }
 
 // ── R33's "why did it stop" — header + escalations ──────────────────
@@ -1236,7 +1320,7 @@ fn header_captures_initial_prompt_and_first_last_event_timestamps() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.header.initial_prompt.as_deref(), Some("build it"));
     assert!(report.header.first_event_at.is_some());
     assert!(report.header.last_event_at.is_some());
@@ -1255,7 +1339,7 @@ fn header_initial_prompt_is_none_when_run_started_is_missing() {
             attempt: 1,
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.header.initial_prompt, None);
     assert!(report.header.first_event_at.is_some());
 }
@@ -1271,7 +1355,7 @@ fn escalation_requested_is_recorded_with_its_typed_cause() {
             cause: crate::run_event::EscalationCause::LoopGuardNodeDeadline,
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.escalations.len(), 1);
     assert_eq!(
         report.escalations[0].cause,
@@ -1298,7 +1382,7 @@ fn a_guard_stopped_run_is_incomplete_but_names_why() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.completion, RunCompletion::Incomplete);
     assert_eq!(report.escalations.len(), 1);
     assert_eq!(
@@ -1323,7 +1407,7 @@ fn run_parked_is_its_own_completion_not_bare_incomplete() {
             reason: "rate limited".into(),
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert!(!report.completion.is_terminal());
     assert!(matches!(report.completion, RunCompletion::Parked { .. }));
     assert_ne!(
@@ -1350,7 +1434,7 @@ fn run_woke_from_park_reverts_to_incomplete_pending_a_real_terminal_event() {
         ),
         event(2, EventPayload::RunWokeFromPark {}),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.completion, RunCompletion::Incomplete);
 }
 
@@ -1379,7 +1463,7 @@ fn outcome_rejected_by_hook_flips_the_matching_entry_not_a_new_one() {
             },
         ),
     ];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(
         report.outcomes.len(),
         1,
@@ -1429,8 +1513,8 @@ fn outcome_rejected_by_hook_is_distinguishable_from_accepted() {
             },
         ),
     ];
-    let accepted = RunReport::compile(run_id, &accepted_events);
-    let rejected = RunReport::compile(run_id, &rejected_events);
+    let accepted = compile_bound(run_id, &accepted_events);
+    let rejected = compile_bound(run_id, &rejected_events);
     assert_eq!(accepted.outcomes[0].status, OutcomeStatus::Accepted);
     assert_ne!(accepted.outcomes[0].status, rejected.outcomes[0].status);
 }
@@ -1448,7 +1532,7 @@ fn outcome_rejected_by_hook_with_no_matching_prior_report_is_still_recorded() {
             hook_id: "fmt-check".into(),
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.outcomes.len(), 1);
     assert_eq!(
         report.outcomes[0].status,
@@ -1474,7 +1558,7 @@ fn tokens_consumed_without_a_price_increments_uncosted_count_not_cost() {
             cost_usd: None,
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.cost.cost_usd, 0.0);
     assert_eq!(report.cost.uncosted_token_events, 1);
 }
@@ -1491,7 +1575,7 @@ fn stage_completed_with_no_prior_stage_entered_still_creates_a_node_entry() {
             outcome: outcome_key("done"),
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(
         report.nodes.len(),
         1,
@@ -1517,7 +1601,7 @@ fn stage_failed_with_no_prior_stage_entered_still_creates_a_node_entry() {
             retry_available: false,
         },
     )];
-    let report = RunReport::compile(run_id, &events);
+    let report = compile_bound(run_id, &events);
     assert_eq!(report.nodes.len(), 1);
     assert_eq!(report.nodes[0].attempts, 1);
     assert_eq!(
@@ -1538,13 +1622,45 @@ fn caveats_always_names_the_memory_receipts_gap_in_every_format() {
     // — an empty `memory_receipts: []` alone reads as "memory was not
     // used," which is exactly the false reading this field prevents.
     let run_id = RunId::new();
-    let report = RunReport::compile(run_id, &[]);
+    let report = compile_bound(run_id, &[]);
     assert!(
         report
             .caveats
             .iter()
-            .any(|c| c.contains("memory_receipts is always empty")),
+            .any(|c| c.contains("legacy journals may omit per-node memory selection receipts")),
         "caveats: {:?}",
         report.caveats
     );
+}
+
+// Earlier projection tests still exercise valid proof using a fixed host-bound
+// fixture. Legacy events are covered separately below, without this helper.
+fn compile_bound(run: RunId, events: &[RunEvent]) -> RunReport {
+    RunReport::compile(run, &crate::verification_evidence::bind_fixture(events))
+}
+#[test]
+fn historical_unbound_verification_never_counts_as_fresh_proof() {
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: node_key("verify_1"),
+                evidence: ContentHash::compute(b"old report"),
+                report: None,
+            },
+        ),
+    ];
+    let report = RunReport::compile(RunId::new(), &events);
+    assert!(matches!(
+        report.verdicts[0].result,
+        VerdictResult::Superseded
+    ));
 }

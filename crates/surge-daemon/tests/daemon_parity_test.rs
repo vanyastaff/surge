@@ -84,7 +84,10 @@ impl BridgeFacade for AutoOutcomeBridge {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         let session = SessionId::new();
         let outcome = config
             .declared_outcomes
@@ -92,7 +95,21 @@ impl BridgeFacade for AutoOutcomeBridge {
             .cloned()
             .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
         self.outcomes.lock().await.insert(session, outcome);
-        Ok(session)
+        Ok(surge_core::execution_recovery::OpenedSession::new(
+            session,
+            surge_core::execution_recovery::ProviderSessionDescriptor::new(
+                surge_core::execution_recovery::ProviderSessionId::new("auto-outcome".into())
+                    .unwrap(),
+                config.invocation,
+                config.runtime,
+                surge_core::ContentHash::compute(b"auto-outcome"),
+                config.working_dir,
+                Default::default(),
+            )
+            .unwrap(),
+            surge_core::execution_recovery::SessionOpenMode::New,
+        )
+        .unwrap())
     }
 
     async fn send_message(
@@ -112,6 +129,8 @@ impl BridgeFacade for AutoOutcomeBridge {
             outcome,
             summary: "auto parity outcome".into(),
             artifacts_produced: vec![],
+
+            verification_report: None,
         });
         Ok(())
     }

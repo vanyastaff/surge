@@ -1081,6 +1081,8 @@ mod hierarchy_tests {
                 attempt: 1,
             },
             EventPayload::SessionOpened {
+                opened: None,
+                handoff: None,
                 node: key("impl_task"),
                 session,
                 agent: "implementer@1.0".into(),
@@ -1088,11 +1090,13 @@ mod hierarchy_tests {
             },
             EventPayload::StageInputsResolved {
                 node: key("impl_task"),
+                attempt: 1,
                 bindings: [(
                     "architecture".into(),
                     ContentHash::compute(b"secret content must not display"),
                 )]
                 .into(),
+                memory_receipt: None,
             },
             EventPayload::SkillBound {
                 node: key("impl_task"),
@@ -1123,6 +1127,8 @@ mod hierarchy_tests {
                 attempt: 1,
             },
             EventPayload::SessionOpened {
+                opened: None,
+                handoff: None,
                 node: key("impl_task"),
                 session: surge_core::SessionId::new(),
                 agent: "reviewer@1.0".into(),
@@ -1247,7 +1253,9 @@ mod hierarchy_tests {
                 },
                 EventPayload::StageInputsResolved {
                     node: key("final_spec"),
+                    attempt: 1,
                     bindings: Default::default(),
+                    memory_receipt: None,
                 },
             ],
             None,

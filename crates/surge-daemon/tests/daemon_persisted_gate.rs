@@ -22,7 +22,10 @@ use tokio_util::sync::CancellationToken;
 struct NoAgent(broadcast::Sender<BridgeEvent>);
 #[async_trait::async_trait]
 impl BridgeFacade for NoAgent {
-    async fn open_session(&self, _: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        _: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         panic!("gate must not use an agent")
     }
     async fn send_message(&self, _: SessionId, _: MessageContent) -> Result<(), SendMessageError> {

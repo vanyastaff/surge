@@ -63,11 +63,12 @@ inside the per-run reader/replay path, before the fold.
 stage that was interrupted:
 
 - **Agent mid-turn** → the stage re-executes (retry).
-- **HumanGate pending** → the gate re-enters and re-emits
-  `ApprovalRequested`. Deduplication against still-open Telegram cards is
-  the cockpit recovery reconciler's job (card-id correlation), so a
-  re-emitted approval reuses the existing card rather than spamming a new
-  one.
+- **HumanGate pending** → an unexpected owner loss retires the unanswered
+  request and re-enters the gate with a fresh request ID. Any old Telegram
+  card is stale and cannot authorize the resumed run; the cockpit recovery
+  reconciler closes it and presents the current request. A durable task
+  Suspend/Continue retains the original request ID, so an answer submitted
+  while suspended remains attached to that exact decision.
 - **Notify mid-flight** → retried.
 - **Terminal not yet appended** → appended on stage completion.
 

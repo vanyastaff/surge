@@ -94,6 +94,9 @@ macro_rules! define_id {
 
 define_id!(SpecId, "spec");
 define_id!(TaskId, "task");
+define_id!(WorkItemId, "work-item");
+define_id!(WorkItemOperationId, "work-item-op");
+define_id!(WorkItemProjectId, "work-item-project");
 define_id!(SubtaskId, "sub");
 
 // New runtime IDs added in M1 for Surge data model.
@@ -109,6 +112,20 @@ impl GateRequestId {
     }
 }
 define_id!(StageGenerationId, "generation");
+// Stable execution invocation, independent of the authenticated MCP connection generation.
+define_id!(StageInvocationId, "invocation");
+define_id!(ExecutionWriterId, "writer");
+impl PartialOrd for StageInvocationId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for StageInvocationId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_ulid().cmp(&other.as_ulid())
+    }
+}
+
 define_id!(SessionId, "session");
 
 // Identifier for a `crate::memory::MemoryClaim`.

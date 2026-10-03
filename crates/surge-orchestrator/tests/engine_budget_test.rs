@@ -59,7 +59,10 @@ impl BridgeFacade for BudgetMockBridge {
     fn legacy_stage_event_adapter(&self) -> bool {
         true
     }
-    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(
+        &self,
+        config: SessionConfig,
+    ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         let session = SessionId::new();
         let outcome = config
             .declared_outcomes
@@ -67,7 +70,29 @@ impl BridgeFacade for BudgetMockBridge {
             .cloned()
             .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is valid"));
         self.outcomes.lock().await.insert(session, outcome);
-        Ok(session)
+        use surge_core::execution_recovery::{
+            OpenedSession, ProviderSessionDescriptor, ProviderSessionId, SessionOpenMode,
+            SessionOpening, SessionRestoreCapabilities,
+        };
+        let (descriptor, mode) = match config.opening {
+            SessionOpening::Continue(saved) => (saved, SessionOpenMode::Resume),
+            SessionOpening::New => (
+                ProviderSessionDescriptor::new(
+                    ProviderSessionId::new(format!("budget-fixture-{session}")).unwrap(),
+                    config.invocation,
+                    config.runtime,
+                    surge_core::ContentHash::compute(b"budget fixture launch"),
+                    config.working_dir,
+                    SessionRestoreCapabilities {
+                        resume: true,
+                        load: true,
+                    },
+                )
+                .unwrap(),
+                SessionOpenMode::New,
+            ),
+        };
+        Ok(OpenedSession::new(session, descriptor, mode).unwrap())
     }
 
     async fn send_message(
@@ -96,6 +121,8 @@ impl BridgeFacade for BudgetMockBridge {
             outcome,
             summary: "budget mock outcome".into(),
             artifacts_produced: vec![],
+
+            verification_report: None,
         });
         Ok(())
     }

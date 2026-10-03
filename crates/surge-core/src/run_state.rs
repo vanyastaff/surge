@@ -18,6 +18,49 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Host decision purpose derived from the accepted graph, not response text.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GateDecisionPurpose {
+    /// A graph HumanGate owns the eventual stage routing outcome.
+    HumanGate,
+    /// An agent skill approval owns exactly these content bindings.
+    SkillTrust(Vec<crate::skill::SkillRef>),
+    /// Historical evidence lacks an authoritative purpose binding.
+    Unbound,
+}
+
+/// Durable human-gate occurrence retained until its stage route commits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecoveredGateDecision {
+    /// Immutable original HumanGate contract from the accepted graph at request time.
+    pub gate_config: Option<crate::human_gate_config::HumanGateConfig>,
+    /// Purpose established by the accepted node and original content contract.
+    pub purpose: GateDecisionPurpose,
+    /// Host-issued identity of the original actionable request.
+    pub request_id: crate::id::GateRequestId,
+    /// Stage owning this occurrence.
+    pub node: NodeKey,
+    /// Exact request event sequence, distinct from later occurrences.
+    pub requested_seq: u64,
+    /// Durable stage-entry occurrence owning this request.
+    pub stage_entry_seq: u64,
+    /// Original request time, used to preserve its deadline.
+    pub requested_at: DateTime<Utc>,
+    /// Original operator prompt.
+    pub prompt: String,
+    /// Original allowed-response schema.
+    pub schema: Option<serde_json::Value>,
+    /// Host-accepted response, if the answer committed before a crash.
+    pub response: Option<serde_json::Value>,
+    /// Whether an explicit durable Suspend fenced this unanswered request.
+    /// Such requests survive Continue with the same operator-visible identity.
+    pub suspended: bool,
+    /// Actual accepted response sequence.
+    pub resolved_seq: Option<u64>,
+    /// Contradictory request or response evidence cannot authorize recovery.
+    pub conflicting: bool,
+}
+
 /// Tracks a pending human-input request while the pipeline is paused
 /// waiting for operator response.
 #[derive(Debug, Clone, PartialEq)]
@@ -201,7 +244,8 @@ pub struct Cursor {
     pub attempt: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TerminalReason {
     Completed,
     Failed,
@@ -210,6 +254,38 @@ pub enum TerminalReason {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunMemory {
+    /// Immutable provider connection history for each stable execution invocation.
+    /// Pre-dispatch writer coverage retained until confirmed cleanup.
+    pub execution_writers: std::collections::HashMap<
+        crate::id::ExecutionWriterId,
+        crate::execution_recovery::process::ExecutionWriterRecord,
+    >,
+    pub provider_sessions:
+        BTreeMap<crate::id::StageInvocationId, Vec<crate::execution_recovery::OpenedSession>>,
+    /// Establishment intents without a matching descriptor remain uncertain after a crash.
+    pub session_establishments: BTreeMap<crate::id::StageInvocationId, NodeKey>,
+    /// Accepted outcomes retain an exact durable consumption identity across host crashes.
+    /// Outstanding host-issued human decisions, including accepted-but-unrouted answers.
+    /// Current durable stage occurrences, independent of transport reconnections.
+    pub stage_occurrences: std::collections::HashMap<NodeKey, u64>,
+    /// Contradictory host gate evidence is retained instead of choosing a new request.
+    pub gate_recovery_error: Option<String>,
+    pub gate_decisions: std::collections::HashMap<crate::id::GateRequestId, RecoveredGateDecision>,
+    pub committed_stage_outcomes: BTreeMap<
+        crate::id::StageInvocationId,
+        crate::execution_recovery::commit::CommittedStageOutcome,
+    >,
+    /// Host decision effects remain independently consumable after a crash.
+    pub committed_gate_stages: std::collections::HashMap<
+        crate::id::GateRequestId,
+        crate::execution_recovery::gate_commit::CommittedGateStage,
+    >,
+    /// Nonterminal suspension fence, retained until matching explicit Continue.
+    pub suspension: Option<crate::execution_recovery::SuspensionFence>,
+    /// Latest host-authorized control generation, independent of attempt ownership.
+    pub control_generation: u64,
+    /// Immutable startup edit policy. Absence retains legacy unbound authority.
+    pub bootstrap_edit_loop_cap: Option<u32>,
     pub artifacts: BTreeMap<String, ArtifactRef>,
     pub artifacts_by_node: BTreeMap<NodeKey, Vec<ArtifactRef>>,
     pub outcomes: BTreeMap<NodeKey, Vec<OutcomeRecord>>,
@@ -252,6 +328,10 @@ pub struct RunMemory {
     /// Task-ledger state derived from `TaskStatusChanged` / `TaskDiscovered` /
     /// `TaskVerified` events. Empty for runs that carry no ledger.
     pub ledger: LedgerState,
+    pub verification: crate::verification_evidence::VerificationContext,
+    pub verification_graph: Option<Box<Graph>>,
+    /// Immutable host accepted context, never resolved through mutable artifact names.
+    pub work_item: Option<crate::work_item::WorkItemContext>,
 }
 
 /// Task-ledger view folded from ledger events. The source of truth is the
@@ -316,16 +396,16 @@ impl LedgerState {
         &mut self,
         task_id: &RoadmapTaskId,
         node: &NodeKey,
-        authorized: bool,
+        claim: crate::verification_evidence::VerificationClaim,
         seq: u64,
     ) {
-        if !authorized {
+        if claim == crate::verification_evidence::VerificationClaim::Unauthorized {
             self.rejected_verifications += 1;
             return;
         }
         let entry = self.tasks.entry(task_id.clone()).or_default();
         entry.status = RoadmapStatus::Completed;
-        entry.verified = true;
+        entry.verified = claim == crate::verification_evidence::VerificationClaim::Verified;
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
     }
@@ -453,7 +533,25 @@ pub fn fold(events: &[RunEvent]) -> Result<RunState, FoldError> {
 }
 
 /// Apply a single event to the current state. Pure function, no I/O.
-pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
+pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
+    if let RunState::Pipeline { memory, .. } = &mut state {
+        if let EventPayload::WorkItemAttemptBound { context } = &event.payload {
+            memory.work_item = Some(context.clone());
+        }
+        memory.apply_recovery_event(event);
+        use crate::verification_evidence::VerificationInvalidation;
+        match memory.verification.observe(&event.payload) {
+            VerificationInvalidation::All => memory
+                .ledger
+                .tasks
+                .values_mut()
+                .for_each(|task| task.verified = false),
+            VerificationInvalidation::Task(id) => {
+                memory.ledger.tasks.entry(id).or_default().verified = false;
+            },
+            VerificationInvalidation::None => {},
+        }
+    }
     match (state, &event.payload) {
         (RunState::NotStarted, EventPayload::RunStarted { .. }) => Ok(RunState::Bootstrapping {
             stage: BootstrapStage::Description,
@@ -486,7 +584,10 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     node: start,
                     attempt: 1,
                 },
-                memory: RunMemory::default(),
+                memory: RunMemory {
+                    verification_graph: Some(graph.clone()),
+                    ..RunMemory::default()
+                },
                 pending_human_input: None,
                 parked: None,
             })
@@ -799,7 +900,15 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
-        (state @ RunState::Pipeline { .. }, EventPayload::TaskVerified { task_id, node, .. }) => {
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TaskVerified {
+                task_id,
+                node,
+                evidence,
+                report,
+            },
+        ) => {
             if let RunState::Pipeline {
                 graph,
                 cursor,
@@ -813,7 +922,15 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 // graph (declares a `LedgerEffect::Verified` outcome). The
                 // engine (M3) already refuses to emit an unauthorized event;
                 // this rejects a tampered log on replay.
-                let authorized = node_has_verification_authority(&graph, node);
+                let authorized = crate::verification_evidence::classify_claim(
+                    Some(&graph),
+                    node,
+                    task_id,
+                    *evidence,
+                    report.as_ref(),
+                    memory.verification.subject.as_ref(),
+                    memory.verification.criteria.get(task_id),
+                );
                 memory
                     .ledger
                     .record_verified(task_id, node, authorized, event.seq);
@@ -876,6 +993,27 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 memory.apply_event(event);
                 Ok(RunState::Pipeline {
                     graph: Arc::new(revised.as_ref().clone()),
+                    cursor,
+                    memory,
+                    pending_human_input,
+                    parked,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (state @ RunState::Pipeline { .. }, EventPayload::BootstrapEditRequested { .. }) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+                parked,
+            } = state
+            {
+                memory.apply_event(event);
+                Ok(RunState::Pipeline {
+                    graph,
                     cursor,
                     memory,
                     pending_human_input,
@@ -987,10 +1125,417 @@ fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
     }
 }
 
+fn skill_decision_purpose(
+    config: &crate::agent_config::AgentConfig,
+    schema: Option<&serde_json::Value>,
+) -> GateDecisionPurpose {
+    let Ok(declared) = config.declared_skills() else {
+        return GateDecisionPurpose::Unbound;
+    };
+    let Some(value) = schema.and_then(|value| value.get("x-surge-skill-bindings")) else {
+        return GateDecisionPurpose::Unbound;
+    };
+    let Ok(bindings) = serde_json::from_value::<Vec<crate::skill::SkillRef>>(value.clone()) else {
+        return GateDecisionPurpose::Unbound;
+    };
+    if bindings.is_empty()
+        || !bindings.iter().all(|binding| {
+            binding.hash.is_some()
+                && declared
+                    .iter()
+                    .any(|skill| skill.name == binding.name && skill.provider == binding.provider)
+        })
+    {
+        return GateDecisionPurpose::Unbound;
+    }
+    GateDecisionPurpose::SkillTrust(bindings)
+}
+
 impl RunMemory {
+    fn gate_decision_purpose(
+        &self,
+        node: &NodeKey,
+        schema: Option<&serde_json::Value>,
+    ) -> GateDecisionPurpose {
+        let Some(found) = self
+            .verification_graph
+            .as_ref()
+            .and_then(|graph| graph.find_node(node))
+        else {
+            return GateDecisionPurpose::Unbound;
+        };
+        match &found.config {
+            crate::node::NodeConfig::HumanGate(_) => GateDecisionPurpose::HumanGate,
+            crate::node::NodeConfig::Agent(config) => skill_decision_purpose(config, schema),
+            _ => GateDecisionPurpose::Unbound,
+        }
+    }
+
+    fn apply_recovery_event(&mut self, event: &RunEvent) {
+        match &event.payload {
+            EventPayload::StageEntered { node, .. } => {
+                self.stage_occurrences.insert(node.clone(), event.seq);
+            },
+            EventPayload::HumanInputRequested {
+                node,
+                session: None,
+                call_id: Some(call_id),
+                prompt,
+                schema,
+            } => {
+                if let Some(request_id) = crate::id::GateRequestId::from_event_call_id(call_id) {
+                    let purpose = self.gate_decision_purpose(node, schema.as_ref());
+                    let gate_config = self
+                        .verification_graph
+                        .as_ref()
+                        .and_then(|graph| graph.find_node(node))
+                        .and_then(|found| match &found.config {
+                            crate::node::NodeConfig::HumanGate(config) => Some(config.clone()),
+                            _ => None,
+                        });
+                    let record = self.gate_decisions.entry(request_id).or_insert_with(|| {
+                        RecoveredGateDecision {
+                            gate_config,
+                            purpose,
+                            request_id,
+                            node: node.clone(),
+                            requested_seq: event.seq,
+                            requested_at: event.timestamp,
+                            stage_entry_seq: self.stage_occurrences.get(node).copied().unwrap_or(0),
+                            prompt: prompt.clone(),
+                            schema: schema.clone(),
+                            response: None,
+                            suspended: false,
+                            resolved_seq: None,
+                            conflicting: false,
+                        }
+                    });
+                    if record.requested_seq != event.seq
+                        || record.node != *node
+                        || record.prompt != *prompt
+                        || record.schema != *schema
+                        || record.stage_entry_seq == 0
+                    {
+                        record.conflicting = true;
+                    }
+                }
+            },
+            EventPayload::HumanInputResolved {
+                node,
+                call_id: Some(call_id),
+                response,
+            } => {
+                let Some(request_id) = crate::id::GateRequestId::from_event_call_id(call_id) else {
+                    return;
+                };
+                let Some(record) = self.gate_decisions.get_mut(&request_id) else {
+                    self.gate_recovery_error =
+                        Some("gate response has no owning request occurrence".into());
+                    return;
+                };
+                if record.node != *node
+                    || self.stage_occurrences.get(node).copied() != Some(record.stage_entry_seq)
+                    || record.resolved_seq.is_some_and(|seq| seq != event.seq)
+                    || record.response.as_ref().is_some_and(|old| old != response)
+                {
+                    record.conflicting = true;
+                } else {
+                    record.response = Some(response.clone());
+                    record.resolved_seq = Some(event.seq);
+                }
+            },
+            EventPayload::SkillBound {
+                node,
+                name,
+                provider,
+                hash,
+                ..
+            } => {
+                self.gate_decisions.retain(|_, record| {
+                    if record.node != *node {
+                        return true;
+                    }
+                    let GateDecisionPurpose::SkillTrust(bindings) = &mut record.purpose else {
+                        return true;
+                    };
+                    let approved = record
+                        .response
+                        .as_ref()
+                        .and_then(|value| value.get("outcome"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("approve");
+                    if !approved
+                        || self.stage_occurrences.get(node).copied() != Some(record.stage_entry_seq)
+                    {
+                        record.conflicting = true;
+                        return true;
+                    }
+                    bindings.retain(|binding| {
+                        !(binding.name == *name
+                            && binding.provider == *provider
+                            && binding.hash == Some(*hash))
+                    });
+                    !bindings.is_empty()
+                });
+            },
+            EventPayload::StageCompleted { node, outcome } => {
+                self.gate_decisions.retain(|_, record| {
+                    if &record.node != node {
+                        return true;
+                    }
+                    let matches = record.purpose == GateDecisionPurpose::HumanGate
+                        && self.stage_occurrences.get(node).copied()
+                            == Some(record.stage_entry_seq)
+                        && record
+                            .response
+                            .as_ref()
+                            .and_then(|response| response.get("outcome"))
+                            .and_then(serde_json::Value::as_str)
+                            == Some(outcome.as_str());
+                    if !matches {
+                        record.conflicting = true;
+                    }
+                    !matches
+                });
+            },
+            EventPayload::GateStageOutcomeCommitted { commit } => {
+                let request = commit.answer().request().request();
+                let record = self
+                    .committed_gate_stages
+                    .entry(request)
+                    .or_insert_with(|| {
+                        crate::execution_recovery::gate_commit::CommittedGateStage {
+                            commit: commit.clone(),
+                            committed_seq: event.seq,
+                            routed_seq: None,
+                            conflicting: false,
+                        }
+                    });
+                if record.committed_seq != event.seq || record.commit != *commit {
+                    record.conflicting = true;
+                }
+            },
+            EventPayload::GateStageRouteCommitted {
+                request,
+                stage_entry_seq,
+                outcome_commit_seq,
+            } => {
+                if let Some(record) = self.committed_gate_stages.get_mut(request) {
+                    if record.committed_seq != *outcome_commit_seq
+                        || record.commit.answer().request().stage_entry_seq() != *stage_entry_seq
+                        || record.routed_seq.is_some_and(|old| old != event.seq)
+                    {
+                        record.conflicting = true;
+                    } else {
+                        record.routed_seq = Some(event.seq);
+                    }
+                } else {
+                    self.gate_recovery_error = Some("orphan gate stage route commit".into());
+                }
+            },
+            EventPayload::StageOutcomeCommitted { commit } => {
+                let record = self
+                    .committed_stage_outcomes
+                    .entry(commit.invocation())
+                    .or_insert_with(
+                        || crate::execution_recovery::commit::CommittedStageOutcome {
+                            commit: commit.clone(),
+                            committed_seq: event.seq,
+                            routed_seq: None,
+                            conflicting: false,
+                        },
+                    );
+                if record.committed_seq != event.seq || record.commit != *commit {
+                    record.conflicting = true;
+                }
+            },
+            EventPayload::StageRouteCommitted {
+                invocation,
+                outcome_commit_seq,
+            } => {
+                if let Some(record) = self.committed_stage_outcomes.get_mut(invocation) {
+                    if record.committed_seq != *outcome_commit_seq
+                        || record.routed_seq.is_some_and(|old| old != event.seq)
+                    {
+                        record.conflicting = true;
+                    } else {
+                        record.routed_seq = Some(event.seq);
+                    }
+                }
+            },
+            EventPayload::ExecutionWriterIntent { intent } => {
+                let record = self
+                    .execution_writers
+                    .entry(intent.writer)
+                    .or_insert_with(
+                        || crate::execution_recovery::process::ExecutionWriterRecord {
+                            intent: intent.clone(),
+                            container: None,
+                            cleanup_confirmed: false,
+                            conflicting_observation: false,
+                        },
+                    );
+                if record.intent != *intent {
+                    record.conflicting_observation = true;
+                }
+            },
+            EventPayload::ExecutionWriterEstablished { writer, container } => {
+                if let Some(record) = self.execution_writers.get_mut(writer) {
+                    if record
+                        .container
+                        .as_ref()
+                        .is_some_and(|old| old != container)
+                    {
+                        record.conflicting_observation = true;
+                    } else {
+                        record.container = Some(container.clone());
+                    }
+                }
+            },
+            EventPayload::ExecutionWriterClosed { writer } => {
+                if let Some(record) = self.execution_writers.get_mut(writer) {
+                    record.cleanup_confirmed = true;
+                }
+            },
+            EventPayload::SessionClosed { session, .. } => {
+                let writer = self
+                    .provider_sessions
+                    .values()
+                    .flatten()
+                    .find(|opened| opened.session == *session)
+                    .and_then(|opened| opened.execution_writer.as_ref())
+                    .map(|observed| observed.writer());
+                if let Some(writer) = writer
+                    && let Some(record) = self.execution_writers.get_mut(&writer)
+                {
+                    record.cleanup_confirmed = true;
+                }
+            },
+            EventPayload::SessionEstablishmentRequested {
+                invocation, node, ..
+            } => {
+                self.session_establishments
+                    .insert(*invocation, node.clone());
+            },
+            EventPayload::SessionOpened {
+                opened: Some(opened),
+                ..
+            } => {
+                if let Some(observed) = &opened.execution_writer
+                    && let Some(record) = self.execution_writers.get_mut(&observed.writer())
+                {
+                    if record.intent.invocation != opened.descriptor.invocation()
+                        || record
+                            .container
+                            .as_ref()
+                            .is_some_and(|old| Some(old) != observed.container())
+                    {
+                        record.conflicting_observation = true;
+                    } else {
+                        record.container = observed.container().cloned();
+                    }
+                }
+                self.session_establishments
+                    .remove(&opened.descriptor.invocation());
+                let history = self
+                    .provider_sessions
+                    .entry(opened.descriptor.invocation())
+                    .or_default();
+                if !history
+                    .iter()
+                    .any(|connection| connection.session == opened.session)
+                {
+                    history.push(opened.clone());
+                }
+            },
+            EventPayload::RunSuspended { fence }
+                if fence.control_generation >= self.control_generation =>
+            {
+                self.control_generation = fence.control_generation;
+                self.suspension = Some(fence.clone());
+                for decision in self.gate_decisions.values_mut() {
+                    if decision.response.is_none()
+                        && decision.purpose == GateDecisionPurpose::HumanGate
+                    {
+                        decision.suspended = true;
+                    }
+                }
+            },
+            EventPayload::RunRecoveryRequired {
+                control_generation, ..
+            } if *control_generation >= self.control_generation => {
+                self.control_generation = *control_generation;
+            },
+            EventPayload::RunContinued { control_generation }
+                if *control_generation > self.control_generation =>
+            {
+                self.control_generation = *control_generation;
+                self.suspension = None;
+            },
+            _ => {},
+        }
+    }
     /// Apply an event to the memory accumulator only. Used independently of
     /// the full state machine for "what's the cost so far" queries.
     pub fn apply_event(&mut self, event: &RunEvent) {
+        use crate::verification_evidence::VerificationInvalidation;
+        if let EventPayload::WorkItemAttemptBound { context } = &event.payload {
+            self.work_item = Some(context.clone());
+        }
+        if let EventPayload::RunStarted { config, .. } = &event.payload {
+            self.bootstrap_edit_loop_cap = config.bootstrap_edit_loop_cap;
+        }
+        self.apply_recovery_event(event);
+        match self.verification.observe(&event.payload) {
+            VerificationInvalidation::All => self
+                .ledger
+                .tasks
+                .values_mut()
+                .for_each(|task| task.verified = false),
+            VerificationInvalidation::Task(id) => {
+                self.ledger.tasks.entry(id).or_default().verified = false;
+            },
+            VerificationInvalidation::None => {},
+        }
+        match &event.payload {
+            EventPayload::PipelineMaterialized { graph, .. }
+            | EventPayload::GraphRevisionAccepted { graph, .. } => {
+                self.verification_graph = Some(graph.clone())
+            },
+            EventPayload::TaskVerified {
+                task_id,
+                node,
+                evidence,
+                report,
+            } => {
+                let valid = crate::verification_evidence::classify_claim(
+                    self.verification_graph.as_deref(),
+                    node,
+                    task_id,
+                    *evidence,
+                    report.as_ref(),
+                    self.verification.subject.as_ref(),
+                    self.verification.criteria.get(task_id),
+                );
+                self.ledger.record_verified(task_id, node, valid, event.seq);
+            },
+            EventPayload::TaskStatusChanged {
+                task_id,
+                to,
+                authority_node,
+                ..
+            } => self
+                .ledger
+                .record_status_change(task_id, *to, authority_node, event.seq),
+            EventPayload::TaskDiscovered {
+                task_id,
+                discovered_from,
+                ..
+            } => self
+                .ledger
+                .record_discovered(task_id, discovered_from, event.seq),
+            _ => {},
+        }
         match &event.payload {
             EventPayload::ArtifactProduced {
                 node,
@@ -1303,6 +1848,69 @@ mod tests {
     }
 
     #[test]
+    fn shared_display_prioritizes_human_then_capacity_and_requires_crash_evidence() {
+        use crate::run_display::{RunDisplayState, WaitingReason};
+        let until = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let mut state = RunState::Pipeline {
+            graph: Arc::new(graph_with_terminal("display", "plan")),
+            cursor: Cursor {
+                node: NodeKey::try_from("plan").unwrap(),
+                attempt: 1,
+            },
+            memory: RunMemory::default(),
+            pending_human_input: Some(PendingHumanInput {
+                node: NodeKey::try_from("plan").unwrap(),
+                call_id: Some("exact-call".into()),
+                prompt: "approve?".into(),
+                schema: None,
+                requested_seq: 3,
+            }),
+            parked: Some(ParkedUntil {
+                wake_at: until,
+                basis: WakeBasis::ObservedReset,
+                reason: "provider exhausted".into(),
+                runtime: Some("runtime-a".into()),
+            }),
+        };
+        let display = RunDisplayState::from_state(Some(&state), None);
+        assert_eq!(display, RunDisplayState::Waiting(WaitingReason::HumanInput));
+        assert_eq!(display.label(), "Waiting for human input");
+        assert_eq!(
+            display.next_action(),
+            Some("Answer the pending request in the Inbox.")
+        );
+        if let RunState::Pipeline {
+            pending_human_input,
+            ..
+        } = &mut state
+        {
+            *pending_human_input = None;
+        }
+        let display = RunDisplayState::from_state(Some(&state), None);
+        assert_eq!(display.wake(), Some((until, WakeBasis::ObservedReset)));
+        assert!(
+            matches!(display, RunDisplayState::Waiting(WaitingReason::Capacity { runtime: Some(ref id), .. }) if id == "runtime-a")
+        );
+        assert_eq!(display.label(), "Waiting for capacity");
+        assert_eq!(
+            RunDisplayState::from_state(None, Some(crate::RunStatus::Running)),
+            RunDisplayState::Unknown
+        );
+        assert_eq!(
+            RunDisplayState::from_state(None, Some(crate::RunStatus::Crashed)).label(),
+            "Recovery requires an operator"
+        );
+        let terminal = RunState::Terminal {
+            kind: TerminalReason::Aborted,
+            reason: "stopped".into(),
+        };
+        assert_eq!(
+            RunDisplayState::from_state(Some(&terminal), Some(crate::RunStatus::Crashed)),
+            RunDisplayState::Done(TerminalReason::Aborted)
+        );
+    }
+
+    #[test]
     fn empty_event_log_folds_to_not_started() {
         let state = fold(&[]).unwrap();
         assert!(matches!(state, RunState::NotStarted));
@@ -1317,6 +1925,7 @@ mod tests {
                 project_path: PathBuf::from("/tmp"),
                 initial_prompt: "test".into(),
                 config: RunConfig {
+                    bootstrap_edit_loop_cap: None,
                     budget: Default::default(),
                     sandbox_default: SandboxMode::WorkspaceWrite,
                     approval_default: ApprovalPolicy::OnRequest,
@@ -1345,6 +1954,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1374,6 +1984,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1621,6 +2232,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1697,6 +2309,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1788,6 +2401,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1893,6 +2507,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1993,6 +2608,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -2147,6 +2763,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -2257,17 +2874,21 @@ mod tests {
                 task_id: "m1-t1".into(),
                 node: verify.clone(),
                 evidence: ContentHash::compute(b"report"),
+
+                report: None,
             },
         ));
 
-        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+        let RunState::Pipeline { memory, .. } =
+            fold(&crate::verification_evidence::bind_fixture(&events)).unwrap()
+        else {
             panic!("expected Pipeline");
         };
         let t1 = &memory.ledger.tasks["m1-t1"];
         assert_eq!(t1.status, RoadmapStatus::Completed);
         assert!(t1.verified);
         assert_eq!(t1.last_authority_node.as_ref(), Some(&verify));
-        assert_eq!(t1.updated_seq, 5);
+        assert_eq!(t1.updated_seq, 7);
 
         let t2 = &memory.ledger.tasks["m1-t2"];
         assert_eq!(t2.status, RoadmapStatus::Pending);
@@ -2300,10 +2921,14 @@ mod tests {
                 task_id: "m1-t1".into(),
                 node: NodeKey::try_from("impl_1").unwrap(),
                 evidence: ContentHash::compute(b"forged"),
+
+                report: None,
             },
         ));
 
-        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+        let RunState::Pipeline { memory, .. } =
+            fold(&crate::verification_evidence::bind_fixture(&events)).unwrap()
+        else {
             panic!("expected Pipeline");
         };
         let t1 = &memory.ledger.tasks["m1-t1"];
@@ -2330,6 +2955,8 @@ mod tests {
                 task_id: "m1-t1".into(),
                 node: verify,
                 evidence: ContentHash::compute(b"report"),
+
+                report: None,
             },
         ));
         // Duplicate discovery must be a no-op (first-write-wins).
@@ -2342,10 +2969,14 @@ mod tests {
             },
         ));
 
-        let RunState::Pipeline { memory: a, .. } = fold(&events).unwrap() else {
+        let RunState::Pipeline { memory: a, .. } =
+            fold(&crate::verification_evidence::bind_fixture(&events)).unwrap()
+        else {
             panic!("expected Pipeline");
         };
-        let RunState::Pipeline { memory: b, .. } = fold(&events).unwrap() else {
+        let RunState::Pipeline { memory: b, .. } =
+            fold(&crate::verification_evidence::bind_fixture(&events)).unwrap()
+        else {
             panic!("expected Pipeline");
         };
         assert_eq!(a.ledger, b.ledger);
@@ -2371,6 +3002,8 @@ mod tests {
                 task_id: "m1-t1".into(),
                 node: NodeKey::try_from("verify_1").unwrap(),
                 evidence: ContentHash::compute(b"report"),
+
+                report: None,
             },
         ));
         events.push(make_event(
@@ -2383,7 +3016,9 @@ mod tests {
             },
         ));
 
-        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+        let RunState::Pipeline { memory, .. } =
+            fold(&crate::verification_evidence::bind_fixture(&events)).unwrap()
+        else {
             panic!("expected Pipeline");
         };
         let t1 = &memory.ledger.tasks["m1-t1"];
@@ -2399,7 +3034,7 @@ mod tests {
         let mut events = ledger_run_prefix();
         // Fold with only the run prefix (RunStarted + PipelineMaterialized) →
         // Pipeline, no pending input → Working.
-        let working = fold(&events).unwrap();
+        let working = fold(&crate::verification_evidence::bind_fixture(&events)).unwrap();
         assert_eq!(working.attention(), Attention::Working);
         assert_eq!(working.pending_prompt(), None);
 
@@ -2414,7 +3049,7 @@ mod tests {
                 schema: None,
             },
         ));
-        let blocked = fold(&events).unwrap();
+        let blocked = fold(&crate::verification_evidence::bind_fixture(&events)).unwrap();
         assert_eq!(blocked.attention(), Attention::NeedsInput);
         assert_eq!(
             blocked.pending_prompt(),
@@ -2430,7 +3065,12 @@ mod tests {
                 response: serde_json::json!({"decision": "approve"}),
             },
         ));
-        assert_eq!(fold(&events).unwrap().attention(), Attention::Working);
+        assert_eq!(
+            fold(&crate::verification_evidence::bind_fixture(&events))
+                .unwrap()
+                .attention(),
+            Attention::Working
+        );
     }
 
     #[test]
@@ -2516,6 +3156,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        bootstrap_edit_loop_cap: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -2551,7 +3192,7 @@ mod tests {
             ),
         ];
 
-        let state = fold(&events).unwrap();
+        let state = fold(&crate::verification_evidence::bind_fixture(&events)).unwrap();
         match state {
             RunState::Pipeline {
                 pending_human_input: None,
@@ -2576,7 +3217,7 @@ mod tests {
             },
         ));
 
-        let parked_state = fold(&events).unwrap();
+        let parked_state = fold(&crate::verification_evidence::bind_fixture(&events)).unwrap();
         let RunState::Pipeline {
             parked: Some(parked),
             ..
@@ -2617,7 +3258,7 @@ mod tests {
             },
         ));
 
-        let parked_state = fold(&events).unwrap();
+        let parked_state = fold(&crate::verification_evidence::bind_fixture(&events)).unwrap();
         assert_eq!(
             parked_state.attention(),
             Attention::Waiting {
@@ -2645,7 +3286,7 @@ mod tests {
         ));
         events.push(make_event(4, EventPayload::RunWokeFromPark {}));
 
-        let resumed_state = fold(&events).unwrap();
+        let resumed_state = fold(&crate::verification_evidence::bind_fixture(&events)).unwrap();
         match &resumed_state {
             RunState::Pipeline { parked: None, .. } => {},
             other => panic!("expected Pipeline with parked cleared, got {other:?}"),
@@ -2692,12 +3333,19 @@ mod tests {
                 }
                 events.push(make_event(5, resolved(stale_id.clone(), timeout)));
                 assert_eq!(
-                    fold(&events).unwrap().pending_prompt(),
+                    fold(&crate::verification_evidence::bind_fixture(&events))
+                        .unwrap()
+                        .pending_prompt(),
                     Some("current request"),
                     "stale timeout={timeout} cleared newer input"
                 );
                 events.push(make_event(6, resolved(current_id.clone(), timeout)));
-                assert_eq!(fold(&events).unwrap().pending_prompt(), None);
+                assert_eq!(
+                    fold(&crate::verification_evidence::bind_fixture(&events))
+                        .unwrap()
+                        .pending_prompt(),
+                    None
+                );
             }
         }
     }

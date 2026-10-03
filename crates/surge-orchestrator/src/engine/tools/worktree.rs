@@ -226,64 +226,63 @@ async fn write_file(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload 
     }
 }
 
-async fn shell_exec(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload {
+async fn shell_exec_owned(
+    ctx: &ToolDispatchContext<'_>,
+    call: &ToolCall,
+    recorder: Option<&surge_persistence::runs::run_writer::RunEventRecorder>,
+) -> ToolResultPayload {
+    let worktree_root = ctx.worktree_root;
     let worktree_root = canonical_root(worktree_root);
     let worktree_root = worktree_root.as_path();
-    let Some(args) = call.arguments.as_object() else {
-        return ToolResultPayload::Error {
-            message: "shell_exec: arguments must be an object".into(),
-        };
+    let (command, cwd, timeout_secs) = match shell_exec_arguments(worktree_root, call) {
+        Ok(values) => values,
+        Err(message) => return ToolResultPayload::Error { message },
     };
-    let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
-        return ToolResultPayload::Error {
-            message: "shell_exec: missing 'command' arg".into(),
-        };
-    };
-    let cwd = if let Some(rel) = args.get("cwd_relative").and_then(|v| v.as_str()) {
-        let joined = worktree_root.join(rel);
-        let canonical = match std::fs::canonicalize(&joined) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResultPayload::Error {
-                    message: format!(
-                        "shell_exec: cannot canonicalize cwd_relative {}: {e}",
-                        joined.display()
-                    ),
-                };
-            },
-        };
-        if !canonical.starts_with(worktree_root) {
-            return ToolResultPayload::Error {
-                message: format!(
-                    "shell_exec: cwd_relative {} escapes worktree {}",
-                    canonical.display(),
-                    worktree_root.display()
-                ),
-            };
-        }
-        canonical
-    } else {
-        worktree_root.to_path_buf()
-    };
-    let timeout_secs = args
-        .get("timeout_seconds")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(300);
 
     let mut cmd = if cfg!(windows) {
         let mut c = tokio::process::Command::new("cmd");
-        c.args(["/C", command]);
+        c.args(["/C", command.as_str()]);
         c
     } else {
         let mut c = tokio::process::Command::new("sh");
-        c.args(["-c", command]);
+        c.args(["-c", command.as_str()]);
         c
     };
     cmd.current_dir(&cwd)
+        .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
 
-    let child = match cmd.spawn() {
+    let ownership = if let Some(recorder) = recorder {
+        let Some(invocation) = ctx.invocation else {
+            return ToolResultPayload::Error {
+                message: "shell_exec: missing owning invocation".into(),
+            };
+        };
+        match crate::engine::writer_coverage::begin(
+            recorder,
+            invocation,
+            surge_core::execution_recovery::process::ExecutionWriterKind::HostTool {
+                call_id: call.call_id.clone(),
+            },
+            false,
+        )
+        .await
+        {
+            Ok(writer) => Some((recorder, writer)),
+            Err(error) => {
+                return ToolResultPayload::Error {
+                    message: format!("shell_exec: ownership intent failed: {error}"),
+                };
+            },
+        }
+    } else {
+        None
+    };
+
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             return ToolResultPayload::Error {
@@ -291,6 +290,9 @@ async fn shell_exec(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload 
             };
         },
     };
+    if let Err(message) = persist_child_ownership(child.id(), ownership, &mut child).await {
+        return ToolResultPayload::Error { message };
+    }
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
     let output_fut = child.wait_with_output();
@@ -327,13 +329,88 @@ async fn shell_exec(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload 
     }
 }
 
+async fn persist_child_ownership(
+    pid: Option<u32>,
+    ownership: Option<(
+        &surge_persistence::runs::run_writer::RunEventRecorder,
+        surge_core::id::ExecutionWriterId,
+    )>,
+    child: &mut tokio::process::Child,
+) -> Result<(), String> {
+    if let Some((recorder, writer)) = ownership
+        && let Some(container) = pid.and_then(|pid| {
+            surge_acp::process_evidence::observe_container(
+                pid,
+                surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+            )
+            .ok()
+        })
+        && let Err(error) = recorder
+            .append_event(surge_core::VersionedEventPayload::new(
+                surge_core::EventPayload::ExecutionWriterEstablished { writer, container },
+            ))
+            .await
+    {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(format!(
+            "shell_exec: process observation commit failed: {error}"
+        ));
+    }
+    Ok(())
+}
+
+fn shell_exec_arguments(
+    worktree_root: &Path,
+    call: &ToolCall,
+) -> Result<(String, PathBuf, u64), String> {
+    let args = call
+        .arguments
+        .as_object()
+        .ok_or_else(|| "shell_exec: arguments must be an object".to_owned())?;
+    let command = args
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "shell_exec: missing 'command' arg".to_owned())?
+        .to_owned();
+    let cwd = if let Some(relative) = args.get("cwd_relative").and_then(serde_json::Value::as_str) {
+        let joined = worktree_root.join(relative);
+        let canonical = std::fs::canonicalize(&joined).map_err(|error| {
+            format!(
+                "shell_exec: cannot canonicalize cwd_relative {}: {error}",
+                joined.display()
+            )
+        })?;
+        if !canonical.starts_with(worktree_root) {
+            return Err(format!(
+                "shell_exec: cwd_relative {} escapes worktree {}",
+                canonical.display(),
+                worktree_root.display()
+            ));
+        }
+        canonical
+    } else {
+        worktree_root.to_path_buf()
+    };
+    let timeout_secs = args
+        .get("timeout_seconds")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(300);
+    Ok((command, cwd, timeout_secs))
+}
+
 #[async_trait]
 impl ToolDispatcher for WorktreeToolDispatcher {
     async fn dispatch(&self, ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload {
         match call.tool.as_str() {
             "read_file" => read_file(ctx.worktree_root, call).await,
             "write_file" => write_file(ctx.worktree_root, call).await,
-            "shell_exec" => shell_exec(ctx.worktree_root, call).await,
+            "shell_exec" => {
+                let recorder = ctx
+                    .writer
+                    .map(surge_persistence::runs::RunWriter::event_recorder);
+                shell_exec_owned(ctx, call, recorder.as_ref()).await
+            },
             other => ToolResultPayload::Unsupported {
                 message: format!(
                     "WorktreeToolDispatcher: tool '{other}' not implemented (M5 supports read_file/write_file/shell_exec)"
@@ -431,11 +508,45 @@ impl ToolDispatcher for WorktreeToolDispatcher {
 mod tests {
     use super::*;
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closed_writer_prevents_real_shell_tool_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let run = surge_core::id::RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let memory = surge_core::run_state::RunMemory::default();
+        let recorder = writer.event_recorder();
+        writer.close().await.unwrap();
+        let context = ToolDispatchContext {
+            writer: None,
+            invocation: Some(surge_core::id::StageInvocationId::new()),
+            run_id: run,
+            session_id: surge_core::id::SessionId::new(),
+            worktree_root: home.path(),
+            run_memory: &memory,
+        };
+        let call = ToolCall {
+            call_id: "closed-writer-shell".into(),
+            tool: "shell_exec".into(),
+            arguments: serde_json::json!({"command":"printf effect > forbidden-effect"}),
+        };
+        let result = shell_exec_owned(&context, &call, Some(&recorder)).await;
+        assert!(
+            matches!(result, ToolResultPayload::Error { .. }),
+            "{result:?}"
+        );
+        assert!(!home.path().join("forbidden-effect").exists());
+    }
+
     fn ctx<'a>(
         root: &'a std::path::Path,
         mem: &'a surge_core::run_state::RunMemory,
     ) -> ToolDispatchContext<'a> {
         ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: root,

@@ -55,6 +55,10 @@ use surge_persistence::runs::run_writer::RunWriter;
 /// for matchers using `MatcherSpec::file_glob`.
 #[derive(Debug, Clone)]
 pub struct HookContext<'a> {
+    /// Host journal authority for pre-dispatch writer coverage.
+    pub writer: Option<surge_persistence::runs::run_writer::RunEventRecorder>,
+    /// Stable logical invocation owning these hook effects.
+    pub invocation: Option<surge_core::id::StageInvocationId>,
     /// Stage node currently executing — required for matcher node filters and
     /// the `EventPayload::HookExecuted` audit record.
     pub node: &'a NodeKey,
@@ -82,6 +86,8 @@ impl<'a> HookContext<'a> {
     #[must_use]
     pub fn for_node(node: &'a NodeKey) -> Self {
         Self {
+            writer: None,
+            invocation: None,
             node,
             session: None,
             tool: None,
@@ -91,6 +97,18 @@ impl<'a> HookContext<'a> {
             file_path: None,
             worktree_path: None,
         }
+    }
+
+    /// Attach run-owned writer coverage without handing the hook lifecycle authority.
+    #[must_use]
+    pub fn with_writer(
+        mut self,
+        writer: &RunWriter,
+        invocation: surge_core::id::StageInvocationId,
+    ) -> Self {
+        self.writer = Some(writer.event_recorder());
+        self.invocation = Some(invocation);
+        self
     }
 
     /// Attach the active ACP session id.
@@ -261,7 +279,7 @@ impl HookCommandSpawner for ProcessSpawner {
             env_keys = "SURGE_WORKTREE,SURGE_NODE,SURGE_OUTCOME,SURGE_SESSION,SURGE_BIN",
             "hook process context prepared"
         );
-        match spawn_via_shell(&command, timeout, working_dir.as_deref(), &env).await {
+        match spawn_via_shell(&command, timeout, working_dir.as_deref(), &env, ctx).await {
             Ok(res) => res,
             Err(err) => {
                 tracing::error!(
@@ -287,6 +305,7 @@ async fn spawn_via_shell(
     timeout: Option<Duration>,
     working_dir: Option<&Path>,
     env: &[(&'static str, String)],
+    ctx: &HookContext<'_>,
 ) -> Result<HookCommandResult, std::io::Error> {
     use tokio::process::Command;
 
@@ -322,7 +341,31 @@ async fn spawn_via_shell(
         cmd.env(key, value);
     }
 
-    let child = cmd.spawn()?;
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let ownership = hook_writer_intent(ctx).await?;
+    let mut child = cmd.spawn()?;
+    if let Some((recorder, writer)) = &ownership
+        && let Some(container) = child.id().and_then(|pid| {
+            surge_acp::process_evidence::observe_container(
+                pid,
+                surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+            )
+            .ok()
+        })
+        && let Err(error) = recorder
+            .append_event(VersionedEventPayload::new(
+                EventPayload::ExecutionWriterEstablished {
+                    writer: *writer,
+                    container,
+                },
+            ))
+            .await
+    {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(std::io::Error::other(error.to_string()));
+    }
 
     // `wait_with_output` consumes the Child and concurrently drains
     // stdout/stderr while waiting for exit. This is critical for
@@ -362,6 +405,33 @@ async fn spawn_via_shell(
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         timed_out: false,
     })
+}
+
+async fn hook_writer_intent(
+    ctx: &HookContext<'_>,
+) -> Result<
+    Option<(
+        surge_persistence::runs::run_writer::RunEventRecorder,
+        surge_core::id::ExecutionWriterId,
+    )>,
+    std::io::Error,
+> {
+    let Some(recorder) = &ctx.writer else {
+        return Ok(None);
+    };
+    let invocation = ctx
+        .invocation
+        .ok_or_else(|| std::io::Error::other("hook writer has no owning invocation"))?;
+    let writer = crate::engine::writer_coverage::begin(
+        recorder,
+        invocation,
+        surge_core::execution_recovery::process::ExecutionWriterKind::HostTool {
+            call_id: format!("hook:{}", ctx.node),
+        },
+        false,
+    )
+    .await?;
+    Ok(Some((recorder.clone(), writer)))
 }
 
 fn resolve_hook_worktree(hook: &Hook, ctx: &HookContext<'_>) -> Option<std::path::PathBuf> {
@@ -994,5 +1064,112 @@ mod tests {
         assert_eq!(executed.len(), 1);
         assert_eq!(executed[0].exit_status, 0);
         assert!(!executed[0].timed_out);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn real_hook_commits_writer_intent_before_its_first_side_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let run = surge_core::id::RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let marker = home.path().join("hook-effect");
+        let oracle = home.path().join("hook_boundary_oracle.py");
+        std::fs::write(
+            &oracle,
+            concat!(
+                "import sqlite3, sys\n",
+                "db = sqlite3.connect('file:' + sys.argv[1] + '?mode=ro', uri=True)\n",
+                "kinds = [row[0] for row in db.execute('SELECT kind FROM events')]\n",
+                "assert 'execution_writer_intent' in kinds, kinds\n",
+                "open(sys.argv[2], 'w').write('effect')\n",
+            ),
+        )
+        .unwrap();
+        let hook = Hook {
+            id: "writer-boundary".into(),
+            trigger: HookTrigger::PostToolUse,
+            matcher: MatcherSpec::default(),
+            command: format!(
+                "python3 '{}' '{}' '{}'",
+                oracle.display(),
+                home.path()
+                    .join("runs")
+                    .join(run.to_string())
+                    .join("events.sqlite")
+                    .display(),
+                marker.display()
+            ),
+            on_failure: HookFailureMode::Reject,
+            timeout_seconds: Some(5),
+            inherit: HookInheritance::Extend,
+        };
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let invocation = surge_core::id::StageInvocationId::new();
+        let ctx = HookContext::for_node(&node)
+            .with_worktree_path(home.path())
+            .with_writer(&writer, invocation);
+        let outcome = HookExecutor::new()
+            .run_hooks(&[hook], HookTrigger::PostToolUse, &ctx)
+            .await;
+        assert!(outcome.is_proceed(), "{outcome:?}");
+        assert!(marker.exists());
+        let events = writer
+            .reader()
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(100),
+            )
+            .await
+            .unwrap();
+        let count = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload.payload,
+                    EventPayload::ExecutionWriterIntent { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            count, 1,
+            "a real hook wrote without durable pre-dispatch ownership"
+        );
+        writer.close().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejected_hook_journal_write_prevents_shell_side_effect() {
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), home.path(), None)
+            .await
+            .unwrap();
+        let marker = home.path().join("must-not-exist");
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let ctx = HookContext::for_node(&node)
+            .with_worktree_path(home.path())
+            .with_writer(&writer, surge_core::id::StageInvocationId::new());
+        writer.close().await.unwrap();
+        let hook = Hook {
+            id: "closed-journal".into(),
+            trigger: HookTrigger::PostToolUse,
+            matcher: MatcherSpec::default(),
+            command: format!("printf effect > '{}'", marker.display()),
+            on_failure: HookFailureMode::Reject,
+            timeout_seconds: Some(5),
+            inherit: HookInheritance::Extend,
+        };
+        let outcome = HookExecutor::new()
+            .run_hooks(&[hook], HookTrigger::PostToolUse, &ctx)
+            .await;
+        assert!(matches!(outcome, HookOutcome::Reject { .. }), "{outcome:?}");
+        assert!(
+            !marker.exists(),
+            "a hook escaped rejected durable ownership intent"
+        );
     }
 }

@@ -153,6 +153,11 @@ mod tests {
             last_authority_node: Some("verify_1".into()),
             updated_seq: 1,
             updated_at_ms: 0,
+            freshness: if verified {
+                surge_core::verification_evidence::ProofFreshness::Current
+            } else {
+                surge_core::verification_evidence::ProofFreshness::Unknown
+            },
         }
     }
 

@@ -84,6 +84,8 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "ok".into(),
         artifacts_produced: vec!["spec.md".into(), "design.md".into()],
+
+        verification_report: None,
     })
     .await;
 
@@ -100,10 +102,15 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -238,6 +245,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         session: session_id,
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "partial".into(),
+        verification_report: None,
         artifacts_produced: vec!["real.md".into(), "ghost.md".into()],
     })
     .await;
@@ -255,10 +263,15 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -355,6 +368,8 @@ subtasks = [
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "colliding artifacts".into(),
         artifacts_produced: vec!["spec.toml".into(), "spec.md".into(), "docs/spec.md".into()],
+
+        verification_report: None,
     })
     .await;
 
@@ -371,10 +386,15 @@ subtasks = [
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -459,6 +479,7 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
         session: session_id,
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "partial".into(),
+        verification_report: None,
         artifacts_produced: vec![
             "real.md".into(),
             "../secret.md".into(),
@@ -480,10 +501,15 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -571,6 +597,8 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
         outcome: OutcomeKey::from_str("drafted").unwrap(),
         summary: "invalid adr".into(),
         artifacts_produced: vec!["docs/adr/0001-contracts.md".into()],
+
+        verification_report: None,
     })
     .await;
     mock.enqueue_event(BridgeEvent::OutcomeReported {
@@ -578,6 +606,8 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
         outcome: OutcomeKey::from_str("no_decision_needed").unwrap(),
         summary: "fallback".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -601,10 +631,15 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],

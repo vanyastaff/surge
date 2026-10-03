@@ -117,6 +117,10 @@ pub struct ArchetypeMetadata {
     /// during bootstrap — not consulted by the post-bootstrap pipeline runtime.
     #[serde(default)]
     pub edit_loop_cap: Option<u32>,
+    /// Optional human estimate for a typical graph node, in seconds.
+    /// Historical scheduler estimates still come only from completed runs.
+    #[serde(default)]
+    pub node_capacity_estimate: Option<crate::capacity::WorkEstimateConfig>,
 }
 
 #[cfg(test)]
@@ -165,6 +169,7 @@ mod tests {
             name: ArchetypeName::Linear3,
             milestones: None,
             edit_loop_cap: None,
+            node_capacity_estimate: None,
         };
         let s = toml::to_string(&m).expect("serialize");
         let parsed: ArchetypeMetadata = toml::from_str(&s).expect("parse");
@@ -177,6 +182,7 @@ mod tests {
             name: ArchetypeName::MultiMilestone,
             milestones: Some(3),
             edit_loop_cap: Some(5),
+            node_capacity_estimate: None,
         };
         let s = toml::to_string(&m).expect("serialize");
         let parsed: ArchetypeMetadata = toml::from_str(&s).expect("parse");

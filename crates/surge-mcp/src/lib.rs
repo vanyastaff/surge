@@ -15,12 +15,16 @@
 pub mod connection;
 pub use connection::{McpHealth, McpServerConnection, stderr_log_path};
 
+/// Typed transport cleanup outcomes; host writer proof is a separate boundary.
+pub mod cleanup;
 pub mod error;
 pub use error::McpError;
 
 pub mod redact;
 
 pub mod registry;
+/// Injected run-owned child writer observation.
+pub mod writer_observer;
 pub use registry::{McpContent, McpRegistry, McpToolEntry, McpToolResult};
 
 /// Authenticated per-session stdio stage-tool transport.

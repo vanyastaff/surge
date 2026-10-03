@@ -56,6 +56,8 @@ enum Source {
     },
     /// A failed or aborted run needing triage.
     FailedRun { run_id: RunId },
+    /// Unconfirmed outcome or confirmed daemon loss; inspection only.
+    Inspection { run_id: RunId },
 }
 
 /// One decision unit in the queue.
@@ -80,6 +82,7 @@ impl InboxItem {
         match &self.source {
             Source::Live { run_id, seq, .. } => format!("live-{run_id}-{seq}"),
             Source::FailedRun { run_id } => format!("failed-{run_id}"),
+            Source::Inspection { run_id } => format!("inspection-{run_id}"),
         }
     }
 }
@@ -301,7 +304,9 @@ impl InboxScreen {
                 badge,
                 badge_color,
                 title,
-                mission: state.run_prompt(&run_id).map(|p| ui::headline(p, 80)),
+                mission: state
+                    .run_mission_title(&run_id)
+                    .map(|p| ui::headline(p, 80)),
                 meta: format!(
                     "{} · r-{}",
                     p.node.replace('_', " "),
@@ -369,7 +374,9 @@ impl InboxScreen {
                 badge: label,
                 badge_color: theme::error(),
                 title: headline.to_string(),
-                mission: state.run_prompt(&run.run_id).map(|p| ui::headline(p, 80)),
+                mission: state
+                    .run_mission_title(&run.run_id)
+                    .map(|p| ui::headline(p, 80)),
                 meta: format!(
                     "started {} · r-{}",
                     run.started_at.with_timezone(&chrono::Local).format("%H:%M"),
@@ -378,6 +385,23 @@ impl InboxScreen {
                 age: String::new(),
                 evidence,
                 source: Source::FailedRun { run_id: run.run_id },
+            });
+        }
+
+        for (run_id, display) in state.inspection_runs() {
+            items.push(InboxItem {
+                rank: 6,
+                badge: "inspect",
+                badge_color: theme::warning(),
+                title: display.label().into(),
+                mission: state.run_mission_title(&run_id).map(ToOwned::to_owned),
+                meta: run_id.to_string(),
+                age: String::new(),
+                evidence: vec![(
+                    "Next action".into(),
+                    display.next_action().unwrap_or_default().into(),
+                )],
+                source: Source::Inspection { run_id },
             });
         }
 
@@ -539,7 +563,7 @@ impl InboxScreen {
             ..
         } = &item.source
         else {
-            if let Source::FailedRun { run_id } = item.source {
+            if let Source::FailedRun { run_id } | Source::Inspection { run_id } = item.source {
                 cx.emit(InboxAction::OpenRun(run_id));
             }
             return;
@@ -764,7 +788,7 @@ impl InboxScreen {
                                     .text_color(theme::text_primary())
                                     .child(d.what.clone()),
                             )
-                            .children(state.run_prompt(&d.run).map(|p| {
+                            .children(state.run_mission_title(&d.run).map(|p| {
                                 div()
                                     .text_size(px(10.5))
                                     .text_color(theme::text_dim())
@@ -862,7 +886,10 @@ impl InboxScreen {
                 ..
             } if surge_core::id::GateRequestId::from_event_call_id(id).is_some()
         );
-        let is_failure = matches!(&item.source, Source::FailedRun { .. });
+        let is_failure = matches!(
+            &item.source,
+            Source::FailedRun { .. } | Source::Inspection { .. }
+        );
 
         // The document scrolls; the response field and decision buttons live
         // in a pinned footer so a long plan never pushes Approve off-screen.

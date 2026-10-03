@@ -7,7 +7,9 @@ use crate::engine::hooks::{HookContext, HookExecutor, HookOutcome};
 use crate::engine::stage::StageError;
 use crate::engine::stage::agent::{AgentStageParams, effective_agent_hooks, execute_agent_stage};
 use crate::engine::stage::branch::{BranchStageParams, execute_branch_stage};
-use crate::engine::stage::human_gate::{HumanGateStageParams, execute_human_gate_stage};
+use crate::engine::stage::human_gate::{
+    HumanGateStageParams, execute_human_gate_stage, restore_human_gate_stage,
+};
 use crate::engine::stage::notify::{NotifyStageParams, execute_notify_stage};
 use crate::engine::stage::skill_binding::{SkillBindingParams, bind_skills};
 use crate::engine::stage::terminal::{
@@ -42,6 +44,10 @@ pub(crate) struct RoadmapAmendmentCommand {
 }
 
 pub(crate) struct RunTaskParams {
+    /// Shared host launch authority for persistent tasks; clones retain the
+    /// same OS lock and fencing token through recovery mutations.
+    pub work_item_claim: Option<surge_persistence::work_items::WorkItemLaunchClaim>,
+    pub pending_suspension: Option<(surge_core::execution_recovery::SuspensionFence, Vec<u8>)>,
     pub run_id: RunId,
     pub writer: RunWriter,
     pub artifact_store: surge_persistence::artifacts::ArtifactStore,
@@ -57,6 +63,8 @@ pub(crate) struct RunTaskParams {
     pub resume_cursor: Option<Cursor>,
     /// Resume from existing memory; if None, start fresh.
     pub resume_memory: Option<RunMemory>,
+    /// Exact durable prefix already folded into resume memory.
+    pub resume_memory_applied_seq: Option<u64>,
     /// Resume from an existing frame stack; if None, start with an empty stack.
     pub resume_frames: Option<Vec<crate::engine::frames::Frame>>,
     /// Resume from existing root traversal counts; if None, start fresh.
@@ -164,15 +172,43 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
     // Box the large inner future so `execute`'s own future stays small
     // at the spawn site (clippy::large_futures; also keeps stack use
     // bounded for the per-run task).
-    let outcome = Box::pin(execute_inner(&mut params)).await;
+    let mut outcome = Box::pin(execute_inner(&mut params)).await;
     if let Some(reg) = mcp_registry {
         let budget = std::time::Duration::from_secs(20);
-        if tokio::time::timeout(budget, reg.shutdown()).await.is_err() {
+        if !matches!(
+            tokio::time::timeout(budget, reg.shutdown()).await,
+            Ok(Ok(()))
+        ) {
+            params.pending_suspension = None;
+            let _ = params.event_tx.send(EngineRunEvent::StreamError {
+                message: "MCP writer cleanup is unconfirmed; suspension cannot be acknowledged"
+                    .into(),
+            });
             tracing::warn!(
                 target: "mcp::supervisor",
                 "MCP registry shutdown exceeded budget on run teardown; \
                  abandoning remaining children to RAII"
             );
+        }
+    }
+    if let Some((fence, blob)) = params.pending_suspension.take() {
+        match params.writer.seal_suspension(fence.clone(), blob).await {
+            Ok(seq) => {
+                let _ = params.event_tx.send(EngineRunEvent::Persisted {
+                    seq: seq.as_u64(),
+                    payload: Box::new(EventPayload::RunSuspended {
+                        fence: fence.clone(),
+                    }),
+                });
+                outcome = RunOutcome::Suspended {
+                    fence: Box::new(fence),
+                };
+            },
+            Err(error) => {
+                let _ = params.event_tx.send(EngineRunEvent::StreamError {
+                    message: format!("suspension fence was not committed: {error}"),
+                });
+            },
         }
     }
     if let Err(error) = params.writer.close().await {
@@ -187,73 +223,630 @@ async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
         Err(error) => return failed(params, error).await,
     };
 
-    loop {
-        if state.frames.is_empty()
-            && let Err(error) = drain_roadmap_queue(params, &mut state).await
-        {
-            return failed(params, format!("apply queued roadmap amendments: {error}")).await;
-        }
+    if let Err(outcome) = Box::pin(restore_suspended_phase(params, &mut state)).await {
+        return outcome;
+    }
+    if let Err(outcome) = Box::pin(restore_committed_routes(params, &mut state)).await {
+        return outcome;
+    }
+    Box::pin(execute_stage_loop(params, state)).await
+}
 
-        apply_pending_revisions(&mut state);
-
-        if let Some(outcome) = abort_if_cancelled(params).await {
-            return outcome;
-        }
-
-        let node = if let Some(n) =
-            lookup_in_active_frame(&state.active_graph, &state.cursor.node, &state.frames)
-        {
-            n.clone()
-        } else {
-            let err = format!("cursor at unknown node {}", state.cursor.node);
-            return failed(params, err).await;
+async fn restore_suspended_phase(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+) -> Result<(), RunOutcome> {
+    if let Some(fence) = state.memory.suspension.clone() {
+        let control = match params.storage.work_items().execution_control(params.run_id) {
+            Ok(Some(control))
+                if control.state
+                    == surge_core::execution_recovery::ExecutionControlState::ContinueReserved =>
+            {
+                control
+            },
+            _ => {
+                return Err(recovery_required(
+                    params,
+                    "suspended attempt lacks a durable Continue reservation".into(),
+                )
+                .await);
+            },
         };
-
-        let stage_start_seq = match enter_stage(params, &state.cursor).await {
-            Ok(seq) => seq,
-            Err(error) => return failed(params, error).await,
-        };
-
-        let stage_result = match dispatch_node_stage(params, &mut state, &node).await {
-            StageDispatch::StageResult(result) => result,
-            StageDispatch::Continue => continue,
-            StageDispatch::Failed(error) => return failed(params, error).await,
-            StageDispatch::Park {
-                wake_at,
-                basis,
-                runtime,
-                details,
+        let restored_without_provider = match &fence.pending_stage {
+            surge_core::execution_recovery::PendingStagePhase::CommittedOutcomeAwaitingRoute {
+                invocation,
+                node,
+                outcome,
+                committed_seq,
             } => {
-                return parked(params, &state.cursor.node, wake_at, basis, runtime, details).await;
-            },
-        };
-
-        let resolution = match resolve_stage_result(params, &mut state, &node, stage_result).await {
-            Ok(resolution) => resolution,
-            Err(outcome) => return outcome,
-        };
-
-        match resolution {
-            StageResolution::Terminal(outcome) => return outcome,
-            StageResolution::Outcome(outcome) => {
-                if let Err(error) =
-                    route_and_snapshot(params, &mut state, &outcome, stage_start_seq).await
-                {
-                    return failed(params, error).await;
+                let consumed = match validate_suspended_commit(
+                    state,
+                    invocation.as_ref(),
+                    node,
+                    outcome,
+                    *committed_seq,
+                ) {
+                    Ok(consumed) => consumed,
+                    Err(diagnostic) => {
+                        return Err(recovery_required(params, diagnostic).await);
+                    },
+                };
+                if !consumed {
+                    let result = route_and_snapshot(
+                        params,
+                        state,
+                        outcome,
+                        surge_persistence::runs::EventSeq(0),
+                    )
+                    .await
+                    .map_err(|error| format!("restore committed routing phase: {error}"));
+                    if let Err(diagnostic) = result {
+                        return Err(recovery_required(params, diagnostic).await);
+                    }
                 }
+                true
+            },
+            surge_core::execution_recovery::PendingStagePhase::WaitingHumanGate {
+                node,
+                request,
+                stage_entry_seq,
+                requested_seq,
+            } => {
+                if !valid_suspended_gate(state, node, request, *stage_entry_seq, *requested_seq) {
+                    return Err(recovery_required(
+                        params,
+                        "suspended human gate contradicts its original decision".into(),
+                    )
+                    .await);
+                }
+                true
+            },
+            surge_core::execution_recovery::PendingStagePhase::BetweenStages => true,
+            surge_core::execution_recovery::PendingStagePhase::Interrupted { .. } => false,
+        };
+        if restored_without_provider {
+            if let Err(error) = params
+                .writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
+                    control_generation: control.generation,
+                }))
+                .await
+            {
+                return Err(recovery_required(
+                    params,
+                    format!("authorize restored routing phase: {error}"),
+                )
+                .await);
+            }
+            state.memory.suspension = None;
+            state.memory.control_generation = control.generation;
+        }
+    }
+    Ok(())
+}
+
+fn validate_suspended_commit(
+    state: &RunExecutionState,
+    invocation: Option<&surge_core::id::StageInvocationId>,
+    node: &surge_core::NodeKey,
+    outcome: &surge_core::OutcomeKey,
+    committed_seq: u64,
+) -> Result<bool, String> {
+    let invocation = invocation.ok_or_else(|| {
+        "suspended committed phase has no authenticated invocation binding".to_owned()
+    })?;
+    let record = state
+        .memory
+        .committed_stage_outcomes
+        .get(invocation)
+        .ok_or_else(|| "suspended committed phase lacks its accepted invocation".to_owned())?;
+    if record.conflicting
+        || record.committed_seq != committed_seq
+        || record.commit.context().node != *node
+        || record.commit.outcome() != outcome
+    {
+        return Err("suspended committed phase contradicts its accepted invocation".into());
+    }
+    Ok(record.routed_seq.is_some())
+}
+
+fn valid_suspended_gate(
+    state: &RunExecutionState,
+    node: &surge_core::NodeKey,
+    request: &surge_core::id::GateRequestId,
+    stage_entry_seq: u64,
+    requested_seq: u64,
+) -> bool {
+    state
+        .memory
+        .gate_decisions
+        .get(request)
+        .is_some_and(|record| {
+            !record.conflicting
+                && record.node == *node
+                && record.request_id == *request
+                && record.stage_entry_seq == stage_entry_seq
+                && record.requested_seq == requested_seq
+                && state.cursor.node == *node
+                && state.memory.stage_occurrences.get(node).copied() == Some(stage_entry_seq)
+        })
+}
+
+async fn restore_committed_routes(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+) -> Result<(), RunOutcome> {
+    // Accepted effects are already durable. A host crash before routing must
+    // consume that exact commit without establishing another provider session.
+    match outstanding_stage_outcome(state) {
+        Ok(Some(record)) => {
+            if let Err(error) = route_and_snapshot(
+                params,
+                state,
+                record.commit.outcome(),
+                surge_persistence::runs::EventSeq(0),
+            )
+            .await
+            {
+                return Err(recovery_required(
+                    params,
+                    format!("restore accepted stage commit: {error}"),
+                )
+                .await);
+            }
+        },
+        Ok(None) => {},
+        Err(error) => return Err(recovery_required(params, error).await),
+    }
+
+    match outstanding_gate_stage(state) {
+        Ok(Some(record)) => {
+            if record.commit.disposition()
+                != surge_core::execution_recovery::gate_commit::GateCommitDisposition::Route
+            {
+                return Err(recovery_required(
+                    params,
+                    "committed bootstrap rejection requires failure routing".into(),
+                )
+                .await);
+            }
+            if let Err(error) = route_and_snapshot(
+                params,
+                state,
+                record.commit.answer().outcome(),
+                surge_persistence::runs::EventSeq(0),
+            )
+            .await
+            {
+                return Err(recovery_required(
+                    params,
+                    format!("restore committed gate effects: {error}"),
+                )
+                .await);
+            }
+        },
+        Ok(None) => {},
+        Err(error) => return Err(recovery_required(params, error).await),
+    }
+    Ok(())
+}
+
+async fn execute_stage_loop(
+    params: &mut RunTaskParams,
+    mut state: RunExecutionState,
+) -> RunOutcome {
+    loop {
+        match Box::pin(execute_stage_step(params, &mut state)).await {
+            StageLoopStep::Continue => {},
+            StageLoopStep::Done(outcome) => return outcome,
+        }
+    }
+}
+
+enum StageLoopStep {
+    Continue,
+    Done(RunOutcome),
+}
+
+async fn execute_stage_step(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+) -> StageLoopStep {
+    if state.frames.is_empty()
+        && let Err(error) = drain_roadmap_queue(params, state).await
+    {
+        return StageLoopStep::Done(
+            failed(params, format!("apply queued roadmap amendments: {error}")).await,
+        );
+    }
+    apply_pending_revisions(state);
+    if let Some(control) = suspension_requested(params) {
+        return StageLoopStep::Done(
+            prepare_suspension(
+                params,
+                state,
+                control,
+                surge_core::execution_recovery::PendingStagePhase::BetweenStages,
+            )
+            .await,
+        );
+    }
+    if let Some(outcome) = abort_if_cancelled(params).await {
+        return StageLoopStep::Done(outcome);
+    }
+    let Some(node) = lookup_in_active_frame(&state.active_graph, &state.cursor.node, &state.frames)
+    else {
+        return StageLoopStep::Done(
+            failed(
+                params,
+                format!("cursor at unknown node {}", state.cursor.node),
+            )
+            .await,
+        );
+    };
+    let node = node.clone();
+    match execute_current_stage(params, state, &node).await {
+        StageLoopStep::Continue => StageLoopStep::Continue,
+        StageLoopStep::Done(outcome) => StageLoopStep::Done(outcome),
+    }
+}
+
+async fn execute_current_stage(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+) -> StageLoopStep {
+    if let Some(error) = &state.memory.gate_recovery_error {
+        return StageLoopStep::Done(recovery_required(params, error.clone()).await);
+    }
+    let restored_gate_entry = state
+        .memory
+        .gate_decisions
+        .values()
+        .find(|record| {
+            matches!(node.config, NodeConfig::HumanGate(_))
+                && record.purpose == surge_core::run_state::GateDecisionPurpose::HumanGate
+                && record.node == state.cursor.node
+        })
+        .map(|record| record.stage_entry_seq);
+    let stage_start_seq = match restored_gate_entry {
+        Some(seq) => surge_persistence::runs::EventSeq(seq),
+        None => match enter_stage(params, &state.cursor).await {
+            Ok(seq) => seq,
+            Err(error) => return StageLoopStep::Done(failed(params, error).await),
+        },
+    };
+    state
+        .memory
+        .stage_occurrences
+        .insert(state.cursor.node.clone(), stage_start_seq.as_u64());
+    let stage_result = match dispatch_node_stage(params, state, node).await {
+        StageDispatch::StageResult(result) => result,
+        StageDispatch::Continue => return StageLoopStep::Continue,
+        StageDispatch::Failed(error) => return StageLoopStep::Done(failed(params, error).await),
+        StageDispatch::Park {
+            wake_at,
+            basis,
+            runtime,
+            details,
+        } => {
+            return StageLoopStep::Done(
+                parked(params, &state.cursor.node, wake_at, basis, runtime, details).await,
+            );
+        },
+    };
+    if let Some(outcome) =
+        handle_stage_suspension(params, state, node, stage_start_seq, &stage_result).await
+    {
+        return StageLoopStep::Done(outcome);
+    }
+    if let Err(StageError::RecoveryRequired(diagnostic)) = &stage_result {
+        return StageLoopStep::Done(recovery_required(params, diagnostic.clone()).await);
+    }
+    let resolution = match resolve_stage_result(params, state, node, stage_result).await {
+        Ok(resolution) => resolution,
+        Err(outcome) => return StageLoopStep::Done(outcome),
+    };
+    match resolution {
+        StageResolution::Terminal(outcome) => StageLoopStep::Done(outcome),
+        StageResolution::Outcome(outcome) => {
+            if let Err(error) = route_and_snapshot(params, state, &outcome, stage_start_seq).await {
+                return StageLoopStep::Done(failed(params, error).await);
+            }
+            match enforce_budget(params, state).await {
+                Ok(Some(outcome)) => StageLoopStep::Done(outcome),
+                Ok(None) => StageLoopStep::Continue,
+                Err(error) => StageLoopStep::Done(failed(params, error).await),
+            }
+        },
+    }
+}
+
+async fn handle_stage_suspension(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+    stage_result: &Result<StageOutcome, StageError>,
+) -> Option<RunOutcome> {
+    let control = suspension_requested(params)?;
+    if matches!(node.config, NodeConfig::HumanGate(_))
+        && matches!(stage_result, Err(StageError::Cancelled))
+    {
+        return Some(suspend_interrupted_gate(params, state, control, stage_start_seq).await);
+    }
+    let pending =
+        pending_suspension_phase(params, state, node, stage_start_seq, stage_result).await;
+    match pending {
+        Ok(Some(pending)) => Some(prepare_suspension(params, state, control, pending).await),
+        Ok(None) => None,
+        Err((recovery, error)) => Some(if recovery {
+            recovery_required(params, error).await
+        } else {
+            failed(params, error).await
+        }),
+    }
+}
+
+async fn suspend_interrupted_gate(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+    control: surge_core::execution_recovery::WorkItemExecutionControl,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+) -> RunOutcome {
+    let end = match params.writer.current_seq().await {
+        Ok(seq) => seq,
+        Err(error) => {
+            return recovery_required(params, format!("read interrupted gate prefix: {error}"))
+                .await;
+        },
+    };
+    let events = match params.writer.read_events(stage_start_seq..end.next()).await {
+        Ok(events) => events,
+        Err(error) => {
+            return recovery_required(params, format!("read interrupted gate identity: {error}"))
+                .await;
+        },
+    };
+    apply_read_events(params.run_id, &events, &mut state.memory);
+    let records: Vec<_> = state
+        .memory
+        .gate_decisions
+        .values()
+        .filter(|record| {
+            record.node == state.cursor.node
+                && !record.conflicting
+                && record.purpose == surge_core::run_state::GateDecisionPurpose::HumanGate
+                && record.stage_entry_seq == stage_start_seq.as_u64()
+        })
+        .collect();
+    if records.len() != 1 {
+        return recovery_required(
+            params,
+            "interrupted human gate lacks one authoritative decision".into(),
+        )
+        .await;
+    }
+    let record = records[0];
+    let pending = surge_core::execution_recovery::PendingStagePhase::WaitingHumanGate {
+        node: record.node.clone(),
+        request: record.request_id,
+        stage_entry_seq: record.stage_entry_seq,
+        requested_seq: record.requested_seq,
+    };
+    prepare_suspension(params, state, control, pending).await
+}
+
+async fn pending_suspension_phase(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+    stage_result: &Result<StageOutcome, StageError>,
+) -> Result<Option<surge_core::execution_recovery::PendingStagePhase>, (bool, String)> {
+    match stage_result {
+        Ok(StageOutcome::Routed(outcome)) => {
+            let events = read_stage_events(params, stage_start_seq, "accepted stage").await?;
+            let accepted = events
+                .iter()
+                .rev()
+                .find_map(|event| match event.payload.payload() {
+                    EventPayload::StageOutcomeCommitted { commit }
+                        if commit.context().node == state.cursor.node
+                            && commit.outcome() == outcome =>
+                    {
+                        Some((commit.invocation(), event.seq.as_u64()))
+                    },
+                    _ => None,
+                });
+            if let Some((invocation, committed_seq)) = accepted {
+                return Ok(Some(
+                    surge_core::execution_recovery::PendingStagePhase::CommittedOutcomeAwaitingRoute {
+                        invocation: Some(invocation),
+                        node: state.cursor.node.clone(),
+                        outcome: outcome.clone(),
+                        committed_seq,
+                    },
+                ));
+            }
+            if matches!(node.config, NodeConfig::Agent(_)) {
+                return Err((
+                    false,
+                    "accepted provider outcome has no durable invocation marker".into(),
+                ));
+            }
+            route_and_snapshot(params, state, outcome, stage_start_seq)
+                .await
+                .map_err(|error| {
+                    (
+                        false,
+                        format!("route non-provider stage before suspension: {error}"),
+                    )
+                })?;
+            Ok(Some(
+                surge_core::execution_recovery::PendingStagePhase::BetweenStages,
+            ))
+        },
+        Err(StageError::Cancelled | StageError::RateLimited { .. }) => {
+            let events = read_stage_events(params, stage_start_seq, "interrupted stage").await?;
+            let invocation = events
+                .iter()
+                .rev()
+                .find_map(|event| match &event.payload.payload {
+                    EventPayload::SessionOpened {
+                        node,
+                        opened: Some(opened),
+                        ..
+                    } if node == &state.cursor.node => Some(opened.descriptor.invocation()),
+                    _ => None,
+                });
+            Ok(invocation.map(|invocation| {
+                surge_core::execution_recovery::PendingStagePhase::Interrupted {
+                    node: state.cursor.node.clone(),
+                    invocation,
+                }
+            }))
+        },
+        Ok(StageOutcome::Terminal(_)) | Err(_) => Ok(None),
+    }
+}
+
+async fn read_stage_events(
+    params: &RunTaskParams,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+    label: &str,
+) -> Result<Vec<surge_persistence::runs::ReadEvent>, (bool, String)> {
+    let end = params.writer.current_seq().await.map_err(|error| {
+        (
+            label == "interrupted stage",
+            format!("read {label} prefix: {error}"),
+        )
+    })?;
+    params
+        .writer
+        .read_events(stage_start_seq..end.next())
+        .await
+        .map_err(|error| {
+            (
+                label == "interrupted stage",
+                format!("read {label} identity: {error}"),
+            )
+        })
+}
+
+async fn recovery_required(params: &RunTaskParams, diagnostic: String) -> RunOutcome {
+    let generation = params
+        .storage
+        .work_items()
+        .execution_control(params.run_id)
+        .ok()
+        .flatten()
+        .map_or(0, |control| control.generation);
+    let payload = EventPayload::RunRecoveryRequired {
+        control_generation: generation,
+        diagnostic: diagnostic.clone(),
+    };
+    if let Err(error) = params
+        .writer
+        .append_event(VersionedEventPayload::new(payload))
+        .await
+    {
+        let _ = params.event_tx.send(EngineRunEvent::StreamError {
+            message: format!("recovery decision was not committed: {error}"),
+        });
+    }
+    RunOutcome::RecoveryRequired {
+        control_generation: generation,
+        diagnostic,
+    }
+}
+
+fn suspension_requested(
+    params: &RunTaskParams,
+) -> Option<surge_core::execution_recovery::WorkItemExecutionControl> {
+    params
+        .storage
+        .work_items()
+        .execution_control(params.run_id)
+        .ok()
+        .flatten()
+        .filter(|control| {
+            control.state == surge_core::execution_recovery::ExecutionControlState::SuspendRequested
+        })
+}
+
+async fn prepare_suspension(
+    params: &mut RunTaskParams,
+    state: &RunExecutionState,
+    control: surge_core::execution_recovery::WorkItemExecutionControl,
+    pending_stage: surge_core::execution_recovery::PendingStagePhase,
+) -> RunOutcome {
+    let prefix = match params.writer.current_seq().await {
+        Ok(seq) => seq.as_u64(),
+        Err(error) => return failed(params, format!("read suspension prefix: {error}")).await,
+    };
+    let mut snapshot = crate::engine::snapshot::EngineSnapshot::new(&state.cursor, prefix, prefix);
+    snapshot.frames = state.frames.iter().cloned().map(Into::into).collect();
+    snapshot.root_traversal_counts = state
+        .root_traversal_counts
+        .iter()
+        .map(|(edge, count)| (edge.to_string(), *count))
+        .collect();
+    snapshot.applied_graph_revision_seq = state.applied_graph_revision_seq;
+    snapshot.pending_stage = Some(pending_stage.clone());
+    let reason = if params.work_item_claim.is_some() {
+        let store = params.storage.work_items();
+        match store.capacity_control_association(params.run_id, control.generation) {
+            Ok(Some(association)) => match store.recovery_cycle(
+                params.run_id,
+                association.invocation(),
+                association.cycle_generation(),
+            ) {
+                Ok(cycle) => match cycle.wake {
+                    Some(wake) => surge_core::execution_recovery::SuspensionReason::Capacity {
+                        wake_at_ms: Some(wake.due_at_ms()),
+                    },
+                    None => {
+                        return recovery_required(
+                            params,
+                            "quota Capacity control has no durable wake schedule".into(),
+                        )
+                        .await;
+                    },
+                },
+                Err(error) => {
+                    return recovery_required(
+                        params,
+                        format!("read quota Capacity cycle: {error}"),
+                    )
+                    .await;
+                },
+            },
+            Ok(None) => surge_core::execution_recovery::SuspensionReason::Manual,
+            Err(error) => {
+                return recovery_required(
+                    params,
+                    format!("inspect quota Capacity control: {error}"),
+                )
+                .await;
             },
         }
-
-        // Stage boundary: the just-completed stage's token usage has been
-        // folded into `state.memory.costs` by `route_and_snapshot`. Enforce the
-        // run's budget here — warn once at the threshold, abort on breach.
-        // A failure to durably record an abort decision is fatal (the run must
-        // never terminate without a persisted reason).
-        match enforce_budget(params, &mut state).await {
-            Ok(Some(outcome)) => return outcome,
-            Ok(None) => {},
-            Err(error) => return failed(params, error).await,
-        }
+    } else {
+        surge_core::execution_recovery::SuspensionReason::Manual
+    };
+    let fence = surge_core::execution_recovery::SuspensionFence {
+        control_generation: control.generation,
+        snapshot_seq: prefix,
+        pending_stage,
+        cleanup_confirmed: true,
+        reason,
+    };
+    match serde_json::to_vec(&snapshot) {
+        Ok(blob) => params.pending_suspension = Some((fence.clone(), blob)),
+        Err(error) => return failed(params, format!("encode suspension snapshot: {error}")).await,
+    }
+    RunOutcome::Suspended {
+        fence: Box::new(fence),
     }
 }
 
@@ -433,7 +1026,9 @@ async fn abort_run_for_budget(
     Ok(Some(outcome))
 }
 
+#[derive(Clone)]
 struct RunExecutionState {
+    memory_applied_seq: u64,
     active_graph: Graph,
     cursor: Cursor,
     hook_executor: HookExecutor,
@@ -467,8 +1062,8 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         node: active_graph.start.clone(),
         attempt: 1,
     });
-    let memory = match params.resume_memory.clone() {
-        Some(memory) => memory,
+    let (memory, memory_applied_seq) = match params.resume_memory.clone() {
+        Some(memory) => (memory, params.resume_memory_applied_seq.unwrap_or(0)),
         None => load_existing_memory(&params.writer, params.run_id)
             .await
             .map_err(|e| format!("load existing memory: {e}"))?,
@@ -490,6 +1085,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         cursor,
         hook_executor: HookExecutor::new(),
         memory,
+        memory_applied_seq,
         frames: params.resume_frames.clone().unwrap_or_default(),
         root_traversal_counts: params
             .resume_root_traversal_counts
@@ -604,7 +1200,7 @@ async fn enter_stage(
     params: &RunTaskParams,
     cursor: &Cursor,
 ) -> Result<surge_persistence::runs::EventSeq, String> {
-    params
+    let entry_seq = params
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
             node: cursor.node.clone(),
@@ -614,11 +1210,7 @@ async fn enter_stage(
         .map_err(|e| format!("write StageEntered: {e}"))?;
     // Fault-injection: simulate a crash mid-run, with StageEntered durable.
     checkpoint_exit_if_requested(&cursor.node);
-    params
-        .writer
-        .current_seq()
-        .await
-        .map_err(|e| format!("current_seq after StageEntered: {e}"))
+    Ok(entry_seq)
 }
 
 enum StageDispatch {
@@ -700,12 +1292,89 @@ async fn dispatch_node_stage(
 ///    would otherwise re-dispatch straight into the same exhausted window,
 ///    burning an attempt against a wall that will not move before
 ///    `wake_at` (see this module's own "zero retries after 429" test).
+async fn observe_failed_agent(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    result: &Result<StageOutcome, StageError>,
+) -> Result<(), StageError> {
+    if result.is_ok() || state.memory.verification.subject.is_none() {
+        return Ok(());
+    }
+    crate::engine::stage::verification::observe_after(
+        &params.writer,
+        &params.worktree_path,
+        state.memory.verification.subject.as_ref(),
+    )
+    .await
+}
+
+fn capacity_park_dispatch(
+    params: &RunTaskParams,
+    result: Result<StageOutcome, StageError>,
+    wake_at: chrono::DateTime<chrono::Utc>,
+    basis: surge_core::capacity::WakeBasis,
+    runtime: String,
+    details: String,
+) -> StageDispatch {
+    if suspension_requested(params).is_some() {
+        // A persistent task's typed quota cycle owns the confirmed Capacity
+        // suspension. Preserve the original 429 for durable evidence.
+        StageDispatch::StageResult(result)
+    } else {
+        StageDispatch::Park {
+            wake_at,
+            basis,
+            runtime: Some(runtime),
+            details: Some(details),
+        }
+    }
+}
+
+async fn observe_rate_limited_runtime(
+    params: &RunTaskParams,
+    node: &surge_core::keys::NodeKey,
+    raw_runtime: &str,
+    retry_after: Option<std::time::Duration>,
+) -> surge_core::capacity::Decision {
+    let observed_at = chrono::Utc::now();
+    let window = surge_core::capacity::CapacityWindow::observed_429(
+        raw_runtime.to_owned(),
+        retry_after,
+        observed_at,
+    );
+    let canonical_runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
+        &surge_acp::Registry::builtin(),
+        raw_runtime,
+    );
+    if let Err(error) = params
+        .capacity_ledger
+        .observe(&canonical_runtime, &window)
+        .await
+    {
+        tracing::warn!(
+            target: "engine::capacity",
+            %node,
+            runtime = %raw_runtime,
+            %error,
+            "capacity ledger observe failed; this run still parks from the in-memory window, \
+             but other runs on this runtime will not see the observation"
+        );
+    }
+    let status = surge_core::capacity::CapacityStatus::Known(window);
+    params.capacity_policy.decide(None, &status, observed_at)
+}
+
 async fn dispatch_agent_node_with_capacity_gate(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
     node: &surge_core::node::Node,
     cfg: &surge_core::agent_config::AgentConfig,
 ) -> StageDispatch {
+    if let Some(error) = validate_persistent_dispatch_authority(params) {
+        return StageDispatch::Failed(format!(
+            "persistent task launch authority expired before provider dispatch: {error}"
+        ));
+    }
     // Resolved once, reused by both the precheck and (on a non-rate-limited
     // result) the post-dispatch clear below — one profile resolve per
     // dispatch, not two.
@@ -742,26 +1411,42 @@ async fn dispatch_agent_node_with_capacity_gate(
             surge_core::capacity::Decision::Dispatch { degraded } => {
                 warn_on_degraded_dispatch(&state.cursor.node, degraded);
             },
-            surge_core::capacity::Decision::Rotate { .. } => {
-                // `CapacityPolicy::decide` never emits this in this
-                // delivery — `RotationPolicy` is always `Disabled` (Task
-                // 12 M3 acceptance criterion B's `From<&CapacityConfig>`
-                // never sets `Enabled`, and R41's live verification is
-                // deferred; see `engine::stage::agent::RotationRefusal`).
-                // Matched explicitly, not folded into a `_` arm, so a
-                // future live `Rotate` cannot silently fall through to an
-                // ordinary dispatch under this arm's name.
-                tracing::error!(
-                    target: "engine::capacity",
-                    node = %state.cursor.node,
-                    "Decision::Rotate reached the engine but is not implemented by this \
-                     delivery; dispatching instead of rotating"
-                );
+            surge_core::capacity::Decision::Rotate { to } => {
+                tracing::warn!(target: "engine::capacity", node = %state.cursor.node,
+                    candidate = %to, "rotation requires a persisted quota handoff; applying configured park policy");
+                let status = params
+                    .capacity_ledger
+                    .status(&runtime)
+                    .await
+                    .unwrap_or(surge_core::capacity::CapacityStatus::NeverObserved);
+                let mut park_policy = params.capacity_policy.clone();
+                park_policy.rotation = surge_core::capacity::RotationPolicy::Disabled;
+                match park_policy.decide(None, &status, chrono::Utc::now()) {
+                    surge_core::capacity::Decision::Park { wake_at, basis } => {
+                        return StageDispatch::Park {
+                            wake_at,
+                            basis,
+                            runtime: Some(runtime.into_string()),
+                            details: None,
+                        };
+                    },
+                    surge_core::capacity::Decision::Dispatch { degraded } => {
+                        warn_on_degraded_dispatch(&state.cursor.node, degraded);
+                    },
+                    surge_core::capacity::Decision::Rotate { .. } => {
+                        return StageDispatch::Failed(
+                            "capacity fallback policy unexpectedly selected rotation".into(),
+                        );
+                    },
+                }
             },
         }
     }
 
     let result = execute_agent_node(params, state, node, cfg).await;
+    if let Err(error) = observe_failed_agent(params, state, &result).await {
+        return StageDispatch::StageResult(Err(error));
+    }
 
     // Only a *typed* rate-limit failure with a resolved runtime carries
     // enough to build an observation — borrow first so a non-matching
@@ -797,45 +1482,10 @@ async fn dispatch_agent_node_with_capacity_gate(
         return StageDispatch::StageResult(result);
     };
 
-    let observed_at = chrono::Utc::now();
-    let window = surge_core::capacity::CapacityWindow::observed_429(
-        raw_runtime.clone(),
-        retry_after,
-        observed_at,
-    );
-    // `raw_runtime` is already the canonical id (constructed via
-    // `CanonicalRuntimeId::resolve` at `StageError::RateLimited`'s own
-    // construction site in `engine::stage::agent`) — re-resolved here
-    // through the same registry to produce the typed key `observe` now
-    // requires, not to normalize it a second time (idempotent either way).
-    let canonical_runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
-        &raw_runtime,
-    );
-    if let Err(error) = params
-        .capacity_ledger
-        .observe(&canonical_runtime, &window)
-        .await
+    match observe_rate_limited_runtime(params, &state.cursor.node, &raw_runtime, retry_after).await
     {
-        tracing::warn!(
-            target: "engine::capacity",
-            node = %state.cursor.node,
-            runtime = %raw_runtime,
-            %error,
-            "capacity ledger observe failed; this run still parks from the in-memory window, \
-             but other runs on this runtime will not see the observation"
-        );
-    }
-    let status = surge_core::capacity::CapacityStatus::Known(window);
-    // `estimate: None` — the window is already exhausted (`observed_429`
-    // always sets `remaining: EXHAUSTED`), so rules 1-4 decide before
-    // `decide` would ever consult an estimate.
-    match params.capacity_policy.decide(None, &status, observed_at) {
-        surge_core::capacity::Decision::Park { wake_at, basis } => StageDispatch::Park {
-            wake_at,
-            basis,
-            runtime: Some(raw_runtime),
-            details: Some(details),
+        surge_core::capacity::Decision::Park { wake_at, basis } => {
+            capacity_park_dispatch(params, result, wake_at, basis, raw_runtime, details)
         },
         // Rule 4's explicit operator opt-out (`blind_backoff` removed):
         // fall through to the ordinary error path unchanged — the on_error
@@ -845,6 +1495,19 @@ async fn dispatch_agent_node_with_capacity_gate(
         surge_core::capacity::Decision::Dispatch { .. }
         | surge_core::capacity::Decision::Rotate { .. } => StageDispatch::StageResult(result),
     }
+}
+
+fn validate_persistent_dispatch_authority(params: &RunTaskParams) -> Option<String> {
+    let Some(claim) = &params.work_item_claim else {
+        return None;
+    };
+    params
+        .storage
+        .work_items()
+        .validate_claim(claim)
+        .map(|_| ())
+        .err()
+        .map(|error| error.to_string())
 }
 
 /// Pre-dispatch half of [`dispatch_agent_node_with_capacity_gate`]: read the
@@ -915,6 +1578,62 @@ fn warn_on_degraded_dispatch(
     }
 }
 
+fn prepare_automatic_quota_wake(
+    run_id: RunId,
+    owner: Option<&(
+        surge_persistence::work_items::WorkItemStore,
+        surge_persistence::work_items::WorkItemLaunchClaim,
+        surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
+    )>,
+    continuation: Option<&surge_core::execution_recovery::WorkItemExecutionControl>,
+) -> Result<
+    (
+        Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
+        Option<crate::engine::stage::agent::TaskQuotaCycle>,
+    ),
+    StageError,
+> {
+    let Some((store, claim, _)) = owner else {
+        return Ok((None, None));
+    };
+    let Some(control) = continuation.filter(|control| {
+        control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
+    }) else {
+        return Ok((None, None));
+    };
+    let handoff = match store.quota_handoff(control.operation) {
+        Ok(handoff) if handoff.is_automatic_wake() => handoff,
+        Ok(_) | Err(surge_persistence::work_items::WorkItemError::NotFound) => {
+            return Ok((None, None));
+        },
+        Err(error) => return Err(StageError::RecoveryRequired(error.to_string())),
+    };
+    if handoff.control_generation() != control.generation {
+        return Err(StageError::RecoveryRequired(
+            "automatic quota handoff does not match Continue generation".into(),
+        ));
+    }
+    let cycle = store
+        .recovery_cycle(
+            run_id,
+            handoff.logical_invocation(),
+            handoff.cycle_generation(),
+        )
+        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
+    let reservation = surge_persistence::work_items::recovery_cycles::CandidateReservation {
+        receipt: handoff.reservation_receipt().to_owned(),
+        candidate: handoff.launch().candidate().candidate().clone(),
+        disposition:
+            surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved,
+    };
+    let opening = store
+        .admit_provider_open(claim, control.operation)
+        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
+    let cycle =
+        crate::engine::stage::agent::TaskQuotaCycle::from_automatic_wake(cycle, reservation);
+    Ok((Some(opening), Some(cycle)))
+}
+
 async fn execute_agent_node(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -948,10 +1667,30 @@ async fn execute_agent_node(
     // re-deliver on the retry, which is acceptable — the operator's guidance
     // should apply to the re-attempt too.
     let steers_backup = steers.clone();
-    let stage_result = execute_agent_stage(AgentStageParams {
+    let quota_owner = params.work_item_claim.as_ref().and_then(|claim| {
+        params
+            .run_config
+            .quota_recovery
+            .stage(&state.cursor.node)
+            .cloned()
+            .map(|stage| (params.storage.work_items(), claim.clone(), stage))
+    });
+    let continuation = params
+        .storage
+        .work_items()
+        .execution_control(params.run_id)
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    let (quota_opening, quota_cycle) =
+        prepare_automatic_quota_wake(params.run_id, quota_owner.as_ref(), continuation.as_ref())?;
+    let stage_result = Box::pin(execute_agent_stage(AgentStageParams {
+        quota_opening,
+        quota_cycle,
+        quota_owner,
+        continuation,
         frames: &state.frames,
         cancel: params.cancel.clone(),
         node: &state.cursor.node,
+        attempt: state.cursor.attempt,
         steers,
         agent_config: cfg,
         bound_skills: &bound_skills,
@@ -977,15 +1716,8 @@ async fn execute_agent_node(
         hook_executor: &state.hook_executor,
         pending_elevations: state.pending_elevations.clone(),
         active_task_id: crate::engine::frames::active_task_id(&state.frames),
-    })
+    }))
     .await;
-
-    let stage_result = if crate::engine::bootstrap::is_flow_generator_profile(cfg.profile.as_str())
-    {
-        handle_flow_generator_result(params, state, stage_result).await
-    } else {
-        stage_result
-    };
 
     // Return undelivered steers to the front of the queue if the stage failed,
     // so operator guidance survives a stage error / retry instead of vanishing —
@@ -1152,44 +1884,6 @@ fn default_skill_roots(worktree_path: &std::path::Path) -> Vec<surge_core::skill
     roots
 }
 
-async fn handle_flow_generator_result(
-    params: &RunTaskParams,
-    state: &RunExecutionState,
-    stage_result: Result<OutcomeKey, StageError>,
-) -> Result<OutcomeKey, StageError> {
-    let Ok(outcome) = stage_result else {
-        return stage_result;
-    };
-    match crate::engine::bootstrap::run_flow_generator_post_processing_with_registry(
-        &state.cursor.node,
-        &state.memory,
-        params.run_config.bootstrap.edit_loop_cap,
-        &params.worktree_path,
-        &params.writer,
-        params.profile_registry.as_deref(),
-    )
-    .await
-    {
-        Ok(crate::engine::bootstrap::FlowValidationDecision::Materialized) => Ok(outcome),
-        Ok(crate::engine::bootstrap::FlowValidationDecision::EditRequested { .. }) => {
-            OutcomeKey::try_from(crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME)
-                .map_err(|e| StageError::Internal(format!("validation retry outcome key: {e}")))
-        },
-        Ok(crate::engine::bootstrap::FlowValidationDecision::CapExceeded { cap }) => {
-            Err(StageError::EditLoopCapExceeded {
-                stage: surge_core::run_event::BootstrapStage::Flow,
-                cap,
-            })
-        },
-        Ok(crate::engine::bootstrap::FlowValidationDecision::MissingArtifact) => {
-            Err(StageError::Internal(
-                "Flow Generator stage finished without producing flow.toml".into(),
-            ))
-        },
-        Err(error) => Err(error),
-    }
-}
-
 async fn dispatch_terminal_node(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1276,11 +1970,12 @@ fn current_subgraph_outputs(
     let Some(crate::engine::frames::Frame::Subgraph(frame)) = state.frames.last() else {
         return Err("SubgraphDone signal but no Subgraph frame on top".into());
     };
-    match state
-        .active_graph
-        .nodes
-        .get(&frame.outer_node)
-        .map(|node| &node.config)
+    match lookup_in_active_frame(
+        &state.active_graph,
+        &frame.outer_node,
+        &state.frames[..state.frames.len() - 1],
+    )
+    .map(|node| &node.config)
     {
         Some(NodeConfig::Subgraph(cfg)) => Ok(cfg.outputs.clone()),
         _ => Err(format!(
@@ -1296,15 +1991,54 @@ async fn execute_human_gate_node(
     cfg: &surge_core::human_gate_config::HumanGateConfig,
 ) -> Result<StageOutcome, StageError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let request_id = surge_core::id::GateRequestId::new();
+    let records: Vec<_> = state
+        .memory
+        .gate_decisions
+        .values()
+        .filter(|record| record.node == state.cursor.node)
+        .collect();
+    if records.len() > 1
+        || records.first().is_some_and(|record| {
+            record.conflicting
+                || state.memory.stage_occurrences.get(&record.node).copied()
+                    != Some(record.stage_entry_seq)
+        })
+    {
+        return Err(StageError::RecoveryRequired(
+            "human gate has contradictory durable occurrences".into(),
+        ));
+    }
+    let restored = records.first().copied();
+    let cfg = if let Some(record) = restored {
+        if record.purpose != surge_core::run_state::GateDecisionPurpose::HumanGate {
+            return Err(StageError::RecoveryRequired(
+                "decision purpose does not authorize HumanGate routing".into(),
+            ));
+        }
+        record.gate_config.as_ref().ok_or_else(|| {
+            StageError::RecoveryRequired("human gate has no original accepted contract".into())
+        })?
+    } else {
+        cfg
+    };
+    let request_id = restored.map_or_else(surge_core::id::GateRequestId::new, |record| {
+        record.request_id
+    });
     params.gate_resolutions.lock().await.insert(
         state.cursor.node.clone(),
         crate::engine::stage::human_gate::PendingGate {
+            recorder: params.writer.event_recorder(),
+            allow_freetext: cfg.allow_freetext,
+            allowed_outcomes: cfg
+                .options
+                .iter()
+                .map(|option| option.outcome.clone())
+                .collect(),
             request_id,
             sender: tx,
         },
     );
-    let result = execute_human_gate_stage(HumanGateStageParams {
+    let gate_params = HumanGateStageParams {
         request_id,
         node: &state.cursor.node,
         gate_config: cfg,
@@ -1314,13 +2048,20 @@ async fn execute_human_gate_node(
         cancel: &params.cancel,
         default_timeout: params.run_config.human_input_timeout,
         bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
-    })
-    .await;
-    params
-        .gate_resolutions
-        .lock()
-        .await
-        .remove(&state.cursor.node);
+    };
+    let result = if let Some(record) = restored {
+        restore_human_gate_stage(gate_params, record).await
+    } else {
+        execute_human_gate_stage(gate_params).await
+    };
+    let mut gate_resolutions = params.gate_resolutions.lock().await;
+    if gate_resolutions
+        .get(&state.cursor.node)
+        .is_some_and(|pending| pending.request_id == request_id)
+    {
+        gate_resolutions.remove(&state.cursor.node);
+    }
+    drop(gate_resolutions);
     result.map(StageOutcome::Routed)
 }
 
@@ -1464,17 +2205,33 @@ async fn resolve_stage_error(
         "stage error captured; running on_error hooks"
     );
 
-    let on_error_resolution = run_on_error_hooks(
+    let on_error_resolution = run_on_error_hooks_owned(
         &state.hook_executor,
         node,
         &state.cursor.node,
         &raw_reason,
         &params.worktree_path,
         params.profile_registry.as_deref(),
+        Some(&params.writer),
     )
     .await;
     for record in &on_error_resolution.records {
         crate::engine::hooks::record_hook_executed(&params.writer, record).await;
+    }
+
+    if state.memory.verification.subject.is_some()
+        && let Err(observation_error) = crate::engine::stage::verification::observe_after(
+            &params.writer,
+            &params.worktree_path,
+            state.memory.verification.subject.as_ref(),
+        )
+        .await
+    {
+        return Err(failed(
+            params,
+            format!("post-hook verification observation failed: {observation_error}"),
+        )
+        .await);
     }
 
     if let Some(suppressed) = on_error_resolution.outcome {
@@ -1545,45 +2302,119 @@ async fn route_and_snapshot(
     outcome: &OutcomeKey,
     stage_start_seq: surge_persistence::runs::EventSeq,
 ) -> Result<(), String> {
-    let applied_events = apply_memory_events_after(
-        &params.writer,
-        params.run_id,
-        stage_start_seq,
-        &mut state.memory,
-    )
-    .await
-    .map_err(|e| format!("update run memory from event log: {e}"))?;
-    state
-        .pending_graph_revisions
-        .extend(applied_events.graph_revisions);
-    apply_pending_revisions(state);
-    let stage_events_applied_seq = params
+    let mut prepared = state.clone();
+    let prefix = params
         .writer
         .current_seq()
         .await
-        .map_err(|e| format!("current_seq after memory update: {e}"))?;
-
-    let routed = route_stage_outcome(state, outcome)?;
-    write_routing_events(params, state, outcome, &routed).await;
-    let post_route_events = apply_memory_events_after(
-        &params.writer,
-        params.run_id,
-        stage_events_applied_seq,
-        &mut state.memory,
-    )
-    .await
-    .map_err(|e| format!("update run memory after routing: {e}"))?;
-    state
+        .map_err(|error| format!("route prefix: {error}"))?;
+    let observed = params
+        .writer
+        .read_events(
+            surge_persistence::runs::EventSeq(
+                stage_start_seq.as_u64().max(prepared.memory_applied_seq),
+            )
+            .next()..prefix.next(),
+        )
+        .await
+        .map_err(|error| format!("read stage route prefix: {error}"))?;
+    let applied_events = apply_read_events(params.run_id, &observed, &mut prepared.memory);
+    prepared
         .pending_graph_revisions
-        .extend(post_route_events.graph_revisions);
-
+        .extend(applied_events.graph_revisions);
+    apply_pending_revisions(&mut prepared);
+    let routed = route_stage_outcome(&mut prepared, outcome)?;
+    let mut events = routing_events(&prepared, outcome, &routed);
+    if let Some(record) = outstanding_stage_outcome(&prepared)? {
+        if record.commit.outcome() != outcome {
+            return Err("committed stage outcome differs from routed outcome".into());
+        }
+        events.push(VersionedEventPayload::new(
+            EventPayload::StageRouteCommitted {
+                invocation: record.commit.invocation(),
+                outcome_commit_seq: record.committed_seq,
+            },
+        ));
+    }
+    if let Some(record) = outstanding_gate_stage(&prepared)? {
+        if record.commit.answer().outcome() != outcome
+            || record.commit.disposition()
+                != surge_core::execution_recovery::gate_commit::GateCommitDisposition::Route
+        {
+            return Err("committed gate effects are not routable with this outcome".into());
+        }
+        let original = record.commit.answer().request();
+        events.push(VersionedEventPayload::new(
+            EventPayload::GateStageRouteCommitted {
+                request: original.request(),
+                stage_entry_seq: original.stage_entry_seq(),
+                outcome_commit_seq: record.committed_seq,
+            },
+        ));
+    }
+    let final_seq = surge_persistence::runs::EventSeq(
+        prefix
+            .as_u64()
+            .checked_add(events.len() as u64)
+            .ok_or_else(|| "stage route sequence overflow".to_owned())?,
+    );
+    for (offset, event) in events.iter().enumerate() {
+        prepared.memory.apply_event(&RunEvent {
+            run_id: params.run_id,
+            seq: prefix.as_u64() + offset as u64 + 1,
+            timestamp: chrono::Utc::now(),
+            payload: event.payload().clone(),
+        });
+    }
     let next_cursor = Cursor {
         node: routed.target,
         attempt: 1,
     };
-    write_stage_boundary_snapshot(params, state, &next_cursor).await?;
-    state.cursor = next_cursor;
+    let blob = prepare_stage_boundary_snapshot(params, &prepared, &next_cursor, final_seq).await?;
+    params
+        .writer
+        .commit_stage_route(prefix, events, blob)
+        .await
+        .map_err(|error| format!("commit stage route: {error}"))?;
+    prepared.cursor = next_cursor;
+    prepared.memory_applied_seq = final_seq.as_u64();
+    *state = prepared;
     Ok(())
+}
+
+fn outstanding_gate_stage(
+    state: &RunExecutionState,
+) -> Result<Option<surge_core::execution_recovery::gate_commit::CommittedGateStage>, String> {
+    let mut pending = state
+        .memory
+        .committed_gate_stages
+        .values()
+        .filter(|record| {
+            record.commit.answer().request().node() == &state.cursor.node
+                && record.routed_seq.is_none()
+        });
+    let first = pending.next().cloned();
+    if pending.next().is_some() || first.as_ref().is_some_and(|record| record.conflicting) {
+        return Err("gate stage has conflicting unconsumed effects".into());
+    }
+    Ok(first)
+}
+
+fn outstanding_stage_outcome(
+    state: &RunExecutionState,
+) -> Result<Option<surge_core::execution_recovery::commit::CommittedStageOutcome>, String> {
+    let mut outstanding = state
+        .memory
+        .committed_stage_outcomes
+        .values()
+        .filter(|record| {
+            record.commit.context().node == state.cursor.node && record.routed_seq.is_none()
+        });
+    let first = outstanding.next().cloned();
+    if outstanding.next().is_some() || first.as_ref().is_some_and(|record| record.conflicting) {
+        return Err("stage has conflicting unconsumed outcome commits".into());
+    }
+    Ok(first)
 }
 
 fn route_stage_outcome(
@@ -1631,51 +2462,35 @@ fn route_after_max_traversal(
     }
 }
 
-async fn write_routing_events(
-    params: &RunTaskParams,
+fn routing_events(
     state: &RunExecutionState,
     outcome: &OutcomeKey,
     routed: &crate::engine::routing::RoutedEdge,
-) {
-    tracing::debug!(
-        target: "engine::routing",
-        from = %state.cursor.node,
-        to = %routed.target,
-        kind = ?routed.kind,
-        "traversing edge",
-    );
-    let _ = params
-        .writer
-        .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
+) -> Vec<VersionedEventPayload> {
+    vec![
+        VersionedEventPayload::new(EventPayload::EdgeTraversed {
             edge: routed.edge_id.clone(),
             from: state.cursor.node.clone(),
             to: routed.target.clone(),
             kind: routed.kind,
-        }))
-        .await;
-    let _ = params
-        .writer
-        .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {
+        }),
+        VersionedEventPayload::new(EventPayload::StageCompleted {
             node: state.cursor.node.clone(),
             outcome: outcome.clone(),
-        }))
-        .await;
+        }),
+    ]
 }
 
-async fn write_stage_boundary_snapshot(
+async fn prepare_stage_boundary_snapshot(
     params: &RunTaskParams,
     state: &RunExecutionState,
     next_cursor: &Cursor,
-) -> Result<(), String> {
-    let current_seq = params
-        .writer
-        .current_seq()
-        .await
-        .map_err(|e| format!("current_seq: {e}"))?;
+    final_seq: surge_persistence::runs::EventSeq,
+) -> Result<Vec<u8>, String> {
     let mut snapshot = crate::engine::snapshot::EngineSnapshot::new(
         next_cursor,
-        current_seq.as_u64(),
-        current_seq.as_u64(),
+        final_seq.as_u64(),
+        final_seq.as_u64(),
     );
     snapshot.applied_graph_revision_seq = state.applied_graph_revision_seq;
     snapshot.frames = state.frames.iter().cloned().map(Into::into).collect();
@@ -1687,17 +2502,12 @@ async fn write_stage_boundary_snapshot(
     let worktree = params.worktree_path.clone();
     let run = params.run_id;
     snapshot.workspace_checkpoint = tokio::task::spawn_blocking(move || {
-        surge_git::checkpoint::capture_record(&worktree, run, current_seq.as_u64())
+        surge_git::checkpoint::capture_record(&worktree, run, final_seq.as_u64())
     })
     .await
     .map_err(|error| format!("checkpoint worker: {error}"))?
     .map_err(|error| format!("workspace checkpoint: {error}"))?;
-    let blob = serde_json::to_vec(&snapshot).map_err(|e| format!("snapshot serialize: {e}"))?;
-    params
-        .writer
-        .write_graph_snapshot(current_seq, blob)
-        .await
-        .map_err(|e| format!("write_graph_snapshot: {e}"))
+    serde_json::to_vec(&snapshot).map_err(|error| format!("snapshot serialize: {error}"))
 }
 
 enum StageOutcome {
@@ -1749,6 +2559,7 @@ pub(crate) struct OnErrorResolution {
 /// declared on the node — otherwise we WARN and let the original failure
 /// propagate (matching the plan's "suppression with an undeclared outcome
 /// falls through to `StageFailed` and emits a WARN log" rule).
+#[cfg(test)]
 pub(crate) async fn run_on_error_hooks(
     executor: &HookExecutor,
     node: &surge_core::node::Node,
@@ -1756,6 +2567,27 @@ pub(crate) async fn run_on_error_hooks(
     raw_reason: &str,
     worktree_path: &std::path::Path,
     profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+) -> OnErrorResolution {
+    run_on_error_hooks_owned(
+        executor,
+        node,
+        cursor_node,
+        raw_reason,
+        worktree_path,
+        profile_registry,
+        None,
+    )
+    .await
+}
+
+async fn run_on_error_hooks_owned(
+    executor: &HookExecutor,
+    node: &surge_core::node::Node,
+    cursor_node: &surge_core::keys::NodeKey,
+    raw_reason: &str,
+    worktree_path: &std::path::Path,
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    writer: Option<&surge_persistence::runs::run_writer::RunWriter>,
 ) -> OnErrorResolution {
     let NodeConfig::Agent(agent_cfg) = &node.config else {
         return OnErrorResolution {
@@ -1772,9 +2604,12 @@ pub(crate) async fn run_on_error_hooks(
         };
     }
 
-    let ctx = HookContext::for_node(cursor_node)
+    let mut ctx = HookContext::for_node(cursor_node)
         .with_worktree_path(worktree_path)
         .with_error(raw_reason);
+    if let Some(writer) = writer {
+        ctx = ctx.with_writer(writer, surge_core::id::StageInvocationId::new());
+    }
     let hook_outcome = executor
         .run_hooks(&effective_hooks, HookTrigger::OnError, &ctx)
         .await;
@@ -1836,14 +2671,14 @@ fn resolve_profile_for_hooks(
 async fn load_existing_memory(
     writer: &surge_persistence::runs::run_writer::RunWriter,
     run_id: RunId,
-) -> Result<RunMemory, surge_persistence::runs::StorageError> {
+) -> Result<(RunMemory, u64), surge_persistence::runs::StorageError> {
     let current = writer.current_seq().await?;
     let events = writer
         .read_events(surge_persistence::runs::EventSeq(1)..current.next())
         .await?;
     let mut memory = RunMemory::default();
     let _ = apply_read_events(run_id, &events, &mut memory);
-    Ok(memory)
+    Ok((memory, current.as_u64()))
 }
 
 #[derive(Debug, Clone, Default)]

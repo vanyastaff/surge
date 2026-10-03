@@ -308,6 +308,8 @@ async fn clean_run_writes_no_memory_claim() {
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "all good".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
@@ -433,6 +435,8 @@ async fn records_the_first_rejecting_hook_not_the_last_one() {
         outcome: OutcomeKey::from_str("pass").unwrap(),
         summary: "first try".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
     mock.enqueue_event(BridgeEvent::OutcomeReported {
@@ -440,6 +444,8 @@ async fn records_the_first_rejecting_hook_not_the_last_one() {
         outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
         summary: "second try".into(),
         artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 

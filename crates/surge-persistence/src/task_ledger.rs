@@ -59,6 +59,10 @@ pub struct TaskLedgerIndexUpsert {
 /// One row from the registry-level task-ledger index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskLedgerIndexRecord {
+    /// Currentness is enriched by the shared operator projection.
+    #[serde(default)]
+    pub freshness: surge_core::verification_evidence::ProofFreshness,
+
     /// Run that owns this task.
     pub run_id: RunId,
     /// Ledger task id.
@@ -88,10 +92,11 @@ impl TaskLedgerIndexRecord {
     /// both call this instead of keeping their own copy of the rule.
     #[must_use]
     pub fn is_evidence_backed(&self) -> bool {
-        surge_core::evidence::is_evidence_backed(&surge_core::evidence::NodeOutcome::new(
-            self.status,
-            self.verified,
-        ))
+        self.freshness == surge_core::verification_evidence::ProofFreshness::Current
+            && surge_core::evidence::is_evidence_backed(&surge_core::evidence::NodeOutcome::new(
+                self.status,
+                self.verified,
+            ))
     }
 
     /// This row with `verified` set to [`Self::is_evidence_backed`] rather
@@ -270,6 +275,8 @@ fn row_to_record(row: &Row<'_>) -> rusqlite::Result<TaskLedgerIndexRecord> {
         last_authority_node: row.get(6)?,
         updated_seq: row.get::<_, i64>(7)? as u64,
         updated_at_ms: row.get(8)?,
+
+        freshness: surge_core::verification_evidence::ProofFreshness::Unknown,
     })
 }
 
@@ -350,15 +357,22 @@ mod tests {
     }
 
     #[test]
-    fn is_evidence_backed_matches_completed_and_verified_only() {
+    fn is_evidence_backed_requires_current_completed_and_verified() {
         let store = store();
         let run = RunId::new();
-        let verified = store
+        let mut verified = store
             .upsert(&upsert(run, "backed", RoadmapStatus::Completed, true, None))
             .unwrap();
+        assert!(
+            !verified.is_evidence_backed(),
+            "raw registry bit has no current observation"
+        );
+        verified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
         assert!(verified.is_evidence_backed());
+        verified.freshness = surge_core::verification_evidence::ProofFreshness::Stale;
+        assert!(!verified.is_evidence_backed());
 
-        let unverified = store
+        let mut unverified = store
             .upsert(&upsert(
                 run,
                 "unbacked",
@@ -367,6 +381,7 @@ mod tests {
                 None,
             ))
             .unwrap();
+        unverified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
         assert!(!unverified.is_evidence_backed());
     }
 

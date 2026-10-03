@@ -68,6 +68,9 @@ pub enum StageError {
     #[error("bridge error: {0}")]
     Bridge(String),
 
+    /// A saved provider session could not be restored safely.
+    #[error("session recovery required: {0}")]
+    RecoveryRequired(String),
     /// The agent hit a provider-side rate limit or usage quota while this
     /// stage was mid-turn — matched directly off
     /// `surge_acp::bridge::error::SendMessageError::RateLimited`, never by
@@ -209,3 +212,5 @@ impl From<StageError> for EngineError {
 // and this format has no remaining reader to protect. Removed rather than
 // repurposed — its assertion (`from_observed_error` succeeds against the
 // persisted string) has no live consumer to describe.
+
+pub(crate) mod verification;

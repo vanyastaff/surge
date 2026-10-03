@@ -113,6 +113,10 @@ async fn run_real_smoke(
     surge_acp::settings_seed::seed_settings_files(&entry.settings_files, &workdir);
     let outcome = OutcomeKey::try_from("done").expect("static outcome key");
     let config = SessionConfig {
+        writer_id: surge_core::id::ExecutionWriterId::new(),
+        invocation: surge_core::id::StageInvocationId::new(),
+        runtime: entry.id.clone(),
+        opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind,
@@ -129,7 +133,7 @@ async fn run_real_smoke(
 
     let bridge = AcpBridge::with_defaults().map_err(|e| (SmokeStage::Spawn, e.to_string()))?;
     let session = match bridge.open_session(config).await {
-        Ok(s) => s,
+        Ok(opened) => opened.session,
         Err(e) => return Err((classify_open_error(&e), e.to_string())),
     };
     if handshake_only {

@@ -120,17 +120,21 @@ async fn old_card_cannot_resolve_a_new_visit_to_the_same_gate() {
         let second = next_request(&mut tap, id).await;
         assert_eq!(first.0, second.0);
         assert_ne!(first.1, second.1);
-        assert!(matches!(
-            engine
-                .resolve_gate_input(
-                    id,
-                    "other".try_into().unwrap(),
-                    second.1,
-                    serde_json::json!({"outcome":"approve"})
-                )
-                .await,
-            Err(surge_orchestrator::engine::EngineError::StaleGateRequest)
-        ));
+        let wrong_node = engine
+            .resolve_gate_input(
+                id,
+                "other".try_into().unwrap(),
+                second.1,
+                serde_json::json!({"outcome":"approve"}),
+            )
+            .await;
+        assert!(
+            matches!(
+                &wrong_node,
+                Err(surge_orchestrator::engine::EngineError::StaleGateRequest)
+            ),
+            "wrong-node result: {wrong_node:?}"
+        );
         let stale = engine
             .resolve_gate_input(
                 id,
@@ -193,7 +197,7 @@ async fn next_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reopening_storage_and_resuming_replaces_the_old_request_identity() {
+async fn reopening_after_owner_loss_reissues_an_unanswered_gate_with_fresh_identity() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path()).await.unwrap();
@@ -224,20 +228,16 @@ async fn reopening_storage_and_resuming_replaces_the_old_request_identity() {
         drop(storage);
         let storage = Storage::open(temp.path()).await.unwrap();
         let engine = build(storage);
-        let mut tap = engine.subscribe_tap();
         let resumed = engine
             .resume_run(id, temp.path().to_path_buf())
             .await
             .unwrap();
-        let fresh = loop {
-            let candidate = next_request(&mut tap, id).await;
-            if candidate.1 != old.1 {
-                break candidate;
-            }
-        };
+        let fresh = next_request(&mut tap, id).await;
+        assert_eq!(old.0, fresh.0);
+        assert_ne!(old.1, fresh.1);
         assert!(matches!(
             engine
-                .resolve_gate_input(id, old.0, old.1, serde_json::json!({"outcome":"approve"}))
+                .resolve_gate_input(id, old.0, old.1, serde_json::json!({"outcome":"approve"}),)
                 .await,
             Err(surge_orchestrator::engine::EngineError::StaleGateRequest)
         ));

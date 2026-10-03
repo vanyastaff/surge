@@ -525,6 +525,8 @@ mod tests {
         )];
         let r = RoutingToolDispatcher::new(Arc::new(EngineStub), mcp, &mcp_tools, &HashMap::new());
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: std::path::Path::new("/tmp"),
@@ -607,6 +609,8 @@ mod tests {
         let mcp = Arc::new(McpRegistry::from_config(&[], None));
         let r = RoutingToolDispatcher::new(Arc::new(EngineStub), mcp, &[], &HashMap::new());
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: std::path::Path::new("/tmp"),
@@ -669,6 +673,8 @@ mod tests {
             });
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: std::path::Path::new("/tmp"),
@@ -714,6 +720,8 @@ mod tests {
             });
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: std::path::Path::new("/tmp"),
@@ -765,6 +773,8 @@ mod tests {
             });
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: std::path::Path::new("/tmp"),
@@ -825,6 +835,8 @@ mod tests {
             .with_artifact_store(store);
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
+            writer: None,
+            invocation: None,
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
             worktree_root: std::path::Path::new("/tmp"),

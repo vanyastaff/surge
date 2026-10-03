@@ -212,6 +212,38 @@ impl MemoryStore {
         insert_claim(&self.conn, claim, ClaimConflictPolicy::Fail)
     }
 
+    /// Atomically refresh an existing unverified claim without changing its
+    /// identity. Verified claims are excluded in the `UPDATE` predicate, so
+    /// a concurrent verification cannot be overwritten between a read and
+    /// the write-back. Returns `false` when the id is absent or no longer
+    /// eligible; callers may then insert a new claim with a fresh id.
+    pub fn update_unverified_claim(&self, claim: &MemoryClaim) -> Result<bool> {
+        if claim.status() != ClaimStatus::Unverified {
+            return Err(PersistenceError::Storage(
+                "replacement claim must be unverified".into(),
+            ));
+        }
+        let updated = self.conn.execute(
+            r#"
+            UPDATE memory_claims
+            SET text = ?1, source = ?2, source_hash = ?3, verified_by = ?4,
+                verified_at = ?5, confidence = ?6, status = ?7
+            WHERE id = ?8 AND status = 'unverified'
+            "#,
+            rusqlite::params![
+                claim.text(),
+                claim.provenance().source,
+                claim.provenance().hash.to_string(),
+                claim.provenance().verified_by,
+                claim.provenance().verified_at.map(|ms| ms as i64),
+                claim.confidence().as_str(),
+                claim.status().as_str(),
+                claim.id().to_string(),
+            ],
+        )?;
+        Ok(updated == 1)
+    }
+
     /// Fetch a memory claim by ID, if one exists.
     pub fn get_claim(&self, id: MemoryClaimId) -> Result<Option<MemoryClaim>> {
         self.conn
@@ -1894,6 +1926,52 @@ mod tests {
         let fetched = store.get_claim(claim.id()).unwrap().unwrap();
 
         assert_eq!(fetched, claim);
+    }
+
+    #[test]
+    fn update_unverified_claim_refreshes_in_place_and_preserves_identity() {
+        let store = MemoryStore::in_memory().unwrap();
+        let original = MemoryClaim::from_transcript(
+            "node 'implement' failed: timeout",
+            "transcript:run-1#turn-1",
+            ContentHash::compute(b"first"),
+        );
+        store.add_claim(&original).unwrap();
+        let refreshed = MemoryClaim::from_transcript(
+            "node 'implement' failed: root cause",
+            "transcript:run-2#turn-7",
+            ContentHash::compute(b"second"),
+        )
+        .with_id(original.id());
+
+        assert!(store.update_unverified_claim(&refreshed).unwrap());
+        let claims = store.list_claims().unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0], refreshed);
+    }
+
+    #[test]
+    fn update_unverified_claim_never_overwrites_a_verified_row() {
+        let store = MemoryStore::in_memory().unwrap();
+        let hash = ContentHash::compute(b"source");
+        let verified = MemoryClaim::new(
+            MemoryClaimId::new(),
+            "verified node failure",
+            Provenance::verified("src/lib.rs", hash, "cargo test", 1_700_000_000_000),
+            Confidence::Verified,
+            ClaimStatus::Verified,
+        )
+        .unwrap();
+        store.add_claim(&verified).unwrap();
+        let unverified = MemoryClaim::from_transcript(
+            "new node failure",
+            "transcript:run-2#turn-7",
+            ContentHash::compute(b"new source"),
+        )
+        .with_id(verified.id());
+
+        assert!(!store.update_unverified_claim(&unverified).unwrap());
+        assert_eq!(store.get_claim(verified.id()).unwrap().unwrap(), verified);
     }
 
     #[test]

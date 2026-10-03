@@ -75,8 +75,9 @@ thought/cached}` (`agent.rs:2763-2779`) — заполнение контекс�
    `from_observed_error → None → capacity_window() → None`, и `doctor`/`inbox` печатают
    ровно то же, что на машине без единого обращения к провайдеру. Не покрыты
    `rate_limit_error` (фактический тип ошибки Anthropic), `rate_limit_exceeded` и
-   `insufficient_quota` (OpenAI), `RESOURCE_EXHAUSTED` (Google), `overloaded_error`,
-   `quota exceeded`, «usage limit reached». → «Видел отказ, но не смог классифицировать»
+   `insufficient_quota` (OpenAI), `RESOURCE_EXHAUSTED` (Google), `quota exceeded`,
+   «usage limit reached». `overloaded_error` исключён: Anthropic 529 — transient
+   overload, а не quota exhaustion, и не должен парковать запуск. → «Видел отказ, но не смог классифицировать»
    отличимо от «не видел ничего». Расширение набора — половина решения; вторая половина
    в том, чтобы непокрытое было **видно**.
 

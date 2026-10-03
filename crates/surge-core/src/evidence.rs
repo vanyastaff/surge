@@ -1,45 +1,11 @@
-//! The single predicate for "is this a proven success, or a merely declared
-//! one" (spec §10, R30/R31).
+//! Shared predicate for a folded task's proven success.
 //!
-//! Before this module existed, three different surfaces answered the
-//! question "did a verifier actually confirm this?" from three different
-//! angles:
-//!
-//! - The live engine fold (`run_state::LedgerState::record_verified`)
-//!   rejects an unauthorized `TaskVerified` outright — a task only ever
-//!   reaches `RoadmapStatus::Completed` there together with `verified: true`,
-//!   in the same assignment (`run_state.rs`'s [`LedgerTask`](crate::run_state::LedgerTask)).
-//! - The Run Report projection (`run_report::compile`) re-derives the same
-//!   authorization check from the event log alone (it deliberately does not
-//!   share `LedgerState`'s fold — see that module's own doc — so it recomputes
-//!   `node_has_verification_authority` against the graph it reconstructs from
-//!   `PipelineMaterialized`/`GraphRevisionAccepted`), producing a
-//!   `VerifierVerdict` per task.
-//! - The cross-run registry mirror (`surge_persistence::runs::views::maintain`,
-//!   `TaskVerified` arm) trusts an engine-emitted `TaskVerified` unconditionally
-//!   — it does **not** re-check authority, on the documented assumption that a
-//!   normal run's `TaskVerified` was already vetted before it was emitted. That
-//!   is a real, named divergence from the two paths above (a forged or
-//!   hand-crafted event log could show `verified` in `surge ledger` while Run
-//!   Report calls the same event `Unauthorized`) — left as-is here (unifying it
-//!   would mean threading the active graph through the per-event SQL view
-//!   maintainer, a materially different change than this module), consistent
-//!   with that arm's own existing comment, which already tracks it as a known
-//!   gap.
-//!
-//! What every one of those paths converges on, once the authorization
-//! question has already been settled by whichever of them owns it, is the
-//! same two-field shape: **a status, and whether it was verified.**
-//! [`LedgerTask`](crate::run_state::LedgerTask) and
-//! `surge_persistence::task_ledger::TaskLedgerIndexRecord` (a downstream
-//! crate this one does not, and must not, depend on — plain text, not an
-//! intra-doc link, for exactly that reason) both already
-//! store exactly `{status, verified}` — this module does not add a fourth
-//! place that *decides* verification; it is the one place that *reads* the
-//! decision, once made, the same way everywhere: [`NodeOutcome`] is that
-//! shared shape, and [`is_evidence_backed`] is the one function every
-//! surface (Run Report, `surge inbox`, `surge ledger`) calls instead of
-//! keeping its own copy of `status == Completed && verified`.
+//! Live replay, historical reports and normalized SQLite views use the common
+//! revision/criteria claim gate in [`crate::verification_evidence`]. Authorized
+//! unbound claims remain tracked but unverified; unauthorized claims cannot
+//! introduce an obligation. Host-facing queries additionally compare the sealed
+//! code identity with the current workspace and check stored report bytes.
+//! [`is_evidence_backed`] reads the resulting status and verification bit.
 //!
 //! ## A related, deliberately separate question
 //!

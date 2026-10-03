@@ -17,6 +17,8 @@ pub struct ReplayedState {
     pub root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32>,
     /// Run memory rebuilt by replaying all events from seq 1 onwards.
     pub memory: RunMemory,
+    /// Exact prefix folded into memory, including accepted stage effects.
+    pub memory_applied_seq: u64,
     /// Latest graph extracted from `PipelineMaterialized` plus any accepted
     /// graph revision events.
     pub graph: surge_core::graph::Graph,
@@ -53,13 +55,19 @@ pub async fn replay(
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
+    let snapshot_seq = snap.as_ref().map(|(seq, _)| seq.as_u64());
     let mut applied_graph_revision_seq = 0;
     let mut frames = Vec::new();
     let mut root_traversal_counts = std::collections::HashMap::new();
     let snap_cursor: Option<Cursor> = match snap {
-        Some((_seq, blob)) => {
+        Some((seq, blob)) => {
             let snapshot = EngineSnapshot::deserialize(&blob)
                 .map_err(|e| EngineError::Internal(format!("snapshot deserialize: {e}")))?;
+            if snapshot.at_seq != seq.as_u64() {
+                return Err(EngineError::Internal(
+                    "execution checkpoint envelope sequence mismatch".into(),
+                ));
+            }
             applied_graph_revision_seq = snapshot.applied_graph_revision_seq;
             frames = snapshot
                 .frames
@@ -115,6 +123,8 @@ pub async fn replay(
         memory.apply_event(&core_event);
     }
 
+    validate_consumed_route(reader, &all_events, &memory, snapshot_seq).await?;
+
     // Detect whether the run already reached a terminal state.
     let already_terminal = all_events.iter().find_map(|e| match &e.payload.payload {
         EventPayload::RunCompleted { terminal_node } => Some(RunOutcome::Completed {
@@ -140,11 +150,68 @@ pub async fn replay(
         frames,
         root_traversal_counts,
         memory,
+        memory_applied_seq: max_seq.as_u64(),
         graph,
         applied_graph_revision_seq,
         already_terminal,
         run_config: persisted_run_config,
     })
+}
+
+async fn validate_consumed_route(
+    reader: &surge_persistence::runs::reader::RunReader,
+    events: &[surge_persistence::runs::reader::ReadEvent],
+    memory: &RunMemory,
+    snapshot_seq: Option<u64>,
+) -> Result<(), EngineError> {
+    // A consumed route requires its durable post-route execution checkpoint.
+    // Falling back to graph.start would re-execute effects already committed.
+    let Some(last_route) = memory
+        .committed_stage_outcomes
+        .values()
+        .filter_map(|record| record.routed_seq)
+        .max()
+    else {
+        return Ok(());
+    };
+    if snapshot_seq.is_none_or(|seq| seq < last_route) {
+        return Err(EngineError::Internal(
+            "consumed stage route lacks its durable execution checkpoint".into(),
+        ));
+    }
+    let routed_target = events.iter().find_map(|event| {
+        if event.seq.as_u64().checked_add(2) != Some(last_route) {
+            return None;
+        }
+        match event.payload.payload() {
+            EventPayload::EdgeTraversed { to, .. } => Some(to),
+            _ => None,
+        }
+    });
+    let route_checkpoint = reader
+        .latest_snapshot_at_or_before(EventSeq(last_route))
+        .await
+        .map_err(|error| EngineError::Storage(error.to_string()))?
+        .ok_or_else(|| {
+            EngineError::Internal("consumed stage route lacks its owning checkpoint".into())
+        })?;
+    let route_snapshot = EngineSnapshot::deserialize(&route_checkpoint.1)
+        .map_err(|error| EngineError::Internal(format!("consumed route checkpoint: {error}")))?;
+    let cursor = route_snapshot
+        .cursor
+        .into_cursor()
+        .map_err(|error| EngineError::Internal(error.to_string()))?;
+    if route_checkpoint.0.as_u64() != last_route
+        || route_snapshot.at_seq != last_route
+        || route_snapshot.stage_boundary_seq != last_route
+        || routed_target.is_none()
+        || cursor.node.as_str() != routed_target.map_or("", |node| node.as_str())
+    {
+        return Err(EngineError::Internal(
+            "consumed stage route contradicts its execution checkpoint cursor".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn latest_graph_from_events(
@@ -307,6 +374,7 @@ mod tests {
         );
 
         let run_config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -373,6 +441,7 @@ mod tests {
 
         // Persist RunConfig with an empty mcp_servers list (mirrors pre-M7 runs).
         let run_config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -428,6 +497,7 @@ mod tests {
         let previous_graph_hash = ContentHash::compute(b"base-flow");
         let graph_hash = ContentHash::compute(b"amended-flow");
         let run_config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,

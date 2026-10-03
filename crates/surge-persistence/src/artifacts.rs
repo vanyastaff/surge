@@ -67,6 +67,12 @@ impl ArtifactStore {
         }
     }
 
+    /// Configured canonical-store root; callers may inspect its ownership boundary.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.runs_root
+    }
+
     /// Resolve the default artifact root, mirroring `~/.surge/runs/`.
     ///
     /// # Errors

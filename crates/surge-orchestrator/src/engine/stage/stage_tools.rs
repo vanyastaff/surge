@@ -131,6 +131,7 @@ impl StageCalls {
                 outcome: candidate.outcome,
                 summary: candidate.summary,
                 artifacts_produced: candidate.artifacts_produced,
+                verification_report: candidate.verification_report.map(Box::new),
             }));
         }
         if tool == "request_human_input" {
@@ -338,6 +339,10 @@ mod descriptor_tests {
     #[tokio::test]
     async fn descriptor_is_self_contained_without_provider_environment_secrets() {
         let mut config = SessionConfig {
+            writer_id: surge_core::id::ExecutionWriterId::new(),
+            invocation: surge_core::id::StageInvocationId::new(),
+            runtime: "fixture".into(),
+            opening: surge_core::execution_recovery::SessionOpening::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
@@ -374,5 +379,84 @@ mod descriptor_tests {
         assert_eq!(stage.server.args, ["internal-stage-mcp"]);
         assert!(!format!("{stage:?}").contains(endpoint.credential()));
         endpoint.close().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod verification_transport_tests {
+    use super::*;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reports_keep_candidate_identity_and_changed_retry_is_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let run = surge_core::RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let context = StageToolContext {
+            run,
+            node: "verify".parse().unwrap(),
+            session: surge_core::SessionId::new(),
+            generation: surge_core::id::StageGenerationId::new(),
+        };
+        let mut calls = StageCalls::new(context.clone());
+        for (call_id, summary) in [("first", "first candidate"), ("second", "second candidate")] {
+            let args = serde_json::json!({"call_id":call_id,"outcome":"passed","summary":summary,"verification_report":{"schema_version":1,"task_id":"t1","outcome":"passed","summary":summary,"checks":[{"command":"test","result":"passed","covers":["criterion:1"]}]}});
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            let key = calls
+                .admit(StageToolCall {
+                    context: context.clone(),
+                    tool: "report_stage_outcome".into(),
+                    arguments: args.clone(),
+                    reply,
+                })
+                .unwrap();
+            let event = calls
+                .event(&writer, &key, &["passed".parse().unwrap()])
+                .await
+                .unwrap()
+                .unwrap();
+            let BridgeEvent::OutcomeReported {
+                verification_report: Some(report),
+                ..
+            } = event
+            else {
+                panic!("candidate report lost")
+            };
+            assert_eq!(report.summary, summary);
+            assert!(!receive.await.unwrap().is_error);
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            assert!(
+                calls
+                    .admit(StageToolCall {
+                        context: context.clone(),
+                        tool: "report_stage_outcome".into(),
+                        arguments: args.clone(),
+                        reply
+                    })
+                    .is_none()
+            );
+            assert!(
+                !receive.await.unwrap().is_error,
+                "identical retry returns immutable receipt"
+            );
+            let mut changed = args;
+            changed["verification_report"]["summary"] = serde_json::json!("different report");
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            assert!(
+                calls
+                    .admit(StageToolCall {
+                        context: context.clone(),
+                        tool: "report_stage_outcome".into(),
+                        arguments: changed,
+                        reply
+                    })
+                    .is_none()
+            );
+            assert!(
+                receive.await.unwrap().is_error,
+                "same call ID cannot replace its report"
+            );
+        }
     }
 }

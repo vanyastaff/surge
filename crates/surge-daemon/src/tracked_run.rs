@@ -35,6 +35,32 @@ impl TrackingContext {
         Self(Source::Synthetic)
     }
 
+    /// Durable host capabilities; synthetic adapters cannot mutate tasks.
+    pub(crate) fn task_sources(&self) -> Option<(Arc<Engine>, Arc<Storage>)> {
+        match &self.0 {
+            Source::Durable { engine, storage } => Some((engine.clone(), storage.clone())),
+            Source::Synthetic => None,
+        }
+    }
+
+    /// Subscribe before the owned task startup transaction.
+    pub(crate) async fn task_run(
+        &self,
+        claim: &surge_persistence::work_items::WorkItemLaunchClaim,
+        resume: bool,
+    ) -> Result<TrackedRun, EngineError> {
+        let prepared = self.prepare(claim.run(), resume).await?;
+        let Some((engine, _)) = self.task_sources() else {
+            return Err(EngineError::Storage("task host unavailable".into()));
+        };
+        let handle = if resume {
+            engine.resume_work_item(claim).await?
+        } else {
+            engine.start_work_item(claim).await?
+        };
+        Ok(TrackedRun { handle, prepared })
+    }
+
     async fn prepare(&self, id: RunId, resume: bool) -> Result<Prepared, EngineError> {
         match &self.0 {
             Source::Synthetic => Ok(Prepared::Synthetic),
@@ -312,6 +338,8 @@ async fn final_flush(
 pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
     let mut definitive = None;
     let mut parked = None;
+    let mut suspended = None;
+    let mut recovery = None;
     for (index, event) in events.iter().enumerate() {
         if event.seq.0 != index as u64 + 1 {
             return false;
@@ -326,6 +354,25 @@ pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
             EventPayload::RunAborted { reason } => Some(RunOutcome::Aborted {
                 reason: reason.clone(),
             }),
+            EventPayload::RunRecoveryRequired {
+                control_generation,
+                diagnostic,
+            } => {
+                recovery = Some(RunOutcome::RecoveryRequired {
+                    control_generation: *control_generation,
+                    diagnostic: diagnostic.clone(),
+                });
+                None
+            },
+            EventPayload::RunSuspended { fence } if fence.cleanup_confirmed => {
+                suspended = Some(fence.clone());
+                None
+            },
+            EventPayload::RunContinued { .. } => {
+                suspended = None;
+                recovery = None;
+                None
+            },
             EventPayload::RunParked { wake_at, .. } => {
                 parked = Some(*wake_at);
                 None
@@ -344,6 +391,12 @@ pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
         }
     }
     definitive
+        .or(recovery)
+        .or_else(|| {
+            suspended.map(|fence| RunOutcome::Suspended {
+                fence: Box::new(fence),
+            })
+        })
         .or_else(|| parked.map(|wake_at| RunOutcome::Parked { wake_at }))
         .as_ref()
         == Some(outcome)

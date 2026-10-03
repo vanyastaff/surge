@@ -11,6 +11,14 @@ supersedes: none
 
 The competitive-waves plan promised a first-class Run Report: one document a reviewer opens to accept or reject a run without reading the transcript (`.autopilot/competitive-waves/manifest.md` R27/R28/R33; brief, verbatim: "`RunReport` type in `surge-core`, compiled from the event log: nodes, outcomes, verifier verdicts, evidence artifacts, cost, skills bound, memory receipts, steers, approvals"). Waves 1–2 of the same plan spent several tasks making sure the facts a report would need are actually *in* the log — `SkillBound` (Task 03), a typed `EscalationCause` (Task 17), context-pack receipts as a planned-but-not-yet-wired event (Task 06) — precisely so a later reader would not have to reconstruct any of it from configuration, prompts, or agent-reported text.
 
+Update (2026-10-03): context-pack receipts now come from each agent's own
+`StageInputsResolved` event. The run freezes candidate claims and budget in a
+content-addressed artifact; every node-stage attempt builds its pack from that
+snapshot, and the report projects a node-and-attempt-specific receipt. The event
+records the attempt number so retries remain distinct. Older journal payloads
+decode with attempt `0`, rendered as unknown (`#?`). The earlier wording
+"planned-but-not-yet-wired" records the state when this ADR was written.
+
 That earlier work only pays off if the report actually reads the log as its only input. Two other shapes were live options going in:
 
 1. **Read from the engine's live `RunState`.** `surge_core::run_state::fold` already exists, is pure, and is unit-tested against event fixtures — reusing it looked at first like the obvious way to avoid a second fold over the same events.

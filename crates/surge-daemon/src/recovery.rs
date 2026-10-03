@@ -305,6 +305,10 @@ pub async fn plan_recovery(
 
     let mut decisions = Vec::new();
     for summary in runs {
+        // Persistent tasks use their claim-fenced recovery owner, never generic resume.
+        if storage.work_items().for_run(summary.id)?.is_some() {
+            continue;
+        }
         if owned.contains(&summary.id) {
             continue;
         }

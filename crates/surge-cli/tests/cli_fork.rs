@@ -98,6 +98,7 @@ async fn seed_parent(home: &Path) -> RunId {
     let start = graph.start.clone();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let config = RunConfig {
+        bootstrap_edit_loop_cap: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
@@ -246,6 +247,7 @@ async fn seed_agent_parent(home: &Path) -> RunId {
     let start = graph.start.clone();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let config = RunConfig {
+        bootstrap_edit_loop_cap: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,

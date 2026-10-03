@@ -191,6 +191,8 @@ async fn stage_with_cleanup(
             outcome: "done".parse().unwrap(),
             summary: "validated result".into(),
             artifacts_produced: vec![],
+
+            verification_report: None,
         })
         .await;
         let worker = mock.clone();
@@ -214,10 +216,15 @@ async fn stage_with_cleanup(
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -287,10 +294,15 @@ async fn agent_stage_with_profile_registry_reports_normalized_runtime() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],
@@ -412,10 +424,15 @@ async fn agent_stage_with_unregistered_mock_runtime_falls_back_to_raw_id_not_non
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         steers: Vec::new(),
         node: &node,
+        attempt: 1,
         agent_config: &cfg,
         bound_skills: &[],
         declared_outcomes: &[],

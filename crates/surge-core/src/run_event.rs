@@ -74,6 +74,15 @@ pub enum EventPayload {
     StageToolReceipt {
         receipt: crate::stage_tool::StageToolReceipt,
     },
+    /// Current host observation. None explicitly invalidates freshness.
+    VerificationSubjectObserved {
+        subject: Option<crate::verification_evidence::VerificationSubject>,
+    },
+    /// Accepted durable criterion epoch for one task; missing context invalidates.
+    VerificationCriteriaAccepted {
+        task_id: crate::roadmap::RoadmapTaskId,
+        criteria: Option<crate::verification_evidence::VerificationCriteria>,
+    },
     // Lifecycle
     RunStarted {
         pipeline_template: Option<TemplateKey>,
@@ -223,9 +232,67 @@ pub enum EventPayload {
     },
     StageInputsResolved {
         node: NodeKey,
+        /// Stage attempt whose complete resolved inputs these hashes and
+        /// optional memory receipt describe. Legacy events did not carry it.
+        #[serde(default)]
+        attempt: u32,
         bindings: BTreeMap<String, ContentHash>,
+        /// Memory selection proof built for this node's project-memory binding.
+        #[serde(default)]
+        memory_receipt: Option<crate::context_pack::PackReceipt>,
+    },
+    /// Host-owned immutable task association, committed in the startup batch.
+    WorkItemAttemptBound {
+        context: crate::work_item::WorkItemContext,
+    },
+    /// A provider operation may have been accepted if establishment is interrupted here.
+    /// Coverage ownership intent committed before a provider or host tool may write.
+    ExecutionWriterIntent {
+        /// Host-authored local/external writer boundary.
+        intent: crate::execution_recovery::process::ExecutionWriterIntent,
+    },
+    /// Host-observed process identity after successful tool launch.
+    ExecutionWriterEstablished {
+        /// Exact preceding ownership intent.
+        writer: crate::id::ExecutionWriterId,
+        /// Observed owned local container, never inferred from a PID alone.
+        container: crate::execution_recovery::process::WriterContainer,
+    },
+    /// Confirmed local cleanup; unresolved tools retain their coverage intent.
+    ExecutionWriterClosed {
+        /// Exact writer whose cleanup completed.
+        writer: crate::id::ExecutionWriterId,
+    },
+    SessionEstablishmentRequested {
+        node: NodeKey,
+        invocation: crate::id::StageInvocationId,
+        restore: bool,
+        /// Fresh host-authenticated tool authority; absent on legacy unbound establishment events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authority: Option<crate::stage_tool::StageToolContext>,
+    },
+    /// Nonterminal stop fence; registry confirmation requires this exact generation/prefix.
+    RunSuspended {
+        fence: crate::execution_recovery::SuspensionFence,
+    },
+    /// Resume authorization for the same attempt under a new control generation.
+    /// Continuation stopped without terminal failure because restore needs an operator choice.
+    RunRecoveryRequired {
+        /// Current durable control generation.
+        control_generation: u64,
+        /// Actionable restore/cleanup diagnostic.
+        diagnostic: String,
+    },
+    RunContinued {
+        control_generation: u64,
     },
     SessionOpened {
+        /// Once-admitted quota opening epoch; absent for legacy and primary openings.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<crate::id::WorkItemOperationId>,
+        /// Actual provider metadata, absent in journals recorded before continuation support.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        opened: Option<crate::execution_recovery::OpenedSession>,
         node: NodeKey,
         session: SessionId,
         /// The node's flow-authored profile (e.g. `"implementer@1.0"`) —
@@ -283,6 +350,32 @@ pub enum EventPayload {
         node: NodeKey,
         outcome: OutcomeKey,
         summary: String,
+    },
+    /// Host-accepted outcome and required effects committed in one transaction.
+    StageOutcomeCommitted {
+        /// Authenticated invocation and ordered effects binding.
+        commit: crate::execution_recovery::commit::StageOutcomeCommit,
+    },
+    /// Consumes the exact accepted invocation in the same transaction as its post-route snapshot.
+    StageRouteCommitted {
+        /// Logical invocation whose accepted outcome was consumed.
+        invocation: crate::id::StageInvocationId,
+        /// Actual event sequence of the matching acceptance marker.
+        outcome_commit_seq: u64,
+    },
+    /// Original human decision and its required effects accepted atomically.
+    GateStageOutcomeCommitted {
+        /// Exact request, answer, occurrence and adjacent effects binding.
+        commit: crate::execution_recovery::gate_commit::GateStageCommit,
+    },
+    /// Exact human acceptance consumed atomically with its route checkpoint.
+    GateStageRouteCommitted {
+        /// Original request, distinct from provider and transport identities.
+        request: crate::id::GateRequestId,
+        /// Durable stage occurrence which owns that request.
+        stage_entry_seq: u64,
+        /// Actual acceptance marker envelope sequence.
+        outcome_commit_seq: u64,
     },
     StageCompleted {
         node: NodeKey,
@@ -371,6 +464,9 @@ pub enum EventPayload {
         node: NodeKey,
         /// Content hash of the verification-report artifact.
         evidence: ContentHash,
+        /// Host-sealed report. Older journal events decode as unbound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report: Option<crate::roadmap::VerificationReportArtifact>,
     },
 
     /// An operator steer message (queued via `surge steer`) was delivered:
@@ -638,11 +734,23 @@ impl EventPayload {
             Self::GraphRevisionAccepted { .. } => "GraphRevisionAccepted",
             Self::StageEntered { .. } => "StageEntered",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
+            Self::WorkItemAttemptBound { .. } => "WorkItemAttemptBound",
+            Self::ExecutionWriterIntent { .. } => "execution_writer_intent",
+            Self::ExecutionWriterEstablished { .. } => "execution_writer_established",
+            Self::ExecutionWriterClosed { .. } => "execution_writer_closed",
+            Self::SessionEstablishmentRequested { .. } => "SessionEstablishmentRequested",
+            Self::RunSuspended { .. } => "RunSuspended",
+            Self::RunRecoveryRequired { .. } => "run_recovery_required",
+            Self::RunContinued { .. } => "RunContinued",
             Self::SessionOpened { .. } => "SessionOpened",
             Self::ToolCalled { .. } => "ToolCalled",
             Self::ToolResultReceived { .. } => "ToolResultReceived",
             Self::ArtifactProduced { .. } => "ArtifactProduced",
             Self::OutcomeReported { .. } => "OutcomeReported",
+            Self::StageOutcomeCommitted { .. } => "StageOutcomeCommitted",
+            Self::StageRouteCommitted { .. } => "StageRouteCommitted",
+            Self::GateStageOutcomeCommitted { .. } => "GateStageOutcomeCommitted",
+            Self::GateStageRouteCommitted { .. } => "GateStageRouteCommitted",
             Self::StageCompleted { .. } => "StageCompleted",
             Self::StageFailed { .. } => "StageFailed",
             Self::SessionClosed { .. } => "SessionClosed",
@@ -652,6 +760,8 @@ impl EventPayload {
             Self::LoopCompleted { .. } => "LoopCompleted",
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",
+            Self::VerificationSubjectObserved { .. } => "VerificationSubjectObserved",
+            Self::VerificationCriteriaAccepted { .. } => "VerificationCriteriaAccepted",
             Self::TaskVerified { .. } => "TaskVerified",
             Self::SteerDelivered { .. } => "SteerDelivered",
             Self::ApprovalRequested { .. } => "ApprovalRequested",
@@ -769,6 +879,9 @@ pub enum ElevationDecision {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunConfig {
+    /// Immutable bootstrap edit limit; old unbound journals do not infer current policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap_edit_loop_cap: Option<u32>,
     pub sandbox_default: SandboxMode,
     pub approval_default: ApprovalPolicy,
     #[serde(default)]
@@ -789,6 +902,22 @@ pub struct RunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_inputs_resolved_legacy_payload_defaults_attempt_and_memory_receipt() {
+        let payload: EventPayload = serde_json::from_str(
+            r#"{"type":"stage_inputs_resolved","node":"worker","bindings":{}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            payload,
+            EventPayload::StageInputsResolved {
+                attempt: 0,
+                memory_receipt: None,
+                ..
+            }
+        ));
+    }
 
     fn minimal_graph_for_event(start: &str) -> Graph {
         use crate::graph::{GraphMetadata, SCHEMA_VERSION};
@@ -833,6 +962,7 @@ mod tests {
             project_path: PathBuf::from("/work/proj"),
             initial_prompt: "build it".into(),
             config: RunConfig {
+                bootstrap_edit_loop_cap: None,
                 budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
@@ -849,6 +979,7 @@ mod tests {
     fn run_config_persists_budget_and_defaults_when_absent() {
         use crate::budget::{BudgetGuard, BudgetLimits};
         let config = RunConfig {
+            bootstrap_edit_loop_cap: None,
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -906,6 +1037,7 @@ mod tests {
                 name: crate::archetype::ArchetypeName::Linear3,
                 milestones: Some(1),
                 edit_loop_cap: Some(3),
+                node_capacity_estimate: None,
             }),
         };
         let bytes = payload.to_bincode().unwrap();
@@ -1111,6 +1243,8 @@ mod tests {
     fn session_opened_and_closed_roundtrip() {
         let session = SessionId::new();
         let opened = EventPayload::SessionOpened {
+            handoff: None,
+            opened: None,
             node: NodeKey::try_from("agent_1").unwrap(),
             session,
             agent: "claude-opus-4-7".into(),
@@ -1254,6 +1388,8 @@ mod tests {
                 task_id: "m1-t1".into(),
                 node: NodeKey::try_from("verify_1").unwrap(),
                 evidence: ContentHash::compute(b"verification-report"),
+
+                report: None,
             },
         ];
         let discriminants = ["TaskStatusChanged", "TaskDiscovered", "TaskVerified"];
@@ -1537,6 +1673,7 @@ mod tests {
         use std::time::Duration;
 
         let cfg = RunConfig {
+            bootstrap_edit_loop_cap: None,
             budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,

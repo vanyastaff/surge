@@ -135,6 +135,14 @@ impl std::fmt::Debug for StageMcpConfig {
 /// it calls `Sandbox::boxed_clone()` and reconstructs the box. Callers that
 /// want to hold a config across multiple opens must rebuild it from inputs.
 pub struct SessionConfig {
+    /// Unique local writer whose intent precedes this connection attempt.
+    pub writer_id: surge_core::id::ExecutionWriterId,
+    /// Stable stage invocation, independent from authenticated connection generations.
+    pub invocation: surge_core::id::StageInvocationId,
+    /// Canonical provider runtime chosen by the host.
+    pub runtime: String,
+    /// Explicit new-session or provider restoration intent.
+    pub opening: surge_core::execution_recovery::SessionOpening,
     /// Present only for engine stages. One-shot sessions do not expose stage tools.
     pub stage_mcp: Option<Box<StageMcpConfig>>,
     /// Agent flavor — drives subprocess invocation. The bridge resolves the
@@ -327,6 +335,10 @@ mod tests {
 
     fn cfg_with(outcomes: Vec<&str>, tools: Vec<ToolDef>) -> SessionConfig {
         SessionConfig {
+            writer_id: surge_core::id::ExecutionWriterId::new(),
+            invocation: surge_core::id::StageInvocationId::new(),
+            runtime: "fixture".into(),
+            opening: Default::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },

@@ -98,20 +98,24 @@ impl BootstrapHarness {
         // 500 * 10ms = 5s — generous enough for Windows CI runners,
         // which were timing out at the prior 1s budget under load.
         for _ in 0..500 {
-            let count = self
-                .mock
-                .recorded_calls
-                .lock()
-                .await
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::Subscribe))
-                .count();
+            let count = self.mock.subscribe_count();
             if count >= expected {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("timed out waiting for {expected} bridge subscribers");
+        let calls = self.mock.recorded_calls.lock().await.clone();
+        let events = self.read_events().await;
+        panic!(
+            "timed out waiting for {expected} bridge subscribers; observed {}; calls={calls:?}; recent events={:?}",
+            self.mock.subscribe_count(),
+            events
+                .iter()
+                .rev()
+                .take(8)
+                .map(|event| &event.payload)
+                .collect::<Vec<_>>()
+        );
     }
 
     pub async fn complete_agent_with_artifact(
@@ -128,15 +132,31 @@ impl BootstrapHarness {
     }
 
     pub async fn report_agent_outcome(&self, session_index: usize, outcome: &str, artifact: &str) {
+        let expected_session = self.sessions[session_index];
         self.mock
             .enqueue_event(BridgeEvent::OutcomeReported {
                 session: self.sessions[session_index],
                 outcome: OutcomeKey::try_from(outcome).unwrap(),
                 summary: "scripted".into(),
                 artifacts_produced: vec![artifact.into()],
+
+                verification_report: None,
             })
             .await;
-        self.mock.pump_scripted_events().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let calls = self.mock.recorded_calls.lock().await;
+                if calls.iter().any(|call| matches!(call, RecordedCall::SendMessage { session } if *session == expected_session)) {
+                    drop(calls);
+                    self.mock.pump_scripted_events().await;
+                    return;
+                }
+                drop(calls);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for the provider prompt before outcome");
     }
 
     pub async fn approve_next_gate(&self) {
@@ -154,6 +174,7 @@ impl BootstrapHarness {
         // exceed the prior 1s budget under heavy parallel-test CPU
         // contention, which surfaced as a low-frequency flake
         // ("timed out waiting for pending bootstrap HumanGate").
+        let mut last_error = None;
         for _ in 0..500 {
             let events = self.read_events().await;
             let request = events
@@ -161,11 +182,12 @@ impl BootstrapHarness {
                 .rev()
                 .find_map(|event| match event.payload.payload() {
                     EventPayload::HumanInputRequested {
-                        node,
-                        call_id,
+                        node, call_id: Some(call_id),
                         session: None,
                         ..
-                    } => Some((node.clone(), call_id.clone())),
+                    } if !events.iter().any(|candidate| {
+                        matches!(candidate.payload.payload(), EventPayload::HumanInputResolved { call_id: Some(resolved_id), .. } if resolved_id == call_id)
+                    }) => Some((node.clone(), call_id.clone())),
                     _ => None,
                 });
             if let Some((node, call_id)) = request {
@@ -173,13 +195,22 @@ impl BootstrapHarness {
                     .engine
                     .resolve_requested_input(
                         self.run_id,
-                        node,
-                        call_id,
+                        node.clone(),
+                        Some(call_id.clone()),
                         serde_json::json!({ "outcome": outcome, "comment": comment }),
                     )
                     .await;
-                if result.is_ok() {
-                    return;
+                let accepted = self.read_events().await.iter().any(|event| {
+                    matches!(event.payload.payload(), EventPayload::HumanInputResolved { call_id: Some(accepted_id), .. } if accepted_id == &call_id)
+                });
+                match result {
+                    Ok(()) if accepted => return,
+                    Ok(()) => {
+                        last_error = Some(format!(
+                            "resolve returned success without durable answer for {node}/{call_id:?}"
+                        ))
+                    },
+                    Err(error) => last_error = Some(error.to_string()),
                 }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -191,7 +222,9 @@ impl BootstrapHarness {
             .take(5)
             .map(|event| &event.payload)
             .collect();
-        panic!("timed out waiting for pending bootstrap HumanGate; latest events: {last_events:?}");
+        panic!(
+            "timed out waiting for pending bootstrap HumanGate; last resolution error: {last_error:?}; latest events: {last_events:?}"
+        );
     }
 
     pub async fn read_events(&self) -> Vec<ReadEvent> {

@@ -164,6 +164,9 @@ pub struct BootstrapCaptureFields {
     pub graph: BootstrapContentRef,
     /// Captured project context, when present.
     pub project_context: Option<BootstrapContentRef>,
+    /// Frozen bootstrap edit policy; absent in legacy captures. Zero means unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap_edit_loop_cap: Option<u32>,
     /// Effective profile/registry/capacity identity actually supplied to the engine.
     pub runtime_identity: ContentHash,
     /// Referenced configuration; values stay outside this journal.
@@ -281,6 +284,8 @@ pub enum BootstrapAttentionReason {
     MissingCredential,
     /// Engine startup evidence is incomplete.
     PartialStartup,
+    /// Legacy capture has no authoritative bootstrap edit policy.
+    MissingBootstrapPolicy,
     /// Isolation ownership cannot be confirmed.
     WorktreeConflict,
     /// Graph or artifacts could not be validated.
@@ -405,12 +410,34 @@ mod tests {
                 digest: ContentHash::compute(b"graph"),
             },
             project_context: None,
+            bootstrap_edit_loop_cap: None,
             runtime_identity: ContentHash::compute(b"runtime"),
             configuration: vec![],
             credential_refs: vec!["env:API_KEY".into(), "secret:agent_auth".into()],
         };
         let valid: BootstrapCapture = fields.try_into().unwrap();
         let json = serde_json::to_value(&valid).unwrap();
+        let mut frozen = json.clone();
+        frozen["bootstrap_edit_loop_cap"] = serde_json::json!(0);
+        assert!(
+            json.get("bootstrap_edit_loop_cap").is_none(),
+            "legacy capture bytes must omit unknown policy"
+        );
+        assert_eq!(
+            valid.fingerprint().unwrap(),
+            ContentHash::compute(&serde_json::to_vec(&valid).unwrap())
+        );
+        let unlimited = serde_json::from_value::<BootstrapCapture>(frozen).unwrap();
+        assert_eq!(unlimited.fields().bootstrap_edit_loop_cap, Some(0));
+        assert_ne!(
+            valid.fingerprint().unwrap(),
+            unlimited.fingerprint().unwrap()
+        );
+        assert_eq!(
+            serde_json::from_slice::<BootstrapCapture>(&serde_json::to_vec(&unlimited).unwrap())
+                .unwrap(),
+            unlimited
+        );
         assert_eq!(
             serde_json::from_value::<BootstrapCapture>(json.clone()).unwrap(),
             valid

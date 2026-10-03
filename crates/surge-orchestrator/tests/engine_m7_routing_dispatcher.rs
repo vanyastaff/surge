@@ -97,6 +97,8 @@ async fn reserved_injected_tool_names_are_never_shadowed_by_mcp() {
     // A reserved name is not routed to MCP — it falls through as
     // Unsupported here (the bridge handles the real injected tool).
     let ctx = ToolDispatchContext {
+        writer: None,
+        invocation: None,
         run_id: RunId::new(),
         session_id: SessionId::new(),
         worktree_root: std::path::Path::new("/tmp"),
@@ -124,6 +126,8 @@ async fn engine_route_is_taken_when_collision() {
     )];
     let r = RoutingToolDispatcher::new(Arc::new(EngineStub), registry, &mcp_tools, &HashMap::new());
     let ctx = ToolDispatchContext {
+        writer: None,
+        invocation: None,
         run_id: RunId::new(),
         session_id: SessionId::new(),
         worktree_root: std::path::Path::new("/tmp"),

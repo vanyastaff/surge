@@ -12,7 +12,8 @@ use surge_core::SessionId;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-type OpenReply = oneshot::Sender<Result<SessionId, OpenSessionError>>;
+type OpenReply =
+    oneshot::Sender<Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>>;
 type PromptReply = oneshot::Sender<Result<(), SendMessageError>>;
 type CloseReply = oneshot::Sender<Result<(), CloseSessionError>>;
 
@@ -97,8 +98,9 @@ pub(super) async fn run(
                             closing_ids.insert(session.session_id); closings.push(tokio::task::spawn_local(close(session, true, None)));
                         } else {
                             let established = session.established.take();
+                            let opened = session.opened.clone();
                             sessions.borrow_mut().insert(id, session);
-                            if reply.send(Ok(id)).is_err() {
+                            if reply.send(Ok(opened)).is_err() {
                                 if let Some(session) = sessions.borrow_mut().remove(&id) {
                                     closing_ids.insert(session.session_id); closings.push(tokio::task::spawn_local(close(session, true, None)));
                                 }
@@ -139,7 +141,7 @@ pub(super) async fn run(
                         let tx = events.clone();
                         openings.push(tokio::task::spawn_local(async move {
                             let _permit = permit;
-                            let result = worker::open_session_impl(&tx, config, &token, &mut reply, timeouts.handshake).await;
+                            let result = worker::open_session_impl(&tx, *config, &token, &mut reply, timeouts.handshake).await;
                             OpenDone { result, reply }
                         }));
                     },
@@ -151,6 +153,7 @@ pub(super) async fn run(
                                 Some(entry) if entry.prompt_running => Err(SendMessageError::PromptAlreadyRunning { session }),
                                 Some(entry) => {
                                     entry.prompt_running = true;
+                                    entry.inner.borrow_mut().live_ingress = true;
                                     entry.prompt_done = CancellationToken::new();
                                     Ok((entry.connection.clone(), entry.inner.borrow().acp_session_id.clone(), entry.cancel.clone(), entry.prompt_done.clone(), entry.secrets.clone()))
                                 },

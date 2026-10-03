@@ -132,6 +132,7 @@ impl Scenario {
 fn provider_error_for_key(key: &str) -> acp::Error {
     match key {
         "429_retry_after" => acp::Error::new(-32000, "429 Too Many Requests: Retry-After: 30"),
+        "429_no_reset" => acp::Error::new(-32000, "429 Too Many Requests"),
         other => acp::Error::internal_error().data(json!({ "unknown_prompt_error_key": other })),
     }
 }
@@ -195,7 +196,11 @@ impl MockAgent {
     }
 
     async fn report(&self, session: acp::SessionId, outcome: &str) -> acp::Result<()> {
-        let arguments = json!({"call_id":"report-1","outcome":outcome,"summary":"controlled stage report","artifacts_produced":[]});
+        let mut arguments = json!({"call_id":"report-1","outcome":outcome,"summary":"controlled stage report","artifacts_produced":[]});
+        if let Ok(report) = env::var("SURGE_TEST_VERIFICATION_REPORT") {
+            arguments["verification_report"] = serde_json::from_str(&report)
+                .map_err(|error| acp::Error::new(-32000, error.to_string()))?;
+        }
         let peer = self.stage_peer.borrow().clone();
         if let Some(peer) = peer {
             let reply = peer.call("report_stage_outcome", arguments).await?;
@@ -222,6 +227,54 @@ impl MockAgent {
     }
 }
 
+fn argument_value(flag: &str) -> Option<String> {
+    let args: Vec<_> = env::args().collect();
+    args.iter()
+        .position(|value| value == flag)
+        .and_then(|index| args.get(index + 1).cloned())
+}
+fn record_wire(kind: &str, request: &impl serde::Serialize) -> Result<(), acp::Error> {
+    use std::io::Write;
+    if let Some(path) = argument_value("--wire-log") {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|_| acp::Error::internal_error())?;
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({"operation":kind,"request":request})
+        )
+        .map_err(|_| acp::Error::internal_error())?;
+    }
+    Ok(())
+}
+fn create_provider_identity(cwd: &std::path::Path) -> Result<String, acp::Error> {
+    let Some(path) = argument_value("--session-store") else {
+        return Ok("mock-session-1".into());
+    };
+    let mut sessions: std::collections::BTreeMap<String, std::path::PathBuf> =
+        if std::path::Path::new(&path).exists() {
+            serde_json::from_slice(&std::fs::read(&path).map_err(|_| acp::Error::internal_error())?)
+                .map_err(|_| acp::Error::internal_error())?
+        } else {
+            Default::default()
+        };
+    let id = format!("mock-provider-{}", surge_core::RunId::new());
+    sessions.insert(
+        id.clone(),
+        cwd.canonicalize()
+            .map_err(|_| acp::Error::internal_error())?,
+    );
+    std::fs::write(
+        path,
+        serde_json::to_vec(&sessions).map_err(|_| acp::Error::internal_error())?,
+    )
+    .map_err(|_| acp::Error::internal_error())?;
+    Ok(id)
+}
+
 impl MockAgent {
     async fn initialize(
         &self,
@@ -238,10 +291,27 @@ impl MockAgent {
         if env::args().any(|arg| arg == "--stall-initialize") {
             std::future::pending::<()>().await;
         }
-        Ok(
+        if let Some(marker) = argument_value("--stall-initialize-once")
+            && std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(marker)
+                .is_ok()
+        {
+            std::future::pending::<()>().await;
+        }
+        let mut response =
             acp::InitializeResponse::new(agent_client_protocol::schema::ProtocolVersion::V1)
-                .agent_info(acp::Implementation::new("mock-acp-agent", "0.0.1")),
-        )
+                .agent_info(acp::Implementation::new("mock-acp-agent", "0.0.1"));
+        let mode = argument_value("--session-capability-policy-file")
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_else(|| argument_value("--session-capabilities").unwrap_or_default());
+        response.agent_capabilities.load_session = matches!(mode.as_str(), "load" | "both");
+        if matches!(mode.as_str(), "resume" | "both") {
+            response.agent_capabilities.session_capabilities.resume =
+                Some(acp::SessionResumeCapabilities::default());
+        }
+        Ok(response)
     }
 
     async fn authenticate(
@@ -256,6 +326,7 @@ impl MockAgent {
         &self,
         req: acp::NewSessionRequest,
     ) -> Result<acp::NewSessionResponse, acp::Error> {
+        record_wire("new_session", &req)?;
         self.log(&format!("new_session: {req:?}"));
         if env::args().any(|arg| arg == "--stage-mcp") || req.mcp_servers.iter().any(|server| matches!(server, acp::McpServer::Stdio(server) if server.name == "surge-stage")) {
             let peer = stage_mcp::Peer::connect(&req).await?;
@@ -273,7 +344,7 @@ impl MockAgent {
         }
         // `--stall-new-session-once <marker>`: hang only on the first launch
         // (creates the marker), answer normally once it exists — a transient
-        // adapter hang for the bridge's handshake retry.
+        // adapter hang that tests must treat as uncertain establishment.
         let args: Vec<_> = env::args().collect();
         if let Some(index) = args
             .iter()
@@ -289,7 +360,8 @@ impl MockAgent {
                 std::future::pending::<()>().await;
             }
         }
-        let response = acp::NewSessionResponse::new(acp::SessionId::new("mock-session-1"));
+        let response =
+            acp::NewSessionResponse::new(acp::SessionId::new(create_provider_identity(&req.cwd)?));
         // `--config-options`: advertise a model and a reasoning-level select
         // (ACP `configOptions`) so clients can exercise set_config_option.
         if env::args().any(|arg| arg == "--config-options") {
@@ -298,13 +370,84 @@ impl MockAgent {
         Ok(response)
     }
 
+    async fn restore_provider(
+        &self,
+        id: &acp::SessionId,
+        cwd: &std::path::Path,
+        servers: Vec<acp::McpServer>,
+    ) -> Result<(), acp::Error> {
+        let path = argument_value("--session-store")
+            .ok_or_else(|| acp::Error::new(-32001, "unknown provider session"))?;
+        let sessions: std::collections::BTreeMap<String, std::path::PathBuf> =
+            serde_json::from_slice(&std::fs::read(path).map_err(|_| acp::Error::internal_error())?)
+                .map_err(|_| acp::Error::internal_error())?;
+        if sessions.get(id.0.as_ref())
+            != Some(
+                &cwd.canonicalize()
+                    .map_err(|_| acp::Error::internal_error())?,
+            )
+        {
+            return Err(acp::Error::new(
+                -32001,
+                "unknown provider session or changed cwd",
+            ));
+        }
+        if !servers.is_empty() {
+            *self.stage_peer.borrow_mut() = Some(
+                stage_mcp::Peer::connect(&acp::NewSessionRequest::new(cwd).mcp_servers(servers))
+                    .await?,
+            );
+        }
+        Ok(())
+    }
+    async fn load_session(
+        &self,
+        req: acp::LoadSessionRequest,
+    ) -> Result<acp::LoadSessionResponse, acp::Error> {
+        record_wire("load_session", &req)?;
+        self.restore_provider(&req.session_id, &req.cwd, req.mcp_servers.clone())
+            .await?;
+        if env::args().any(|arg| arg == "--load-history-permission") {
+            let request = acp::RequestPermissionRequest::new(
+                req.session_id.clone(),
+                acp::ToolCallUpdate::new(
+                    "historical-permission",
+                    acp::ToolCallUpdateFields::new().title("write_file"),
+                ),
+                vec![acp::PermissionOption::new(
+                    "allow",
+                    "Allow",
+                    acp::PermissionOptionKind::AllowOnce,
+                )],
+            );
+            let (reply, received) = oneshot::channel();
+            self.permission_tx
+                .send((request, reply))
+                .map_err(|_| acp::Error::internal_error())?;
+            let response = received.await.map_err(|_| acp::Error::internal_error())??;
+            record_wire("historical_permission_response", &response)?;
+        }
+        Ok(acp::LoadSessionResponse::new())
+    }
+    async fn resume_session(
+        &self,
+        req: acp::ResumeSessionRequest,
+    ) -> Result<acp::ResumeSessionResponse, acp::Error> {
+        record_wire("resume_session", &req)?;
+        self.restore_provider(&req.session_id, &req.cwd, req.mcp_servers.clone())
+            .await?;
+        Ok(acp::ResumeSessionResponse::new())
+    }
     async fn prompt(&self, req: acp::PromptRequest) -> Result<acp::PromptResponse, acp::Error> {
+        record_wire("prompt", &req)?;
         record_marker("--prompt-file")?;
         let count = self.prompt_count.get() + 1;
         self.prompt_count.set(count);
         self.log(&format!("prompt #{count}: session={:?}", req.session_id));
 
-        if env::args().any(|arg| arg == "--stage-mcp") {
+        if env::args().any(|arg| arg == "--stage-mcp")
+            && !matches!(&self.scenario, Scenario::PromptError(_))
+        {
             let peer = self
                 .stage_peer
                 .borrow()
@@ -363,6 +506,7 @@ impl MockAgent {
                 .send((request, tx))
                 .map_err(|_| acp::Error::internal_error())?;
             let response = rx.await.map_err(|_| acp::Error::internal_error())??;
+            record_wire("current_permission_response", &response)?;
             if !matches!(response.outcome, acp::RequestPermissionOutcome::Selected(_)) {
                 return Err(acp::Error::internal_error());
             }
@@ -389,10 +533,20 @@ impl MockAgent {
         match &self.scenario {
             // ── prompt_error=KEY ─────────────────────────────────────────────
             Scenario::PromptError(key) => {
-                self.log(&format!(
-                    "prompt_error: returning scripted error for key {key:?}"
-                ));
-                return Err(provider_error_for_key(key));
+                if let Some(marker) = argument_value("--prompt-error-once")
+                    && std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(marker)
+                        .is_err()
+                {
+                    self.report(sid, "done").await?;
+                } else {
+                    self.log(&format!(
+                        "prompt_error: returning scripted error for key {key:?}"
+                    ));
+                    return Err(provider_error_for_key(key));
+                }
             },
 
             // ── echo ────────────────────────────────────────────────────────

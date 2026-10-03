@@ -49,6 +49,7 @@ pub(crate) struct AcpSession {
     pub tail: Rc<RefCell<Vec<u8>>>,
     pub events: broadcast::Sender<BridgeEvent>,
     pub established: Option<BridgeEvent>,
+    pub opened: surge_core::execution_recovery::OpenedSession,
 }
 
 pub(crate) type SessionMap = Rc<RefCell<HashMap<SessionId, AcpSession>>>;
@@ -70,6 +71,10 @@ pub(crate) async fn handle_session_notification(
     use crate::bridge::event::AgentMessageMeta;
     use crate::bridge::tokens::extract_usage;
     use agent_client_protocol::schema::v1::SessionUpdate;
+
+    if !state.borrow().live_ingress || state.borrow().closing {
+        return;
+    }
 
     // Update last_token_usage if this notification carries it.
     if let Some(snap) = extract_usage(&notif.update) {
@@ -258,7 +263,9 @@ pub(crate) async fn open_session_impl(
     event_tx: &broadcast::Sender<BridgeEvent>,
     config: SessionConfig,
     shutdown: &tokio_util::sync::CancellationToken,
-    reply: &mut tokio::sync::oneshot::Sender<Result<SessionId, OpenSessionError>>,
+    reply: &mut tokio::sync::oneshot::Sender<
+        Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>,
+    >,
     handshake_timeout: Duration,
 ) -> Result<AcpSession, OpenSessionError> {
     // A launcher-started adapter (npx) occasionally never answers the
@@ -271,7 +278,8 @@ pub(crate) async fn open_session_impl(
     loop {
         match open_session_attempt(event_tx, &config, shutdown, reply, handshake_timeout).await {
             Err(OpenSessionError::HandshakeTimedOut { phase, timeout })
-                if attempt < HANDSHAKE_ATTEMPTS
+                if phase == "initialize"
+                    && attempt < HANDSHAKE_ATTEMPTS
                     && !shutdown.is_cancelled()
                     && !reply.is_closed() =>
             {
@@ -296,7 +304,9 @@ async fn open_session_attempt(
     event_tx: &broadcast::Sender<BridgeEvent>,
     config: &SessionConfig,
     shutdown: &tokio_util::sync::CancellationToken,
-    reply: &mut tokio::sync::oneshot::Sender<Result<SessionId, OpenSessionError>>,
+    reply: &mut tokio::sync::oneshot::Sender<
+        Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>,
+    >,
     handshake_timeout: Duration,
 ) -> Result<AcpSession, OpenSessionError> {
     if shutdown.is_cancelled() || reply.is_closed() {
@@ -402,6 +412,7 @@ async fn open_session_attempt(
         config.bindings.clone(),
         worktree_root_canonical,
     );
+    inner.borrow_mut().live_ingress = false;
 
     // The ACP SDK requires `futures::AsyncWrite + Unpin` / `futures::AsyncRead + Unpin`.
     // Tokio's ChildStdin/ChildStdout implement tokio's AsyncWrite/AsyncRead, so we wrap
@@ -432,39 +443,34 @@ async fn open_session_attempt(
     ));
 
     let handshake = async {
-        handshake_step(
-            connection.initialize(init_request),
-            "initialize",
-            shutdown,
-            reply,
-            deadline,
-            handshake_timeout,
-        )
-        .await?;
-        handshake_step(
-            connection.new_session(
-                NewSessionRequest::new(&config.working_dir).mcp_servers(
-                    config
-                        .stage_mcp
-                        .as_ref()
-                        .map(|stage| {
-                            vec![agent_client_protocol::schema::v1::McpServer::Stdio(
-                                stage.server.clone(),
-                            )]
-                        })
-                        .unwrap_or_default(),
-                ),
-            ),
-            "new_session",
-            shutdown,
-            reply,
-            deadline,
-            handshake_timeout,
-        )
-        .await
-    }
-    .await;
-    let response = match handshake {
+        use surge_core::execution_recovery::{SessionOpening, SessionOpenMode, SessionRestoreCapabilities};
+        let initialized = handshake_step(connection.initialize(init_request), "initialize", shutdown, reply, deadline, handshake_timeout).await?;
+        let capabilities = SessionRestoreCapabilities { resume: initialized.agent_capabilities.session_capabilities.resume.is_some(), load: initialized.agent_capabilities.load_session };
+        let servers = config.stage_mcp.as_ref().map(|stage| vec![agent_client_protocol::schema::v1::McpServer::Stdio(stage.server.clone())]).unwrap_or_default();
+        let canonical_cwd = config.working_dir.canonicalize().map_err(|_| OpenSessionError::HandshakeFailed { reason: "session directory unavailable".into() })?;
+        let launch_hash = surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes());
+        let (response, mode) = match &config.opening {
+            SessionOpening::New => (handshake_step(connection.new_session(NewSessionRequest::new(&canonical_cwd).mcp_servers(servers)), "new_session", shutdown, reply, deadline, handshake_timeout).await?, SessionOpenMode::New),
+            SessionOpening::Continue(saved) => {
+                if saved.cwd() != canonical_cwd || saved.runtime() != config.runtime || saved.launch_hash() != &launch_hash || saved.invocation() != config.invocation {
+                    return Err(OpenSessionError::HandshakeFailed { reason: "saved provider session differs from pinned runtime, launch, invocation or cwd".into() });
+                }
+                let provider_id = agent_client_protocol::schema::v1::SessionId::new(saved.provider_session_id().as_str());
+                let (options, mode) = if capabilities.resume {
+                    let restored = handshake_step(connection.resume_session(agent_client_protocol::schema::v1::ResumeSessionRequest::new(provider_id.clone(), &canonical_cwd).mcp_servers(servers)), "resume_session", shutdown, reply, deadline, handshake_timeout).await?;
+                    (restored.config_options, SessionOpenMode::Resume)
+                } else if capabilities.load {
+                    let restored = handshake_step(connection.load_session(agent_client_protocol::schema::v1::LoadSessionRequest::new(provider_id.clone(), &canonical_cwd).mcp_servers(servers)), "load_session", shutdown, reply, deadline, handshake_timeout).await?;
+                    (restored.config_options, SessionOpenMode::Load)
+                } else { return Err(OpenSessionError::HandshakeFailed { reason: "provider supports neither session/resume nor session/load; explicit replacement decision required".into() }); };
+                let mut response = agent_client_protocol::schema::v1::NewSessionResponse::new(provider_id);
+                response.config_options = options;
+                (response, mode)
+            }
+        };
+        Ok::<_, OpenSessionError>((response, capabilities, mode, canonical_cwd, launch_hash))
+    }.await;
+    let (response, capabilities, mode, canonical_cwd, launch_hash) = match handshake {
         Ok(response) => response,
         Err(error) => {
             let error = match error {
@@ -523,9 +529,51 @@ async fn open_session_attempt(
             return Err(error);
         }
     }
+    let opened = (|| {
+        let descriptor = surge_core::execution_recovery::ProviderSessionDescriptor::new(
+            surge_core::execution_recovery::ProviderSessionId::new(
+                response.session_id.to_string(),
+            )?,
+            config.invocation,
+            config.runtime.clone(),
+            launch_hash,
+            canonical_cwd,
+            capabilities,
+        )?;
+        let mut opened =
+            surge_core::execution_recovery::OpenedSession::new(session_id, descriptor, mode)?;
+        opened.execution_writer = Some(
+            surge_core::execution_recovery::process::ExecutionWriterObservation::new(
+                config.writer_id,
+                child.id().and_then(|pid| {
+                    crate::process_evidence::observe_container(
+                        pid,
+                        surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+                    )
+                    .ok()
+                }),
+            )?,
+        );
+        Ok::<_, surge_core::execution_recovery::RecoveryIdentityError>(opened)
+    })();
+    let opened = match opened {
+        Ok(opened) => opened,
+        Err(error) => {
+            connection.stop();
+            let _ = io_task_handle.await;
+            drop(connection);
+            reap_failed_open(&mut child).await;
+            drainer.abort();
+            let _ = drainer.await;
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: error.to_string(),
+            });
+        },
+    };
     inner.borrow_mut().acp_session_id = response.session_id.to_string();
     debug!(session = %session_id, hidden_count = hidden_names.len(), "ACP handshake completed");
     Ok(AcpSession {
+        opened,
         secrets,
         session_id,
         agent_label: config.agent_kind.label().into(),
@@ -643,7 +691,9 @@ async fn handshake_step<T>(
     future: impl std::future::Future<Output = agent_client_protocol::schema::v1::Result<T>>,
     phase: &'static str,
     shutdown: &tokio_util::sync::CancellationToken,
-    reply: &mut tokio::sync::oneshot::Sender<Result<SessionId, OpenSessionError>>,
+    reply: &mut tokio::sync::oneshot::Sender<
+        Result<surge_core::execution_recovery::OpenedSession, OpenSessionError>,
+    >,
     deadline: tokio::time::Instant,
     timeout: Duration,
 ) -> Result<T, OpenSessionError> {
@@ -1222,25 +1272,25 @@ mod tests {
                 expect_retry_after_secs: None,
             },
             Case {
-                name: "OpenAI insufficient_quota",
+                name: "OpenAI insufficient_quota without 429 (not enough evidence to park)",
                 details: "You exceeded your current quota, please check your plan and billing details. \
                           {\"error\":{\"type\":\"insufficient_quota\"}}",
                 expect_retry_after_secs: None,
             },
             Case {
-                name: "Google RESOURCE_EXHAUSTED",
+                name: "Google RESOURCE_EXHAUSTED with explicit 429",
                 details: "429 Resource has been exhausted (e.g. check quota). \
                           {\"error\":{\"code\":429,\"status\":\"RESOURCE_EXHAUSTED\"}}",
                 expect_retry_after_secs: None,
             },
             Case {
-                name: "Anthropic overloaded_error",
+                name: "Anthropic overloaded_error (529 transient overload, not quota)",
                 details: "Overloaded {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\
                           \"message\":\"Overloaded\"}}",
                 expect_retry_after_secs: None,
             },
             Case {
-                name: "usage limit reached (subscription-style, epoch suffix)",
+                name: "usage limit reached with explicit reset time but no 429",
                 details: "Claude AI usage limit reached|1735500000",
                 expect_retry_after_secs: None,
             },
@@ -1254,6 +1304,14 @@ mod tests {
         let mut any_retry_after_recovered = false;
         for case in cases {
             let err = classify_prompt_dispatch_error(case.details.to_string());
+            if case.name.starts_with("Anthropic overloaded_error") {
+                assert!(
+                    matches!(err, super::super::error::SendMessageError::Bridge(_)),
+                    "case {:?}: transient overload must not become a quota park: {err:?}",
+                    case.name
+                );
+                continue;
+            }
             let super::super::error::SendMessageError::RateLimited { retry_after, .. } = err else {
                 panic!("case {:?}: expected RateLimited, got {err:?}", case.name);
             };

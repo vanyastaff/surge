@@ -66,6 +66,7 @@ async fn pending_log(
         project_path: "/fixture".into(),
         initial_prompt: String::new(),
         config: surge_core::run_event::RunConfig {
+            bootstrap_edit_loop_cap: None,
             sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
             approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -302,7 +303,7 @@ async fn recovery_selects_only_current_bound_unresolved_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn missing_registered_database_is_an_error_and_inspection_does_not_create_it() {
+async fn missing_registered_database_is_unconfirmed_and_inspection_does_not_create_it() {
     let home = tempfile::tempdir().unwrap();
     let storage = Storage::open(home.path()).await.unwrap();
     let id = RunId::new();
@@ -320,7 +321,15 @@ async fn missing_registered_database_is_an_error_and_inspection_does_not_create_
         .join("events.sqlite");
     std::fs::remove_file(&database).unwrap();
     let provider = PersistenceSnapshots { storage };
-    assert!(provider.snapshot(id).await.is_err());
+    let snapshot = provider.snapshot(id).await.unwrap().unwrap();
+    assert_eq!(
+        snapshot.display,
+        surge_core::run_display::RunDisplayState::Unknown
+    );
+    assert!(
+        !snapshot.terminal,
+        "missing evidence cannot retire request cards"
+    );
     assert!(!database.exists());
     let unknown = RunId::new();
     assert!(provider.snapshot(unknown).await.unwrap().is_none());

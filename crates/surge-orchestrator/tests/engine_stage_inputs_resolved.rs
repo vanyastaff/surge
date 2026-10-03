@@ -43,6 +43,7 @@ async fn launch(
     config: &AgentConfig,
     file: Option<&str>,
     registry: bool,
+    with_memory_claim_snapshot: bool,
 ) -> (StageResult, Vec<EventPayload>, bool) {
     let directory = tempfile::tempdir().unwrap();
     if let Some(content) = file {
@@ -76,12 +77,42 @@ async fn launch(
             produced_at_seq: 1,
         },
     );
+    if file.is_some() {
+        let artifact = memory.artifacts.get("context").unwrap().clone();
+        memory.artifacts.insert("project_memory".into(), artifact);
+    }
+    if with_memory_claim_snapshot {
+        let snapshot = surge_orchestrator::project_context::MemoryClaimSnapshot {
+            budget: surge_core::context_pack::ContextPackConfig {
+                budget_tokens: 2000,
+            },
+            claims: Vec::new(),
+        };
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let artifact = artifacts
+            .put(
+                run,
+                surge_orchestrator::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME,
+                &bytes,
+            )
+            .await
+            .unwrap();
+        memory.artifacts.insert(
+            surge_orchestrator::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME.into(),
+            artifact,
+        );
+    }
     let resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hooks = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        quota_opening: None,
+        quota_cycle: None,
+        quota_owner: None,
+        continuation: None,
         frames: &[],
         cancel: tokio_util::sync::CancellationToken::new(),
         node: &node,
+        attempt: 1,
         steers: Vec::new(),
         agent_config: config,
         bound_skills: &[],
@@ -128,7 +159,7 @@ fn recorded_inputs(events: &[EventPayload]) -> &BTreeMap<String, ContentHash> {
         .iter()
         .enumerate()
         .filter_map(|(index, event)| match event {
-            EventPayload::StageInputsResolved { node, bindings } => {
+            EventPayload::StageInputsResolved { node, bindings, .. } => {
                 assert_eq!(node.as_str(), "worker");
                 Some((index, bindings))
             },
@@ -167,7 +198,7 @@ async fn actual_launch_records_full_static_and_file_values_before_session() {
         optional: false,
     });
     let first_file = "Full file content beyond the bridge echo cap. ".repeat(100);
-    let (result, events, opened) = launch(&config, Some(&first_file), false).await;
+    let (result, events, opened) = launch(&config, Some(&first_file), false, false).await;
     assert!(matches!(result, Err(StageError::RateLimited { .. })));
     assert!(opened);
     let inputs = recorded_inputs(&events);
@@ -175,7 +206,7 @@ async fn actual_launch_records_full_static_and_file_values_before_session() {
     assert_eq!(inputs["large"], ContentHash::compute(large.as_bytes()));
     assert_eq!(inputs["file"], ContentHash::compute(first_file.as_bytes()));
     let changed = format!("{first_file}changed bytes");
-    let (_, next, _) = launch(&config, Some(&changed), false).await;
+    let (_, next, _) = launch(&config, Some(&changed), false, false).await;
     let next_inputs = recorded_inputs(&next);
     assert_ne!(inputs["file"], next_inputs["file"]);
     assert_eq!(
@@ -186,8 +217,36 @@ async fn actual_launch_records_full_static_and_file_values_before_session() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn memory_receipt_is_attached_only_when_project_memory_binding_resolves() {
+    let mut config = config();
+    config.bindings.push(Binding {
+        target: TemplateVar("memory".into()),
+        source: ArtifactSource::RunArtifact {
+            name: "project_memory".into(),
+        },
+        optional: false,
+    });
+
+    let (_, events, _) = launch(&config, Some("selected memory seed"), false, true).await;
+    let record = events.iter().find_map(|event| match event {
+        EventPayload::StageInputsResolved { memory_receipt, .. } => Some(memory_receipt),
+        _ => None,
+    });
+    assert_eq!(
+        record,
+        Some(&Some(surge_core::context_pack::PackReceipt {
+            selected: Vec::new(),
+            dropped: Vec::new(),
+            reason: None,
+            budget: 2000,
+            used: 0,
+        }))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_successful_resolution_is_recorded_explicitly() {
-    let (result, events, opened) = launch(&config(), None, false).await;
+    let (result, events, opened) = launch(&config(), None, false, false).await;
     assert!(matches!(result, Err(StageError::RateLimited { .. })));
     assert!(opened);
     assert!(recorded_inputs(&events).is_empty());
@@ -215,7 +274,7 @@ async fn resolution_validation_and_prompt_failures_record_no_inputs_or_session()
         (&invalid_prompt, false),
         (&required, true),
     ] {
-        let (result, events, opened) = launch(config, None, registry).await;
+        let (result, events, opened) = launch(config, None, registry, false).await;
         assert!(matches!(result, Err(StageError::Internal(_))), "{result:?}");
         assert!(!opened);
         assert!(!events.iter().any(|event| matches!(
@@ -232,7 +291,7 @@ async fn duplicate_targets_are_rejected_before_recording_or_launch_without_regis
         binding("duplicate", "first"),
         binding("duplicate", "second"),
     ];
-    let (result, events, opened) = launch(&config, None, false).await;
+    let (result, events, opened) = launch(&config, None, false, false).await;
     assert!(
         matches!(result, Err(StageError::Internal(ref error)) if error.contains("duplicate")),
         "{result:?}"

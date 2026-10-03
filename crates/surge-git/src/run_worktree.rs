@@ -113,7 +113,14 @@ pub enum WorktreeConflict {
     RepositoryMismatch,
     OccupiedPath,
     MissingAfterExecution,
-    RegistrationMismatch,
+    /// libgit2's registered worktree path is not the path the run pinned.
+    RegistrationPathMismatch,
+    /// The checkout's common git directory is not the pinned repository's.
+    RegistrationCommonDirMismatch,
+    /// The checkout's working directory is not the pinned path.
+    RegistrationWorkdirMismatch,
+    /// The linked worktree's name is not the run's short id.
+    RegistrationNameMismatch,
     BranchMismatch,
     MissingCreationEvidence,
     CreationLoggingDisabled,
@@ -339,23 +346,34 @@ fn verify_creation(repo: &Repository, spec: &RunWorktreeSpec) -> Result<(), GitE
     Ok(())
 }
 
-/// Whether two paths name the same location, ignoring Windows' verbatim
-/// (`\\?\`) prefix.
+/// Whether two paths name the same location.
 ///
-/// `Path::canonicalize` returns `\\?\C:\dir` on Windows while libgit2 reports
-/// worktree paths as `C:\dir`; comparing them with `==` made every existing
-/// checkout look like a registration mismatch. `\\?\UNC\…` is left alone
-/// because it has no plain equivalent to strip to.
+/// On Windows the same directory has several spellings: `Path::canonicalize`
+/// returns `\\?\C:\dir`, libgit2 reports worktree paths as `C:/dir/` (forward
+/// slashes, trailing separator), and NTFS ignores case. Comparing them with `==`
+/// made every existing checkout look like a registration mismatch, so on Windows
+/// paths are compared after [`normalize_windows`]. Elsewhere the comparison is
+/// exact: `/tmp/A` and `/tmp/a` are different directories.
 fn same_location(a: &Path, b: &Path) -> bool {
-    a == b || strip_verbatim(&a.to_string_lossy()) == strip_verbatim(&b.to_string_lossy())
+    a == b
+        || (cfg!(windows)
+            && normalize_windows(&a.to_string_lossy()) == normalize_windows(&b.to_string_lossy()))
 }
 
-fn strip_verbatim(path: &str) -> &str {
-    if path.starts_with(r"\\?\UNC\") {
+/// One spelling for a Windows path: no `\\?\` prefix, `/` separators, no
+/// trailing separator, lower case. `\\?\UNC\…` paths keep their prefix (there is
+/// no plain form to strip to). Pure string work, so it is testable on any OS.
+fn normalize_windows(path: &str) -> String {
+    let stripped = if path.starts_with(r"\\?\UNC\") {
         path
     } else {
         path.strip_prefix(r"\\?\").unwrap_or(path)
+    };
+    let mut folded = stripped.replace('\\', "/").to_lowercase();
+    while folded.len() > 1 && folded.ends_with('/') && !folded.ends_with(":/") {
+        folded.pop();
     }
+    folded
 }
 
 fn verify_checkout(
@@ -366,21 +384,64 @@ fn verify_checkout(
 ) -> Result<(), GitError> {
     verify_creation(repo, spec)?;
     worktree.validate()?;
-    if !same_location(worktree.path(), &spec.path)
-        || !same_location(&worktree.path().canonicalize()?, &spec.path)
-    {
-        return Err(conflict(&spec.path, WorktreeConflict::RegistrationMismatch));
+    let registered = worktree.path();
+    let registered_canonical = registered.canonicalize()?;
+    if !same_location(registered, &spec.path) || !same_location(&registered_canonical, &spec.path) {
+        tracing::warn!(
+            registered = %registered.display(),
+            registered_canonical = %registered_canonical.display(),
+            pinned = %spec.path.display(),
+            "registered worktree path differs from the pinned path"
+        );
+        return Err(conflict(
+            &spec.path,
+            WorktreeConflict::RegistrationPathMismatch,
+        ));
     }
     let checkout = Repository::open(&spec.path)?;
     let linked = git2::Worktree::open_from_repository(&checkout)?;
-    if checkout.commondir().canonicalize()? != spec.base.git_common_dir
-        || !checkout
-            .workdir()
-            .is_some_and(|workdir| same_location(workdir, &spec.path))
-        || linked.name() != Some(spec.run_id.short().as_str())
-        || !same_location(linked.path(), &spec.path)
+    let common_dir = checkout.commondir().canonicalize()?;
+    if common_dir != spec.base.git_common_dir {
+        tracing::warn!(
+            common_dir = %common_dir.display(),
+            pinned = %spec.base.git_common_dir.display(),
+            "checkout common dir differs from the pinned repository"
+        );
+        return Err(conflict(
+            &spec.path,
+            WorktreeConflict::RegistrationCommonDirMismatch,
+        ));
+    }
+    if !checkout
+        .workdir()
+        .is_some_and(|workdir| same_location(workdir, &spec.path))
     {
-        return Err(conflict(&spec.path, WorktreeConflict::RegistrationMismatch));
+        tracing::warn!(
+            workdir = ?checkout.workdir(),
+            pinned = %spec.path.display(),
+            "checkout workdir differs from the pinned path"
+        );
+        return Err(conflict(
+            &spec.path,
+            WorktreeConflict::RegistrationWorkdirMismatch,
+        ));
+    }
+    if linked.name() != Some(spec.run_id.short().as_str()) {
+        return Err(conflict(
+            &spec.path,
+            WorktreeConflict::RegistrationNameMismatch,
+        ));
+    }
+    if !same_location(linked.path(), &spec.path) {
+        tracing::warn!(
+            linked = %linked.path().display(),
+            pinned = %spec.path.display(),
+            "linked worktree path differs from the pinned path"
+        );
+        return Err(conflict(
+            &spec.path,
+            WorktreeConflict::RegistrationPathMismatch,
+        ));
     }
     let head = checkout.find_reference("HEAD")?;
     if head.symbolic_target() != Some(format!("refs/heads/{}", spec.branch()).as_str()) {
@@ -920,27 +981,42 @@ mod location_tests {
     use super::*;
 
     #[test]
-    fn a_verbatim_prefix_does_not_make_a_path_a_different_location() {
-        let verbatim = Path::new(r"\\?\C:\Users\run\worktrees\abc");
-        let plain = Path::new(r"C:\Users\run\worktrees\abc");
-        assert!(same_location(verbatim, plain));
-        assert!(same_location(plain, verbatim));
-        assert!(same_location(plain, plain));
+    fn every_windows_spelling_of_a_directory_normalizes_the_same() {
+        let canonical = r"\\?\C:\Users\Run\worktrees\abc";
+        let libgit2 = "C:/Users/Run/worktrees/abc/";
+        let lower = r"c:\users\run\worktrees\abc";
+        let n = normalize_windows(canonical);
+        assert_eq!(n, "c:/users/run/worktrees/abc");
+        assert_eq!(n, normalize_windows(libgit2));
+        assert_eq!(n, normalize_windows(lower));
     }
 
     #[test]
-    fn different_directories_stay_different() {
-        assert!(!same_location(
-            Path::new(r"\\?\C:\a\b"),
-            Path::new(r"C:\a\c")
-        ));
-        assert!(!same_location(Path::new("/tmp/a"), Path::new("/tmp/b")));
+    fn different_windows_directories_stay_different() {
+        assert_ne!(
+            normalize_windows(r"\\?\C:\a\b"),
+            normalize_windows("C:/a/c/")
+        );
+        assert_ne!(normalize_windows(r"C:\a"), normalize_windows(r"D:\a"));
     }
 
     #[test]
-    fn a_unc_verbatim_path_is_left_as_is() {
-        assert_eq!(strip_verbatim(r"\\?\UNC\srv\share"), r"\\?\UNC\srv\share");
-        assert_eq!(strip_verbatim(r"\\?\C:\x"), r"C:\x");
-        assert_eq!(strip_verbatim("/plain/unix"), "/plain/unix");
+    fn roots_and_unc_paths_keep_their_shape() {
+        assert_eq!(normalize_windows(r"C:\"), "c:/");
+        assert_eq!(normalize_windows("/"), "/");
+        assert_eq!(
+            normalize_windows(r"\\?\UNC\srv\share\"),
+            "//?/unc/srv/share"
+        );
+    }
+
+    #[test]
+    fn off_windows_the_comparison_stays_exact() {
+        if cfg!(windows) {
+            return;
+        }
+        assert!(same_location(Path::new("/tmp/a"), Path::new("/tmp/a")));
+        assert!(!same_location(Path::new("/tmp/a"), Path::new("/tmp/A")));
+        assert!(!same_location(Path::new("/tmp/a/"), Path::new("/tmp/b")));
     }
 }
