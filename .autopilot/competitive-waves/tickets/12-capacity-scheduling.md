@@ -277,6 +277,22 @@ wide counters, cache buckets and non-USD cost. Task totals must expose coverage
 separately from pricing. This remains a reviewed next dependency, not implemented
 accounting evidence for the routing change.
 
+Version-specific source research further limits the default contract. Surge's
+builtin `npx` launch commands do not pin adapter packages; registry metadata and
+a package found in the npm cache do not prove the version actually launched.
+Keep the generic accounting contract unknown until the host establishes the
+exact adapter artifact and its documented semantics.
+
+The [Claude ACP 0.23.1 implementation](https://raw.githubusercontent.com/zed-industries/claude-agent-acp/v0.23.1/src/acp-agent.ts)
+resets its usage accumulator per prompt and sums independent input, output and
+cache buckets. Its [background-task regression](https://raw.githubusercontent.com/zed-industries/claude-agent-acp/v0.23.1/src/tests/acp-agent.test.ts)
+also includes earlier background results in a later prompt's report. Treat this
+as an explicitly contracted reported processing window, not complete request-only
+spend; interruption and monetary cost coverage still need separate proof.
+The [Codex ACP 0.16.0 prompt implementation](https://raw.githubusercontent.com/zed-industries/codex-acp/v0.16.0/src/codex_agent.rs)
+returns a stop reason without response usage. These findings neither prove all
+versions unsupported nor authorize inference of spend from context occupancy.
+
 - [ ] `CapacityPolicy::decide(estimate,&window) -> Dispatch | Park{wake_at}`
 - [ ] `estimate` — медиана длительности и расхода по архетипу ноды из **существующих** таблиц аналитики
 - [ ] Нет истории по архетипу → оценки нет → **отказа в диспатче нет**
