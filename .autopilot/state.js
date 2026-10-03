@@ -9,8 +9,14 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-09-07T14:10:00-05:00",
-  "finishedAt": "2026-09-07T14:10:00-05:00",
+  "updatedAt": "2026-10-03T20:47:37Z",
+  "finishedAt": null,
+  "previousCheckpoint": {
+    "finishedAt": "2026-09-07T14:10:00-05:00",
+    "requirements": { "total": 53, "done": 46, "deferred": 7 },
+    "tests": { "passed": 2638, "failed": 0, "skipped": 38 },
+    "note": "Historical checkpoint only. T12 is reopened; deferred requirements remain required by the current goal."
+  },
   "stages": [
     {
       "id": "preflight",
@@ -47,32 +53,32 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-05T16:34:13-05:00",
-      "note": "все 19 тасков реализованы и закоммичены; таск 10 закрыт после круга починки (f03e74a)",
-      "finishedAt": "2026-09-07T14:10:00-05:00"
+      "note": "T12 reopened: configured pre-dispatch rotation is in development; budget, cold process recovery, source invalidation and final gates remain required. The previous 46 completed requirements are historical; none is counted as currently verified until the full requirement audit is rerun.",
+      "finishedAt": null
     },
     {
       "id": "review",
-      "status": "done",
+      "status": "pending",
       "startedAt": "2026-09-05T17:02:31-05:00",
-      "note": "закоммичено и проверено: 01-18; таск 10 принят после устранения трёх блокирующих по R31",
-      "finishedAt": "2026-09-07T14:10:00-05:00"
+      "note": "The current T12 implementation still requires final spec compliance and independent code/security review.",
+      "finishedAt": null
     },
     {
       "id": "final",
-      "status": "done",
+      "status": "pending",
       "startedAt": "2026-09-07T14:10:00-05:00",
-      "finishedAt": "2026-09-07T14:10:00-05:00"
+      "finishedAt": null
     }
   ],
   "requirements": {
     "total": 53,
-    "done": 46,
-    "inTicket": 0,
-    "inSpec": 0,
+    "done": 0,
+    "inTicket": 7,
+    "inSpec": 46,
     "placeholder": 0,
-    "deferred": 7,
+    "deferred": 0,
     "dropped": 0
   },
   "commits": [
@@ -447,11 +453,12 @@ window.STATE =
         "crates/surge-orchestrator/src/engine/engine.rs",
         "crates/surge-daemon/src/"
       ],
-      "status": "done",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 12,
       "concerns": [
-        "пять этапов M0-M5, все закоммичены; ротация R41 признана структурно непоставляемой и вынесена тикетом",
+        "Historical M0-M5 commits do not close R37/R38/R41. Full T12 acceptance remains open in competitive-waves/tickets/12-capacity-scheduling.md.",
+        "Current routing tests pass scoped scenarios; nonzero host budget, cold process recovery, source invalidation, full gates and independent parent review are still pending.",
         "livelock найден зондом на M3: одна 429 паркует рантайм навсегда; закрыт тремя механизмами, каждый проверен мутацией",
         "два несущих пути были невидимы для набора: подавление гейта оставляло 642/642 зелёными, откат проводки конфига 1571/1571",
         "M5 сузил показ ёмкости для терминальных ранов — записано как долг с названным способом снятия"
@@ -630,11 +637,7 @@ window.STATE =
     }
   ],
   "singlePass": null,
-  "tests": {
-    "passed": 2638,
-    "failed": 0,
-    "skipped": 38
-  },
+  "tests": null,
   "debt": {
     "placeholders": [],
     "assumptions": [
