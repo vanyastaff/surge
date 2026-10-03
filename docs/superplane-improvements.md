@@ -15,6 +15,11 @@ several independent analysis nodes using different available providers, followed
 by a synthesis node and one implementation owner. This is represented directly
 in the generated Flow rather than requiring the user to select a separate mode.
 
+The orchestrator chooses the number and ordering of these nodes from the question
+and planning dependencies. Independent analyses may run in parallel; analyses
+that need an earlier result run in sequence. Provider availability constrains
+the generated graph, and synthesis waits for the required analysis outputs.
+
 Each analysis node receives the same accepted input revision and evidence and
 remains read-only. Synthesis records agreements, unresolved disagreements,
 selected decisions and their rationale; it cannot replace verification or retire
