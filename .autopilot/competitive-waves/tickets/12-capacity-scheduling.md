@@ -15,6 +15,46 @@ require `cargo build -p surge-acp --bin mock_acp_agent` and
 `cargo build -p surge-cli --bin surge` for the stage MCP helper. This verifies
 reactive task-owned recovery; pre-dispatch capacity rotation remains open.
 
+### Task-owned pre-dispatch slice: verification in progress (2026-10-03)
+
+The current implementation freezes configured route declarations on the real
+`WorkItemCommand::Start` path, including `quota_recovery: None`. It records an
+actual `StageEntered`-anchored plan, stores separate immutable skip provenance,
+and uses the existing one-shot opening permit for the selected provider. A
+configured source snapshot is not an observed provider account. Opaque sources
+and unspecified models have no reusable skip pin.
+
+Author-controlled ACP evidence: test session `99357` passed all 21 cases in
+`quota_recovery_route_test`, including ordinary zero-A/one-B dispatch, all-skipped
+no-open suspension and same-attempt wake, mixed skip/actual-429 recovery, explicit
+family rejection, exact project scope, changed selected/skipped file sources,
+post-429 pin invalidation, exact child environment, and registry/journal secret
+sentinels. The test-only host usage oracle verifies retained prior 600 tokens plus
+600 after wake: cap 1000 aborts and cap 1500 completes. Those are injected host
+usage assertions, not production ACP token accounting.
+
+Cold host park/wake passed in `75708`, `31850`, and `99357`, using kill-and-wait of
+the first server process and a new Storage/ACP/Engine/server plus periodic wake.
+An earlier second-child failure `3061` had no retained diagnostics and remains
+unexplained; future failures retain the isolated fixture. Cold-host readiness
+FIFO protection subsequently changed the helper, so its affected outer gates
+must be rerun.
+
+The planned binding negative matrix had genuine RED `2010`: an establishment
+request appended *after* the plan could still bind. Extending the current prefix
+inspection made matrix `71035` green. Later actual phase-crash test `82241` found
+a separate unresolved production failure: cold reconciliation manufactured a
+new same-node `StageEntered`, new logical plan and duplicate provider opening
+after an already opened, prompt-authorized session whose wire prompt had not run.
+That failure remains a repair prerequisite; these scoped greens do not constitute
+acceptance or permission to close the ticket.
+
+The original complete nextest gate failed with ENOSPC and remains unverified.
+Final integrated strict lint/tests and independent parent reviews are pending.
+Ordinary unowned-flow ownership normalization, real ACP usage and trusted
+available-route estimates remain explicit requirements/dependencies below; the
+runtime-wide capacity row cannot authorize a configured route-specific skip.
+
 ### Pre-dispatch implementation boundary
 
 Read-only architecture review found that `runtime_capacity` has no profile/account
@@ -238,6 +278,33 @@ before declaring T12 complete. This is a reviewed plan, not implemented evidence
 ## Разделы спецификации
 
 Истории 34–37, 49–50. Решения §13, §14, §19, §20. Границы: `surge-core::capacity`. Швы §2 и §3.
+
+### Unplanned owner-loss containment (reviewed repair dependency)
+
+The actual process-crash oracle exposed a duplicate opening: after a durable
+`SessionOpened` and prompt authorization, startup replay appended another
+`StageEntered`, cleared the old quota plan and admitted a new provider session.
+The test held the facade before the wire prompt; production cannot use that
+test-only knowledge to infer that the authorized prompt had no effects.
+
+Before entering a restored stage, inspect its original current occurrence and
+registry provenance under the authentic launch claim. Match node, attempt,
+entry/plan sequences, logical invocation, frozen policy and control generation.
+Existing reservations or uncertain/established/executing handoffs without
+independently verified continuation/wake authority require recovery attention.
+Missing or inconsistent provenance also requires attention. Even a plan with no
+admission must reuse its original occurrence and normal transactional gates;
+restart never manufactures a fresh logical plan or opening authority.
+
+Keep original provider/session/writer identities. Authenticated committed outcome
+and routing evidence may permit legitimate later reentry; confirmed planned
+parking and existing verified wake paths remain eligible. A read-only inspection
+result grants no effect capability. The crash oracles must prove unchanged
+stage/plan/admission/open/prompt counts as well as retained identities, while
+ordinary dispatch, all-skipped wake, mixed exhaustion and frozen-budget tests
+remain green. This is a reviewed containment repair, not completed evidence.
+Recovering the same ACP session under verified continuation authority remains a
+required product outcome; attention does not replace that requirement.
 
 ## Критерии приёмки
 
