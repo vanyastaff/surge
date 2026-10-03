@@ -362,7 +362,19 @@ The new normal-Start relative-cwd acceptance test produced behavioral RED in
 builder session `69110` (exit 101 after successful compilation): checkout-based
 freeze disagrees with the actual launch file, the task enters Attention with
 `selected configured source changed before provider effect`, and no A prompt is
-sent. Lease implementation and GREEN remain pending; this is not a setup failure.
+sent. This was behavioral failure, not a setup failure. After the actual-cwd
+preparation change, builder session `39038` passed the same outer scenario
+(exit 0, 0.68 seconds), including actual source 429 and next-task zero-A/one-B
+effects assertions. The remaining lease, crash, source-drift and full-workspace
+gates remain pending; one outer GREEN is not final acceptance.
+
+The generic-Start bypass law also produced genuine RED in builder session
+`85434`: a preparation existed, but direct Start still reserved an attempt.
+Migration `0028`, opaque guard ownership, snapshot/token finalization and
+universal live-preparation fences are under implementation in repair 3. Session
+`78346` failed compilation while the private secure-fd helper was being adapted
+to nix 0.29; it is not behavioral GREEN or an accepted candidate. The builder
+retains sole Cargo ownership until final handoff.
 
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
