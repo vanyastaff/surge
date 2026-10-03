@@ -258,6 +258,44 @@ do not replace the full T12 gate. No requirement was retired.
 
 ## Что должно заработать
 
+### Actual launch cwd for configured sources (reviewed repair dependency)
+
+Current 5a preparation found that daemon Start freezes relative auth-file pins
+against `workspace.checkout`, while provider launch and subsequent guards use
+`workspace.path`. Absolute-file fixtures do not prove the required launch-cwd
+contract. Fail-closed rejection or a permanently unavailable reusable pin does
+not establish support for a valid relative declaration.
+
+Prepare the original owned workspace before freezing configured source pins,
+keeping project/config discovery rooted at checkout separately. Provisioning
+acknowledgment still requires the real accepted attempt's launch claim; do not
+mint that acknowledgment before Start acceptance. Do not copy credentials or
+rewrite relative declarations to absolute checkout paths.
+
+The reviewed repair uses an opaque non-Clone/non-Serde per-item Start preparation
+guard and a durable preparation fence. Replay precedes filesystem work; begin
+and finalize use short registry transactions. Original-owner Git reconciliation
+and actual-cwd fingerprinting happen outside the registry transaction under a
+secure stable per-item OS lock. A global write transaction through Git/auth I/O
+would delay unrelated task controls and is not the selected design.
+
+Finalize must recheck token, command identity and captured version/generation,
+accepted revision, workspace/prepared state and control before atomically storing
+the ordinary immutable attempt, operation result and consumed preparation.
+Generic Start/reserve cannot bypass a live preparation. Lifecycle mutations must
+respect that fence; a dead preparation is reclaimable only while holding the same
+OS lock, without timeout-based ownership or guessed PID checks. It grants neither
+provider effects nor automatic first launch. Existing prepared workspaces must
+not be recreated after loss, and failed preparation must preserve retained files.
+
+Acceptance requires real normal daemon Start with relative files whose checkout
+and actual-cwd contents differ; selected/skipped/post-429 actual-file changes;
+concurrent exact replay; direct mutation bypass refusal; stale/control/archive
+fences; host-death reclamation; and responsive unrelated-item controls during
+blocked fingerprinting. Compare retained files, raw index and HEAD and assert no
+premature Prepared acknowledgment or provider RPC. This is a reviewed dependency,
+not an implemented repair or final 5a acceptance.
+
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
 Configured rotation on ordinary CLI/daemon flow launches must enter the same
