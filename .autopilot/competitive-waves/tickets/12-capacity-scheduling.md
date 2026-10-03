@@ -358,6 +358,12 @@ blocked fingerprinting. Compare retained files, raw index and HEAD and assert no
 premature Prepared acknowledgment or provider RPC. This is a reviewed dependency,
 not an implemented repair or final 5a acceptance.
 
+The new normal-Start relative-cwd acceptance test produced behavioral RED in
+builder session `69110` (exit 101 after successful compilation): checkout-based
+freeze disagrees with the actual launch file, the task enters Attention with
+`selected configured source changed before provider effect`, and no A prompt is
+sent. Lease implementation and GREEN remain pending; this is not a setup failure.
+
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
 Configured rotation on ordinary CLI/daemon flow launches must enter the same
