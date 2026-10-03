@@ -284,6 +284,29 @@ mod tests {
     }
 
     #[test]
+    fn stage_usage_migrations_preserve_existing_attempt_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        apply(&mut conn, &PER_RUN_MIGRATIONS[..6], &clock).unwrap();
+        conn.execute(
+            "INSERT INTO stage_executions (node_id, attempt, started_seq, started_at) VALUES ('worker', 1, 1, 10)",
+            [],
+        )
+        .unwrap();
+
+        apply(&mut conn, &PER_RUN_MIGRATIONS[6..], &clock).unwrap();
+
+        let row: (i64, Option<String>, Option<f64>, i64) = conn
+            .query_row(
+                "SELECT attempt, session_id, known_cost_usd, cost_unknown FROM stage_executions WHERE node_id='worker'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (1, None, None, 0));
+    }
+
+    #[test]
     fn apply_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
         let clock = MockClock::new(1_700_000_000_000);

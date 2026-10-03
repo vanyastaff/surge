@@ -23,7 +23,7 @@ pub fn stage_executions(
 ) -> Result<Vec<StageExecution>, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT node_id, attempt, started_seq, ended_seq, started_at, ended_at,
-                outcome, cost_usd, tokens_in, tokens_out
+                outcome, cost_usd, tokens_in, tokens_out, known_cost_usd, cost_unknown
          FROM stage_executions ORDER BY started_seq",
     )?;
     let iter = stmt.query_map([], |row| {
@@ -42,6 +42,8 @@ pub fn stage_executions(
             cost_usd: row.get(7)?,
             tokens_in: row.get::<_, i64>(8)? as u64,
             tokens_out: row.get::<_, i64>(9)? as u64,
+            known_cost_usd: row.get(10)?,
+            cost_unknown: row.get::<_, bool>(11)?,
         })
     })?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)

@@ -208,27 +208,106 @@ pub trait WorkEstimator: Send + Sync {
     async fn estimate(&self, node: &NodeKey) -> Option<WorkEstimate>;
 }
 
-/// [`WorkEstimator`] over the *current run's own* `stage_executions`
-/// materialized view (`per_run/0001_initial.sql`) — zero new tables, zero
-/// new writes on the hot path (plan §2). Averages the wall-clock duration
-/// of every *completed* prior attempt of the same node in this run; `None`
-/// when none exist yet (a fresh node, or one whose only attempts are still
-/// running). A cross-run aggregate is a different `WorkEstimator`
-/// implementation behind the same trait, not a change to this one or to
-/// `decide` — deliberately not built here (plan §2: there is no
-/// "archetype" table to source it from).
-///
-/// Three ways this diverges from the acceptance criterion it satisfies,
-/// named plainly rather than left to be discovered by reading the body:
-/// the criterion asked for the *median* of duration and *spend* by
-/// *archetype*; this estimator computes the **mean** of **duration only**,
-/// over **the same node in the same run**. Spend is not estimated at
-/// all — `StageExecution::cost_usd` is read off every row [`Self::estimate`]
-/// fetches and then dropped on the floor, because [`WorkEstimate`] itself
-/// carries only a duration; no cost signal reaches
-/// `CapacityPolicy::decide` through this estimator.
+/// [`WorkEstimator`] over completed runs of the same graph archetype.
+/// Missing archetype metadata or history yields no estimate, preserving the
+/// capacity policy's fail-open behavior for an unobserved workload.
 pub struct RunHistoryWorkEstimator {
     reader: RunReader,
+    history: Option<Arc<dyn ArchetypeHistory>>,
+}
+
+/// Read-only cross-run archetype analytics source.
+#[async_trait]
+pub trait ArchetypeHistory: Send + Sync {
+    /// Completed duration and cost samples for an archetype.
+    async fn samples(&self, archetype: surge_core::ArchetypeName) -> Vec<(u64, Option<u64>)>;
+}
+
+/// Registry-backed historical archetype samples; per-run read failures are
+/// skipped so old or partially-written runs cannot block a new dispatch.
+pub struct PersistentArchetypeHistory {
+    storage: Arc<surge_persistence::runs::Storage>,
+}
+
+impl PersistentArchetypeHistory {
+    /// Build from the engine's registry-level storage handle.
+    #[must_use]
+    pub fn new(storage: Arc<surge_persistence::runs::Storage>) -> Self {
+        Self { storage }
+    }
+}
+
+#[async_trait]
+impl ArchetypeHistory for PersistentArchetypeHistory {
+    async fn samples(&self, archetype: surge_core::ArchetypeName) -> Vec<(u64, Option<u64>)> {
+        let Ok(runs) = self
+            .storage
+            .list_runs(surge_persistence::runs::RunFilter {
+                status: Some(surge_core::RunStatus::Completed),
+                project_path: None,
+                limit: Some(1_000),
+            })
+            .await
+        else {
+            return Vec::new();
+        };
+        let mut samples = Vec::new();
+        for run in runs {
+            let Ok(reader) = self.storage.open_run_reader(run.id).await else {
+                continue;
+            };
+            let Ok(events) = reader.read_run_events().await else {
+                continue;
+            };
+            let matches_archetype = events
+                .iter()
+                .find_map(|event| match &event.payload {
+                    surge_core::run_event::EventPayload::PipelineMaterialized { graph, .. } => {
+                        graph
+                            .metadata
+                            .archetype
+                            .as_ref()
+                            .map(|meta| meta.name == archetype)
+                    },
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if !matches_archetype {
+                continue;
+            }
+            let Ok(rows) = reader.stage_executions().await else {
+                continue;
+            };
+            for row in rows {
+                if let Some(end) = row.ended_at_ms {
+                    let Ok(duration) = u64::try_from(end.saturating_sub(row.started_at_ms)) else {
+                        continue;
+                    };
+                    let cost = (!row.cost_unknown)
+                        .then_some(row.known_cost_usd)
+                        .flatten()
+                        .and_then(usd_to_micros_usd);
+                    samples.push((duration, cost));
+                }
+            }
+        }
+        samples
+    }
+}
+
+fn usd_to_micros_usd(cost_usd: f64) -> Option<u64> {
+    const MAX_MICROS_USD: f64 = 18_446_744_073_709_551_616.0;
+    let micros = (cost_usd * 1_000_000.0).round();
+    if !micros.is_finite() || micros < 0.0 || micros >= MAX_MICROS_USD {
+        return None;
+    }
+    // The finite/range checks above make this rounded conversion safe.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "usage is rounded to integer micro-USD after finite nonnegative range checks"
+    )]
+    Some(micros as u64)
 }
 
 impl RunHistoryWorkEstimator {
@@ -237,52 +316,55 @@ impl RunHistoryWorkEstimator {
     /// after the writer that produced it is dropped.
     #[must_use]
     pub fn new(reader: RunReader) -> Self {
-        Self { reader }
+        Self {
+            reader,
+            history: None,
+        }
+    }
+
+    /// Enable cross-run estimates over completed graphs of the same archetype.
+    #[must_use]
+    pub fn with_history(mut self, history: Arc<dyn ArchetypeHistory>) -> Self {
+        self.history = Some(history);
+        self
     }
 }
 
 #[async_trait]
 impl WorkEstimator for RunHistoryWorkEstimator {
-    async fn estimate(&self, node: &NodeKey) -> Option<WorkEstimate> {
-        let executions = match self.reader.stage_executions().await {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::warn!(
-                    target: "engine::capacity",
-                    node = %node,
-                    %error,
-                    "stage_executions read failed; treating as no estimate"
-                );
-                return None;
-            },
-        };
-
-        let durations_ms: Vec<u64> = executions
-            .iter()
-            .filter(|row| &row.node_id == node)
-            .filter_map(|row| {
-                let ended_at_ms = row.ended_at_ms?;
-                u64::try_from(ended_at_ms.saturating_sub(row.started_at_ms)).ok()
-            })
-            .collect();
-
-        if durations_ms.is_empty() {
+    async fn estimate(&self, _node: &NodeKey) -> Option<WorkEstimate> {
+        let history = self.history.as_ref()?;
+        let events = self.reader.read_run_events().await.ok()?;
+        let archetype = events.iter().find_map(|event| match &event.payload {
+            surge_core::run_event::EventPayload::PipelineMaterialized { graph, .. } => graph
+                .metadata
+                .archetype
+                .as_ref()
+                .map(|metadata| metadata.name),
+            _ => None,
+        })?;
+        let samples = history.samples(archetype).await;
+        if samples.is_empty() {
             return None;
         }
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a wall-clock duration average in milliseconds is nowhere near f64's \
-                      53-bit exact-integer range for any run this crate could produce"
-        )]
-        let avg_ms = durations_ms.iter().sum::<u64>() as f64 / durations_ms.len() as f64;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "avg_ms is a mean of non-negative u64 values, always >= 0 and within u64::MAX"
-        )]
-        Some(WorkEstimate::new(std::time::Duration::from_millis(
-            avg_ms as u64,
-        )))
+        let durations: Vec<u64> = samples.iter().map(|sample| sample.0).collect();
+        let median = median_u64(&durations);
+        let costs: Vec<u64> = samples.iter().filter_map(|sample| sample.1).collect();
+        Some(
+            WorkEstimate::new(std::time::Duration::from_millis(median))
+                .with_cost_micros_usd((!costs.is_empty()).then(|| median_u64(&costs))),
+        )
+    }
+}
+
+fn median_u64(values: &[u64]) -> u64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let middle = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        u64::midpoint(sorted[middle - 1], sorted[middle])
+    } else {
+        sorted[middle]
     }
 }
 
@@ -337,6 +419,116 @@ mod tests {
         let registry = surge_acp::Registry::builtin();
         let id = CanonicalRuntimeId::resolve(&registry, "mock");
         assert_eq!(id.as_str(), "mock");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one integration fixture exercises graph, session, usage, and completion projections"
+    )]
+    async fn persistent_archetype_history_aggregates_only_matching_completed_runs() {
+        use std::collections::BTreeMap;
+        use surge_core::archetype::{ArchetypeMetadata, ArchetypeName};
+        use surge_core::graph::{GraphMetadata, SCHEMA_VERSION};
+        use surge_core::run_event::{EventPayload, VersionedEventPayload};
+        use surge_core::{NodeKey, RunStatus};
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        for (name, archetype, cost) in [
+            ("hist_a", ArchetypeName::Spike, 0.001),
+            ("hist_b", ArchetypeName::Spike, 0.009),
+            ("hist_c", ArchetypeName::Spike, 0.003),
+            ("hist_unknown_cost", ArchetypeName::Spike, f64::NAN),
+            ("hist_other", ArchetypeName::BugFix, 0.9),
+        ] {
+            let id = surge_core::RunId::new();
+            let writer = storage.create_run(id, dir.path(), None).await.unwrap();
+            let mut graph = surge_core::Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata::new(name, chrono::Utc::now()),
+                start: NodeKey::try_from("worker").unwrap(),
+                nodes: BTreeMap::new(),
+                edges: Vec::new(),
+                subgraphs: BTreeMap::new(),
+            };
+            graph.metadata.archetype = Some(ArchetypeMetadata {
+                name: archetype,
+                milestones: None,
+                edit_loop_cap: None,
+                node_capacity_estimate: None,
+            });
+            writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::PipelineMaterialized {
+                        graph: Box::new(graph),
+                        graph_hash: surge_core::ContentHash::compute(name.as_bytes()),
+                    },
+                ))
+                .await
+                .unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
+                    node: NodeKey::try_from("worker").unwrap(),
+                    attempt: 1,
+                }))
+                .await
+                .unwrap();
+            let session = surge_core::SessionId::new();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
+                    handoff: None,
+                    opened: None,
+                    node: NodeKey::try_from("worker").unwrap(),
+                    session,
+                    agent: "test-profile".to_string(),
+                    agent_id: Some("test-runtime".to_string()),
+                }))
+                .await
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::TokensConsumed {
+                    session,
+                    prompt_tokens: 1,
+                    output_tokens: 1,
+                    cache_hits: 0,
+                    model: "test-model".to_string(),
+                    cost_usd: cost.is_finite().then_some(cost),
+                }))
+                .await
+                .unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {
+                    node: NodeKey::try_from("worker").unwrap(),
+                    outcome: surge_core::OutcomeKey::try_from("done").unwrap(),
+                }))
+                .await
+                .unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_from("worker").unwrap(),
+                }))
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+            storage
+                .set_run_status(&id, RunStatus::Completed, None)
+                .await
+                .unwrap();
+        }
+        let history = PersistentArchetypeHistory::new(storage);
+        let samples = history.samples(ArchetypeName::Spike).await;
+        assert_eq!(samples.len(), 4);
+        assert!(samples.iter().all(|sample| sample.0 >= 10));
+        assert_eq!(
+            samples.iter().filter(|sample| sample.1.is_some()).count(),
+            3
+        );
+        assert_eq!(
+            median_u64(&samples.iter().filter_map(|s| s.1).collect::<Vec<_>>()),
+            3000
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -398,5 +590,90 @@ mod tests {
         let estimator = RunHistoryWorkEstimator::new(writer.reader());
         let node = NodeKey::try_from("impl_1").unwrap();
         assert_eq!(estimator.estimate(&node).await, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_history_estimator_does_not_substitute_node_history_for_archetype_history() {
+        use surge_core::keys::OutcomeKey;
+        use surge_core::run_event::{EventPayload, VersionedEventPayload};
+        use surge_persistence::runs::clock::MockClock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(MockClock::new(1_000));
+        let storage = Storage::open_with(dir.path(), clock.clone()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let node = NodeKey::try_from("impl_1").unwrap();
+        for (advance_ms, payload) in [
+            (
+                0,
+                EventPayload::StageEntered {
+                    node: node.clone(),
+                    attempt: 1,
+                },
+            ),
+            (
+                10,
+                EventPayload::StageCompleted {
+                    node: node.clone(),
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                },
+            ),
+            (
+                990,
+                EventPayload::StageEntered {
+                    node: node.clone(),
+                    attempt: 2,
+                },
+            ),
+            (
+                90,
+                EventPayload::StageCompleted {
+                    node: node.clone(),
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                },
+            ),
+            (
+                910,
+                EventPayload::StageEntered {
+                    node: node.clone(),
+                    attempt: 3,
+                },
+            ),
+            (
+                30,
+                EventPayload::StageCompleted {
+                    node: node.clone(),
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                },
+            ),
+            (
+                970,
+                EventPayload::StageEntered {
+                    node: node.clone(),
+                    attempt: 4,
+                },
+            ),
+            (
+                200,
+                EventPayload::StageCompleted {
+                    node: node.clone(),
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                },
+            ),
+        ] {
+            clock.advance(advance_ms);
+            writer
+                .append_event(VersionedEventPayload::new(payload))
+                .await
+                .unwrap();
+        }
+
+        let estimator = RunHistoryWorkEstimator::new(writer.reader());
+        assert_eq!(
+            estimator.estimate(&node).await,
+            None,
+            "same-run node history must not masquerade as an archetype estimate"
+        );
     }
 }
