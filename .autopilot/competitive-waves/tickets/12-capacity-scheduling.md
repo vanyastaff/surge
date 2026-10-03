@@ -256,6 +256,23 @@ actual provider routing and automatic wake cases (2 passed, 0 skipped).
 The broader nextest linker ENOSPC failure is retained above; these scoped results
 do not replace the full T12 gate. No requirement was retired.
 
+### Root full-workspace candidate check (2026-10-03, still RED)
+
+After package-aware cleanup and rebuilding the ACP/CLI fixture binaries, root ran
+`cargo nextest run --workspace --exclude surge-ui --no-fail-fast` with
+`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=1`, and dev/test debug info disabled.
+Session `71139` terminated with exit 100: 3374 tests ran, 3345 passed, 27 failed,
+2 timed out at the configured 120-second ceiling, and 36 were skipped.
+The preserved log is `/tmp/surge-predispatch-root-workspace-lowdebug-20261003.log`.
+
+Failures include bootstrap planning, task/provider and gate recovery, skill
+binding, an unowned-rotation expectation and two snapshots. Several actual
+provider paths report `provider opening differs from recipe admission`; their
+cause and correct repair still require diagnosis. This is executable failure
+evidence, not a final spec or code-quality verdict. The candidate remains frozen
+while read-only triage consolidates defects with the relative-cwd gap below;
+the shared formal repair count remains 2/3, with no third dispatch yet.
+
 ## Что должно заработать
 
 ### Actual launch cwd for configured sources (reviewed repair dependency)
