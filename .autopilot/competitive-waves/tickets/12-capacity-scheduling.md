@@ -268,10 +268,10 @@ The preserved log is `/tmp/surge-predispatch-root-workspace-lowdebug-20261003.lo
 Failures include bootstrap planning, task/provider and gate recovery, skill
 binding, an unowned-rotation expectation and two snapshots. Several actual
 provider paths report `provider opening differs from recipe admission`; their
-cause and correct repair still require diagnosis. This is executable failure
-evidence, not a final spec or code-quality verdict. The candidate remains frozen
-while read-only triage consolidates defects with the relative-cwd gap below;
-the shared formal repair count remains 2/3, with no third dispatch yet.
+cause and correct repair were still undiagnosed at that checkpoint. This is
+executable failure evidence, not a final spec or code-quality verdict. The
+candidate was frozen for read-only triage; the formal repair count at that
+checkpoint was 2/3. The subsequent third dispatch is recorded below.
 
 Read-only triage identifies test-adapter contract failures: WireBridge rewrites
 the launch recipe after admission; AuthorBridge returns a fabricated launch hash
@@ -339,11 +339,13 @@ not be recreated after loss, and failed preparation must preserve retained files
 The secure preparation path is scoped by a pure host-config/graph predicate:
 configured `RotationPolicy::Candidate` and an Agent node, including subgraphs.
 It performs no auth-file or key I/O before obtaining the guard. Ordinary Starts
-without configured rotation, legacy caller-owned quota policy and terminal-only
+without configured rotation (including a supplied legacy policy) and terminal-only
 graphs retain their existing cross-platform path; every reserve still enforces
 the live preparation fence. Platforms without the required secure lock support
 explicitly refuse the new configured-rotation path before provider effects.
 They must not silently disable rotation or use an insecure lock fallback.
+With configured host rotation enabled, host freeze replaces a supplied legacy
+policy, so that combination also requires preparation; it is not an exemption.
 
 Secure lock implementation belongs in a private persistence module. It does not
 depend upward on orchestrator or introduce a generic public filesystem API.
@@ -357,6 +359,18 @@ fences; host-death reclamation; and responsive unrelated-item controls during
 blocked fingerprinting. Compare retained files, raw index and HEAD and assert no
 premature Prepared acknowledgment or provider RPC. This is a reviewed dependency,
 not an implemented repair or final 5a acceptance.
+
+The reviewed responsiveness oracle blocks the actual daemon's worker immediately
+before host fingerprinting, after original-owner Git preparation. A different
+item's Archive must complete through that same server before release, and the
+original normal Start must then perform its actual freeze and provider launch.
+The hook and call are debug-only, use an exact item selector and verified bounded
+regular markers, and grant no authority. This proves the pre-fingerprint worker
+boundary; it does not claim cancellation of an arbitrary kernel credential read.
+Combine it with short-transaction laws and the real relative-file outer test.
+The worker must own the preparation guard throughout Git/fingerprint work;
+cancellation of the awaiting async request cannot unlock it while that work
+continues, and a detached worker must never finalize Start in the background.
 
 The new normal-Start relative-cwd acceptance test produced behavioral RED in
 builder session `69110` (exit 101 after successful compilation): checkout-based
@@ -375,6 +389,21 @@ universal live-preparation fences are under implementation in repair 3. Session
 `78346` failed compilation while the private secure-fd helper was being adapted
 to nix 0.29; it is not behavioral GREEN or an accepted candidate. The builder
 retains sole Cargo ownership until final handoff.
+
+Additional author-loop evidence in the same unfrozen repair 3: preparation laws
+passed 13/13 in session `68935`, after behavioral RED `42983` showed that replacing
+the lock pathname could bypass a still-live descriptor. The preparation row now
+binds held directory/lock identity; replacement cannot prove the old owner dead.
+Actual daemon pre-fingerprint responsiveness passed in `73963`: another item's
+Create and Archive completed through the same server before release, without an
+early provider RPC. Awaiter cancellation passed in `69388`: the blocking worker
+kept the guard until completion and discarded output created no attempt or effect.
+
+The current quota suite passed 35/35 in `14975` before the final lock-identity
+hardening; it needs revalidation on the final source. Strict checks `47653` and
+`94330` stopped on fixture compilation/lint errors. Their mechanical corrections
+remain author WIP until a new terminal gate confirms them. These targeted results
+do not retire the earlier full-workspace failure or constitute final 5a/5b review.
 
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
