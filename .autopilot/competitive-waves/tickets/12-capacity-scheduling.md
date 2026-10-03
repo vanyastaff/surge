@@ -188,6 +188,45 @@ do not replace the full T12 gate. No requirement was retired.
 
 ## Что должно заработать
 
+### Ordinary flow ownership normalization (reviewed next dependency)
+
+Configured rotation on ordinary CLI/daemon flow launches must enter the same
+durable task owner, workspace, opening fences and automatic wake lifecycle as
+task launches. The current task-owned pre-dispatch implementation does not close
+this criterion. Until normalization exists, unowned rotation must fail explicitly
+before any provider effect; freezing a policy alone is not support.
+
+The reviewed next unit creates a real graph-backed task and accepted revision,
+reserves an attempt with the host's run ID, and records a durable owned-flow
+launch intent and operation result in one registry transaction. The exact graph
+hash is a typed accepted-contract origin, without invented feature criteria.
+Initial prompt and every launch input survive acknowledgment. The coordinator
+does not launch detached work; existing admission, claims and startup recovery
+remain the effect owners.
+
+Operation replay is inspected before current source-cleanliness checks, discovery
+or config freezing. Exact replay returns the original attempt, frozen config and
+workspace intent; any changed explicit request field, including complete
+`run_config`, conflicts. First acceptance captures a clean immutable Git base
+and freezes host config before the transaction. Workspace preparation uses that
+retained base. Dirty source or an arbitrary explicit `--worktree` is rejected on
+first acceptance without changing source files, index or HEAD.
+
+A reserved attempt alone is not a recoverable queued request: existing startup
+reconciliation intentionally skips Reserved attempts without startup history.
+Only an explicit durable owned-flow launch intent authorizes reconciliation of
+that case. It permits startup attempts, not provider effects, and does not weaken
+the generic Reserved safeguard. CLI launches must retain daemon ownership and
+automatic wake rather than create a separate local recovery lifecycle.
+
+Acceptance must cover CLI and daemon ordinary flow starts with zero exhausted-A
+opens and one selected-B open; matching stream/registry run identity; concurrent
+exact replay; changed `run_config` rejection; replay after source/config changes;
+crashes after acceptance and queued acknowledgment before startup; retained
+workspace and frozen budget through park/wake; and unchanged dirty files, index
+and HEAD on first-acceptance rejection. Inventory other unowned launch surfaces
+before declaring T12 complete. This is a reviewed plan, not implemented evidence.
+
 Перед диспатчем ноды движок смотрит, влезет ли работа в остаток окна. Не влезает — ран паркуется с временем пробуждения и виден в inbox как ожидающий, а не как молча вставший. После сброса он просыпается сам, с замороженным бюджетом, который переармируется точно так же, как при обычном resume. Если ротация включена, вместо парковки берётся следующий настроенный профиль того же рантайма.
 
 ## Из брифа, дословно
