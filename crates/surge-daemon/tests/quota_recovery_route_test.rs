@@ -398,6 +398,16 @@ async fn task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace() {
         storage.work_items().workspace_prepared(item).unwrap(),
         "real host must prepare and record workspace before first prompt"
     );
+    for runtime in ["quota-a", "quota-b"] {
+        storage
+            .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
+                runtime,
+                Some(Duration::from_secs(1)),
+                chrono::Utc::now() - chrono::Duration::seconds(2),
+            ))
+            .await
+            .unwrap();
+    }
     std::fs::write(&dirty, b"retain this user work").unwrap();
     std::fs::write(&tracked, b"retain dirty tracked source").unwrap();
     bridge.primary_continue.notify_one();
@@ -459,6 +469,18 @@ async fn task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace() {
         "eligible B must actually receive the task prompt"
     );
     let events = completed.expect("fallback must complete instead of remaining capacity paused");
+    assert!(
+        matches!(
+            storage.capacity_status("quota-a").await.unwrap(),
+            surge_core::capacity::CapacityStatus::Known(_)
+        ),
+        "fallback B success cannot establish recovery of exhausted A"
+    );
+    assert_eq!(
+        storage.capacity_status("quota-b").await.unwrap(),
+        surge_core::capacity::CapacityStatus::NeverObserved,
+        "actual successful provider B must clear its own stale exhaustion"
+    );
     let opened: Vec<_> = events
         .iter()
         .filter_map(|row| match &row.payload.payload {

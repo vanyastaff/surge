@@ -1252,6 +1252,14 @@ async fn resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_sto
     );
 
     assert!(
+        matches!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            surge_core::capacity::CapacityStatus::Known(_)
+        ),
+        "authentication failure is not evidence that the exhausted provider recovered"
+    );
+
+    assert!(
         configured_store.exists(),
         "the resumed run's stage failure must write to the store this test configured at the \
          engine level; before the fix, `resume_run` rebuilds EngineRunConfig::default() with \
@@ -1270,5 +1278,79 @@ async fn resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_sto
         claims[0].text().contains("agent_1"),
         "claim text should name the failing node: {}",
         claims[0].text()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn binding_failure_before_provider_open_preserves_exhaustion() {
+    let profiles = tempfile::tempdir().unwrap();
+    drop_profile(profiles.path(), "binding-role", "claude-code", &["done"]);
+    let registry = Arc::new(ProfileRegistry::new(
+        DiskProfileSet::scan(profiles.path()).unwrap(),
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    storage
+        .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
+            "claude-acp",
+            Some(Duration::from_secs(1)),
+            chrono::Utc::now() - chrono::Duration::seconds(2),
+        ))
+        .await
+        .unwrap();
+    let mock = Arc::new(MockBridge::new());
+    let engine = Engine::new_full(
+        mock.clone(),
+        storage.clone(),
+        Arc::new(UnusedDispatcher),
+        Arc::new(surge_notify::MultiplexingNotifier::new()),
+        None,
+        Some(registry),
+        EngineConfig::default(),
+    );
+    let mut node = agent_node("agent_1", "binding-role@1.0", vec![], &["done"]);
+    let NodeConfig::Agent(config) = &mut node.config else {
+        unreachable!()
+    };
+    config.bindings.push(surge_core::agent_config::Binding {
+        source: surge_core::agent_config::ArtifactSource::RunArtifact {
+            name: "missing_context".into(),
+        },
+        target: surge_core::agent_config::TemplateVar("context".into()),
+        optional: false,
+    });
+    let handle = engine
+        .start_run(
+            RunId::new(),
+            graph(
+                "capacity-binding-failure",
+                "agent_1",
+                vec![node, terminal_node("end")],
+                vec![edge("finish", "agent_1", "done", "end")],
+            ),
+            dir.path().to_path_buf(),
+            EngineRunConfig::default(),
+        )
+        .await
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(outcome, RunOutcome::Failed { .. }), "{outcome:?}");
+    assert!(
+        mock.recorded_calls
+            .lock()
+            .await
+            .iter()
+            .all(|call| !matches!(call, fixtures::mock_bridge::RecordedCall::OpenSession)),
+        "binding failure must occur before opening a provider"
+    );
+    assert!(
+        matches!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            surge_core::capacity::CapacityStatus::Known(_)
+        ),
+        "pre-provider failure cannot prove quota recovery"
     );
 }

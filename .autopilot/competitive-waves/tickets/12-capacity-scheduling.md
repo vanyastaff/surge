@@ -85,6 +85,23 @@ ACCEPTABLE. The full persistence library suite also passed: 438 tests. This read
 API grants no opening authority and does not yet establish
 the latest account/recipe observation across different runs. T12 remains in repair.
 
+### Actual-provider capacity recovery
+
+Successful fallback execution cannot establish recovery of the configured primary.
+The capacity gate now captures the journal prefix before dispatch and clears only
+the runtime identified by the last actual opening for the same node after that
+prefix, and only on a successful stage result. Authentication, configuration,
+pre-opening and storage failures preserve recorded exhaustion. Missing current
+opening identity or unreadable history also preserves it.
+
+The authentication-failure regression failed on the old implementation. The existing
+13 capacity tests, added zero-opening missing-binding regression and real daemon
+A→B case passed after the fix; the latter directly verifies A remains exhausted
+while B's stale observation clears. Independent spec/quality review returned
+ACCEPTABLE. Strict orchestrator/daemon all-target/all-feature clippy, workspace fmt
+and diff checks passed. This corrects attribution but does not implement pre-dispatch
+rotation.
+
 ## Что должно заработать
 
 Перед диспатчем ноды движок смотрит, влезет ли работа в остаток окна. Не влезает — ран паркуется с временем пробуждения и виден в inbox как ожидающий, а не как молча вставший. После сброса он просыпается сам, с замороженным бюджетом, который переармируется точно так же, как при обычном resume. Если ротация включена, вместо парковки берётся следующий настроенный профиль того же рантайма.

@@ -1375,9 +1375,8 @@ async fn dispatch_agent_node_with_capacity_gate(
             "persistent task launch authority expired before provider dispatch: {error}"
         ));
     }
-    // Resolved once, reused by both the precheck and (on a non-rate-limited
-    // result) the post-dispatch clear below — one profile resolve per
-    // dispatch, not two.
+    // The configured runtime controls admission. Recovery after dispatch must
+    // use the actual provider opening, which may belong to a quota fallback.
     let runtime = crate::engine::stage::agent::resolve_node_runtime_id(
         params.profile_registry.as_deref(),
         cfg,
@@ -1443,6 +1442,7 @@ async fn dispatch_agent_node_with_capacity_gate(
         }
     }
 
+    let dispatch_prefix = params.writer.current_seq().await.ok();
     let result = execute_agent_node(params, state, node, cfg).await;
     if let Err(error) = observe_failed_agent(params, state, &result).await {
         return StageDispatch::StageResult(Err(error));
@@ -1460,24 +1460,10 @@ async fn dispatch_agent_node_with_capacity_gate(
         _ => None,
     };
     let Some((raw_runtime, retry_after, details)) = rate_limit else {
-        // Not rate-limited (success, or any other `StageError`): if this
-        // node's profile resolves to a runtime, clear any stale exhaustion
-        // record for it. This is the other half of BLOCKING #1's fix — a
-        // real, non-rate-limited outcome is proof the runtime is not (or
-        // no longer) exhausted, and is what lets a row with no learned
-        // reset time stop haunting every future dispatch instead of only
-        // the one right after a bypassed park.
-        if let Some(runtime) = runtime
-            && let Err(error) = params.capacity_ledger.clear(&runtime).await
+        if result.is_ok()
+            && let Some(prefix) = dispatch_prefix
         {
-            tracing::warn!(
-                target: "engine::capacity",
-                node = %state.cursor.node,
-                %runtime,
-                %error,
-                "capacity ledger clear failed; a stale exhaustion record for this runtime \
-                 may persist"
-            );
+            clear_successful_dispatch_capacity(params, &state.cursor.node, prefix).await;
         }
         return StageDispatch::StageResult(result);
     };
@@ -1494,6 +1480,46 @@ async fn dispatch_agent_node_with_capacity_gate(
         // `Rotate` cannot be reached here for the same reason as above.
         surge_core::capacity::Decision::Dispatch { .. }
         | surge_core::capacity::Decision::Rotate { .. } => StageDispatch::StageResult(result),
+    }
+}
+
+/// A successful stage proves recovery only for its last actual provider opening.
+/// Read strictly after the dispatch prefix so previous attempts cannot supply it.
+async fn clear_successful_dispatch_capacity(
+    params: &RunTaskParams,
+    node: &surge_core::keys::NodeKey,
+    prefix: surge_persistence::runs::EventSeq,
+) {
+    let events = match read_stage_events(params, prefix.next(), "capacity dispatch").await {
+        Ok(events) => events,
+        Err((_, error)) => {
+            tracing::warn!(target: "engine::capacity", %node, %error,
+                "cannot establish successful provider identity; retaining capacity observations");
+            return;
+        },
+    };
+    let runtime = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload.payload {
+            EventPayload::SessionOpened {
+                node: opened_node,
+                agent_id,
+                ..
+            } if opened_node == node => Some(agent_id.as_deref()),
+            _ => None,
+        })
+        .flatten();
+    let Some(runtime) = runtime else {
+        return;
+    };
+    let runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
+        &surge_acp::Registry::builtin(),
+        runtime,
+    );
+    if let Err(error) = params.capacity_ledger.clear(&runtime).await {
+        tracing::warn!(target: "engine::capacity", %node, %runtime, %error,
+            "capacity ledger clear failed; stale exhaustion may persist");
     }
 }
 
