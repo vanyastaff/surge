@@ -146,7 +146,13 @@ async fn describe_with_agent(
 ) -> Result<surge_orchestrator::project_context::ProjectContextOutcome> {
     let bridge =
         Arc::new(surge_acp::bridge::AcpBridge::with_defaults().context("start ACP bridge")?);
-    let facade: Arc<dyn BridgeFacade> = bridge.clone();
+    let storage = surge_persistence::runs::Storage::open(super::common::surge_home_dir()?).await?;
+    let facade: Arc<dyn BridgeFacade> = Arc::new(
+        surge_orchestrator::recipe_admission::RecipeAdmissionBridge::new(
+            bridge.clone(),
+            storage.work_items(),
+        ),
+    );
     let result = describe_project_with_bridge(options, facade).await;
     if let Ok(bridge) = Arc::try_unwrap(bridge)
         && let Err(e) = bridge.shutdown().await

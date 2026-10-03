@@ -117,6 +117,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0025-quota-handoffs",
         include_str!("migrations/registry/0025_quota_handoffs.sql"),
     ),
+    (
+        "registry-0026-recipe-admissions",
+        include_str!("migrations/registry/0026_recipe_admissions.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

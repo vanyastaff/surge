@@ -239,10 +239,13 @@ async fn task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace() {
         primary_ready: tokio::sync::Notify::new(),
         primary_continue: tokio::sync::Notify::new(),
     });
-    let engine = Arc::new(Engine::new(
+    let engine = Arc::new(Engine::new_full(
         bridge.clone(),
         storage.clone(),
         Arc::new(WorktreeToolDispatcher::new(project.path().into())),
+        Arc::new(surge_notify::MultiplexingNotifier::new()),
+        None,
+        None,
         engine_config(home.path()),
     ));
     let cancel = CancellationToken::new();
@@ -345,6 +348,8 @@ async fn task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace() {
         .unwrap();
         serde_json::to_value(FrozenQuotaPolicy::new(vec![stage]).unwrap()).unwrap()
     };
+    let frozen_policy: surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy =
+        serde_json::from_value(quota_policy.clone()).unwrap();
     let start = WorkItemCommand::Start {
         operation_id: WorkItemOperationId::new(),
         item,
@@ -492,6 +497,31 @@ async fn task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace() {
         })
         .collect();
     assert_eq!(opened.len(), 2, "retain both actual provider descriptors");
+    assert!(
+        storage
+            .work_items()
+            .inspect_current_recipe_exhaustion(
+                &detail.item.project,
+                &frozen_policy.stages()[0].candidates()[0],
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap()
+            .is_some(),
+        "production new_full must publish exact fresh primary marker through admitted opening"
+    );
+    let admission_count: i64 = storage
+        .acquire_registry_conn()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM recipe_opening_admissions",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        admission_count, 2,
+        "primary and fallback both cross the admission barrier once"
+    );
     assert_eq!(opened[0].descriptor.runtime(), "quota-a");
     assert_eq!(opened[1].descriptor.runtime(), "quota-b");
     assert_ne!(
@@ -913,6 +943,20 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
     assert!(
         opened.len() >= 3,
         "wake must durably record a new provider session"
+    );
+    let admissions: i64 = storage
+        .acquire_registry_conn()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM recipe_opening_admissions",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        usize::try_from(admissions).unwrap(),
+        opened.len(),
+        "legacy constructor path admits primary, fallback and automatic continuation exactly once"
     );
     assert!(opened.iter().all(|opened| {
         opened.descriptor.cwd() == storage.work_items().show(item).unwrap().item.workspace.path

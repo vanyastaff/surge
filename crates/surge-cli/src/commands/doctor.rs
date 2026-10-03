@@ -15,6 +15,7 @@ use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 use surge_acp::Registry;
 use surge_acp::bridge::error::{OpenSessionError, SendMessageError};
+use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::{AcpBridge, AgentKind, AlwaysAllowSandbox, MessageContent, SessionConfig};
 use surge_core::OutcomeKey;
 use surge_core::doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
@@ -132,6 +133,15 @@ async fn run_real_smoke(
     };
 
     let bridge = AcpBridge::with_defaults().map_err(|e| (SmokeStage::Spawn, e.to_string()))?;
+    let home =
+        super::common::surge_home_dir().map_err(|error| (SmokeStage::Spawn, error.to_string()))?;
+    let storage = surge_persistence::runs::Storage::open(home)
+        .await
+        .map_err(|error| (SmokeStage::Spawn, error.to_string()))?;
+    let bridge = surge_orchestrator::recipe_admission::RecipeAdmissionBridge::new(
+        std::sync::Arc::new(bridge),
+        storage.work_items(),
+    );
     let session = match bridge.open_session(config).await {
         Ok(opened) => opened.session,
         Err(e) => return Err((classify_open_error(&e), e.to_string())),

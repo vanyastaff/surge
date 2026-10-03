@@ -81,7 +81,7 @@ impl BridgeFacade for BudgetMockBridge {
                     ProviderSessionId::new(format!("budget-fixture-{session}")).unwrap(),
                     config.invocation,
                     config.runtime,
-                    surge_core::ContentHash::compute(b"budget fixture launch"),
+                    surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes()),
                     config.working_dir,
                     SessionRestoreCapabilities {
                         resume: true,
@@ -92,7 +92,15 @@ impl BridgeFacade for BudgetMockBridge {
                 SessionOpenMode::New,
             ),
         };
-        Ok(OpenedSession::new(session, descriptor, mode).unwrap())
+        let mut opened = OpenedSession::new(session, descriptor, mode).unwrap();
+        opened.execution_writer = Some(
+            surge_core::execution_recovery::process::ExecutionWriterObservation::new(
+                config.writer_id,
+                None,
+            )
+            .unwrap(),
+        );
+        Ok(opened)
     }
 
     async fn send_message(

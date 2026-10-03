@@ -102,6 +102,90 @@ ACCEPTABLE. Strict orchestrator/daemon all-target/all-feature clippy, workspace 
 and diff checks passed. This corrects attribution but does not implement pre-dispatch
 rotation.
 
+### Registry opening admission ordering
+
+Added registry migration 0026 and `work_items::recipe_capacity`: every comparable
+provider opening commits a unique execution-writer admission before the RPC.
+AUTOINCREMENT epochs order a broad runtime + existing Debug-AgentKind launch-hash
+partition across projects, models and accounts. The latest admission is Unknown
+until its exact opening attaches a sealed typed exhaustion receipt. Failed RPCs
+and host death retain the Unknown barrier; repeated writer IDs cannot replay an
+RPC, even when the original result was missing. No historical admissions are
+invented or backfilled.
+
+`record_selected_rate_limit` publishes within its existing transaction only for
+matching actual writer, invocation, runtime and launch hash at the latest epoch.
+Older typed causes remain audit evidence. A conflicting receipt for the same
+opening rejects and rolls back; the original association is immutable. The new
+read-only `inspect_current_recipe_exhaustion` checks latest admission, exact
+project/frozen candidate/model, original/latest TTL/reset and sealed opening in
+one registry read snapshot. This evidence grants no provider-opening authority.
+
+All engine construction paths delegate to one owner that wraps the raw facade.
+Standalone production project-description, doctor and daemon-triage callers wrap
+with the same canonical registry dependency; library functions receive their
+facade rather than opening an unrelated default registry. The wrapper delegates
+legacy adapter and all bridge operations, validates returned provider identity,
+and closes mismatched openings. Production fixture runtime sentinels were replaced
+with the actual runtime identity.
+
+Behavioral RED reproduced reservation evidence surviving a newer no-quota opening
+and duplicate-writer facade replay before enforcement. Targeted tests cover
+supersession, late original error, missing historical admission, unrelated
+runtime/hash, exact project/model/TTL, conflicting origin rollback, storage failure
+with zero RPC, receipt mismatch and replay after restart. The daemon A→B case
+uses production `new_full` and asserts an actionable exact primary marker plus
+one admission per primary/fallback; the wake case checks the alternate constructor
+and a barrier for every recorded continuation opening. Pre-dispatch planning,
+skip/reservation and account/profile rotation remain open; T12 is still in repair.
+
+### Continue acknowledgment race repair
+
+The real wake suite exposed an intermittent race after `RunContinued`: the daemon
+journal subscriber could call `confirm_continued` before the engine authorized the
+quota wake prompt. Both belonged to the same operation/generation, but the prompt
+fence accepted only ContinueReserved and rejected its legitimate Executing ack.
+A deterministic interposed acknowledgment reproduced the same conflict (RED).
+The repaired fence accepts either state while preserving exact operation,
+generation, current established handoff and durable journal prefix checks. Separate
+tests retain both event orderings and reject changed operation/generation; all
+three targeted automatic-wake storage tests pass. Broad execution verification is
+recorded separately after the complete suites finish.
+
+### Verification resource limit
+
+The requested broad `cargo nextest run -p surge-orchestrator -p surge-daemon`
+failed during test-binary linking with `No space left on device`, before test
+execution. It is **not** a passing nextest gate. Concurrently queued verification
+commands also ended with ENOSPC fingerprint-write failures. All those handles
+are terminal. Package-scoped build-cache cleanup restored space without changing
+source; verification now runs bounded affected suites sequentially. The complete
+T12 nextest gate remains unverified until sufficient build capacity is available.
+
+Whole-workspace strict clippy passed on the admission + acknowledgment repair
+and fixture changes: `cargo clippy --workspace --all-targets --all-features --
+-D warnings` (exit 0, 2m27s). Workspace fmt and diff checks passed. The unrelated
+future-dependency notice for `block 0.1.6` was informational.
+
+Final bounded verification after the acknowledgment repair and complete fixture
+corrections passed with `CARGO_INCREMENTAL=0` and sequential linking:
+
+- Persistence library: 443 passed.
+- Orchestrator affected suites: archetypes 1, actual ACP/MCP permission 18, budget 3,
+  capacity parking 14, recipe-admission facade 7 passed.
+- Daemon affected suites: parity 1, resume stream 6 and real quota routing/wake 2
+  passed. Both constructors and primary/fallback/continuation barriers were checked.
+- Strict all-feature clippy for the final modified ACP permission fixture passed;
+  workspace format and diff checks passed.
+
+The root independently reran final whole-workspace strict clippy with
+`CARGO_INCREMENTAL=0` (exit 0, 1m29s), and
+`cargo nextest run -p surge-daemon --test quota_recovery_route_test` passed both
+actual provider routing and automatic wake cases (2 passed, 0 skipped).
+
+The broader nextest linker ENOSPC failure is retained above; these scoped results
+do not replace the full T12 gate. No requirement was retired.
+
 ## Что должно заработать
 
 Перед диспатчем ноды движок смотрит, влезет ли работа в остаток окна. Не влезает — ран паркуется с временем пробуждения и виден в inbox как ожидающий, а не как молча вставший. После сброса он просыпается сам, с замороженным бюджетом, который переармируется точно так же, как при обычном resume. Если ротация включена, вместо парковки берётся следующий настроенный профиль того же рантайма.

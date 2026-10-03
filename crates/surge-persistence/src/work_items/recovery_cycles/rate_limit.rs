@@ -252,6 +252,93 @@ struct RateLimitOpeningEvidence {
     prefix: u64,
 }
 
+pub(in crate::work_items) fn inspect_current_receipt(
+    conn: &Connection,
+    receipt: &str,
+    project: &surge_core::id::WorkItemProjectId,
+    expected: &FrozenQuotaCandidate,
+    now_ms: i64,
+) -> Result<Option<FreshTypedExhaustion>> {
+    let Some(evidence) = inspect_fresh_on_connection(conn, receipt, expected, now_ms)? else {
+        return Ok(None);
+    };
+    if &record(conn, evidence.marker.item)?.project != project {
+        return Ok(None);
+    }
+    let opening = &evidence.marker.opening;
+    let Some(writer) = opening.execution_writer.as_ref() else {
+        return Ok(None);
+    };
+    let exact: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM recipe_opening_admissions WHERE execution_writer=? AND invocation=? AND runtime=? AND launch_hash=? AND exhaustion_receipt=? AND epoch=(SELECT MAX(epoch) FROM recipe_opening_admissions WHERE runtime=? AND launch_hash=?))",
+        params![writer.writer().to_string(), opening.descriptor.invocation().to_string(), opening.descriptor.runtime(), opening.descriptor.launch_hash().to_string(), receipt, opening.descriptor.runtime(), opening.descriptor.launch_hash().to_string()], |row| row.get(0))?;
+    Ok(exact.then_some(evidence))
+}
+
+fn inspect_fresh_on_connection(
+    conn: &Connection,
+    receipt: &str,
+    expected: &FrozenQuotaCandidate,
+    now_ms: i64,
+) -> Result<Option<FreshTypedExhaustion>> {
+    let Some(marker) = read_marker(conn, receipt)? else {
+        return Ok(None);
+    };
+    if &marker.candidate != expected {
+        return Ok(None);
+    }
+    let (observed, exhaustion): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT observed,exhaustion FROM work_item_quota_candidates WHERE receipt=?",
+        [receipt],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let observed = observed
+        .map(|body| serde_json::from_str::<QuotaObservation>(&body))
+        .transpose()?;
+    let exhaustion = exhaustion
+        .map(|body| serde_json::from_str::<QuotaObservation>(&body))
+        .transpose()?;
+    let Some(observed) = observed else {
+        return Err(WorkItemError::Invalid(
+            "typed rate-limit observed evidence is absent".into(),
+        ));
+    };
+    match observed.evidence() {
+        QuotaEvidence::Observed {
+            available: true, ..
+        } if exhaustion.is_none() => return Ok(None),
+        QuotaEvidence::Observed {
+            available: false, ..
+        } if exhaustion.as_ref() == Some(&observed) => {},
+        _ => {
+            return Err(WorkItemError::Invalid(
+                "typed rate-limit latest observed/exhaustion disagree".into(),
+            ));
+        },
+    }
+    let Some((original_at, original_until)) = exhausted_window(&marker.observation) else {
+        return Ok(None);
+    };
+    let Some((latest_at, latest_until)) = exhausted_window(&observed) else {
+        return Ok(None);
+    };
+    if latest_at < original_at {
+        return Err(WorkItemError::Invalid(
+            "typed rate-limit latest observation precedes original response".into(),
+        ));
+    }
+    let observed_at_ms = latest_at;
+    let valid_until_ms = original_until.min(latest_until);
+    if now_ms < observed_at_ms || now_ms >= valid_until_ms {
+        return Ok(None);
+    }
+    Ok(Some(FreshTypedExhaustion {
+        marker,
+        observed_at_ms,
+        valid_until_ms,
+    }))
+}
+
 impl WorkItemStore {
     /// Inspect one reservation in a consistent read snapshot. Candidate mismatch,
     /// cancelled exhaustion, future observations and elapsed validity return None.
@@ -264,63 +351,9 @@ impl WorkItemStore {
     ) -> Result<Option<FreshTypedExhaustion>> {
         let mut connection = self.pool.get()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let Some(marker) = read_marker(&tx, receipt)? else {
-            return Ok(None);
-        };
-        if &marker.candidate != expected {
-            return Ok(None);
-        }
-        let (observed, exhaustion): (Option<String>, Option<String>) = tx.query_row(
-            "SELECT observed,exhaustion FROM work_item_quota_candidates WHERE receipt=?",
-            [receipt],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let observed = observed
-            .map(|body| serde_json::from_str::<QuotaObservation>(&body))
-            .transpose()?;
-        let exhaustion = exhaustion
-            .map(|body| serde_json::from_str::<QuotaObservation>(&body))
-            .transpose()?;
-        let Some(observed) = observed else {
-            return Err(WorkItemError::Invalid(
-                "typed rate-limit observed evidence is absent".into(),
-            ));
-        };
-        match observed.evidence() {
-            QuotaEvidence::Observed {
-                available: true, ..
-            } if exhaustion.is_none() => return Ok(None),
-            QuotaEvidence::Observed {
-                available: false, ..
-            } if exhaustion.as_ref() == Some(&observed) => {},
-            _ => {
-                return Err(WorkItemError::Invalid(
-                    "typed rate-limit latest observed/exhaustion disagree".into(),
-                ));
-            },
-        }
-        let Some((original_at, original_until)) = exhausted_window(&marker.observation) else {
-            return Ok(None);
-        };
-        let Some((latest_at, latest_until)) = exhausted_window(&observed) else {
-            return Ok(None);
-        };
-        if latest_at < original_at {
-            return Err(WorkItemError::Invalid(
-                "typed rate-limit latest observation precedes original response".into(),
-            ));
-        }
-        let observed_at_ms = latest_at;
-        let valid_until_ms = original_until.min(latest_until);
-        if now_ms < observed_at_ms || now_ms >= valid_until_ms {
-            return Ok(None);
-        }
-        Ok(Some(FreshTypedExhaustion {
-            marker,
-            observed_at_ms,
-            valid_until_ms,
-        }))
+        inspect_fresh_on_connection(&tx, receipt, expected, now_ms)
     }
+
     /// Historical typed origin is independent of the latest quota probe.
     pub fn typed_rate_limit(&self, receipt: &str) -> Result<Option<QuotaRateLimitMarker>> {
         let connection = self.pool.get()?;
@@ -460,6 +493,7 @@ impl WorkItemStore {
         let next = apply_quota_observation(&tx, &current, receipt, observation)?;
         tx.execute("UPDATE work_item_quota_candidates SET typed_exhaustion=? WHERE receipt=? AND typed_exhaustion IS NULL",
             params![serde_json::to_string(&marker)?,receipt])?;
+        super::super::recipe_capacity::publish_receipt(&tx, &marker.opening, receipt)?;
         tx.commit()?;
         Ok(next)
     }

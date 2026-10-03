@@ -328,7 +328,7 @@ async fn try_one_attempt(
     let cfg = SessionConfig {
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
-        runtime: "fixture".into(),
+        runtime: "claude-acp".into(),
         opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,

@@ -1384,7 +1384,12 @@ async fn spawn_task_router(
     // EarlyDuplicate events post a tracker comment; ExternalUpdate events
     // reflect external status/label/closed changes into ticket_index.
     let source_map_for_consumer = source_map;
-    let bridge_for_consumer = Arc::clone(&bridge);
+    let bridge_for_consumer: Arc<dyn surge_acp::bridge::facade::BridgeFacade> = Arc::new(
+        surge_orchestrator::recipe_admission::RecipeAdmissionBridge::new(
+            Arc::clone(&bridge),
+            storage.work_items(),
+        ),
+    );
     let storage_for_consumer = Arc::clone(&storage);
     let notifier_for_consumer = Arc::clone(&notifier);
     let engine_for_consumer = engine;

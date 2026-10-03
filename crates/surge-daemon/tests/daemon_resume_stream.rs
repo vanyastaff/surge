@@ -130,20 +130,28 @@ impl BridgeFacade for ParkOnce {
         &self,
         config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
-        Ok(surge_core::execution_recovery::OpenedSession::new(
+        let mut opened = surge_core::execution_recovery::OpenedSession::new(
             SessionId::new(),
             surge_core::execution_recovery::ProviderSessionDescriptor::new(
                 surge_core::execution_recovery::ProviderSessionId::new("park-once".into()).unwrap(),
                 config.invocation,
                 config.runtime,
-                surge_core::ContentHash::compute(b"park-once"),
+                surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes()),
                 config.working_dir,
                 Default::default(),
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,
         )
-        .unwrap())
+        .unwrap();
+        opened.execution_writer = Some(
+            surge_core::execution_recovery::process::ExecutionWriterObservation::new(
+                config.writer_id,
+                None,
+            )
+            .unwrap(),
+        );
+        Ok(opened)
     }
     async fn send_message(
         &self,

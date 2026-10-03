@@ -36,6 +36,10 @@ fn descriptor(invocation: StageInvocationId, cwd: std::path::PathBuf) -> Provide
 }
 
 async fn fixture() -> Fixture {
+    fixture_with_admission(false).await
+}
+
+async fn fixture_with_admission(admit: bool) -> Fixture {
     let home = tempfile::tempdir().unwrap();
     let storage = Storage::open(home.path()).await.unwrap();
     let store = storage.work_items();
@@ -110,12 +114,29 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
     let invocation = StageInvocationId::new();
-    let original = OpenedSession::new(
+    let mut original = OpenedSession::new(
         SessionId::new(),
         descriptor(invocation, workspace.path),
         SessionOpenMode::New,
     )
     .unwrap();
+    if admit {
+        let writer_id = surge_core::id::ExecutionWriterId::new();
+        original.execution_writer = Some(
+            surge_core::execution_recovery::process::ExecutionWriterObservation::new(
+                writer_id, None,
+            )
+            .unwrap(),
+        );
+        store
+            .admit_recipe_opening(
+                writer_id,
+                invocation,
+                "a",
+                original.descriptor.launch_hash(),
+            )
+            .unwrap();
+    }
     let serialized = toml::to_string(&graph).unwrap();
     let events = vec![
         V::new(EventPayload::RunStarted {
@@ -1051,6 +1072,15 @@ async fn automatic_wake_requires_current_confirmed_capacity_control_without_part
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_wake_atomically_reserves_continue_candidate_and_handoff() {
+    automatic_wake_authorization_order(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_wake_subscriber_ack_before_prompt_keeps_exact_authority() {
+    automatic_wake_authorization_order(true).await;
+}
+
+async fn automatic_wake_authorization_order(acknowledge: bool) {
     use surge_core::execution_recovery::{
         ExecutionControlState, PendingStagePhase, SuspensionFence, SuspensionReason,
     };
@@ -1264,6 +1294,49 @@ async fn automatic_wake_atomically_reserves_continue_candidate_and_handoff() {
         .await
         .unwrap()
         .as_u64();
+    // Deterministic scheduler ordering: the journal subscriber acknowledges
+    // Continue before the engine seals its prompt authorization.
+    if acknowledge {
+        let acknowledged = f.store.confirm_continued(&f.claim, 2).unwrap();
+        assert_eq!(acknowledged.state, ExecutionControlState::Executing);
+    }
+    let exact_control = f.store.execution_control(f.claim.run).unwrap().unwrap();
+    let conn = f.store.pool.get().unwrap();
+    for wrong_generation in [false, true] {
+        let mut changed = exact_control.clone();
+        if wrong_generation {
+            changed.generation += 1;
+        } else {
+            changed.operation = WorkItemOperationId::new();
+        }
+        conn.execute(
+            "UPDATE work_item_execution_controls SET payload=? WHERE run=? AND generation=2",
+            params![
+                serde_json::to_string(&changed).unwrap(),
+                f.claim.run.to_string()
+            ],
+        )
+        .unwrap();
+        assert!(
+            f.store
+                .authorize_automatic_wake_prompt(
+                    &f.claim,
+                    first.handoff().operation(),
+                    continued_seq
+                )
+                .is_err(),
+            "changed operation or generation must never authorize prompt"
+        );
+    }
+    conn.execute(
+        "UPDATE work_item_execution_controls SET payload=? WHERE run=? AND generation=2",
+        params![
+            serde_json::to_string(&exact_control).unwrap(),
+            f.claim.run.to_string()
+        ],
+    )
+    .unwrap();
+    drop(conn);
     let executing = f
         .store
         .authorize_automatic_wake_prompt(&f.claim, first.handoff().operation(), continued_seq)
@@ -1627,4 +1700,165 @@ async fn fresh_typed_exhaustion_rejects_corrupted_original_or_latest_bounds() {
         );
         f.writer.close().await.unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn newer_opening_without_quota_supersedes_exact_exhaustion() {
+    let f = fixture_with_admission(true).await;
+    seal_fixture_exhaustion(&f).await;
+    let project = f.store.show(f.claim.binding.item).unwrap().item.project;
+    let expected = &f.body.launch.candidate;
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, expected, 100)
+            .unwrap()
+            .is_some()
+    );
+    f.store
+        .admit_recipe_opening(
+            surge_core::id::ExecutionWriterId::new(),
+            StageInvocationId::new(),
+            "a",
+            expected.launch_hash(),
+        )
+        .unwrap();
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, expected, 100)
+            .unwrap()
+            .is_none(),
+        "newer attempted opening is Unknown, even without quota policy or successful RPC"
+    );
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn historical_exhaustion_without_admission_is_not_actionable() {
+    let f = fixture().await;
+    seal_fixture_exhaustion(&f).await;
+    let project = f.store.show(f.claim.binding.item).unwrap().item.project;
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, &f.body.launch.candidate, 100)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.store
+            .typed_rate_limit(&f.body.reservation)
+            .unwrap()
+            .is_some()
+    );
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn late_old_origin_is_audit_only_and_unrelated_recipes_do_not_supersede() {
+    let f = fixture_with_admission(true).await;
+    let expected = &f.body.launch.candidate;
+    let project = f.store.show(f.claim.binding.item).unwrap().item.project;
+    for (runtime, hash) in [
+        ("b", *expected.launch_hash()),
+        ("a", ContentHash::compute(b"different")),
+    ] {
+        f.store
+            .admit_recipe_opening(
+                surge_core::id::ExecutionWriterId::new(),
+                StageInvocationId::new(),
+                runtime,
+                &hash,
+            )
+            .unwrap();
+    }
+    seal_fixture_exhaustion(&f).await;
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, expected, 100)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&WorkItemProjectId::new(), expected, 100)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, expected, 1100)
+            .unwrap()
+            .is_none()
+    );
+    let other_model = FrozenQuotaCandidate::new(
+        expected.candidate().clone(),
+        Some("different-model".into()),
+        *expected.launch_hash(),
+    )
+    .unwrap();
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, &other_model, 100)
+            .unwrap()
+            .is_none()
+    );
+    f.writer.close().await.unwrap();
+
+    let f = fixture_with_admission(true).await;
+    let expected = &f.body.launch.candidate;
+    let project = f.store.show(f.claim.binding.item).unwrap().item.project;
+    f.store
+        .admit_recipe_opening(
+            surge_core::id::ExecutionWriterId::new(),
+            StageInvocationId::new(),
+            "a",
+            expected.launch_hash(),
+        )
+        .unwrap();
+    seal_fixture_exhaustion(&f).await;
+    assert!(
+        f.store
+            .typed_rate_limit(&f.body.reservation)
+            .unwrap()
+            .is_some(),
+        "retain original typed cause for audit"
+    );
+    assert!(
+        f.store
+            .inspect_current_recipe_exhaustion(&project, expected, 100)
+            .unwrap()
+            .is_none(),
+        "late A error cannot resurrect exhaustion past a newer opening"
+    );
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_opening_cannot_attach_a_conflicting_exhaustion_origin() {
+    let f = fixture_with_admission(true).await;
+    let conn = f.store.pool.get().unwrap();
+    conn.execute(
+        "UPDATE recipe_opening_admissions SET exhaustion_receipt='different-origin'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let error = f
+        .store
+        .record_selected_rate_limit(
+            &f.claim,
+            &f.cycle,
+            &f.body.reservation,
+            &quota_source(&f),
+            &quota_error_observation(),
+        )
+        .unwrap_err();
+    assert!(matches!(error, WorkItemError::Conflict(_)), "{error:?}");
+    assert!(
+        f.store
+            .typed_rate_limit(&f.body.reservation)
+            .unwrap()
+            .is_none(),
+        "conflicting association rolls back new origin atomically"
+    );
+    f.writer.close().await.unwrap();
 }

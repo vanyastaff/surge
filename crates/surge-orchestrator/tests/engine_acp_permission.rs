@@ -278,12 +278,67 @@ async fn roundtrip(root: PathBuf, mode: u8) {
             .unwrap();
         return;
     }
+    // The actual launch recipe must be configured before engine admission,
+    // rather than only rewritten by the controlled transport adapter afterward.
+    let profiles = root.join("fixture-profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("permission-fixture-1.0.toml"),
+        r#"
+schema_version=1
+[role]
+id="permission-fixture"
+version="1.0.0"
+display_name="Controlled ACP fixture"
+category="agents"
+description="Actual launch recipe before dispatch"
+when_to_use="Tests"
+[runtime]
+agent_id="permission-fixture"
+recommended_model="fixture"
+[[outcomes]]
+id="done"
+description="Done"
+edge_kind_hint="forward"
+[prompt]
+system="Controlled permission journey"
+"#,
+    )
+    .unwrap();
+    let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let args: Vec<String> = bridge
+        .flags
+        .iter()
+        .cloned()
+        .chain(["--pid-file".into(), bridge.pid_path.display().to_string()])
+        .collect();
+    let agent =
+        serde_json::from_value(serde_json::json!({"command": binary, "args": args})).unwrap();
+    let disk_profiles =
+        surge_orchestrator::profile_loader::DiskProfileSet::scan(&profiles).unwrap();
+    assert_eq!(
+        disk_profiles.entries().len(),
+        1,
+        "controlled profile must parse, not silently fall back to bundled profiles"
+    );
+    let engine_config = EngineConfig {
+        profile_registry: Some(Arc::new(
+            surge_orchestrator::profile_loader::ProfileRegistry::new(disk_profiles),
+        )),
+        agent_registry: Some(Arc::new(surge_acp::Registry::from_config(
+            std::collections::HashMap::from([("permission-fixture".into(), agent)]),
+        ))),
+        ..EngineConfig::default()
+    };
     let mut bridge_events = bridge.subscribe();
     let engine = Engine::new(
         bridge.clone(),
         storage.clone(),
         Arc::new(WorktreeToolDispatcher::new(root.clone())),
-        EngineConfig::default(),
+        engine_config,
     );
     let mut tap = engine.subscribe_tap();
     let id = RunId::new();
@@ -302,6 +357,7 @@ async fn roundtrip(root: PathBuf, mode: u8) {
     } else {
         graph_source
     };
+    let graph_source = graph_source.replace("implementer@1.0", "permission-fixture@1.0");
     let graph = toml::from_str(&graph_source).unwrap();
     let mut run_config = EngineRunConfig::default();
     if mode == 3 {
@@ -834,20 +890,28 @@ impl BridgeFacade for SpoofedBroadcast {
                 verification_report: None,
             })
             .unwrap();
-        Ok(OpenedSession::new(
+        let mut opened = OpenedSession::new(
             SessionId::new(),
             ProviderSessionDescriptor::new(
                 ProviderSessionId::new("spoofed-broadcast".into()).unwrap(),
                 config.invocation,
                 config.runtime,
-                surge_core::ContentHash::compute(b"spoofed-broadcast"),
+                surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes()),
                 config.working_dir,
                 Default::default(),
             )
             .unwrap(),
             SessionOpenMode::New,
         )
-        .unwrap())
+        .unwrap();
+        opened.execution_writer = Some(
+            surge_core::execution_recovery::process::ExecutionWriterObservation::new(
+                config.writer_id,
+                None,
+            )
+            .unwrap(),
+        );
+        Ok(opened)
     }
     async fn send_message(&self, _: SessionId, _: MessageContent) -> Result<(), SendMessageError> {
         Ok(())

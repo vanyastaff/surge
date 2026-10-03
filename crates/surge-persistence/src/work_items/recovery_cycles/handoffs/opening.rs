@@ -531,8 +531,13 @@ impl WorkItemStore {
         }
         let mut control = control::read_control(&tx, claim.run(), None)?
             .ok_or_else(|| WorkItemError::Conflict("Continue control is absent".into()))?;
-        if control.state != ControlState::ContinueReserved
-            || control.generation != handoff.body.target_control
+        // The journal subscriber can acknowledge this same Continue before
+        // prompt sealing. Executing is an acknowledgment, not new authority:
+        // the exact operation, generation and established opening still fence it.
+        if !matches!(
+            control.state,
+            ControlState::ContinueReserved | ControlState::Executing
+        ) || control.generation != handoff.body.target_control
             || control.operation != operation
         {
             return Err(WorkItemError::Conflict(

@@ -9,6 +9,7 @@ pub use handoffs::{
     QuotaWakeReservation,
 };
 pub use policy::{FrozenQuotaCandidate, FrozenQuotaPolicy, FrozenQuotaStage, QuotaRoutingMode};
+pub(super) use rate_limit::inspect_current_receipt;
 pub use rate_limit::{FreshTypedExhaustion, QuotaRateLimitMarker, QuotaRateLimitSource};
 
 const MAX_CANDIDATES: u64 = 32;

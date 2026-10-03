@@ -360,7 +360,7 @@ fn project_context_session_config(
     Ok(SessionConfig {
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
-        runtime: "fixture".into(),
+        runtime: invocation.normalized_agent_id.clone(),
         opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,

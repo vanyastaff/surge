@@ -104,3 +104,5 @@ mod bootstrap_profile_tests {
         assert_eq!(outcomes.len(), 4);
     }
 }
+
+pub mod recipe_admission;

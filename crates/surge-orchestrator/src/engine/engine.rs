@@ -135,17 +135,15 @@ impl Engine {
         mcp_registry: Option<Arc<surge_mcp::McpRegistry>>,
         config: EngineConfig,
     ) -> Self {
-        let (event_tap, _initial_subscriber) = tokio::sync::broadcast::channel(TAP_BUFFER_SIZE);
-        Self {
+        Self::new_full(
             bridge,
             storage,
             tool_dispatcher,
             notify_deliverer,
             mcp_registry,
-            config: Arc::new(config),
-            runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            event_tap,
-        }
+            None,
+            config,
+        )
     }
 
     /// Full constructor: every dependency including the profile registry.
@@ -170,6 +168,10 @@ impl Engine {
         if profile_registry.is_some() {
             config.profile_registry = profile_registry;
         }
+        let bridge = Arc::new(crate::recipe_admission::RecipeAdmissionBridge::new(
+            bridge,
+            storage.work_items(),
+        ));
         let (event_tap, _initial_subscriber) = tokio::sync::broadcast::channel(TAP_BUFFER_SIZE);
         Self {
             bridge,

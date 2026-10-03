@@ -206,6 +206,9 @@ impl BridgeFacade for MockBridge {
             .pop_front()
             .unwrap_or_else(SessionId::new);
         use surge_core::execution_recovery::*;
+        let writer = config.writer_id;
+        let launch_hash =
+            surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes());
         let (descriptor, mode) = match config.opening {
             SessionOpening::Continue(saved) => (saved, SessionOpenMode::Resume),
             SessionOpening::New => (
@@ -213,7 +216,7 @@ impl BridgeFacade for MockBridge {
                     ProviderSessionId::new(format!("fixture-provider-{id}")).unwrap(),
                     config.invocation,
                     config.runtime,
-                    surge_core::ContentHash::compute(b"fixture launch"),
+                    launch_hash,
                     if config.working_dir.is_absolute() {
                         config.working_dir
                     } else {
@@ -228,7 +231,10 @@ impl BridgeFacade for MockBridge {
                 SessionOpenMode::New,
             ),
         };
-        Ok(OpenedSession::new(id, descriptor, mode).unwrap())
+        let mut opened = OpenedSession::new(id, descriptor, mode).unwrap();
+        opened.execution_writer =
+            Some(process::ExecutionWriterObservation::new(writer, None).unwrap());
+        Ok(opened)
     }
 
     async fn send_message(
