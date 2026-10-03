@@ -43,14 +43,35 @@ must be rerun.
 The planned binding negative matrix had genuine RED `2010`: an establishment
 request appended *after* the plan could still bind. Extending the current prefix
 inspection made matrix `71035` green. Later actual phase-crash test `82241` found
-a separate unresolved production failure: cold reconciliation manufactured a
+a separate production failure: cold reconciliation manufactured a
 new same-node `StageEntered`, new logical plan and duplicate provider opening
 after an already opened, prompt-authorized session whose wire prompt had not run.
-That failure remains a repair prerequisite; these scoped greens do not constitute
-acceptance or permission to close the ticket.
+The author added read-only current-occurrence reconciliation before a new entry.
+Session `14409` then passed both actual phase-crash tests (unknown opening RPC
+and opened/prompt-authorized before the physical prompt) plus the selected-source
+guard. Session `73711` passed the authenticated same-node storage classification
+law. The original two crash tests and the missing-binding negative still require
+final affected reruns. New actual cold Engine same-node reentry passed in `87173`
+and, with strengthened identity/snapshot assertions, `8111`: the first owned host
+exits 99 after an authenticated self-route commit; a fresh host executes only the
+next bounded iteration. Exact two physical/logical identities, actual entry
+anchors, distinct provider sessions, retained original descriptor and persisted
+self-route snapshot are checked.
+These scoped greens do not constitute acceptance or permission to close the ticket.
 
 The original complete nextest gate failed with ENOSPC and remains unverified.
 Final integrated strict lint/tests and independent parent reviews are pending.
+Scoped strict clippy session `31096` passed for persistence, orchestrator and
+daemon with all targets/features and `-D warnings`, after the fixture nesting and
+helper conditionals were repaired. Release orchestrator strict clippy `5694`
+passed with the new fault hook and its call fully excluded from release builds.
+Independent parent library nextest `49073` passed 1677 tests before the latest
+planned-park suffix regression was added; this is not the full integration gate.
+The planned-park suffix law had genuine RED: an establishment request after
+binding could still seal a planned receipt. Shared current-prefix validation
+made `51781` green for request, newer entry, completed stage and aborted run,
+with unchanged proof/control/wake/cycle authority; the untouched occurrence
+still parks.
 Ordinary unowned-flow ownership normalization, real ACP usage and trusted
 available-route estimates remain explicit requirements/dependencies below; the
 runtime-wide capacity row cannot authorize a configured route-specific skip.
@@ -256,10 +277,33 @@ remain the effect owners.
 Operation replay is inspected before current source-cleanliness checks, discovery
 or config freezing. Exact replay returns the original attempt, frozen config and
 workspace intent; any changed explicit request field, including complete
-`run_config`, conflicts. First acceptance captures a clean immutable Git base
-and freezes host config before the transaction. Workspace preparation uses that
+wire-safe run configuration, conflicts. First acceptance captures a clean immutable
+Git base and freezes host config before the transaction. Workspace preparation uses that
 retained base. Dirty source or an arbitrary explicit `--worktree` is rejected on
 first acceptance without changing source files, index or HEAD.
+
+The reviewed request contract is a separate `OwnedFlowRunConfig` DTO with
+`deny_unknown_fields`, not serialized `EngineRunConfig`: the latter skips its
+in-process `agent_registry`. Every allowed explicit field participates in bounded
+canonical request identity, with sorted map keys and preserved list ordering.
+The DTO excludes agent registries, memory-store overrides, caller quota policy
+and host-derived memory claims; fallible legacy conversion rejects supplied
+internal data instead of dropping it. Clients construct the DTO before host
+context seeding. Existing task-requirements serialization and hashes stay intact.
+
+Keep incoming request identity, immutable host-prepared startup inputs and live
+provider configuration separate. The host accepts graph/base/workspace, seeds,
+budget, guards and quota policy once. Provider registry and effective auth sources
+are rebuilt and checked against the accepted model/recipe/pins before effects,
+without saving credential-bearing registry snapshots or silently freezing anew.
+Exact replay returns the original receipt despite catalog drift; an incompatible
+catalog at first launch, cold reconciliation or wake requires attention on the
+original attempt with zero RPC. Returning an accepted receipt grants no effect.
+
+The accepted flow contract holds the graph hash and exact original user prompt,
+including an empty prompt. Flow-origin context returns that prompt without task
+criteria or title decoration. Host context seeding adds separate seeds/defaults;
+frozen configuration and the startup journal must match the accepted prompt.
 
 A reserved attempt alone is not a recoverable queued request: existing startup
 reconciliation intentionally skips Reserved attempts without startup history.
@@ -268,10 +312,20 @@ that case. It permits startup attempts, not provider effects, and does not weake
 the generic Reserved safeguard. CLI launches must retain daemon ownership and
 automatic wake rather than create a separate local recovery lifecycle.
 
+Pending intent eligibility also requires exact run/binding/generation, an active
+Reserved attempt, permitting current control and no archive; a generally valid
+Attention or Suspended launch claim is insufficient. Cancel/suspend must fence
+pending dispatch atomically. Existing startup history takes the authenticated
+resume/hydration path or attention, never another first launch. Operation/run-ID
+collisions and the startup-commit-before-intent-ack crash window require checks.
+
 Acceptance must cover CLI and daemon ordinary flow starts with zero exhausted-A
 opens and one selected-B open; matching stream/registry run identity; concurrent
 exact replay; changed `run_config` rejection; replay after source/config changes;
-crashes after acceptance and queued acknowledgment before startup; retained
+crashes after acceptance and queued acknowledgment before startup; startup commit
+before intent acknowledgment; unknown/internal DTO fields and every allowed
+input's conflict behavior; exact prompt after restart; catalog drift replay and
+unstarted drift refusal; invalid-control pending-intent refusal; retained
 workspace and frozen budget through park/wake; and unchanged dirty files, index
 and HEAD on first-acceptance rejection. Inventory other unowned launch surfaces
 before declaring T12 complete. This is a reviewed plan, not implemented evidence.
