@@ -935,3 +935,62 @@ Managed agents and first-party manager views try to complete a task inside one
 vendor's walls. Surge is the local-first layer that makes fleets of agents from
 any vendor finish whole projects — with a ledger that can't lose work, a
 verifier that can't be gamed, and an event log that can replay how it happened.
+
+## Forge and VibeForge evidence (2026-10-03)
+
+These are separate sources; no shared implementation or ownership is established
+by this inspection. VibeForge feature descriptions below are documentation claims,
+not behavior verified by running its desktop application.
+
+Automagik Forge models a task with multiple attempts, configurable executor profiles,
+worktree isolation, follow-up messages and review. Its inspected frontend exposes
+profile, base branch and worktree selection when creating an attempt. The app router
+delegates task/attempt handlers to `forge-core`; the current workspace consumes those
+backend crates from crates.io. Consequently the old developer guide's upstream
+submodule diagram is not the authoritative current workspace layout.
+Sources: [README](https://github.com/automagik-dev/forge),
+[attempt dialog](https://github.com/automagik-dev/forge/blob/9ff6c06923fe653815ac95b93a2c10dd0351ce8a/frontend/src/components/dialogs/tasks/CreateAttemptDialog.tsx),
+[router](https://github.com/automagik-dev/forge/blob/9ff6c06923fe653815ac95b93a2c10dd0351ce8a/forge-app/src/router.rs),
+[workspace manifest](https://github.com/automagik-dev/forge/blob/9ff6c06923fe653815ac95b93a2c10dd0351ce8a/Cargo.toml).
+
+VibeForge documents Solo, Swarm, Orchestrator and Fusion. Fusion collects independent
+answers from different models, has a judge synthesize a task, then one integrator
+implements it. Swarm shares a tree with negotiated ownership; Orchestrator assigns
+separate workspaces. Task modes distinguish interview, planning, questions, review,
+implementation and UI checking. Sources: [modes](https://vibe-forge.ru/docs/modes/),
+[Fusion walkthrough](https://vibe-forge.ru/).
+
+The documented review surface keeps diff comments next to changed lines and batches
+them into a follow-up. Its UI checker reports screenshots and verdicts, allows saved
+paths to be replayed, and explicitly leaves unsupported interactions unverified.
+Sources: [review](https://vibe-forge.ru/docs/review/),
+[UI checking](https://vibe-forge.ru/docs/check/).
+
+### Implications for Surge (proposed, not accepted requirements)
+
+- **Fusion fits an optional decision stage.** Use it for disputed architecture,
+  product assumptions or planning. All participants receive the same accepted
+  input revision and evidence; their answers remain independent and read-only.
+  Persist individual answers, disagreements, synthesis and its rationale. One
+  implementation owner acts only on the accepted synthesis. Consensus is not
+  verification; spec and executable evidence gates still decide completion.
+- **Separate collaboration shape from permission.** The orchestrator can choose
+  solo, parallel analysis or independent slices according to dependencies and
+  availability. Users need not choose a team mode before typing a goal. Provider
+  unavailability uses the existing fallback/paused policy, with reduced diversity
+  visible in the decision record.
+- **Keep comments and evidence beside the task.** Show the retained worktree,
+  current accepted revision, attempt/session identity, diff, review threads, CI
+  and flow progress together. Batch local comments while preserving each comment's
+  file/revision/line identity; connect PR comments to actual repair commits.
+- **Make UI verification an evidence-producing flow.** Save screenshots and step
+  results against the tested revision. A reusable path is valuable only when replay
+  proves observable outcomes; unsupported actions stay unverified. A green script
+  invocation alone cannot claim a working product journey.
+- **Preserve configurable autonomy.** Both sources emphasize manual selection or
+  acceptance. Surge's accepted product direction lets policy and the orchestrator
+  decide stage approval and merge readiness. Borrow clarity and evidence presentation
+  while retaining that AFK completion contract.
+
+This note adds research context only. It does not retire existing requirements,
+replace the active SuperPlane implementation sequence or assert Fusion is shipped.
