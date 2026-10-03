@@ -815,22 +815,12 @@ pub struct WorkEstimateConfig {
     pub median_cost_micros_usd: Option<u64>,
 }
 
-/// R41 seam (rotate to another configured agent runtime instead of parking
-/// on exhaustion) — the shape [`CapacityPolicy::decide`] is prepared to
-/// consult once a verified rotation target exists.
+/// R41 configured profile selection on exhaustion.
 ///
-/// **Not wired live in this delivery.** Verifying that a candidate profile
-/// really targets a *different* [`crate::runtime::RuntimeKind`] needs
-/// `surge_acp::Registry`, which this crate does not depend on (`surge-core`
-/// stays I/O- and registry-free) — that verification is
-/// `surge-orchestrator`'s job, not yet scheduled as a numbered task. Until
-/// it lands, [`CapacityPolicy::decide`] never emits [`Decision::Rotate`]
-/// regardless of this field's value: today, every profile pointed at one
-/// agent runtime resolves to the same launch command and the same login,
-/// so "rotate to the next profile of the same runtime" would not change
-/// anything — it would silently repeat rules 2/3's already-exhausted
-/// dispatch with extra steps, which is worse than refusing outright. See
-/// ADR-0016 for the full argument.
+/// The pure policy can propose a profile, but the orchestrator must verify
+/// that it represents a distinct configured account of the same runtime and
+/// persist opening authority before dispatch. An elapsed observed reset
+/// permits retrying the original profile instead of selecting a fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RotationPolicy {
     /// No rotation candidate configured, or rotation disabled.
@@ -944,11 +934,8 @@ pub enum Decision {
         /// Why `wake_at` is what it is.
         basis: WakeBasis,
     },
-    /// Rotate to a different, verified-different-runtime profile instead of
-    /// parking. **Never emitted by [`CapacityPolicy::decide`] in this
-    /// delivery** — see [`RotationPolicy`]'s doc; kept as a variant so that
-    /// whatever future work does wire live rotation is an additive change,
-    /// not a breaking one.
+    /// Propose a configured profile instead of parking. The caller validates
+    /// the target and persists opening authority before actually rotating.
     Rotate {
         /// The profile to rotate to.
         to: crate::keys::ProfileKey,
@@ -1057,6 +1044,7 @@ impl CapacityPolicy {
         if let RotationPolicy::Candidate { profile } = &self.rotation
             && let Some(window) = status.window()
             && window.is_exhausted()
+            && window.resets_at().is_none_or(|reset| reset > now)
             && let Ok(to) = crate::keys::ProfileKey::try_from(profile.as_str())
         {
             return Decision::Rotate { to };
@@ -2105,6 +2093,32 @@ mod tests {
                 to: crate::keys::ProfileKey::try_from("backup@1.0").unwrap()
             }
         );
+    }
+
+    #[test]
+    fn rotation_does_not_override_retry_after_observed_reset_elapsed() {
+        let now = t("2026-01-01T00:00:00Z");
+        let policy = CapacityPolicy {
+            blind_backoff: Some(Duration::from_secs(60)),
+            rotation: RotationPolicy::Candidate {
+                profile: "backup@1.0".into(),
+            },
+            jitter_max: Duration::ZERO,
+        };
+        for elapsed in [10, 11] {
+            let window = CapacityWindow::observed_429(
+                "claude-acp",
+                Some(Duration::from_secs(10)),
+                now - chrono::Duration::seconds(elapsed),
+            );
+            assert_eq!(
+                policy.decide(None, &CapacityStatus::Known(window), now),
+                Decision::Dispatch {
+                    degraded: Some(Degraded::ExhaustedResetElapsed),
+                },
+                "an elapsed reset must permit retry of the original profile"
+            );
+        }
     }
 
     #[test]

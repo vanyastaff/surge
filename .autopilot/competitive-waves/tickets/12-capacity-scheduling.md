@@ -15,6 +15,38 @@ require `cargo build -p surge-acp --bin mock_acp_agent` and
 `cargo build -p surge-cli --bin surge` for the stage MCP helper. This verifies
 reactive task-owned recovery; pre-dispatch capacity rotation remains open.
 
+### Pre-dispatch implementation boundary
+
+Read-only architecture review found that `runtime_capacity` has no profile/account
+scope, observation timestamp or trusted source reference. It cannot authorize an
+account-specific skip. Existing reactive fallback requires an actual primary
+`SessionOpened` and typed 429; those checks must remain intact.
+
+The next implementation needs these linked pieces:
+
+1. A host-owned planned-stage journal anchor with stable logical invocation,
+   frozen policy hash and control generation, before any provider effect.
+2. Typed binding origin (original opening or pre-dispatch plan), with migration
+   backfill preserving existing original-opening evidence.
+3. Recipe/account-scoped durable capacity observations with trusted source,
+   timestamp, expiry/reset and revision. Separate skip evidence from typed 429.
+4. Transactional pre-dispatch skip and reservation in frozen candidate order,
+   checking opt-in, same provider family, current claim/control and fresh evidence.
+5. Reuse the existing one-shot quota opening permit and prompt authorization;
+   pass logical invocation separately from selected provider invocation.
+
+Acceptance must show zero primary opens/prompts when a trusted fresh observation
+permits skipping it, one fallback open in the retained workspace, rejection of
+forged/stale observations and different-family targets, and no duplicate effect
+after crashes at plan/reservation/admission/opening boundaries. Unknown availability
+permits an attempt without asserting availability; exhausted alternatives park.
+
+A prerequisite policy defect was reproduced by
+`rotation_does_not_override_retry_after_observed_reset_elapsed`: rotation used to
+override retry even at/after an observed reset. The fix allows the original profile
+retry at that boundary; 65 capacity tests, strict core all-target/all-feature clippy
+and workspace format checks pass. Independent code review returned ACCEPTABLE.
+
 ## Что должно заработать
 
 Перед диспатчем ноды движок смотрит, влезет ли работа в остаток окна. Не влезает — ран паркуется с временем пробуждения и виден в inbox как ожидающий, а не как молча вставший. После сброса он просыпается сам, с замороженным бюджетом, который переармируется точно так же, как при обычном resume. Если ротация включена, вместо парковки берётся следующий настроенный профиль того же рантайма.
