@@ -241,6 +241,42 @@ before declaring T12 complete. This is a reviewed plan, not implemented evidence
 
 ## Критерии приёмки
 
+### ACP usage measurement boundary (2026-10-03)
+
+The real warmup-before-planned-park fixture exposed an existing accounting gap:
+`surge-acp::bridge::tokens::extract_usage` returns no spent-token snapshot.
+The mock emits both context-window `UsageUpdate` and end-turn `PromptResponse`
+usage, but current production consumption does not charge the latter. Nonzero
+real ACP spending and its conservation therefore remain unproved; a host-owned
+budget oracle can verify scheduling/rearm behavior without claiming measured
+provider spending.
+
+The pinned schema 1.9.1 describes response usage as per-turn while its component
+fields describe session totals. The contradiction and divergent implementations
+are tracked in [upstream issue 1860](https://github.com/agentclientprotocol/agent-client-protocol/issues/1860).
+Context-window occupancy must not be substituted for spent tokens. A linked
+implementation must make accumulation semantics and measurement coverage explicit,
+preserve unknown/missing usage, and prove no double charging through multiple
+turns, resume, reconnect and event replay. Token history/estimation requirements
+remain open wherever real protocol usage is required; no requirement is retired.
+
+The reviewed accounting dependency freezes a versioned adapter usage contract:
+unknown, per-turn, or provider-session cumulative. Keep raw independent `u64`
+token buckets, context occupancy and monetary cost separate; do not infer a
+provider's contract from monotonic samples or fill in a model/currency. Before a
+prompt RPC, persist a host turn identity. Store its raw usage receipt, normalized
+delta, measurement coverage and cumulative baseline atomically, with exact
+replay idempotence and conflicting replay rejection. A loaded session needs a
+trusted baseline; missing reports, interrupted turns and declining cumulative
+counters preserve incomplete coverage rather than becoming zero spending.
+
+Acceptance must distinguish per-turn `100/300/50` from cumulative
+`100/400/450`, charging `450` in both explicitly contracted cases. It must cover
+duplicate delivery, restart, loaded sessions, missing usage, occupancy updates,
+wide counters, cache buckets and non-USD cost. Task totals must expose coverage
+separately from pricing. This remains a reviewed next dependency, not implemented
+accounting evidence for the routing change.
+
 - [ ] `CapacityPolicy::decide(estimate,&window) -> Dispatch | Park{wake_at}`
 - [ ] `estimate` — медиана длительности и расхода по архетипу ноды из **существующих** таблиц аналитики
 - [ ] Нет истории по архетипу → оценки нет → **отказа в диспатче нет**
