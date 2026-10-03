@@ -55,6 +55,15 @@ Ordinary unowned-flow ownership normalization, real ACP usage and trusted
 available-route estimates remain explicit requirements/dependencies below; the
 runtime-wide capacity row cannot authorize a configured route-specific skip.
 
+Acceptance evidence must distinguish the positive storage inspection law
+`authenticated_same_node_reentry_retains_a_newer_unadmitted_plan` from an actual
+cold daemon/Engine continuation. The law constructs authenticated outcome and
+route records and checks the read-only classifier; it does not execute the next
+loop occurrence. The outer acceptance must additionally show that a completed
+same-node occurrence permits the next legitimate iteration after restart, with
+no repeated old provider effect. Containment of an unfinished occurrence does
+not establish restoration of its actual ACP session.
+
 ### Pre-dispatch implementation boundary
 
 Read-only architecture review found that `runtime_capacity` has no profile/account
