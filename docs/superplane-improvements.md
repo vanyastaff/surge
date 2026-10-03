@@ -8,6 +8,25 @@ verification, reports, inbox and capacity mechanisms are the starting point.
 
 ## Sequence and acceptance
 
+### Accepted multi-provider planning extension (2026-10-03)
+
+For a difficult question or planning decision, the orchestrator may construct
+several independent analysis nodes using different available providers, followed
+by a synthesis node and one implementation owner. This is represented directly
+in the generated Flow rather than requiring the user to select a separate mode.
+
+Each analysis node receives the same accepted input revision and evidence and
+remains read-only. Synthesis records agreements, unresolved disagreements,
+selected decisions and their rationale; it cannot replace verification or retire
+requirements. Stage acceptance follows the existing configurable policy. When
+different providers are unavailable, use the accepted fresh-context same-provider
+review fallback or preserve a paused decision, recording reduced diversity.
+
+Acceptance must verify persisted analysis outputs and synthesis after restart,
+no writes from reviewers, no execution before required stage acceptance, and
+invalidation of analysis/synthesis when their input revision changes. This is an
+accepted extension of phase 4, not an implemented or accepted-complete feature.
+
 | Phase | Scope | Acceptance | Status |
 |---|---|---|---|
 | 1 · P0 | Reliable completion reconciliation and durable outbound delivery | Lost events and daemon restarts cannot strand finished tickets; tracker delivery retries without starting work again | Complete: local reconciliation, durable terminal comments and shared waiting reasons verified |

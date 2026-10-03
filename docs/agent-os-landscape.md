@@ -966,6 +966,14 @@ paths to be replayed, and explicitly leaves unsupported interactions unverified.
 Sources: [review](https://vibe-forge.ru/docs/review/),
 [UI checking](https://vibe-forge.ru/docs/check/).
 
+Other documented features worth tracking are skill/MCP discovery with explicit
+installation approval and rollback, project-file mentions, SSH-hosted execution,
+and a checked-in workspace setup recipe covering setup/run/cleanup, copied local
+files and per-session ports. These are product descriptions, not runtime acceptance.
+Sources: [skills and MCP](https://vibe-forge.ru/docs/skills/),
+[server execution](https://vibe-forge.ru/docs/server/),
+[workspace configuration](https://vibe-forge.ru/docs/workspace/).
+
 ### Implications for Surge (proposed, not accepted requirements)
 
 - **Fusion fits an optional decision stage.** Use it for disputed architecture,
