@@ -630,6 +630,20 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             ));
         }
     }
+    if let Some(registry) = p.agent_registry.as_deref()
+        && let Some(route) = registry
+            .find_normalized(p.quota_opening.as_ref().map_or_else(
+                || {
+                    resolved_profile.as_ref().map_or("mock", |profile| {
+                        effective_agent_id(p.agent_config, profile)
+                    })
+                },
+                |permit| permit.launch().candidate().candidate().runtime(),
+            ))
+            .and_then(|entry| entry.capacity_route.as_ref())
+    {
+        crate::engine::capacity_routes::materialize_managed_env(route, &mut agent_launch.env);
+    }
     let AgentLaunch {
         kind: agent_kind,
         env: agent_env,
@@ -940,6 +954,21 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         };
     }
 
+    if let Err(error) = validate_configured_capacity_sources(&p, &session_config) {
+        if let (Some(permit), Some((store, claim, _))) =
+            (p.quota_opening.take(), p.quota_owner.as_ref())
+        {
+            store
+                .invalidate_unexecuted_quota_open(claim, permit)
+                .map_err(|failure| {
+                    StageError::RecoveryRequired(format!(
+                        "retain source-changed opening containment: {failure}"
+                    ))
+                })?;
+        }
+        return Err(error);
+    }
+
     // Persist the complete resolved inputs, independently of the capped ACP echo.
     // This proves resolution for this attempt, before a session can be opened.
     p.writer
@@ -1010,7 +1039,14 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         .await
         .map_err(|error| StageError::Storage(error.to_string()))?;
 
-    let logical_invocation = session_config.invocation;
+    let provider_invocation = session_config.invocation;
+    let logical_invocation = p
+        .quota_cycle
+        .as_ref()
+        .map(|quota| quota.cycle.invocation.parse())
+        .transpose()
+        .map_err(|_| StageError::RecoveryRequired("invalid planned logical invocation".into()))?
+        .unwrap_or(session_config.invocation);
     let logical_runtime = session_config.runtime.clone();
     let quota_opening = p.quota_opening.take();
     let is_quota_fallback = quota_opening.is_some();
@@ -1371,8 +1407,16 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     && let (Some((store, claim, policy)), Some(quota)) =
                         (&p.quota_owner, &mut task_quota_cycle)
                 {
+                    if let Some(target) = policy.candidates().iter().find(|target|Some(target.candidate().runtime())==quota.cycle.selected_runtime.as_deref())
+                        && target.configured_pin().is_some() {
+                        let builtin = surge_acp::Registry::builtin();
+                        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
+                        if crate::engine::capacity_routes::verify_skipped_snapshot(store.host_home(),p.worktree_path,registry,target).is_err() {
+                            store.invalidate_admitted_configured_pin(execution_writer).map_err(|e|StageError::Storage(e.to_string()))?;
+                        }
+                    }
                     match record_task_quota_rate_limit(
-                        store, claim, policy, quota, logical_invocation, session_id, error,
+                        store, claim, policy, quota, provider_invocation, session_id, error,
                     ) {
                         Ok(cycle) => quota.cycle = cycle,
                         Err(storage_error) => return Err(StageError::RecoveryRequired(format!(
@@ -1415,9 +1459,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // profiles reference it. Whether Surge can ever observe two
                 // distinct logins sharing one runtime is an open question
                 // for the capacity ledger's design (M2), not settled here.
-                runtime: resolved_profile
-                    .as_ref()
-                    .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string()),
+                runtime: resolved_profile.as_ref().map(|_|logical_runtime.clone()),
                 retry_after,
                 details,
             },
@@ -1481,7 +1523,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // A rejecting hook lets the agent attempt a different outcome
                 // until `limits.max_retries` is exhausted.
                 let hook_ctx = HookContext::for_node(p.node)
-                    .with_writer(p.writer, logical_invocation)
+                    .with_writer(p.writer, provider_invocation)
                     .with_worktree_path(p.worktree_path)
                     .with_session(session_id)
                     .with_outcome(&outcome);
@@ -1777,7 +1819,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     .map_err(|error| StageError::Storage(error.to_string()))?);
                 let effects_count = u32::try_from(committed.len()).map_err(|_| StageError::Internal("stage effects batch is too large".into()))?;
                 let commit = surge_core::execution_recovery::commit::StageOutcomeCommit::new(
-                    stage_calls.context.clone(), session_id, logical_invocation, outcome.clone(), effects_count, effects_hash,
+                    stage_calls.context.clone(), session_id, provider_invocation, outcome.clone(), effects_count, effects_hash,
                 ).map_err(|error| StageError::Internal(error.to_string()))?;
                 committed.push(VersionedEventPayload::new(EventPayload::StageOutcomeCommitted { commit }));
                 p.writer.append_events(committed).await.map_err(|error| StageError::Storage(error.to_string()))?;
@@ -1837,7 +1879,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 };
                 let ctx = ToolDispatchContext {
                     writer: Some(p.writer),
-                    invocation: Some(logical_invocation),
+                    invocation: Some(provider_invocation),
                     run_id: p.run_id,
                     session_id,
                     worktree_root: p.worktree_path,
@@ -1848,7 +1890,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // the call: we send a synthetic tool-error reply and continue
                 // the agent loop without invoking the dispatcher.
                 let hook_ctx = HookContext::for_node(p.node)
-                    .with_writer(p.writer, logical_invocation)
+                    .with_writer(p.writer, provider_invocation)
                     .with_worktree_path(p.worktree_path)
                     .with_session(session_id)
                     .with_tool(tool.as_str(), Some(args_redacted_json.as_str()));
@@ -2182,11 +2224,23 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         && let (Some(quota), Some((store, claim, policy))) =
             (task_quota_cycle.as_ref(), p.quota_owner.as_ref())
     {
-        let next = store
-            .reserve_next_candidate_after_exhaustion(claim, &quota.cycle, policy)
-            .map_err(|error| {
-                StageError::RecoveryRequired(format!("reserve next quota candidate: {error}"))
-            })?;
+        let configured = policy
+            .candidates()
+            .iter()
+            .any(|target| target.configured_route().is_some());
+        let next = if configured {
+            match store.select_planned_capacity(claim,&quota.cycle,chrono::Utc::now().timestamp_millis())
+                .map_err(|error|StageError::RecoveryRequired(format!("select next configured quota candidate: {error}")))? {
+                surge_persistence::work_items::recovery_cycles::CapacitySelection::Selected {reservation,..}=>Some(reservation),
+                surge_persistence::work_items::recovery_cycles::CapacitySelection::AllExhausted {..}=>None,
+            }
+        } else {
+            store
+                .reserve_next_candidate_after_exhaustion(claim, &quota.cycle, policy)
+                .map_err(|error| {
+                    StageError::RecoveryRequired(format!("reserve next quota candidate: {error}"))
+                })?
+        };
         if let Some(reservation) = next {
             if reservation.disposition
                 != surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved
@@ -2284,13 +2338,98 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         let scheduled = store
             .arm_recovery_wake(claim, &quota.cycle, &quota.reservation.receipt, &wake)
             .map_err(|error| StageError::RecoveryRequired(format!("arm quota wake: {error}")))?;
-        store
-            .request_capacity_suspend(claim, &scheduled, &quota.reservation.receipt, now_ms)
-            .map_err(|error| {
-                StageError::RecoveryRequired(format!("reserve quota suspension: {error}"))
-            })?;
+        if configured {
+            let skips = store
+                .revalidate_capacity_skips(claim, &scheduled, now_ms, None)
+                .map_err(|error| {
+                    StageError::RecoveryRequired(format!(
+                        "revalidate exhausted configured skips: {error}"
+                    ))
+                })?;
+            let builtin = surge_acp::Registry::builtin();
+            let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
+            for skip in &skips {
+                crate::engine::capacity_routes::verify_skipped_snapshot(
+                    store.host_home(),
+                    p.worktree_path,
+                    registry,
+                    &skip.candidate,
+                )?;
+            }
+            store.request_capacity_suspend_with_skips(
+                claim,
+                &scheduled,
+                &quota.reservation.receipt,
+                now_ms,
+            )
+        } else {
+            store.request_capacity_suspend(claim, &scheduled, &quota.reservation.receipt, now_ms)
+        }
+        .map_err(|error| {
+            StageError::RecoveryRequired(format!("reserve quota suspension: {error}"))
+        })?;
     }
     stage_result
+}
+
+fn validate_configured_capacity_sources(
+    p: &AgentStageParams<'_>,
+    session_config: &surge_acp::bridge::SessionConfig,
+) -> Result<(), StageError> {
+    if let (Some(quota), Some((store, claim, _))) = (&p.quota_cycle, &p.quota_owner) {
+        let skips = store
+            .revalidate_capacity_skips(
+                claim,
+                &quota.cycle,
+                chrono::Utc::now().timestamp_millis(),
+                p.quota_opening.as_ref(),
+            )
+            .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
+        let builtin = surge_acp::Registry::builtin();
+        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
+        for skip in &skips {
+            crate::engine::capacity_routes::verify_skipped_snapshot(
+                store.host_home(),
+                p.worktree_path,
+                registry,
+                &skip.candidate,
+            )?;
+        }
+    }
+    if let Some(permit) = p.quota_opening.as_ref()
+        && let Some(route) = permit.launch().candidate().configured_route()
+    {
+        let builtin = surge_acp::Registry::builtin();
+        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
+        if registry
+            .find_normalized(&session_config.runtime)
+            .and_then(|entry| entry.capacity_route.as_ref())
+            != Some(route)
+        {
+            return Err(StageError::RecoveryRequired(
+                "selected configured route declaration changed before provider effect".into(),
+            ));
+        }
+        let actual = crate::engine::capacity_routes::configured_pin(
+            p.quota_owner
+                .as_ref()
+                .map_or(p.worktree_path, |(store, _, _)| store.host_home()),
+            &session_config.runtime,
+            &session_config.agent_kind,
+            route,
+            &session_config.env,
+            p.worktree_path,
+        );
+        if permit.launch().candidate().configured_pin().is_some()
+            && actual.as_ref() != permit.launch().candidate().configured_pin()
+        {
+            return Err(StageError::RecoveryRequired(
+                "selected configured source changed before provider effect".into(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 async fn apply_memory_claim_pack(
@@ -3312,24 +3451,13 @@ pub(crate) fn resolve_profile_runtime_id(
     ))
 }
 
-/// Why a candidate rotation target was refused (Task 12 §1(1), revision 6).
+/// Why legacy runtime-only capacity routing refuses a rotation target.
 ///
-/// R41 ("rotate across configured accounts of the same agent instead of
-/// parking") is **not deliverable** on today's account model: A1 (Task 12
-/// revision 5/6) keys capacity on the canonical agent-runtime registry id
-/// because that is the only identity the engine path can produce, and
-/// `builtin_registry.json` carries exactly one launch configuration per
-/// runtime — so two profiles naming the same runtime resolve to the same
-/// command, the same login, the same capacity key. "Rotating" between them
-/// would not change which account is exhausted; it would silently repeat
-/// the already-exhausted dispatch with extra steps, which is worse than
-/// refusing outright (see `docs/adr/0016-capacity-parking-and-wake.md`,
-/// A2, for the follow-up account model that would make rotation real).
-///
-/// [`verify_rotation_target`] always returns one of these — every arm is a
-/// refusal, none is "rotation approved" — kept as a named enum (not a bare
-/// `bool`/`Option`) so a caller's `match` states *which* structural reason
-/// applied, for the operator-visible log line, without re-deriving it.
+/// Runtime kind cannot distinguish accounts or configured authentication sources.
+/// Task-owned routing instead freezes explicit registry route declarations and
+/// opaque host-authenticated source snapshots in `engine::capacity_routes`.
+/// Those snapshots prove configured source identity, never an observed account.
+/// Ordinary unowned flow rotation requires the shared ownership coordinator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationRefusal {
     /// The current node's own `agent_id` does not resolve to a registry
@@ -3358,14 +3486,9 @@ pub enum RotationRefusal {
     },
 }
 
-/// Verify whether `candidate_agent_id` is a usable R41 rotation target for
-/// a node currently running `current_agent_id`. **Always refuses** — see
-/// [`RotationRefusal`]'s doc for why every structural case, including the
-/// one the original R41 design called "allowed", is not deliverable today.
-/// Kept as a real (not stubbed) verification against `registry` — proven
-/// by the four cases in this module's tests — so the shape is ready for
-/// R41's own follow-up ticket to consume once a genuine second-account
-/// model exists, rather than imagined.
+/// Refuse a rotation based only on runtime kind. Task-owned configured routing
+/// uses the stronger host-frozen source identity path; this legacy verifier
+/// grants no account or provider-opening authority.
 #[must_use]
 pub fn verify_rotation_target(
     registry: &surge_acp::Registry,
@@ -3422,7 +3545,7 @@ fn derive_agent_kind(profile_str: &str) -> AgentKind {
 /// process environment at stage time. A required-but-unset source variable
 /// fails the stage with a typed, actionable `StageError::Internal` — the run
 /// never spawns an agent with a silently absent credential.
-fn derive_agent_kind_from_id(
+pub(crate) fn derive_agent_kind_from_id(
     profile_str: &str,
     agent_id: &str,
     registry: Option<&surge_acp::Registry>,
@@ -3531,9 +3654,9 @@ fn derive_agent_kind_from_id(
 /// [`derive_agent_kind_from_id`] and threaded into `SessionConfig` / the
 /// worktree seed.
 #[derive(Debug)]
-struct AgentLaunch {
-    kind: AgentKind,
-    env: BTreeMap<String, String>,
+pub(crate) struct AgentLaunch {
+    pub(crate) kind: AgentKind,
+    pub(crate) env: BTreeMap<String, String>,
     settings_files: Vec<surge_core::config::AgentSettingsFile>,
 }
 
@@ -3681,6 +3804,7 @@ mod tests {
                 mcp_servers: vec![],
                 capabilities: vec![],
                 env,
+                capacity_route: None,
                 settings_files: vec![AgentSettingsFile::new(
                     ".my-agent/settings.json",
                     "{\"mode\":\"headless\"}\n",
@@ -3725,6 +3849,7 @@ mod tests {
                 capabilities: vec![],
                 env,
                 settings_files: vec![],
+                capacity_route: None,
             },
         );
         let registry = surge_acp::Registry::from_config(agents);
@@ -4012,6 +4137,7 @@ mod tests {
                 capabilities: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
             },
         )]))
     }

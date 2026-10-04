@@ -130,6 +130,13 @@ impl FreshTypedExhaustion {
     pub fn observed_at_ms(&self) -> i64 {
         self.observed_at_ms
     }
+    /// Provider-declared reset, without inferring account availability.
+    pub fn reset_at_ms(&self) -> Option<i64> {
+        match self.marker.observation.evidence() {
+            QuotaEvidence::Observed { reset_at_ms, .. } => *reset_at_ms,
+            _ => None,
+        }
+    }
     /// Exclusive upper bound from both TTLs and any provider resets.
     pub fn valid_until_ms(&self) -> i64 {
         self.valid_until_ms
@@ -649,7 +656,7 @@ impl WorkItemStore {
             let target =
                 control::read_control(&tx, claim.run, None)?.ok_or(WorkItemError::NotFound)?;
             if association.source_revision() != expected.revision
-                || association.reservation() != reservation
+                || association.provider_reservation() != Some(reservation)
                 || target.generation != association.target_control()
                 || !matches!(
                     target.state,
@@ -753,4 +760,8 @@ fn source_closed_in_prefix(
             cursor = seq;
         }
     }
+}
+
+pub(super) fn has_typed_marker(conn: &Connection, receipt: &str) -> Result<bool> {
+    Ok(read_marker(conn, receipt)?.is_some())
 }

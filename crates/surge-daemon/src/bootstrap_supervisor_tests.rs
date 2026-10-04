@@ -62,20 +62,27 @@ impl BridgeFacade for AuthorBridge {
             .lock()
             .await
             .insert(session, (config.working_dir.clone(), index));
-        Ok(surge_core::execution_recovery::OpenedSession::new(
+        let writer = config.writer_id;
+        let hash = surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes());
+        let mut opened = surge_core::execution_recovery::OpenedSession::new(
             session,
             surge_core::execution_recovery::ProviderSessionDescriptor::new(
                 surge_core::execution_recovery::ProviderSessionId::new("author".into()).unwrap(),
                 config.invocation,
                 config.runtime,
-                surge_core::ContentHash::compute(b"author"),
+                hash,
                 config.working_dir,
                 surge_core::execution_recovery::SessionRestoreCapabilities::default(),
             )
             .unwrap(),
             surge_core::execution_recovery::SessionOpenMode::New,
         )
-        .unwrap())
+        .unwrap();
+        opened.execution_writer = Some(
+            surge_core::execution_recovery::process::ExecutionWriterObservation::new(writer, None)
+                .unwrap(),
+        );
+        Ok(opened)
     }
     async fn send_message(
         &self,

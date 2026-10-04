@@ -71,6 +71,9 @@ pub enum StageError {
     /// A saved provider session could not be restored safely.
     #[error("session recovery required: {0}")]
     RecoveryRequired(String),
+    /// Host current capacity proof parked a stage before provider effects.
+    #[error("configured candidates exhausted before dispatch")]
+    CapacityExhausted,
     /// The agent hit a provider-side rate limit or usage quota while this
     /// stage was mid-turn — matched directly off
     /// `surge_acp::bridge::error::SendMessageError::RateLimited`, never by

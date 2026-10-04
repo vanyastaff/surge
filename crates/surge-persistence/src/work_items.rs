@@ -1,5 +1,7 @@
 //! Registry-owned persistent tasks. Transactions never span provisioning or engine awaits.
 mod control;
+mod start_preparation;
+pub use start_preparation::StartPreparation;
 pub mod recovery_cycles;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -202,6 +204,11 @@ fn response(conn: &Connection, result: OperationResult) -> Result<WorkItemResult
     }
 }
 impl WorkItemStore {
+    /// Explicit registry-owned host storage location.
+    pub fn host_home(&self) -> &std::path::Path {
+        &self.home
+    }
+
     /// Inspect admission without attempting execution or inferring it from error text.
     pub fn operation_admission(&self, command: &WorkItemCommand) -> Result<WorkItemAdmission> {
         let Some(operation) = command.operation_id() else {
@@ -362,11 +369,16 @@ impl WorkItemStore {
         actor: &str,
         now: i64,
     ) -> Result<WorkItemResult> {
+        if let Some(result) = self.replay(command)? {
+            return Ok(result);
+        }
+        let _preparation_lock = self.reclaim_start_preparation(command)?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(result) = self.replay_conn(&tx, command)? {
             return Ok(result);
         }
+        self.check_start_preparation(&tx, command)?;
         let result = match command {
             WorkItemCommand::Create {
                 operation_id,
@@ -484,6 +496,10 @@ impl WorkItemStore {
         graph: &Graph,
         config: &str,
     ) -> Result<OperationResult> {
+        let preparing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_start_preparations WHERE item=? AND state='preparing')",[id.to_string()],|row|row.get(0))?;
+        if preparing {
+            return Err(WorkItemError::Busy);
+        }
         let mut item = record(tx, id)?;
         check(&item, version, true)?;
         let ordinal: u64 = tx.query_row(
@@ -1140,6 +1156,438 @@ mod tests {
             panic!("detail")
         };
         (home, storage, *detail)
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_start_preparation_refuses_generic_reservation() {
+        let (_home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let _guard = store.begin_start_preparation(&command).unwrap();
+        assert!(matches!(
+            store.mutate(&command, None, Some("{}"), "host", 2),
+            Err(WorkItemError::Busy)
+        ));
+        let mut conn = store.pool.get().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let WorkItemCommand::Start { graph, .. } = &command else {
+            panic!("Start");
+        };
+        assert!(matches!(
+            store.reserve(&tx, detail.item.id, detail.item.version, graph, "{}"),
+            Err(WorkItemError::Busy)
+        ));
+        drop(tx);
+        drop(conn);
+        assert!(store.replay(&command).unwrap().is_none());
+        assert!(
+            store
+                .show(detail.item.id)
+                .unwrap()
+                .item
+                .active_run
+                .is_none()
+        );
+        assert!(!store.workspace_prepared(detail.item.id).unwrap());
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_consumes_once_and_replay_does_no_filesystem_work() {
+        let (home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let guard = store.begin_start_preparation(&command).unwrap();
+        assert_eq!(guard.workspace(), &detail.item.workspace);
+        assert!(!guard.workspace_prepared());
+        assert!(matches!(
+            store.begin_start_preparation(&command),
+            Err(WorkItemError::Busy)
+        ));
+        let result = guard.finalize(&command, "frozen").unwrap();
+        let WorkItemResult::Attempt(attempt) = &result else {
+            panic!("attempt");
+        };
+        assert_eq!(attempt.ordinal, 1);
+        assert_eq!(attempt.config, "frozen");
+        assert!(!store.workspace_prepared(detail.item.id).unwrap());
+        std::fs::rename(
+            home.path().join("work-items/preparation-locks"),
+            home.path().join("gone-locks"),
+        )
+        .unwrap();
+        let replay = store
+            .mutate(&command, None, Some("must not replace config"), "host", 3)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::to_value(replay).unwrap()
+        );
+        assert!(!home.path().join("work-items/preparation-locks").exists());
+        assert!(matches!(
+            store.begin_start_preparation(&command),
+            Err(WorkItemError::Conflict(_))
+        ));
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_lifecycle_busy_discussion_drift_and_drop_release() {
+        let (_home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let guard = store.begin_start_preparation(&command).unwrap();
+        for command in [
+            WorkItemCommand::Archive {
+                operation_id: WorkItemOperationId::new(),
+                item: detail.item.id,
+                expected_version: 1,
+            },
+            WorkItemCommand::Edit {
+                operation_id: WorkItemOperationId::new(),
+                item: detail.item.id,
+                expected_version: 1,
+                expected_revision: 1,
+                requirements: req("Changed"),
+            },
+            WorkItemCommand::Continue {
+                operation_id: WorkItemOperationId::new(),
+                item: detail.item.id,
+                expected_version: 1,
+                new_session: false,
+            },
+        ] {
+            assert!(matches!(
+                store.mutate(&command, None, None, "host", 2),
+                Err(WorkItemError::Busy)
+            ));
+        }
+        let discussion = WorkItemCommand::Discuss {
+            operation_id: WorkItemOperationId::new(),
+            item: detail.item.id,
+            expected_version: 1,
+            body: "Clarification".into(),
+            proposal: None,
+        };
+        store.mutate(&discussion, None, None, "human", 2).unwrap();
+        assert!(matches!(
+            guard.finalize(&command, "frozen"),
+            Err(WorkItemError::Conflict(_))
+        ));
+        assert!(store.replay(&command).unwrap().is_none());
+        assert!(
+            store
+                .show(detail.item.id)
+                .unwrap()
+                .item
+                .active_run
+                .is_none()
+        );
+        let updated = store.show(detail.item.id).unwrap().item;
+        let archive = WorkItemCommand::Archive {
+            operation_id: WorkItemOperationId::new(),
+            item: updated.id,
+            expected_version: updated.version,
+        };
+        store.mutate(&archive, None, None, "host", 3).unwrap();
+        assert!(matches!(
+            store.begin_start_preparation(&start(&updated)),
+            Err(WorkItemError::Conflict(_))
+        ));
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_snapshot_drift_never_creates_an_attempt() {
+        for sql in [
+            "UPDATE work_items SET generation=generation+1 WHERE id=?",
+            "UPDATE work_items SET workspace_prepared=1 WHERE id=?",
+            "UPDATE work_items SET accepted_revision=accepted_revision+1 WHERE id=?",
+            "UPDATE work_items SET archived_at_ms=9 WHERE id=?",
+            "UPDATE work_items SET workspace='{}' WHERE id=?",
+        ] {
+            let (_home, storage, detail) = fixture().await;
+            let store = storage.work_items();
+            let command = start(&detail.item);
+            let guard = store.begin_start_preparation(&command).unwrap();
+            store
+                .pool
+                .get()
+                .unwrap()
+                .execute(sql, [detail.item.id.to_string()])
+                .unwrap();
+            assert!(guard.finalize(&command, "frozen").is_err(), "{sql}");
+            assert!(store.replay(&command).unwrap().is_none());
+            let count: u64 = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM work_item_attempts", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "{sql}");
+        }
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_dead_row_is_reclaimed_by_lifecycle_under_the_lock() {
+        let (_home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        drop(store.begin_start_preparation(&command).unwrap());
+        // A crash leaves exactly the same row state but releases the kernel lock.
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE work_item_start_preparations SET state='preparing' WHERE item=?",
+                [detail.item.id.to_string()],
+            )
+            .unwrap();
+        let archive = WorkItemCommand::Archive {
+            operation_id: WorkItemOperationId::new(),
+            item: detail.item.id,
+            expected_version: 1,
+        };
+        store.mutate(&archive, None, None, "host", 3).unwrap();
+        let state: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM work_item_start_preparations WHERE item=?",
+                [detail.item.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "abandoned");
+        assert!(store.replay(&command).unwrap().is_none());
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preparation_owner_child() {
+        let Some(home) = std::env::var_os("SURGE_PREPARATION_CHILD_HOME") else {
+            return;
+        };
+        let command: WorkItemCommand = serde_json::from_slice(
+            &std::fs::read(std::path::Path::new(&home).join("command.json")).unwrap(),
+        )
+        .unwrap();
+        let storage = crate::runs::Storage::open(&home).await.unwrap();
+        let _guard = storage
+            .work_items()
+            .begin_start_preparation(&command)
+            .unwrap();
+        std::fs::write(std::path::Path::new(&home).join("owner.ready"), "held").unwrap();
+        std::future::pending::<()>().await;
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_killed_owner_can_be_reclaimed_without_provider_authority() {
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let (home, storage, detail) = fixture().await;
+        let command = start(&detail.item);
+        std::fs::write(
+            home.path().join("command.json"),
+            serde_json::to_vec(&command).unwrap(),
+        )
+        .unwrap();
+        let mut child = OwnedChild(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "work_items::tests::preparation_owner_child",
+                    "--nocapture",
+                ])
+                .env("SURGE_PREPARATION_CHILD_HOME", home.path())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !home.path().join("owner.ready").exists() {
+                assert!(
+                    child.0.try_wait().unwrap().is_none(),
+                    "child exited before holding lock"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let store = storage.work_items();
+        assert!(matches!(
+            store.begin_start_preparation(&command),
+            Err(WorkItemError::Busy)
+        ));
+        assert!(
+            store
+                .show(detail.item.id)
+                .unwrap()
+                .item
+                .active_run
+                .is_none()
+        );
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        let guard = store.begin_start_preparation(&command).unwrap();
+        assert!(!guard.workspace_prepared());
+        assert!(store.replay(&command).unwrap().is_none());
+        assert!(
+            store
+                .show(detail.item.id)
+                .unwrap()
+                .item
+                .active_run
+                .is_none()
+        );
+        drop(guard);
+        let archive = WorkItemCommand::Archive {
+            operation_id: WorkItemOperationId::new(),
+            item: detail.item.id,
+            expected_version: 1,
+        };
+        store.mutate(&archive, None, None, "host", 3).unwrap();
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_does_not_hold_registry_lock_while_external_work_is_blocked() {
+        let (_home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = WorkItemCommand::Create {
+            operation_id: WorkItemOperationId::new(),
+            project: detail.item.workspace.checkout.clone(),
+            title: "Independent".into(),
+            requirements: req("Other"),
+        };
+        let WorkItemResult::Detail(other) = store
+            .mutate(&command, Some(&detail.item.workspace), None, "host", 2)
+            .unwrap()
+        else {
+            panic!("detail");
+        };
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let preparer = store.clone();
+        let start = start(&detail.item);
+        let blocked = std::thread::spawn(move || {
+            let _guard = preparer.begin_start_preparation(&start).unwrap();
+            held_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+        });
+        held_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        let archive = WorkItemCommand::Archive {
+            operation_id: WorkItemOperationId::new(),
+            item: other.item.id,
+            expected_version: other.item.version,
+        };
+        let independent = store.clone();
+        let control = tokio::task::spawn_blocking(move || {
+            independent.mutate(&archive, None, None, "host", 3)
+        });
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), control).await;
+        release_tx.send(()).unwrap();
+        blocked.join().unwrap();
+        result.unwrap().unwrap().unwrap();
+        assert!(
+            store
+                .show(other.item.id)
+                .unwrap()
+                .item
+                .archived_at_ms
+                .is_some()
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_concurrent_exact_operation_has_one_attempt_and_receipt() {
+        let (_home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let threads = (0..2)
+            .map(|_| {
+                let store = store.clone();
+                let command = command.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    concurrent_start_result(&store, &command)
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            serde_json::to_value(&results[0]).unwrap(),
+            serde_json::to_value(&results[1]).unwrap()
+        );
+        let conn = store.pool.get().unwrap();
+        let attempts: u64 = conn
+            .query_row("SELECT COUNT(*) FROM work_item_attempts", [], |r| r.get(0))
+            .unwrap();
+        let receipts: u64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM work_item_operations WHERE operation=?",
+                [command.operation_id().unwrap().to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!((attempts, receipts), (1, 1));
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_preparation_relocated_live_lock_never_proves_dead_ownership() {
+        let (home, storage, detail) = fixture().await;
+        let store = storage.work_items();
+        let command = start(&detail.item);
+        let old = store.begin_start_preparation(&command).unwrap();
+        std::fs::rename(
+            home.path().join("work-items/preparation-locks"),
+            home.path().join("relocated-held-locks"),
+        )
+        .unwrap();
+        assert!(
+            store.begin_start_preparation(&command).is_err(),
+            "a replacement pathname lock cannot establish old owner death"
+        );
+        let archive = WorkItemCommand::Archive {
+            operation_id: WorkItemOperationId::new(),
+            item: detail.item.id,
+            expected_version: 1,
+        };
+        assert!(store.mutate(&archive, None, None, "host", 3).is_err());
+        assert!(old.finalize(&command, "frozen").is_err());
+        assert!(store.replay(&command).unwrap().is_none());
+        assert!(
+            store
+                .show(detail.item.id)
+                .unwrap()
+                .item
+                .active_run
+                .is_none()
+        );
+    }
+    fn concurrent_start_result(store: &WorkItemStore, command: &WorkItemCommand) -> WorkItemResult {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(result) = store.replay(command).unwrap() {
+                return result;
+            }
+            match store.begin_start_preparation(command) {
+                Ok(guard) => {
+                    return guard.finalize(command, "same frozen config").unwrap();
+                },
+                Err(WorkItemError::Busy | WorkItemError::Conflict(_))
+                    if std::time::Instant::now() < deadline =>
+                {
+                    std::thread::yield_now()
+                },
+                Err(error) => panic!("{error}"),
+            }
+        }
     }
     fn req(text: &str) -> WorkItemRequirements {
         WorkItemRequirements::new(text.into(), vec!["Fixed acceptance".into()]).unwrap()

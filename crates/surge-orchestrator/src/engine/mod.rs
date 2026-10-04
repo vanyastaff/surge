@@ -29,7 +29,9 @@
 // Submodules added incrementally as later phases land.
 pub mod bootstrap;
 pub mod capacity;
+pub(crate) mod capacity_routes;
 pub mod config;
+mod configured_route_pin;
 pub mod daemon_facade;
 pub mod elevation;
 pub mod engine;

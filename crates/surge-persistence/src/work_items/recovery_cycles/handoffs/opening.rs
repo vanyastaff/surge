@@ -904,6 +904,56 @@ impl WorkItemStore {
         let connection = self.pool.get()?;
         read_handoff(&connection, operation)
     }
+    /// Consume an unexecuted opening permit when configured source validation fails.
+    /// Historical or unknown provider effects cannot use this cancellation boundary.
+    pub fn invalidate_unexecuted_quota_open(
+        &self,
+        claim: &WorkItemLaunchClaim,
+        permit: QuotaOpenPermit,
+    ) -> Result<()> {
+        let path = self
+            .home
+            .join("runs")
+            .join(claim.run.to_string())
+            .join("events.sqlite");
+        let journal =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let mut query =
+            journal.prepare("SELECT schema_version,payload FROM events ORDER BY seq")?;
+        let rows = query.query_map([], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (schema, bytes) = row?;
+            let event = surge_core::migrate_payload(schema, &bytes)
+                .map_err(|error| WorkItemError::Invalid(error.to_string()))?;
+            let invocation = permit.launch.provider_invocation();
+            if matches!(&event,EventPayload::ExecutionWriterIntent {intent} if intent.invocation==invocation)
+                || matches!(&event,EventPayload::SessionEstablishmentRequested {invocation:actual,..} if *actual==invocation)
+            {
+                return Err(WorkItemError::Conflict(
+                    "provider effect intent exists; retain unknown opening containment".into(),
+                ));
+            }
+        }
+        let mut connection = self.pool.get()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let handoff = read_handoff(&tx, permit.operation)?;
+        current_handoff(&tx, claim, &handoff)?;
+        if handoff.state != QuotaHandoffState::OpeningUnknown
+            || handoff.body.run != permit.run
+            || handoff.body.target_control != permit.control_generation
+            || handoff.body.launch != permit.launch
+        {
+            return Err(WorkItemError::Conflict(
+                "unexecuted permit differs from current opening".into(),
+            ));
+        }
+        tx.execute("UPDATE work_item_quota_handoffs SET state='invalidated' WHERE operation=? AND state='opening_unknown'",[permit.operation.to_string()])?;
+        tx.execute("UPDATE work_item_quota_cycles SET closed=1,wake_at_ms=NULL,revision=revision+1 WHERE run=? AND invocation=? AND cycle_generation=?",params![claim.run.to_string(),handoff.body.logical_invocation,handoff.body.target_cycle])?;
+        tx.commit()?;
+        Ok(())
+    }
     /// Spend an epoch before the provider RPC. Replays cannot obtain another permit.
     pub fn admit_provider_open(
         &self,
@@ -1064,7 +1114,7 @@ impl WorkItemStore {
         let handoff = read_handoff(&registry, operation)?;
         let stage = read_bound_stage(&registry, claim.run, &handoff.body.logical_invocation)?;
         let original_seq: u64 = registry.query_row(
-            "SELECT opening_seq FROM work_item_quota_stages WHERE run=? AND invocation=?",
+            "SELECT COALESCE(opening_seq,plan_seq) FROM work_item_quota_stages WHERE run=? AND invocation=?",
             params![claim.run.to_string(), handoff.body.logical_invocation],
             |row| row.get(0),
         )?;

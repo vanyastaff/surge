@@ -40,6 +40,14 @@ async fn fixture() -> Fixture {
 }
 
 async fn fixture_with_admission(admit: bool) -> Fixture {
+    fixture_with_options(admit, false).await
+}
+
+async fn fixture_with_options(admit: bool, pinned: bool) -> Fixture {
+    fixture_with_loop(admit, pinned, false).await
+}
+
+async fn fixture_with_loop(admit: bool, pinned: bool, loop_graph: bool) -> Fixture {
     let home = tempfile::tempdir().unwrap();
     let storage = Storage::open(home.path()).await.unwrap();
     let store = storage.work_items();
@@ -73,18 +81,37 @@ async fn fixture_with_admission(admit: bool) -> Fixture {
     let mut other_node = graph.nodes[&node].clone();
     other_node.id = other.clone();
     graph.nodes.insert(other, other_node);
-    let candidate = FrozenQuotaCandidate::new(
+    if loop_graph {
+        graph.edges[0].to = node.clone();
+        graph.edges[0].kind = surge_core::edge::EdgeKind::Backtrack;
+        graph.edges[0].policy.max_traversals = Some(2);
+    }
+    let mut candidate = FrozenQuotaCandidate::new(
         RecoveryCandidate::new("a".into(), AccountEvidence::Unknown).unwrap(),
-        None,
+        pinned.then(|| "sonnet".into()),
         ContentHash::compute(b"launch-a"),
     )
     .unwrap();
-    let candidate_b = FrozenQuotaCandidate::new(
+    let mut candidate_b = FrozenQuotaCandidate::new(
         RecoveryCandidate::new("b".into(), AccountEvidence::Unknown).unwrap(),
-        None,
+        pinned.then(|| "sonnet".into()),
         ContentHash::compute(b"launch-b"),
     )
     .unwrap();
+    if pinned {
+        for (runtime, target) in [("a", &mut candidate), ("b", &mut candidate_b)] {
+            *target = target.clone().with_configured_snapshot(
+                surge_core::config::CapacityRoute {
+                    provider_family: "fixture".into(),
+                    configured_route: runtime.into(),
+                    auth_sources: Vec::new(),
+                    completeness:
+                        surge_core::config::ConfiguredSourceCompleteness::CompleteConfiguredSources,
+                },
+                Some(ContentHash::compute(runtime.as_bytes())),
+            );
+        }
+    }
     let stage = FrozenQuotaStage::new(
         node.clone(),
         QuotaRoutingMode::Configured,
@@ -136,6 +163,11 @@ async fn fixture_with_admission(admit: bool) -> Fixture {
                 original.descriptor.launch_hash(),
             )
             .unwrap();
+        if let Some(pin) = candidate.configured_pin() {
+            store
+                .attach_admitted_configured_pin(writer_id, pin)
+                .unwrap();
+        }
     }
     let serialized = toml::to_string(&graph).unwrap();
     let events = vec![
@@ -1861,4 +1893,800 @@ async fn one_opening_cannot_attach_a_conflicting_exhaustion_origin() {
         "conflicting association rolls back new origin atomically"
     );
     f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planned_binding_retains_real_occurrence_and_first_open_is_one_shot() {
+    let f = fixture().await;
+    f.writer
+        .append_event(V::new(EventPayload::SessionClosed {
+            session: f.original.session,
+            disposition: surge_core::run_event::SessionDisposition::Normal,
+        }))
+        .await
+        .unwrap();
+    let entry = f
+        .writer
+        .append_event(V::new(EventPayload::StageEntered {
+            node: "impl_1".try_into().unwrap(),
+            attempt: 2,
+        }))
+        .await
+        .unwrap();
+    let invocation = StageInvocationId::new();
+    let policy: FrozenQuotaPolicy = serde_json::from_value(
+        serde_json::from_str::<serde_json::Value>(
+            &attempt(&f.store.pool.get().unwrap(), f.claim.run)
+                .unwrap()
+                .config,
+        )
+        .unwrap()["quota_recovery"]
+            .clone(),
+    )
+    .unwrap();
+    let plan = f
+        .writer
+        .append_event(V::new(EventPayload::QuotaStagePlanned {
+            node: "impl_1".try_into().unwrap(),
+            attempt: 2,
+            stage_entry_seq: entry.0,
+            logical_invocation: invocation,
+            control_generation: 0,
+            policy_hash: policy.content_hash().unwrap(),
+        }))
+        .await
+        .unwrap();
+    f.store
+        .bind_planned_quota_stage(&f.claim, invocation, plan.0)
+        .unwrap();
+    let cycle = f
+        .store
+        .begin_recovery_cycle(&f.claim, &invocation.to_string(), 0)
+        .unwrap();
+    let super::super::super::CapacitySelection::Selected {
+        cycle,
+        reservation,
+        skipped,
+    } = f
+        .store
+        .select_planned_capacity(&f.claim, &cycle, 10)
+        .unwrap()
+    else {
+        panic!("opaque history must attempt real provider")
+    };
+    assert!(skipped.is_empty());
+    assert_eq!(reservation.candidate.runtime(), "a");
+    let provider = StageInvocationId::new();
+    let launch = QuotaLaunchContract::new(
+        policy.stages()[0].candidates()[0].clone(),
+        provider,
+        SessionOpenMode::New,
+        None,
+    )
+    .unwrap();
+    let handoff = f
+        .store
+        .reserve_quota_open(&f.claim, &cycle, &reservation, launch)
+        .unwrap();
+    assert_ne!(provider, invocation);
+    let permit = f
+        .store
+        .admit_provider_open(&f.claim, handoff.operation())
+        .unwrap();
+    assert_eq!(permit.launch().provider_invocation(), provider);
+    assert!(
+        f.store
+            .admit_provider_open(&f.claim, handoff.operation())
+            .is_err()
+    );
+    let current = f
+        .store
+        .recovery_cycle(f.claim.run, &invocation.to_string(), cycle.generation)
+        .unwrap();
+    let replay = f
+        .store
+        .select_planned_capacity(&f.claim, &current, 10)
+        .unwrap();
+    assert!(matches!(
+        replay,
+        super::super::super::CapacitySelection::Selected {
+            reservation: CandidateReservation {
+                disposition: ReservationDisposition::Replayed,
+                ..
+            },
+            ..
+        }
+    ));
+    let connection = f.store.pool.get().unwrap();
+    let (original, planned): (Option<u64>, Option<u64>) = connection
+        .query_row(
+            "SELECT opening_seq,plan_seq FROM work_item_quota_stages WHERE run=? AND invocation=?",
+            params![f.claim.run.to_string(), invocation.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(original, None);
+    assert_eq!(planned, Some(plan.0));
+    f.store
+        .invalidate_unexecuted_quota_open(&f.claim, permit)
+        .unwrap();
+    assert_eq!(
+        f.store.quota_handoff(handoff.operation()).unwrap().state(),
+        QuotaHandoffState::Invalidated
+    );
+    assert!(
+        f.store
+            .admit_provider_open(&f.claim, handoff.operation())
+            .is_err(),
+        "invalidated opening cannot be retried"
+    );
+    f.writer
+        .append_event(V::new(EventPayload::StageEntered {
+            node: "impl_1".try_into().unwrap(),
+            attempt: 3,
+        }))
+        .await
+        .unwrap();
+    assert!(
+        f.store
+            .bind_planned_quota_stage(&f.claim, invocation, plan.0)
+            .is_err(),
+        "old same-node stage occurrence cannot become new authority"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unexecuted_cancellation_never_erases_historical_provider_uncertainty() {
+    let f = fixture().await;
+    let permit = f
+        .store
+        .admit_provider_open(&f.claim, f.body.operation)
+        .unwrap();
+    assert!(
+        f.store
+            .invalidate_unexecuted_quota_open(&f.claim, permit)
+            .is_err()
+    );
+    assert_eq!(
+        f.store.quota_handoff(f.body.operation).unwrap().state(),
+        QuotaHandoffState::OpeningUnknown
+    );
+    assert!(
+        f.store
+            .admit_provider_open(&f.claim, f.body.operation)
+            .is_err()
+    );
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_skip_and_actual_exhaustion_park_with_the_real_provider_origin() {
+    let (f, current, reservation, _session) = fixture_with_two_fresh_pinned_sources().await;
+    let super::super::super::CapacitySelection::AllExhausted { cycle, skipped } = f
+        .store
+        .select_planned_capacity(&f.claim, &current, 100)
+        .unwrap()
+    else {
+        panic!("fresh A skip plus typed B cannot reopen A")
+    };
+    assert_eq!(skipped.len(), 1);
+    let wake = RecoveryWake::new(
+        RunId::new().to_string(),
+        WakeOrigin::PolicyBackoff,
+        100,
+        1100,
+    )
+    .unwrap();
+    let scheduled = f
+        .store
+        .arm_recovery_wake(&f.claim, &cycle, &reservation.receipt, &wake)
+        .unwrap();
+    assert!(
+        f.store
+            .request_capacity_suspend(&f.claim, &scheduled, &reservation.receipt, 100)
+            .is_err(),
+        "strict reactive API must not accept unattempted A"
+    );
+    let association = f
+        .store
+        .request_capacity_suspend_with_skips(&f.claim, &scheduled, &reservation.receipt, 100)
+        .unwrap();
+    assert!(
+        matches!(association.evidence_origin().unwrap(),CapacityEvidenceOrigin::ProviderReservation(receipt) if receipt==reservation.receipt)
+    );
+    f.writer.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_or_advanced_plans_never_create_a_binding() {
+    for case in [
+        "node",
+        "attempt",
+        "entry",
+        "policy",
+        "control",
+        "invocation",
+        "request-before",
+        "request-after",
+        "terminal",
+    ] {
+        let f = fixture().await;
+        f.writer
+            .append_event(V::new(EventPayload::SessionClosed {
+                session: f.original.session,
+                disposition: surge_core::run_event::SessionDisposition::Normal,
+            }))
+            .await
+            .unwrap();
+        let entry = f
+            .writer
+            .append_event(V::new(EventPayload::StageEntered {
+                node: "impl_1".try_into().unwrap(),
+                attempt: 2,
+            }))
+            .await
+            .unwrap();
+        let policy: FrozenQuotaPolicy = serde_json::from_value(
+            serde_json::from_str::<serde_json::Value>(
+                &attempt(&f.store.pool.get().unwrap(), f.claim.run)
+                    .unwrap()
+                    .config,
+            )
+            .unwrap()["quota_recovery"]
+                .clone(),
+        )
+        .unwrap();
+        let invocation = StageInvocationId::new();
+        if case == "request-before" {
+            f.writer
+                .append_event(V::new(EventPayload::SessionEstablishmentRequested {
+                    node: "impl_1".try_into().unwrap(),
+                    invocation,
+                    restore: false,
+                    authority: None,
+                }))
+                .await
+                .unwrap();
+        }
+        let plan = f
+            .writer
+            .append_event(V::new(EventPayload::QuotaStagePlanned {
+                node: if case == "node" { "other" } else { "impl_1" }
+                    .try_into()
+                    .unwrap(),
+                attempt: if case == "attempt" { 3 } else { 2 },
+                stage_entry_seq: if case == "entry" {
+                    entry.0 - 1
+                } else {
+                    entry.0
+                },
+                logical_invocation: invocation,
+                control_generation: u64::from(case == "control"),
+                policy_hash: if case == "policy" {
+                    ContentHash::compute(b"different frozen policy")
+                } else {
+                    policy.content_hash().unwrap()
+                },
+            }))
+            .await
+            .unwrap();
+        if case == "request-after" {
+            f.writer
+                .append_event(V::new(EventPayload::SessionEstablishmentRequested {
+                    node: "impl_1".try_into().unwrap(),
+                    invocation,
+                    restore: false,
+                    authority: None,
+                }))
+                .await
+                .unwrap();
+        }
+        if case == "terminal" {
+            f.writer
+                .append_event(V::new(EventPayload::RunCompleted {
+                    terminal_node: "end".try_into().unwrap(),
+                }))
+                .await
+                .unwrap();
+        }
+        let bound = if case == "invocation" {
+            StageInvocationId::new()
+        } else {
+            invocation
+        };
+        let count = || {
+            f.store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM work_item_quota_stages WHERE run=?",
+                    [f.claim.run.to_string()],
+                    |r| r.get::<_, u64>(0),
+                )
+                .unwrap()
+        };
+        let before = count();
+        assert!(
+            f.store
+                .bind_planned_quota_stage(&f.claim, bound, plan.0)
+                .is_err(),
+            "{case} must not create provider effect authority"
+        );
+        assert_eq!(
+            count(),
+            before,
+            "rejected {case} plan must make no registry writes"
+        );
+        f.writer.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticated_same_node_reentry_retains_a_newer_unadmitted_plan() {
+    use super::super::super::PlannedResumeInspection;
+    let f = fixture_with_loop(true, true, true).await;
+    let authority = f
+        .writer
+        .read_events(crate::runs::EventSeq(4)..crate::runs::EventSeq(5))
+        .await
+        .unwrap();
+    let EventPayload::SessionEstablishmentRequested {
+        authority: Some(authority),
+        ..
+    } = &authority[0].payload.payload
+    else {
+        panic!("actual authenticated establishment")
+    };
+    let node: NodeKey = "impl_1".try_into().unwrap();
+    let outcome: surge_core::OutcomeKey = "done".try_into().unwrap();
+    let effects = vec![V::new(EventPayload::OutcomeReported {
+        node: node.clone(),
+        outcome: outcome.clone(),
+        summary: "host-authenticated loop outcome".into(),
+    })];
+    let commit = surge_core::execution_recovery::commit::StageOutcomeCommit::new(
+        authority.clone(),
+        f.original.session,
+        f.original.descriptor.invocation(),
+        outcome.clone(),
+        1,
+        ContentHash::compute(&serde_json::to_vec(&effects).unwrap()),
+    )
+    .unwrap();
+    let mut batch = effects;
+    batch.push(V::new(EventPayload::StageOutcomeCommitted { commit }));
+    let committed = f
+        .writer
+        .append_events(batch)
+        .await
+        .unwrap()
+        .last()
+        .unwrap()
+        .0;
+    f.writer
+        .append_events(vec![
+            V::new(EventPayload::EdgeTraversed {
+                edge: "e_impl_to_end".try_into().unwrap(),
+                from: node.clone(),
+                to: node.clone(),
+                kind: surge_core::edge::EdgeKind::Backtrack,
+            }),
+            V::new(EventPayload::StageCompleted {
+                node: node.clone(),
+                outcome,
+            }),
+            V::new(EventPayload::StageRouteCommitted {
+                invocation: f.original.descriptor.invocation(),
+                outcome_commit_seq: committed,
+            }),
+        ])
+        .await
+        .unwrap();
+    let policy: FrozenQuotaPolicy = serde_json::from_value(
+        serde_json::from_str::<serde_json::Value>(
+            &attempt(&f.store.pool.get().unwrap(), f.claim.run)
+                .unwrap()
+                .config,
+        )
+        .unwrap()["quota_recovery"]
+            .clone(),
+    )
+    .unwrap();
+    let cursor = surge_core::run_state::Cursor {
+        node: node.clone(),
+        attempt: 1,
+    };
+    assert_eq!(
+        f.store
+            .inspect_planned_stage_resume(&f.claim, &cursor, &policy.content_hash().unwrap(), 0)
+            .unwrap(),
+        PlannedResumeInspection::CompletedOccurrence,
+        "authenticated completed same-node routing may enter the next occurrence"
+    );
+    let entry = f
+        .writer
+        .append_event(V::new(EventPayload::StageEntered {
+            node: node.clone(),
+            attempt: 2,
+        }))
+        .await
+        .unwrap();
+    let logical = StageInvocationId::new();
+    let plan = f
+        .writer
+        .append_event(V::new(EventPayload::QuotaStagePlanned {
+            node: node.clone(),
+            attempt: 2,
+            stage_entry_seq: entry.0,
+            logical_invocation: logical,
+            control_generation: 0,
+            policy_hash: policy.content_hash().unwrap(),
+        }))
+        .await
+        .unwrap();
+    let cursor = surge_core::run_state::Cursor {
+        node: node.clone(),
+        attempt: 2,
+    };
+    let count = || {
+        f.store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM work_item_quota_stages WHERE run=?",
+                [f.claim.run.to_string()],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap()
+    };
+    let before = count();
+    assert_eq!(
+        f.store
+            .inspect_planned_stage_resume(&f.claim, &cursor, &policy.content_hash().unwrap(), 0)
+            .unwrap(),
+        PlannedResumeInspection::UnadmittedOccurrence {
+            stage_entry_seq: entry.0
+        },
+        "older authenticated completion cannot manufacture another entry or logical plan"
+    );
+    assert_eq!(count(), before, "inspection cannot bind or admit an effect");
+    f.store
+        .bind_planned_quota_stage(&f.claim, logical, plan.0)
+        .unwrap();
+    f.writer
+        .append_event(V::new(EventPayload::StageEntered {
+            node: node.clone(),
+            attempt: 3,
+        }))
+        .await
+        .unwrap();
+    let cursor = surge_core::run_state::Cursor { node, attempt: 3 };
+    assert!(
+        f.store
+            .inspect_planned_stage_resume(&f.claim, &cursor, &policy.content_hash().unwrap(), 0)
+            .is_err(),
+        "unfinished bound occurrence cannot be superseded even without RPC"
+    );
+    f.store
+        .pool
+        .get()
+        .unwrap()
+        .execute(
+            "DELETE FROM work_item_quota_stages WHERE run=?",
+            [f.claim.run.to_string()],
+        )
+        .unwrap();
+    assert!(
+        f.store
+            .inspect_planned_stage_resume(&f.claim, &cursor, &policy.content_hash().unwrap(), 0)
+            .is_err(),
+        "missing original registry binding cannot grant a new occurrence"
+    );
+    f.writer.close().await.unwrap();
+}
+
+async fn fixture_with_two_fresh_pinned_sources()
+-> (Fixture, RecoveryCycle, CandidateReservation, SessionId) {
+    let f = fixture_with_options(true, true).await;
+    seal_fixture_exhaustion(&f).await;
+    f.writer
+        .append_event(V::new(EventPayload::SessionClosed {
+            session: f.original.session,
+            disposition: surge_core::run_event::SessionDisposition::Normal,
+        }))
+        .await
+        .unwrap();
+    let entry = f
+        .writer
+        .append_event(V::new(EventPayload::StageEntered {
+            node: "impl_1".try_into().unwrap(),
+            attempt: 2,
+        }))
+        .await
+        .unwrap();
+    let policy: FrozenQuotaPolicy = serde_json::from_value(
+        serde_json::from_str::<serde_json::Value>(
+            &attempt(&f.store.pool.get().unwrap(), f.claim.run)
+                .unwrap()
+                .config,
+        )
+        .unwrap()["quota_recovery"]
+            .clone(),
+    )
+    .unwrap();
+    let logical = StageInvocationId::new();
+    let plan = f
+        .writer
+        .append_event(V::new(EventPayload::QuotaStagePlanned {
+            node: "impl_1".try_into().unwrap(),
+            attempt: 2,
+            stage_entry_seq: entry.0,
+            logical_invocation: logical,
+            control_generation: 0,
+            policy_hash: policy.content_hash().unwrap(),
+        }))
+        .await
+        .unwrap();
+    f.store
+        .bind_planned_quota_stage(&f.claim, logical, plan.0)
+        .unwrap();
+    let cycle = f
+        .store
+        .begin_recovery_cycle(&f.claim, &logical.to_string(), 0)
+        .unwrap();
+    let super::super::super::CapacitySelection::Selected {
+        cycle,
+        reservation,
+        skipped,
+    } = f
+        .store
+        .select_planned_capacity(&f.claim, &cycle, 100)
+        .unwrap()
+    else {
+        panic!("B unknown must really attempt")
+    };
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(reservation.candidate.runtime(), "b");
+    let provider = StageInvocationId::new();
+    let target = policy.stages()[0].candidates()[1].clone();
+    let launch =
+        QuotaLaunchContract::new(target.clone(), provider, SessionOpenMode::New, None).unwrap();
+    let handoff = f
+        .store
+        .reserve_quota_open(&f.claim, &cycle, &reservation, launch)
+        .unwrap();
+    let _permit = f
+        .store
+        .admit_provider_open(&f.claim, handoff.operation())
+        .unwrap();
+    let session = SessionId::new();
+    let writer = surge_core::id::ExecutionWriterId::new();
+    f.store
+        .admit_recipe_opening(writer, provider, "b", target.launch_hash())
+        .unwrap();
+    f.store
+        .attach_admitted_configured_pin(writer, target.configured_pin().unwrap())
+        .unwrap();
+    let descriptor = ProviderSessionDescriptor::new(
+        ProviderSessionId::new("actual-b".into()).unwrap(),
+        provider,
+        "b".into(),
+        *target.launch_hash(),
+        f.original.descriptor.cwd().to_path_buf(),
+        SessionRestoreCapabilities {
+            resume: true,
+            load: true,
+        },
+    )
+    .unwrap();
+    let mut opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();
+    opened.execution_writer = Some(
+        surge_core::execution_recovery::process::ExecutionWriterObservation::new(writer, None)
+            .unwrap(),
+    );
+    f.writer
+        .append_event(V::new(EventPayload::SessionEstablishmentRequested {
+            node: "impl_1".try_into().unwrap(),
+            invocation: provider,
+            restore: false,
+            authority: None,
+        }))
+        .await
+        .unwrap();
+    let seq = f
+        .writer
+        .append_event(V::new(EventPayload::SessionOpened {
+            node: "impl_1".try_into().unwrap(),
+            session,
+            agent: "b".into(),
+            agent_id: None,
+            opened: Some(opened),
+            handoff: Some(handoff.operation()),
+        }))
+        .await
+        .unwrap();
+    f.store
+        .confirm_provider_open(&f.claim, handoff.operation(), seq.0)
+        .unwrap();
+    f.store
+        .authorize_fallback_prompt(&f.claim, handoff.operation(), seq.0)
+        .unwrap();
+    let cycle = f
+        .store
+        .recovery_cycle(f.claim.run, &logical.to_string(), 1)
+        .unwrap();
+    let source =
+        QuotaRateLimitSource::new(seq.0, provider, session, Some(1000), "actual B 429".into())
+            .unwrap();
+    let current = f
+        .store
+        .record_selected_rate_limit(
+            &f.claim,
+            &cycle,
+            &reservation.receipt,
+            &source,
+            &quota_error_observation(),
+        )
+        .unwrap();
+    (f, current, reservation, session)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planned_park_rejects_advanced_journal_without_mutating_capacity_authority() {
+    for case in [
+        "request",
+        "entry",
+        "completed",
+        "aborted",
+        "plan",
+        "same-plan",
+        "unchanged",
+    ] {
+        let (f, _, _, session) = fixture_with_two_fresh_pinned_sources().await;
+        f.writer
+            .append_event(V::new(EventPayload::SessionClosed {
+                session,
+                disposition: surge_core::run_event::SessionDisposition::Normal,
+            }))
+            .await
+            .unwrap();
+        let node: NodeKey = "impl_1".try_into().unwrap();
+        let entry = f
+            .writer
+            .append_event(V::new(EventPayload::StageEntered {
+                node: node.clone(),
+                attempt: 3,
+            }))
+            .await
+            .unwrap();
+        let policy: FrozenQuotaPolicy = serde_json::from_value(
+            serde_json::from_str::<serde_json::Value>(
+                &attempt(&f.store.pool.get().unwrap(), f.claim.run)
+                    .unwrap()
+                    .config,
+            )
+            .unwrap()["quota_recovery"]
+                .clone(),
+        )
+        .unwrap();
+        let logical = StageInvocationId::new();
+        let plan = f
+            .writer
+            .append_event(V::new(EventPayload::QuotaStagePlanned {
+                node: node.clone(),
+                attempt: 3,
+                stage_entry_seq: entry.0,
+                logical_invocation: logical,
+                control_generation: 0,
+                policy_hash: policy.content_hash().unwrap(),
+            }))
+            .await
+            .unwrap();
+        f.store
+            .bind_planned_quota_stage(&f.claim, logical, plan.0)
+            .unwrap();
+        let cycle = f
+            .store
+            .begin_recovery_cycle(&f.claim, &logical.to_string(), 0)
+            .unwrap();
+        let super::super::super::CapacitySelection::AllExhausted { cycle, .. } = f
+            .store
+            .select_planned_capacity(&f.claim, &cycle, 100)
+            .unwrap()
+        else {
+            panic!("both actual pinned typed sources must be fresh")
+        };
+        let suffix = match case {
+            "request" => Some(EventPayload::SessionEstablishmentRequested {
+                node: node.clone(),
+                invocation: StageInvocationId::new(),
+                restore: false,
+                authority: None,
+            }),
+            "entry" => Some(EventPayload::StageEntered {
+                node: node.clone(),
+                attempt: 4,
+            }),
+            "completed" => Some(EventPayload::StageCompleted {
+                node: node.clone(),
+                outcome: "done".try_into().unwrap(),
+            }),
+            "same-plan" => Some(EventPayload::QuotaStagePlanned {
+                node: node.clone(),
+                attempt: 3,
+                stage_entry_seq: entry.0,
+                logical_invocation: logical,
+                control_generation: 0,
+                policy_hash: policy.content_hash().unwrap(),
+            }),
+            "plan" => Some(EventPayload::QuotaStagePlanned {
+                node: node.clone(),
+                attempt: 3,
+                stage_entry_seq: entry.0,
+                logical_invocation: StageInvocationId::new(),
+                control_generation: 0,
+                policy_hash: policy.content_hash().unwrap(),
+            }),
+            "aborted" => Some(EventPayload::RunAborted {
+                reason: "terminal after bound plan".into(),
+            }),
+            _ => None,
+        };
+        if let Some(suffix) = suffix {
+            f.writer.append_event(V::new(suffix)).await.unwrap();
+        }
+        let before_control = f.store.execution_control(f.claim.run).unwrap();
+        let count = |table: &str| {
+            f.store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get::<_, u64>(0)
+                })
+                .unwrap()
+        };
+        let before = (
+            count("work_item_capacity_plan_proofs"),
+            count("work_item_capacity_controls"),
+        );
+        let result = f.store.suspend_planned_capacity(&f.claim, &cycle, 100);
+        if case == "unchanged" {
+            assert!(
+                result.is_ok(),
+                "current all-skipped occurrence still parks: {result:?}"
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "stale suffix {case} cannot seal planned authority"
+            );
+            assert_eq!(
+                (
+                    count("work_item_capacity_plan_proofs"),
+                    count("work_item_capacity_controls")
+                ),
+                before
+            );
+            assert_eq!(
+                f.store.execution_control(f.claim.run).unwrap(),
+                before_control
+            );
+            assert_eq!(
+                f.store
+                    .recovery_cycle(f.claim.run, &logical.to_string(), cycle.generation)
+                    .unwrap(),
+                cycle
+            );
+            assert!(
+                f.store
+                    .due_recovery_wakes_for_run(f.claim.run, i64::MAX, 10)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        f.writer.close().await.unwrap();
+    }
 }

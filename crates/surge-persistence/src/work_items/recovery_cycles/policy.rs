@@ -19,17 +19,28 @@ pub struct FrozenQuotaCandidate {
     candidate: RecoveryCandidate,
     model: Option<String>,
     launch_hash: ContentHash,
+    #[serde(default)]
+    configured_pin: Option<ContentHash>,
+    #[serde(default)]
+    configured_route: Option<surge_core::config::CapacityRoute>,
 }
 #[derive(Deserialize)]
 struct RawCandidatePolicy {
     candidate: RecoveryCandidate,
     model: Option<String>,
     launch_hash: ContentHash,
+    #[serde(default)]
+    configured_pin: Option<ContentHash>,
+    #[serde(default)]
+    configured_route: Option<surge_core::config::CapacityRoute>,
 }
 impl TryFrom<RawCandidatePolicy> for FrozenQuotaCandidate {
     type Error = WorkItemError;
     fn try_from(value: RawCandidatePolicy) -> Result<Self> {
-        Self::new(value.candidate, value.model, value.launch_hash)
+        let mut candidate = Self::new(value.candidate, value.model, value.launch_hash)?;
+        candidate.configured_pin = value.configured_pin;
+        candidate.configured_route = value.configured_route;
+        Ok(candidate)
     }
 }
 impl FrozenQuotaCandidate {
@@ -48,7 +59,27 @@ impl FrozenQuotaCandidate {
             candidate,
             model,
             launch_hash,
+            configured_pin: None,
+            configured_route: None,
         })
+    }
+    /// Attach a host-created configured source snapshot. This is not observed account evidence.
+    pub fn with_configured_snapshot(
+        mut self,
+        route: surge_core::config::CapacityRoute,
+        pin: Option<ContentHash>,
+    ) -> Self {
+        self.configured_route = Some(route);
+        self.configured_pin = pin;
+        self
+    }
+    /// Host snapshot pin, absent for opaque or historic routes.
+    pub fn configured_pin(&self) -> Option<&ContentHash> {
+        self.configured_pin.as_ref()
+    }
+    /// Nonsecret configured source declaration.
+    pub fn configured_route(&self) -> Option<&surge_core::config::CapacityRoute> {
+        self.configured_route.as_ref()
     }
     /// Canonical runtime and actual account evidence.
     pub fn candidate(&self) -> &RecoveryCandidate {

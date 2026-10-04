@@ -33,6 +33,7 @@ async fn exercise(reports_usage: bool) {
         capabilities: vec![],
         env: BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     };
     let pool = AgentPool::new(
         HashMap::from([("fixture".into(), config)]),

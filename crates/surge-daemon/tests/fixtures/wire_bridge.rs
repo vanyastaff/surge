@@ -7,8 +7,7 @@ use surge_acp::bridge::error::{
 };
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::{
-    AcpBridge, AgentKind, BridgeEvent, MessageContent, SessionConfig, SessionState,
-    ToolResultPayload,
+    AcpBridge, BridgeEvent, MessageContent, SessionConfig, SessionState, ToolResultPayload,
 };
 use surge_core::SessionId;
 pub struct WireBridge {
@@ -19,19 +18,63 @@ pub struct WireBridge {
         surge_core::RunId,
     )>,
 }
+impl WireBridge {
+    /// Configure the actual recipe before the engine's admission decorator sees it.
+    pub fn engine_config(
+        &self,
+        home: &std::path::Path,
+    ) -> surge_orchestrator::engine::EngineConfig {
+        use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
+        let profiles = home.join("wire-fixture-profiles");
+        std::fs::create_dir_all(&profiles).unwrap();
+        std::fs::write(
+            profiles.join("implementer-1.0.toml"),
+            r#"
+schema_version = 1
+[role]
+id = "implementer"
+version = "1.0.0"
+display_name = "Wire fixture"
+category = "agents"
+description = "Actual ACP fixture recipe"
+when_to_use = "Tests"
+[runtime]
+recommended_model = "sonnet"
+agent_id = "wire-fixture"
+[[outcomes]]
+id = "done"
+description = "Success"
+edge_kind_hint = "forward"
+[prompt]
+system = "Report done using the supplied stage outcome tool."
+"#,
+        )
+        .unwrap();
+        let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/debug/mock_acp_agent{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        let agent = serde_json::from_value(serde_json::json!({
+            "command": binary, "args": self.flags
+        }))
+        .unwrap();
+        surge_orchestrator::engine::EngineConfig {
+            profile_registry: Some(std::sync::Arc::new(ProfileRegistry::new(
+                DiskProfileSet::scan(&profiles).unwrap(),
+            ))),
+            agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::from_config(
+                std::collections::HashMap::from([("wire-fixture".to_owned(), agent)]),
+            ))),
+            ..Default::default()
+        }
+    }
+}
 #[async_trait::async_trait]
 impl BridgeFacade for WireBridge {
     async fn open_session(
         &self,
-        mut config: SessionConfig,
+        config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
-        config.agent_kind = AgentKind::Custom {
-            binary: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-                "../../target/debug/mock_acp_agent{}",
-                std::env::consts::EXE_SUFFIX
-            )),
-            args: self.flags.clone(),
-        };
         self.bridge.open_session(config).await
     }
     async fn send_message(

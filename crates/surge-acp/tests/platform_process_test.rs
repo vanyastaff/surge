@@ -22,6 +22,7 @@ fn stdio_config(command: &str, args: Vec<&str>) -> AgentConfig {
         capabilities: vec![],
         env: std::collections::BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     }
 }
 

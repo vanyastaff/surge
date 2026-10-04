@@ -603,7 +603,7 @@ async fn assert_rate_limited_agent_parks(
 /// at all. A configured but not yet durable rotation candidate must follow
 /// the configured 77s fallback, not an invented fixed delay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rotation_without_durable_handoff_uses_configured_backoff() {
+async fn rotation_without_durable_task_owner_refuses_before_any_provider_effect() {
     let profiles_dir = tempfile::tempdir().unwrap();
     drop_profile(
         profiles_dir.path(),
@@ -663,33 +663,25 @@ async fn rotation_without_durable_handoff_uses_configured_backoff() {
         ],
         vec![edge("agent_to_end", "agent_1", "done", "end")],
     );
-    let handle = engine
+    let result = engine
         .start_run(
             run_id,
             g,
             dir.path().to_path_buf(),
             EngineRunConfig::default(),
         )
-        .await
-        .expect("start_run");
-
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
-        .await
-        .expect("run must not hang")
-        .expect("run handle join");
-
-    let RunOutcome::Parked { wake_at } = outcome else {
-        panic!("expected Parked (the pre-dispatch check), got {outcome:?}");
-    };
-    let seconds_until_wake = (wake_at - chrono::Utc::now()).num_seconds();
+        .await;
     assert!(
-        (68..=77).contains(&seconds_until_wake),
-        "rotation fallback must honor configured 77s backoff, got {seconds_until_wake}s"
+        matches!(result, Err(surge_orchestrator::engine::EngineError::GraphInvalid(ref reason))
+        if reason.contains("durable task ownership") && reason.contains("task Start"))
     );
     assert!(
         mock.recorded_calls.lock().await.is_empty(),
-        "the bridge must never be touched at all: R37 is a *pre-dispatch* refusal, not a \
-         reactive one — the run's only opportunity to burn a real attempt must never be taken"
+        "unowned rotation must not open or prompt"
+    );
+    assert!(
+        storage.get_run(&run_id).await.unwrap().is_none(),
+        "refusal must precede session journal creation"
     );
 }
 

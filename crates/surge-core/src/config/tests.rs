@@ -142,6 +142,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     assert!(valid_config.validate().is_ok());
@@ -161,6 +162,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     let result = invalid_config.validate();
@@ -184,6 +186,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     let result = config_empty_cmd.validate();
@@ -209,6 +212,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     let result = config_empty_host.validate();
@@ -234,6 +238,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     let result = config_invalid_port.validate();
@@ -275,6 +280,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     assert!(config_valid_tcp.validate().is_ok());
@@ -298,6 +304,7 @@ fn test_config_validation() {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         },
     );
     config_bad_routing
@@ -631,6 +638,7 @@ fn test_agent_config_validation_whitespace_command() {
         capabilities: vec![],
         env: std::collections::BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     };
     let result = agent.validate("test-agent");
     assert!(result.is_err());
@@ -653,6 +661,7 @@ fn test_agent_config_validation_whitespace_tcp_host() {
         capabilities: vec![],
         env: std::collections::BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     };
     let result = agent.validate("test-agent");
     assert!(result.is_err());
@@ -764,6 +773,7 @@ fn test_tcp_transport_valid_port_range() {
         capabilities: vec![],
         env: std::collections::BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     };
     assert!(agent_min.validate("test").is_ok());
 
@@ -778,6 +788,7 @@ fn test_tcp_transport_valid_port_range() {
         capabilities: vec![],
         env: std::collections::BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     };
     assert!(agent_max.validate("test").is_ok());
 }
@@ -869,6 +880,7 @@ fn test_websocket_transport_validation_error() {
         capabilities: vec![],
         env: std::collections::BTreeMap::new(),
         settings_files: vec![],
+        capacity_route: None,
     };
     let err = agent.validate("test-agent").unwrap_err();
     assert!(

@@ -128,6 +128,7 @@ owo-colors = { version = "4", features = ["supports-colors"] }
 regex = "1"
 
 # Random number generation
+hmac = "0.12.1"
 rand = "0.9"
 
 # M2 storage layer
@@ -161,7 +162,7 @@ surge-telegram = { path = "crates/surge-telegram" }
 # M7 dependencies
 rmcp = { version = ">=1.6, <2.0", default-features = false, features = ["client", "transport-child-process", "which-command"] }
 interprocess = { version = "2", features = ["tokio"] }
-nix = { version = "0.29", default-features = false, features = ["signal"] }
+nix = { version = "0.29", default-features = false, features = ["signal", "fs", "user"] }
 
 # Debug builds keep line tables (panics and backtraces still name file:line)
 # but not full variable-level debug info: with full debug info `target/`

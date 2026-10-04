@@ -10,5 +10,7 @@ expression: stages
   ended_at_ms: "[ts]"
   outcome: done
   cost_usd: 0
+  known_cost_usd: ~
+  cost_unknown: false
   tokens_in: 0
   tokens_out: 0

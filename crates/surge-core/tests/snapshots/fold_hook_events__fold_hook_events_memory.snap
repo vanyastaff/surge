@@ -10,6 +10,7 @@ RunMemory {
     stage_occurrences: {
         NodeKey("impl_1"): 11,
     },
+    quota_plans: {},
     gate_recovery_error: None,
     gate_decisions: {},
     committed_stage_outcomes: {},

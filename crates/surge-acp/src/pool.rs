@@ -1509,6 +1509,7 @@ mod tests {
             mcp_servers: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
             capabilities: vec![],
         }
     }

@@ -323,12 +323,13 @@ impl BridgeFacade for MockBridge {
 
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
         // Cannot await here; the event receiver is installed synchronously.
+        let receiver = self.tx.subscribe();
         self.subscribe_count.fetch_add(1, Ordering::SeqCst);
         let recorded = self.recorded_calls.clone();
         tokio::spawn(async move {
             recorded.lock().await.push(RecordedCall::Subscribe);
         });
-        self.tx.subscribe()
+        receiver
     }
 }
 
@@ -363,6 +364,64 @@ mod tests {
             bindings: BTreeMap::new(),
             env: Default::default(),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admission_rejects_changed_descriptor_closes_and_never_prompts() {
+        use surge_core::execution_recovery::{
+            ProviderSessionDescriptor, ProviderSessionId, SessionOpening,
+            SessionRestoreCapabilities,
+        };
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let mock = std::sync::Arc::new(MockBridge::new());
+        let bridge = surge_orchestrator::recipe_admission::RecipeAdmissionBridge::new(
+            mock.clone(),
+            storage.work_items(),
+        );
+        let mut config = minimal_session_config();
+        config.opening = SessionOpening::Continue(
+            ProviderSessionDescriptor::new(
+                ProviderSessionId::new("negative-descriptor-provider".into()).unwrap(),
+                config.invocation,
+                "different-runtime".into(),
+                surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes()),
+                config.working_dir.clone(),
+                SessionRestoreCapabilities {
+                    resume: true,
+                    load: true,
+                },
+            )
+            .unwrap(),
+        );
+        let result = bridge.open_session(config).await;
+        assert!(
+            matches!(result, Err(OpenSessionError::HandshakeFailed { ref reason })
+            if reason.contains("provider opening differs from recipe admission"))
+        );
+        let calls = mock.recorded_calls.lock().await;
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| matches!(call, RecordedCall::OpenSession))
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| matches!(call, RecordedCall::CloseSession(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, RecordedCall::SendMessage { .. }))
+        );
+        assert!(mock.last_prompt().await.is_none());
     }
 
     #[tokio::test]

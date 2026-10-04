@@ -230,6 +230,15 @@ pub enum EventPayload {
         node: NodeKey,
         attempt: u32,
     },
+    /// Host plan committed before any provider opening for this logical stage.
+    QuotaStagePlanned {
+        node: NodeKey,
+        attempt: u32,
+        stage_entry_seq: u64,
+        logical_invocation: crate::id::StageInvocationId,
+        control_generation: u64,
+        policy_hash: ContentHash,
+    },
     StageInputsResolved {
         node: NodeKey,
         /// Stage attempt whose complete resolved inputs these hashes and
@@ -733,6 +742,7 @@ impl EventPayload {
             Self::RoadmapUpdated { .. } => "RoadmapUpdated",
             Self::GraphRevisionAccepted { .. } => "GraphRevisionAccepted",
             Self::StageEntered { .. } => "StageEntered",
+            Self::QuotaStagePlanned { .. } => "QuotaStagePlanned",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
             Self::WorkItemAttemptBound { .. } => "WorkItemAttemptBound",
             Self::ExecutionWriterIntent { .. } => "execution_writer_intent",

@@ -268,6 +268,9 @@ pub struct RunMemory {
     /// Outstanding host-issued human decisions, including accepted-but-unrouted answers.
     /// Current durable stage occurrences, independent of transport reconnections.
     pub stage_occurrences: std::collections::HashMap<NodeKey, u64>,
+    /// Host plans for current anchored occurrences, independent of provider sessions.
+    pub quota_plans:
+        std::collections::HashMap<NodeKey, crate::execution_recovery::PendingStagePhase>,
     /// Contradictory host gate evidence is retained instead of choosing a new request.
     pub gate_recovery_error: Option<String>,
     pub gate_decisions: std::collections::HashMap<crate::id::GateRequestId, RecoveredGateDecision>,
@@ -1175,6 +1178,23 @@ impl RunMemory {
         match &event.payload {
             EventPayload::StageEntered { node, .. } => {
                 self.stage_occurrences.insert(node.clone(), event.seq);
+                self.quota_plans.remove(node);
+            },
+            EventPayload::QuotaStagePlanned {
+                node,
+                stage_entry_seq,
+                logical_invocation,
+                ..
+            } if self.stage_occurrences.get(node) == Some(stage_entry_seq) => {
+                self.quota_plans.insert(
+                    node.clone(),
+                    crate::execution_recovery::PendingStagePhase::PlannedCapacity {
+                        node: node.clone(),
+                        logical_invocation: *logical_invocation,
+                        stage_entry_seq: *stage_entry_seq,
+                        plan_seq: event.seq,
+                    },
+                );
             },
             EventPayload::HumanInputRequested {
                 node,

@@ -521,6 +521,7 @@ mod tests {
             version_probe_args: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         };
         assert!(entry.is_npx());
 

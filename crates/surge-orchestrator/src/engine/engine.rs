@@ -168,10 +168,13 @@ impl Engine {
         if profile_registry.is_some() {
             config.profile_registry = profile_registry;
         }
-        let bridge = Arc::new(crate::recipe_admission::RecipeAdmissionBridge::new(
-            bridge,
-            storage.work_items(),
-        ));
+        let bridge = Arc::new(
+            crate::recipe_admission::RecipeAdmissionBridge::new(bridge, storage.work_items())
+                .with_configured_routes(
+                    config.agent_registry.clone(),
+                    storage.home().to_path_buf(),
+                ),
+        );
         let (event_tap, _initial_subscriber) = tokio::sync::broadcast::channel(TAP_BUFFER_SIZE);
         Self {
             bridge,
@@ -325,11 +328,26 @@ impl Engine {
             .await
     }
 
+    /// Whether host configured-source freezing requires an exclusive launch-workspace preparation.
+    /// This inspects graph/config metadata only; it never reads credentials or route keys.
+    #[must_use]
+    pub fn requires_start_preparation(&self, graph: &Graph) -> bool {
+        matches!(
+            self.config.capacity.rotation,
+            surge_core::capacity::RotationPolicy::Candidate { .. }
+        ) && graph
+            .nodes
+            .values()
+            .chain(graph.subgraphs.values().flat_map(|g| g.nodes.values()))
+            .any(|node| matches!(node.config, surge_core::node::NodeConfig::Agent(_)))
+    }
+
     /// Freeze validated host configuration before creating a durable task reservation.
     pub async fn freeze_work_item_config(
         &self,
         graph: &Graph,
         mut config: EngineRunConfig,
+        working_dir: &Path,
     ) -> Result<EngineRunConfig, EngineError> {
         match self.config.profile_registry.as_ref() {
             Some(registry) => {
@@ -337,6 +355,14 @@ impl Engine {
                 crate::engine::validate::validate_profile_inputs(graph, registry)?;
             },
             None => crate::engine::validate::validate_for_m6(graph)?,
+        }
+        if let Some(policy) = super::capacity_routes::freeze_policy(
+            graph,
+            &self.config,
+            self.storage.home(),
+            working_dir,
+        )? {
+            config.quota_recovery = policy;
         }
         crate::engine::validate::validate_quota_policy(
             graph,
@@ -449,23 +475,12 @@ impl Engine {
         })
     }
 
-    async fn prepare_run_start(
+    fn task_start_context(
         &self,
         run_id: RunId,
-        graph: &Graph,
-        worktree_path: &Path,
-        mut run_config: EngineRunConfig,
         claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
-    ) -> Result<
-        (
-            surge_persistence::runs::run_writer::RunWriter,
-            surge_persistence::artifacts::ArtifactStore,
-            EngineRunConfig,
-        ),
-        EngineError,
-    > {
-        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
-        let task_context = if let Some(claim) = claim {
+    ) -> Result<Option<surge_core::work_item::WorkItemContext>, EngineError> {
+        let context = if let Some(claim) = claim {
             let (_, _, context, _) = super::work_items::pinned(&self.storage, claim)?;
             Some(context)
         } else {
@@ -482,6 +497,26 @@ impl Engine {
             }
             None
         };
+        Ok(context)
+    }
+
+    async fn prepare_run_start(
+        &self,
+        run_id: RunId,
+        graph: &Graph,
+        worktree_path: &Path,
+        mut run_config: EngineRunConfig,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<
+        (
+            surge_persistence::runs::run_writer::RunWriter,
+            surge_persistence::artifacts::ArtifactStore,
+            EngineRunConfig,
+        ),
+        EngineError,
+    > {
+        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
+        let task_context = self.task_start_context(run_id, claim)?;
 
         tracing::info!(
             target: "surge.path.exercised",
@@ -501,6 +536,14 @@ impl Engine {
                 crate::engine::validate::validate_profile_inputs(graph, registry)?;
             },
             None => validate_for_m6(graph)?,
+        }
+        if claim.is_none()
+            && matches!(
+                self.config.capacity.rotation,
+                surge_core::capacity::RotationPolicy::Candidate { .. }
+            )
+        {
+            return Err(EngineError::GraphInvalid("configured capacity rotation requires durable task ownership; start this graph through task Start".into()));
         }
         crate::engine::validate::validate_quota_policy(
             graph,

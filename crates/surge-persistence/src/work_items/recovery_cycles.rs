@@ -2,13 +2,15 @@
 use super::*;
 mod handoffs;
 mod policy;
+mod predispatch;
 mod rate_limit;
 pub use handoffs::{
-    CapacityControlAssociation, CapacityReconciliationPage, CapacityStopKind,
-    QuotaHandoffInspection, QuotaHandoffState, QuotaLaunchContract, QuotaOpenPermit,
-    QuotaWakeReservation,
+    CapacityControlAssociation, CapacityEvidenceOrigin, CapacityReconciliationPage,
+    CapacityStopKind, QuotaHandoffInspection, QuotaHandoffState, QuotaLaunchContract,
+    QuotaOpenPermit, QuotaWakeReservation,
 };
 pub use policy::{FrozenQuotaCandidate, FrozenQuotaPolicy, FrozenQuotaStage, QuotaRoutingMode};
+pub use predispatch::{CapacitySelection, CapacitySkip, PlannedResumeInspection};
 pub(super) use rate_limit::inspect_current_receipt;
 pub use rate_limit::{FreshTypedExhaustion, QuotaRateLimitMarker, QuotaRateLimitSource};
 
@@ -393,6 +395,48 @@ fn apply_quota_observation(
     read_cycle(tx, current.run, &current.invocation, current.generation)
 }
 
+fn reserve_on_transaction(
+    tx: &Transaction<'_>,
+    claim: &WorkItemLaunchClaim,
+    expected: &RecoveryCycle,
+    candidate: &RecoveryCandidate,
+) -> Result<CandidateReservation> {
+    fence(tx, claim, expected.control_generation)?;
+    if expected.run != claim.run {
+        return Err(WorkItemError::Conflict("wrong recovery run".into()));
+    }
+    let key = candidate.key()?;
+    let body = serde_json::to_string(candidate)?;
+    let prior:Option<(String,String)>=tx.query_row("SELECT receipt,body FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=? AND (candidate_key=? OR runtime=?)",params![expected.run.to_string(),expected.invocation,expected.generation,key,candidate.runtime],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
+    if let Some((receipt, original)) = prior {
+        if original != body {
+            return Err(WorkItemError::Conflict(
+                "candidate key has a different immutable body".into(),
+            ));
+        }
+        return Ok(CandidateReservation {
+            receipt,
+            candidate: serde_json::from_str(&original)?,
+            disposition: ReservationDisposition::Replayed,
+        });
+    }
+    check_cycle(tx, claim, expected)?;
+    let count:u64=tx.query_row("SELECT COUNT(*) FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=?",params![expected.run.to_string(),expected.invocation,expected.generation],|row|row.get(0))?;
+    if count >= MAX_CANDIDATES {
+        return Err(WorkItemError::Conflict(
+            "recovery candidate budget exhausted".into(),
+        ));
+    }
+    let receipt = RunId::new().to_string();
+    tx.execute("INSERT INTO work_item_quota_candidates(run,invocation,cycle_generation,candidate_key,runtime,receipt,body) VALUES(?,?,?,?,?,?,?)",params![expected.run.to_string(),expected.invocation,expected.generation,key,candidate.runtime,receipt,body])?;
+    tx.execute("UPDATE work_item_quota_cycles SET selected_runtime=?,revision=revision+1 WHERE run=? AND invocation=? AND cycle_generation=?",params![candidate.runtime,expected.run.to_string(),expected.invocation,expected.generation])?;
+    Ok(CandidateReservation {
+        receipt,
+        candidate: candidate.clone(),
+        disposition: ReservationDisposition::Reserved,
+    })
+}
+
 impl WorkItemStore {
     /// Begin one cycle without altering the frozen graph, configuration or sessions.
     pub fn begin_recovery_cycle(
@@ -434,41 +478,9 @@ impl WorkItemStore {
     ) -> Result<CandidateReservation> {
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        fence(&tx, claim, expected.control_generation)?;
-        if expected.run != claim.run {
-            return Err(WorkItemError::Conflict("wrong recovery run".into()));
-        }
-        let key = candidate.key()?;
-        let body = serde_json::to_string(candidate)?;
-        let prior:Option<(String,String)>=tx.query_row("SELECT receipt,body FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=? AND (candidate_key=? OR runtime=?)",params![expected.run.to_string(),expected.invocation,expected.generation,key,candidate.runtime],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
-        if let Some((receipt, original)) = prior {
-            if original != body {
-                return Err(WorkItemError::Conflict(
-                    "candidate key has a different immutable body".into(),
-                ));
-            }
-            return Ok(CandidateReservation {
-                receipt,
-                candidate: serde_json::from_str(&original)?,
-                disposition: ReservationDisposition::Replayed,
-            });
-        }
-        check_cycle(&tx, claim, expected)?;
-        let count:u64=tx.query_row("SELECT COUNT(*) FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=?",params![expected.run.to_string(),expected.invocation,expected.generation],|row|row.get(0))?;
-        if count >= MAX_CANDIDATES {
-            return Err(WorkItemError::Conflict(
-                "recovery candidate budget exhausted".into(),
-            ));
-        }
-        let receipt = RunId::new().to_string();
-        tx.execute("INSERT INTO work_item_quota_candidates(run,invocation,cycle_generation,candidate_key,runtime,receipt,body) VALUES(?,?,?,?,?,?,?)",params![expected.run.to_string(),expected.invocation,expected.generation,key,candidate.runtime,receipt,body])?;
-        tx.execute("UPDATE work_item_quota_cycles SET selected_runtime=?,revision=revision+1 WHERE run=? AND invocation=? AND cycle_generation=?",params![candidate.runtime,expected.run.to_string(),expected.invocation,expected.generation])?;
+        let result = reserve_on_transaction(&tx, claim, expected, candidate)?;
         tx.commit()?;
-        Ok(CandidateReservation {
-            receipt,
-            candidate: candidate.clone(),
-            disposition: ReservationDisposition::Reserved,
-        })
+        Ok(result)
     }
     /// Reserve the next frozen candidate only after every prior reservation
     /// has a host-sealed typed exhaustion marker. Replays never grant a second
@@ -746,9 +758,18 @@ impl WorkItemStore {
                     }
                 )
             });
-        if !evidence {
+        let planned = handoffs::read_capacity_association(&tx, &current)?
+            .map(|association| {
+                association
+                    .evidence_origin()
+                    .map(|origin| matches!(origin, CapacityEvidenceOrigin::PlannedExhaustion(_)))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if !evidence && !(planned && current.selected_runtime.is_none()) {
             return Err(WorkItemError::Conflict(
-                "capacity cycle has no recorded selected candidate evidence".into(),
+                "capacity cycle has no recorded selected candidate or planned exhaustion evidence"
+                    .into(),
             ));
         }
         tx.execute("UPDATE work_item_quota_cycles SET control_generation=?,revision=revision+1 WHERE run=? AND invocation=? AND cycle_generation=?",params![new_control,current.run.to_string(),current.invocation,current.generation])?;
@@ -861,6 +882,23 @@ fn capacity_fence(
     }) else {
         return Ok(false);
     };
+    if let PendingStagePhase::PlannedCapacity {
+        node,
+        logical_invocation,
+        stage_entry_seq,
+        plan_seq,
+    } = &fence.pending_stage
+    {
+        return predispatch::planned_capacity_fence(
+            conn,
+            control,
+            invocation,
+            node,
+            *logical_invocation,
+            *stage_entry_seq,
+            *plan_seq,
+        );
+    }
     let PendingStagePhase::Interrupted {
         invocation: pending,
         node,

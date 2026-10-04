@@ -121,6 +121,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0026-recipe-admissions",
         include_str!("migrations/registry/0026_recipe_admissions.sql"),
     ),
+    (
+        "registry-0027-quota-plans",
+        include_str!("migrations/registry/0027_quota_plans.sql"),
+    ),
+    (
+        "registry-0028-start-preparations",
+        include_str!("migrations/registry/0028_start_preparations.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

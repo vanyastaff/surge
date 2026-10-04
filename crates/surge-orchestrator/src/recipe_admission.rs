@@ -17,11 +17,29 @@ use surge_persistence::work_items::WorkItemStore;
 pub struct RecipeAdmissionBridge {
     inner: Arc<dyn BridgeFacade>,
     store: WorkItemStore,
+    routes: Option<Arc<surge_acp::Registry>>,
+    home: Option<std::path::PathBuf>,
 }
 impl RecipeAdmissionBridge {
     #[must_use]
     pub fn new(inner: Arc<dyn BridgeFacade>, store: WorkItemStore) -> Self {
-        Self { inner, store }
+        Self {
+            inner,
+            store,
+            routes: None,
+            home: None,
+        }
+    }
+    /// Explicit host registry dependency; absent standalone routes stay opaque.
+    #[must_use]
+    pub fn with_configured_routes(
+        mut self,
+        routes: Option<Arc<surge_acp::Registry>>,
+        home: std::path::PathBuf,
+    ) -> Self {
+        self.routes = routes;
+        self.home = Some(home);
+        self
     }
 }
 #[async_trait]
@@ -39,6 +57,25 @@ impl BridgeFacade for RecipeAdmissionBridge {
             .map_err(|error| OpenSessionError::HandshakeFailed {
                 reason: format!("recipe admission refused: {error}"),
             })?;
+        if let (Some(registry), Some(home)) = (&self.routes, &self.home)
+            && let Some(route) = registry
+                .find_normalized(&runtime)
+                .and_then(|entry| entry.capacity_route.as_ref())
+            && let Some(pin) = crate::engine::capacity_routes::configured_pin(
+                home,
+                &runtime,
+                &config.agent_kind,
+                route,
+                &config.env,
+                &config.working_dir,
+            )
+        {
+            self.store
+                .attach_admitted_configured_pin(writer, &pin)
+                .map_err(|error| OpenSessionError::HandshakeFailed {
+                    reason: format!("configured admission refused: {error}"),
+                })?;
+        }
         let opened = self.inner.open_session(config).await?;
         if opened
             .execution_writer

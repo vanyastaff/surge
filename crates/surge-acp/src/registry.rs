@@ -105,6 +105,8 @@ pub struct RegistryEntry {
     /// its own CLI needs. `surge_acp::settings_seed` writes them generically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub settings_files: Vec<surge_core::config::AgentSettingsFile>,
+    #[serde(default)]
+    pub capacity_route: Option<surge_core::config::CapacityRoute>,
 }
 
 impl RegistryEntry {
@@ -130,6 +132,7 @@ impl RegistryEntry {
                 .collect(),
             env: self.env.clone(),
             settings_files: self.settings_files.clone(),
+            capacity_route: self.capacity_route.clone(),
         }
     }
 
@@ -457,6 +460,7 @@ impl Registry {
                     version_probe_args: vec![],
                     env: config.env,
                     settings_files: config.settings_files,
+                    capacity_route: config.capacity_route,
                 }
             })
             .collect();
@@ -939,6 +943,7 @@ mod tests {
                 capabilities: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
             },
         );
 
@@ -969,6 +974,7 @@ mod tests {
                 capabilities: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
             },
         );
         let registry = Registry::for_run(&config);
@@ -1192,6 +1198,7 @@ mod tests {
             version_probe_args: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         }
     }
 
@@ -1385,6 +1392,7 @@ mod tests {
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![],
             },
         );
@@ -1414,6 +1422,7 @@ mod tests {
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![
                     surge_core::config::AgentCapability::Code,
                     surge_core::config::AgentCapability::Test,
@@ -1446,6 +1455,7 @@ mod tests {
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![],
             },
         );
@@ -1458,6 +1468,7 @@ mod tests {
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![],
             },
         );
@@ -1586,6 +1597,7 @@ max_qa_iterations = 5
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![
                     surge_core::config::AgentCapability::Code,
                     surge_core::config::AgentCapability::Plan,
@@ -1620,6 +1632,7 @@ max_qa_iterations = 5
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![surge_core::config::AgentCapability::Code],
             },
         );
@@ -1662,6 +1675,7 @@ max_qa_iterations = 5
                 mcp_servers: vec![],
                 env: std::collections::BTreeMap::new(),
                 settings_files: vec![],
+                capacity_route: None,
                 capabilities: vec![surge_core::config::AgentCapability::Code],
             },
         );

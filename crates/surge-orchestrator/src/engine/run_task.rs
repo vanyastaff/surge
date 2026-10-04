@@ -223,11 +223,43 @@ async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
         Err(error) => return failed(params, error).await,
     };
 
+    let had_suspended_phase = state.memory.suspension.is_some();
     if let Err(outcome) = Box::pin(restore_suspended_phase(params, &mut state)).await {
         return outcome;
     }
     if let Err(outcome) = Box::pin(restore_committed_routes(params, &mut state)).await {
         return outcome;
+    }
+    if params.resume_cursor.is_some()
+        && !had_suspended_phase
+        && state.memory.suspension.is_none()
+        && let Some(claim) = params.work_item_claim.as_ref()
+        && params
+            .run_config
+            .quota_recovery
+            .stage(&state.cursor.node)
+            .is_some_and(|stage| {
+                stage
+                    .candidates()
+                    .iter()
+                    .any(|candidate| candidate.configured_route().is_some())
+            })
+    {
+        let hash = match params.run_config.quota_recovery.content_hash() {
+            Ok(hash) => hash,
+            Err(error) => return recovery_required(params, error.to_string()).await,
+        };
+        let inspected = params.storage.work_items().inspect_planned_stage_resume(
+            claim,
+            &state.cursor,
+            &hash,
+            state.memory.control_generation,
+        );
+        match inspected {
+            Ok(surge_persistence::work_items::recovery_cycles::PlannedResumeInspection::UnadmittedOccurrence {stage_entry_seq})=>state.restored_quota_entry=Some(stage_entry_seq),
+            Ok(_)=>{},
+            Err(error)=>return recovery_required(params,format!("cold planned-stage reconciliation: {error}")).await,
+        }
     }
     Box::pin(execute_stage_loop(params, state)).await
 }
@@ -302,27 +334,49 @@ async fn restore_suspended_phase(
                 true
             },
             surge_core::execution_recovery::PendingStagePhase::BetweenStages => true,
+            surge_core::execution_recovery::PendingStagePhase::PlannedCapacity {
+                node,
+                stage_entry_seq,
+                ..
+            } => {
+                if node != &state.cursor.node
+                    || state.memory.stage_occurrences.get(node) != Some(stage_entry_seq)
+                    || state.memory.quota_plans.get(node) != Some(&fence.pending_stage)
+                {
+                    return Err(recovery_required(
+                        params,
+                        "suspended capacity plan contradicts actual stage occurrence".into(),
+                    )
+                    .await);
+                }
+                false
+            },
             surge_core::execution_recovery::PendingStagePhase::Interrupted { .. } => false,
         };
         if restored_without_provider {
-            if let Err(error) = params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
-                    control_generation: control.generation,
-                }))
-                .await
+            if let Err(diagnostic) = commit_restored_continuation(params, control.generation).await
             {
-                return Err(recovery_required(
-                    params,
-                    format!("authorize restored routing phase: {error}"),
-                )
-                .await);
+                return Err(recovery_required(params, diagnostic).await);
             }
             state.memory.suspension = None;
             state.memory.control_generation = control.generation;
         }
     }
     Ok(())
+}
+
+async fn commit_restored_continuation(
+    params: &RunTaskParams,
+    control_generation: u64,
+) -> Result<(), String> {
+    params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
+            control_generation,
+        }))
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("authorize restored routing phase: {error}"))
 }
 
 fn validate_suspended_commit(
@@ -508,8 +562,22 @@ async fn execute_current_stage(
                 && record.purpose == surge_core::run_state::GateDecisionPurpose::HumanGate
                 && record.node == state.cursor.node
         })
-        .map(|record| record.stage_entry_seq);
-    let stage_start_seq = match restored_gate_entry {
+        .map(|record| record.stage_entry_seq)
+        .or_else(|| {
+            state
+                .memory
+                .suspension
+                .as_ref()
+                .and_then(|fence| match &fence.pending_stage {
+                    surge_core::execution_recovery::PendingStagePhase::PlannedCapacity {
+                        node,
+                        stage_entry_seq,
+                        ..
+                    } if node == &state.cursor.node => Some(*stage_entry_seq),
+                    _ => None,
+                })
+        });
+    let stage_start_seq = match restored_gate_entry.or_else(|| state.restored_quota_entry.take()) {
         Some(seq) => surge_persistence::runs::EventSeq(seq),
         None => match enter_stage(params, &state.cursor).await {
             Ok(seq) => seq,
@@ -706,6 +774,33 @@ async fn pending_suspension_phase(
                     invocation,
                 }
             }))
+        },
+        Err(StageError::CapacityExhausted) => {
+            let events = read_stage_events(params, stage_start_seq, "planned capacity").await?;
+            let phase = events
+                .iter()
+                .rev()
+                .find_map(|row| match &row.payload.payload {
+                    EventPayload::QuotaStagePlanned {
+                        node,
+                        stage_entry_seq,
+                        logical_invocation,
+                        ..
+                    } if node == &state.cursor.node
+                        && *stage_entry_seq == stage_start_seq.as_u64() =>
+                    {
+                        Some(
+                            surge_core::execution_recovery::PendingStagePhase::PlannedCapacity {
+                                node: node.clone(),
+                                logical_invocation: *logical_invocation,
+                                stage_entry_seq: *stage_entry_seq,
+                                plan_seq: row.seq.as_u64(),
+                            },
+                        )
+                    },
+                    _ => None,
+                });
+            Ok(phase)
         },
         Ok(StageOutcome::Terminal(_)) | Err(_) => Ok(None),
     }
@@ -1054,6 +1149,8 @@ struct RunExecutionState {
     /// declares skills would re-pay that cost per node for no reason.
     /// `None` until the first node that declares skills populates it.
     skill_catalog: Option<std::sync::Arc<surge_core::skill::SkillCatalog>>,
+    /// Inspected original unadmitted occurrence, without effect authority.
+    restored_quota_entry: Option<u64>,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -1098,6 +1195,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         budget_warned,
         budget_exceeded_noted,
         skill_catalog: None,
+        restored_quota_entry: None,
     })
 }
 
@@ -1167,8 +1265,9 @@ async fn abort_run(params: &RunTaskParams) -> RunOutcome {
 /// Pure check for the [`checkpoint_exit_if_requested`] fault-injection seam:
 /// does `env` (the `SURGE_CHECKPOINT_EXIT` value) name `node_key`?
 ///
-/// Always compiled (not debug-gated) so it is unit-testable; only the actual
-/// `process::exit` wrapper is debug-gated.
+/// Compiled in debug builds and tests; the actual `process::exit` wrapper
+/// remains debug-gated even when release unit tests check this predicate.
+#[cfg(any(debug_assertions, test))]
 fn checkpoint_exit_matches(env: Option<&str>, node_key: &str) -> bool {
     env.is_some_and(|target| target == node_key)
 }
@@ -1364,6 +1463,20 @@ async fn observe_rate_limited_runtime(
     params.capacity_policy.decide(None, &status, observed_at)
 }
 
+fn has_configured_task_capacity(params: &RunTaskParams, node: &surge_core::NodeKey) -> bool {
+    params.work_item_claim.is_some()
+        && params
+            .run_config
+            .quota_recovery
+            .stage(node)
+            .is_some_and(|stage| {
+                stage
+                    .candidates()
+                    .iter()
+                    .any(|candidate| candidate.configured_route().is_some())
+            })
+}
+
 async fn dispatch_agent_node_with_capacity_gate(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1397,7 +1510,11 @@ async fn dispatch_agent_node_with_capacity_gate(
         .capacity_precheck_bypass_once
         .swap(false, std::sync::atomic::Ordering::SeqCst);
 
-    if !bypass_precheck && let Some(runtime) = runtime.clone() {
+    let host_planned_capacity = has_configured_task_capacity(params, &state.cursor.node);
+    if !bypass_precheck
+        && !host_planned_capacity
+        && let Some(runtime) = runtime.clone()
+    {
         match capacity_decision_for(params, &state.cursor.node, &runtime).await {
             surge_core::capacity::Decision::Park { wake_at, basis } => {
                 return StageDispatch::Park {
@@ -1660,6 +1777,157 @@ fn prepare_automatic_quota_wake(
     Ok((Some(opening), Some(cycle)))
 }
 
+type TaskQuotaOwner = (
+    surge_persistence::work_items::WorkItemStore,
+    surge_persistence::work_items::WorkItemLaunchClaim,
+    surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
+);
+type PreparedTaskQuota = (
+    Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
+    Option<crate::engine::stage::agent::TaskQuotaCycle>,
+);
+
+async fn bind_current_plan(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    owner: &TaskQuotaOwner,
+    control: u64,
+) -> Result<surge_persistence::work_items::recovery_cycles::RecoveryCycle, StageError> {
+    let (store, claim, _) = owner;
+    let current = params
+        .writer
+        .current_seq()
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    let events = params
+        .writer
+        .read_events(surge_persistence::runs::EventSeq(1)..current.next())
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    let entry = events.iter().rev().find(|row|matches!(&row.payload.payload,EventPayload::StageEntered { node: entered, attempt } if entered == &state.cursor.node && *attempt == state.cursor.attempt)).ok_or_else(||StageError::RecoveryRequired("actual stage entry missing".into()))?;
+    let hash = params
+        .run_config
+        .quota_recovery
+        .content_hash()
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    let planned = events.iter().find_map(|row| match &row.payload.payload {
+        EventPayload::QuotaStagePlanned {
+            stage_entry_seq,
+            logical_invocation,
+            policy_hash,
+            control_generation,
+            ..
+        } if *stage_entry_seq == entry.seq.as_u64()
+            && policy_hash == &hash
+            && *control_generation == control =>
+        {
+            Some((*logical_invocation, row.seq.as_u64()))
+        },
+        _ => None,
+    });
+    let (logical, plan_seq) = if let Some(planned) = planned {
+        planned
+    } else {
+        let logical = surge_core::id::StageInvocationId::new();
+        let sequence = params
+            .writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::QuotaStagePlanned {
+                    node: state.cursor.node.clone(),
+                    attempt: state.cursor.attempt,
+                    stage_entry_seq: entry.seq.as_u64(),
+                    logical_invocation: logical,
+                    control_generation: control,
+                    policy_hash: hash,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        (logical, sequence.as_u64())
+    };
+    store
+        .bind_planned_quota_stage(claim, logical, plan_seq)
+        .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
+    store
+        .begin_recovery_cycle(claim, &logical.to_string(), control)
+        .map_err(|e| StageError::RecoveryRequired(e.to_string()))
+}
+
+fn select_current_plan(
+    params: &RunTaskParams,
+    owner: &TaskQuotaOwner,
+    cycle: &surge_persistence::work_items::recovery_cycles::RecoveryCycle,
+) -> Result<PreparedTaskQuota, StageError> {
+    let (store, claim, policy) = owner;
+    match store
+        .select_planned_capacity(claim, cycle, chrono::Utc::now().timestamp_millis())
+        .map_err(|e| StageError::RecoveryRequired(e.to_string()))?
+    {
+        surge_persistence::work_items::recovery_cycles::CapacitySelection::Selected {
+            cycle,
+            reservation,
+            ..
+        } => {
+            if reservation.disposition
+                != surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved
+            {
+                return Err(StageError::RecoveryRequired(
+                    "planned opening replay requires reconciliation".into(),
+                ));
+            }
+            let target = policy
+                .candidates()
+                .iter()
+                .find(|target| target.candidate() == &reservation.candidate)
+                .cloned()
+                .ok_or_else(|| {
+                    StageError::RecoveryRequired("selected candidate outside host plan".into())
+                })?;
+            let launch = surge_persistence::work_items::recovery_cycles::QuotaLaunchContract::new(
+                target,
+                surge_core::id::StageInvocationId::new(),
+                surge_core::execution_recovery::SessionOpenMode::New,
+                None,
+            )
+            .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
+            let handoff = store
+                .reserve_quota_open(claim, &cycle, &reservation, launch)
+                .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
+            let opening = store
+                .admit_provider_open(claim, handoff.operation())
+                .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
+            Ok((
+                Some(opening),
+                Some(
+                    crate::engine::stage::agent::TaskQuotaCycle::from_automatic_wake(
+                        cycle,
+                        reservation,
+                    ),
+                ),
+            ))
+        },
+        surge_persistence::work_items::recovery_cycles::CapacitySelection::AllExhausted {
+            cycle,
+            skipped,
+        } => {
+            let builtin = surge_acp::Registry::builtin();
+            let registry = params.agent_registry.as_deref().unwrap_or(&builtin);
+            for skip in &skipped {
+                crate::engine::capacity_routes::verify_skipped_snapshot(
+                    store.host_home(),
+                    &params.worktree_path,
+                    registry,
+                    &skip.candidate,
+                )?;
+            }
+            store
+                .suspend_planned_capacity(claim, &cycle, chrono::Utc::now().timestamp_millis())
+                .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
+            Err(StageError::CapacityExhausted)
+        },
+    }
+}
+
 async fn execute_agent_node(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1706,8 +1974,29 @@ async fn execute_agent_node(
         .work_items()
         .execution_control(params.run_id)
         .map_err(|error| StageError::Storage(error.to_string()))?;
-    let (quota_opening, quota_cycle) =
+    let (mut quota_opening, mut quota_cycle) =
         prepare_automatic_quota_wake(params.run_id, quota_owner.as_ref(), continuation.as_ref())?;
+    if quota_opening.is_none()
+        && let Some((_, _, policy)) = quota_owner.as_ref()
+        && policy
+            .candidates()
+            .iter()
+            .any(|target| target.configured_route().is_some())
+    {
+        let owner = quota_owner
+            .as_ref()
+            .ok_or_else(|| StageError::RecoveryRequired("host quota owner disappeared".into()))?;
+        let cycle = bind_current_plan(
+            params,
+            state,
+            owner,
+            continuation
+                .as_ref()
+                .map_or(0, |control| control.generation),
+        )
+        .await?;
+        (quota_opening, quota_cycle) = select_current_plan(params, owner, &cycle)?;
+    }
     let stage_result = Box::pin(execute_agent_stage(AgentStageParams {
         quota_opening,
         quota_cycle,
@@ -2322,6 +2611,39 @@ async fn record_suppressed_error(
     Ok(suppressed)
 }
 
+/// Debug-only crash seam after an authenticated route and snapshot commit.
+/// Only the first actual durable entry of the selected node can terminate this
+/// isolated test host. Release builds do not read the selector or exit.
+#[cfg(debug_assertions)]
+async fn route_commit_exit_if_requested(
+    params: &RunTaskParams,
+    node: &surge_core::NodeKey,
+    entry: surge_persistence::runs::EventSeq,
+    committed: surge_persistence::runs::EventSeq,
+) {
+    let target = std::env::var("SURGE_ROUTE_COMMIT_EXIT").ok();
+    if !checkpoint_exit_matches(target.as_deref(), node.as_str()) {
+        return;
+    }
+    let Ok(events) = params
+        .writer
+        .read_events(surge_persistence::runs::EventSeq(1)..committed.next())
+        .await
+    else {
+        return;
+    };
+    let mut entries = events.iter().filter(|row| {
+        matches!(
+            &row.payload.payload, EventPayload::StageEntered {node:actual,..} if actual==node
+        )
+    });
+    if entries.next().is_some_and(|row| row.seq == entry) && entries.next().is_none() {
+        tracing::warn!(target: "engine::fault_injection", %node,
+            "SURGE_ROUTE_COMMIT_EXIT hit after committed route; exiting uncleanly (99)");
+        std::process::exit(99);
+    }
+}
+
 async fn route_and_snapshot(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -2402,6 +2724,8 @@ async fn route_and_snapshot(
         .commit_stage_route(prefix, events, blob)
         .await
         .map_err(|error| format!("commit stage route: {error}"))?;
+    #[cfg(debug_assertions)]
+    route_commit_exit_if_requested(params, &state.cursor.node, stage_start_seq, final_seq).await;
     prepared.cursor = next_cursor;
     prepared.memory_applied_seq = final_seq.as_u64();
     *state = prepared;

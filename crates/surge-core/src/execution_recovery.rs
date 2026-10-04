@@ -290,6 +290,17 @@ pub enum PendingStagePhase {
         /// Stable invocation, distinct from the new MCP generation.
         invocation: crate::id::StageInvocationId,
     },
+    /// An exact host plan parked before any provider was opened.
+    PlannedCapacity {
+        /// Node belonging to the actual anchored stage occurrence.
+        node: crate::NodeKey,
+        /// Stable logical stage, separate from later provider invocations.
+        logical_invocation: crate::id::StageInvocationId,
+        /// Actual StageEntered event sequence.
+        stage_entry_seq: u64,
+        /// Durable QuotaStagePlanned occurrence.
+        plan_seq: u64,
+    },
     /// An unanswered host decision retained without a provider invocation.
     WaitingHumanGate {
         /// Exact gate node.

@@ -98,6 +98,44 @@ impl AgentSettingsFile {
     }
 }
 
+/// Explicit credential sources managed by this configured launch route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AuthSource {
+    /// Effective child environment key; its value is never persisted by capacity routing.
+    Env {
+        /// Environment variable name explicitly managed for this launch.
+        target_key: String,
+    },
+    /// Provider-owned file, relative to the explicit launch working directory when relative.
+    File {
+        /// Declared source locator resolved against the explicit launch directory.
+        path: std::path::PathBuf,
+    },
+}
+/// Completeness is a declaration about configured sources, not an observed provider account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfiguredSourceCompleteness {
+    /// Operator declares every configured authentication source; inaccessible sources remain opaque.
+    CompleteConfiguredSources,
+    /// Authentication discovery is incomplete, so historical capacity cannot authorize a skip.
+    Opaque,
+}
+/// Nonsecret operator declaration identifying a distinct configured provider route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapacityRoute {
+    /// Explicit provider family; runtime kind and display tags are not evidence.
+    pub provider_family: String,
+    /// Nonsecret name distinguishing configured routes within one family.
+    pub configured_route: String,
+    /// Typed declared source locators, containing no credential values.
+    #[serde(default)]
+    pub auth_sources: Vec<AuthSource>,
+    /// Whether all configured authentication sources have been declared.
+    pub completeness: ConfiguredSourceCompleteness,
+}
+
 /// Configuration for a single coding agent (Claude Code, Copilot CLI, etc.).
 ///
 /// Specifies the command to spawn, transport layer, MCP servers to inject,
@@ -133,6 +171,9 @@ pub struct AgentConfig {
     /// (see [`AgentSettingsFile`]). Data, so a new provider needs no code.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub settings_files: Vec<AgentSettingsFile>,
+    /// Explicit capacity identity; absent entries remain opaque.
+    #[serde(default)]
+    pub capacity_route: Option<CapacityRoute>,
 }
 
 impl AgentConfig {

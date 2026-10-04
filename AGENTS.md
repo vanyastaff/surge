@@ -92,6 +92,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-acp/src/process_evidence.rs` | Read-only host process identity and writer-liveness evidence, with Linux/macOS implementations. |
 | `crates/surge-acp/src/quota_observation.rs` | Typed subscription quota evidence; distinguishes unsupported probes, unknown availability and actual rate-limit observations. |
 | `crates/surge-persistence/src/work_items.rs` | Registry-owned task history, idempotent reservations, launch fencing and paged cumulative usage. |
+| `crates/surge-persistence/src/work_items/start_preparation.rs` | Exclusive host Start preparation lease, immutable snapshot fences and atomic reservation finalization; private `secure_lock.rs` owns descriptor-checked per-item OS locks. |
 | `crates/surge-persistence/src/work_items/recipe_capacity.rs` | Registry opening epochs and current exact-recipe exhaustion inspection; newer comparable openings supersede prior evidence. |
 | `crates/surge-orchestrator/src/recipe_admission.rs` | Facade decorator that commits a unique registry opening barrier before provider RPC and checks its returned identity. |
 | `crates/surge-persistence/src/work_items/control.rs` | Generation-fenced task suspension/continuation intents and acknowledgments. |

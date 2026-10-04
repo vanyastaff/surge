@@ -490,6 +490,7 @@ pub fn maintain(
         | EventPayload::VerificationCriteriaAccepted { .. }
         | PipelineMaterialized { .. }
         | GraphRevisionAccepted { .. }
+        | EventPayload::QuotaStagePlanned { .. }
         | StageInputsResolved { .. }
         | EventPayload::WorkItemAttemptBound { .. }
         | EventPayload::ExecutionWriterIntent { .. }

@@ -7,12 +7,15 @@ use surge_core::execution_recovery::{ExecutionControlState, WorkItemExecutionCon
 pub enum CapacityStopKind {
     /// Every policy candidate was considered; a separately validated wake may exist.
     CandidatesExhausted,
+    /// Fresh configured evidence exhausted a planned stage before provider effects.
+    PreDispatchExhausted,
     /// The selected provider failed, but its complete writer cleanup is unknown.
     CleanupUnknown,
 }
 impl CapacityStopKind {
     fn tag(self) -> &'static str {
         match self {
+            Self::PreDispatchExhausted => "quota_predispatch_suspend_v1",
             Self::CandidatesExhausted => "quota_capacity_suspend_v1",
             Self::CleanupUnknown => "quota_cleanup_stop_v1",
         }
@@ -71,6 +74,7 @@ pub(crate) fn read_stop_kind(
     }
     for kind in [
         CapacityStopKind::CandidatesExhausted,
+        CapacityStopKind::PreDispatchExhausted,
         CapacityStopKind::CleanupUnknown,
     ] {
         if hash == intent_hash(kind, association)?.to_string() {
@@ -108,7 +112,9 @@ pub(crate) fn insert_capacity_intent(
         source_revision: current.revision,
         source_control: current.control_generation,
         target_control: generation,
-        reservation: reservation.into(),
+        reservation: (kind != CapacityStopKind::PreDispatchExhausted).then(|| reservation.into()),
+        planned_receipt: (kind == CapacityStopKind::PreDispatchExhausted)
+            .then(|| reservation.into()),
         wake_identity: if kind == CapacityStopKind::CleanupUnknown {
             None
         } else {
@@ -144,8 +150,8 @@ pub(crate) fn insert_capacity_intent(
     };
     tx.execute("INSERT INTO work_item_execution_controls(run,generation,item,attempt_generation,operation,state,payload) VALUES(?,?,?,?,?,'suspend_requested',?)",
         params![claim.run.to_string(),generation,claim.binding.item.to_string(),claim.binding.generation,operation.to_string(),serde_json::to_string(&control)?])?;
-    tx.execute("INSERT INTO work_item_capacity_controls(run,item,attempt_generation,invocation,cycle_generation,source_revision,source_control,target_control,reservation,wake_identity,body) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        params![claim.run.to_string(),claim.binding.item.to_string(),claim.binding.generation,current.invocation,current.generation,current.revision,current.control_generation,generation,reservation,association.wake_identity,body])?;
+    tx.execute("INSERT INTO work_item_capacity_controls(run,item,attempt_generation,invocation,cycle_generation,source_revision,source_control,target_control,reservation,planned_receipt,wake_identity,body) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![claim.run.to_string(),claim.binding.item.to_string(),claim.binding.generation,current.invocation,current.generation,current.revision,current.control_generation,generation,(kind != CapacityStopKind::PreDispatchExhausted).then_some(reservation),(kind == CapacityStopKind::PreDispatchExhausted).then_some(reservation),association.wake_identity,body])?;
     association.sequence = u64::try_from(tx.last_insert_rowid())
         .map_err(|_| WorkItemError::Invalid("invalid capacity association cursor".into()))?;
     tx.execute(

@@ -108,6 +108,15 @@ pub enum QuotaHandoffState {
     Attention,
 }
 
+/// Immutable source of capacity suspension evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapacityEvidenceOrigin<'a> {
+    /// A real provider attempt and its reservation.
+    ProviderReservation(&'a str),
+    /// A plan that exhausted every candidate without provider effects.
+    PlannedExhaustion(&'a str),
+}
+
 /// Durable association discoverable even before suspension confirmation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CapacityControlAssociation {
@@ -118,10 +127,23 @@ pub struct CapacityControlAssociation {
     source_revision: u64,
     source_control: u64,
     target_control: u64,
-    reservation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reservation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planned_receipt: Option<String>,
     wake_identity: Option<String>,
 }
-type StoredCapacityAssociation = (u64, String, u64, u64, u64, String, Option<String>, String);
+type StoredCapacityAssociation = (
+    u64,
+    String,
+    u64,
+    u64,
+    u64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
 
 /// Bounded raw-history page; the cursor advances across inactive associations too.
 #[derive(Debug)]
@@ -153,9 +175,19 @@ impl CapacityControlAssociation {
     pub fn source_revision(&self) -> u64 {
         self.source_revision
     }
-    /// Candidate reservation associated with the stop.
-    pub fn reservation(&self) -> &str {
-        &self.reservation
+    /// Typed immutable proof associated with the stop.
+    pub fn evidence_origin(&self) -> Result<CapacityEvidenceOrigin<'_>> {
+        match (&self.reservation, &self.planned_receipt) {
+            (Some(receipt), None) => Ok(CapacityEvidenceOrigin::ProviderReservation(receipt)),
+            (None, Some(receipt)) => Ok(CapacityEvidenceOrigin::PlannedExhaustion(receipt)),
+            _ => Err(WorkItemError::Invalid(
+                "capacity evidence must have exactly one origin".into(),
+            )),
+        }
+    }
+    /// Actual provider reservation; planned proofs cannot satisfy this boundary.
+    pub fn provider_reservation(&self) -> Option<&str> {
+        self.reservation.as_deref()
     }
     /// Newly reserved suspension generation.
     pub fn target_control(&self) -> u64 {
@@ -274,7 +306,7 @@ impl WorkItemStore {
         let row: Option<StoredCapacityAssociation> =
             connection
                 .query_row(
-                    "SELECT sequence,invocation,cycle_generation,source_revision,source_control,reservation,wake_identity,body FROM work_item_capacity_controls WHERE run=? AND target_control=? AND invalidated=0",
+                    "SELECT sequence,invocation,cycle_generation,source_revision,source_control,reservation,planned_receipt,wake_identity,body FROM work_item_capacity_controls WHERE run=? AND target_control=? AND invalidated=0",
                     params![run.to_string(), target_control],
                     |row| {
                         Ok((
@@ -286,6 +318,7 @@ impl WorkItemStore {
                             row.get(5)?,
                             row.get(6)?,
                             row.get(7)?,
+                            row.get(8)?,
                         ))
                     },
                 )
@@ -297,6 +330,7 @@ impl WorkItemStore {
             source_revision,
             source_control,
             reservation,
+            planned_receipt,
             wake_identity,
             body,
         )) = row
@@ -312,6 +346,7 @@ impl WorkItemStore {
             source_control,
             target_control,
             reservation,
+            planned_receipt,
             wake_identity,
         };
         let mut original = association.clone();
@@ -348,7 +383,7 @@ impl WorkItemStore {
         }
         let conn = self.pool.get()?;
         let mut statement = conn.prepare(
-            "SELECT c.sequence,c.run,c.invocation,c.cycle_generation,c.source_revision,c.source_control,c.target_control,c.reservation,c.wake_identity,c.body,EXISTS(SELECT 1 FROM work_items i JOIN work_item_attempts a ON a.run=c.run WHERE i.id=c.item AND c.reconciled=0 AND c.invalidated=0 AND i.active_run=c.run AND i.generation=c.attempt_generation AND a.generation=c.attempt_generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','attention','suspended')) FROM work_item_capacity_controls c WHERE c.sequence>? AND c.sequence<=? ORDER BY c.sequence LIMIT ?",
+            "SELECT c.sequence,c.run,c.invocation,c.cycle_generation,c.source_revision,c.source_control,c.target_control,c.reservation,c.planned_receipt,c.wake_identity,c.body,EXISTS(SELECT 1 FROM work_items i JOIN work_item_attempts a ON a.run=c.run WHERE i.id=c.item AND c.reconciled=0 AND c.invalidated=0 AND i.active_run=c.run AND i.generation=c.attempt_generation AND a.generation=c.attempt_generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','attention','suspended')) FROM work_item_capacity_controls c WHERE c.sequence>? AND c.sequence<=? ORDER BY c.sequence LIMIT ?",
         )?;
         let rows = statement.query_map(params![after, through, limit], |row| {
             let association = CapacityControlAssociation {
@@ -366,12 +401,13 @@ impl WorkItemStore {
                 source_control: row.get(5)?,
                 target_control: row.get(6)?,
                 reservation: row.get(7)?,
-                wake_identity: row.get(8)?,
+                planned_receipt: row.get(8)?,
+                wake_identity: row.get(9)?,
             };
             Ok((
                 association,
-                row.get::<_, String>(9)?,
-                row.get::<_, bool>(10)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, bool>(11)?,
             ))
         })?;
         let mut result = Vec::new();
@@ -410,6 +446,17 @@ impl WorkItemStore {
         })
     }
 
+    /// Reserve a provider-origin suspension after validating immutable fresh skipped routes.
+    pub fn request_capacity_suspend_with_skips(
+        &self,
+        claim: &WorkItemLaunchClaim,
+        expected: &RecoveryCycle,
+        reservation: &str,
+        now_ms: i64,
+    ) -> Result<CapacityControlAssociation> {
+        self.reserve_provider_capacity_stop(claim, expected, reservation, now_ms, true)
+    }
+
     /// Atomically reserve a Capacity suspension and its discoverable cycle join.
     pub fn request_capacity_suspend(
         &self,
@@ -417,6 +464,17 @@ impl WorkItemStore {
         expected: &RecoveryCycle,
         reservation: &str,
         now_ms: i64,
+    ) -> Result<CapacityControlAssociation> {
+        self.reserve_provider_capacity_stop(claim, expected, reservation, now_ms, false)
+    }
+
+    fn reserve_provider_capacity_stop(
+        &self,
+        claim: &WorkItemLaunchClaim,
+        expected: &RecoveryCycle,
+        reservation: &str,
+        now_ms: i64,
+        allow_skips: bool,
     ) -> Result<CapacityControlAssociation> {
         use surge_core::execution_recovery::{ExecutionControlState, WorkItemExecutionControl};
         if now_ms < 0 {
@@ -437,7 +495,7 @@ impl WorkItemStore {
             let latest = control::read_control(&tx, claim.run, None)?
                 .ok_or_else(|| WorkItemError::Conflict("capacity control is absent".into()))?;
             if original.source_revision != expected.revision
-                || original.reservation != reservation
+                || original.provider_reservation() != Some(reservation)
                 || original.wake_identity
                     != expected
                         .wake
@@ -462,7 +520,10 @@ impl WorkItemStore {
         }
         let current = check_cycle(&tx, claim, expected)?;
         let stage = read_bound_stage(&tx, claim.run, &current.invocation)?;
-        ensure_candidates_unavailable(&tx, &current, &stage, now_ms)?;
+        let project = allow_skips
+            .then(|| record(&tx, claim.binding.item).map(|item| item.project))
+            .transpose()?;
+        ensure_candidates_unavailable(&tx, &current, &stage, now_ms, project.as_ref())?;
         let selected: String = tx.query_row(
             "SELECT runtime FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=? AND receipt=?",
             params![claim.run.to_string(),current.invocation,current.generation,reservation],
@@ -489,7 +550,8 @@ impl WorkItemStore {
             source_revision: current.revision,
             source_control: current.control_generation,
             target_control: generation,
-            reservation: reservation.to_owned(),
+            reservation: Some(reservation.to_owned()),
+            planned_receipt: None,
             wake_identity: current.wake.as_ref().map(|wake| wake.identity().to_owned()),
         };
         let body = serde_json::to_string(&association)?;
@@ -602,16 +664,34 @@ impl WorkItemStore {
     }
 }
 
+type CapacityAssociationRow = (
+    u64,
+    u64,
+    u64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
 pub(super) fn read_capacity_association(
     conn: &Connection,
     expected: &RecoveryCycle,
 ) -> Result<Option<CapacityControlAssociation>> {
-    let row: Option<(u64,u64,u64,String,Option<String>,String)> = conn.query_row(
-        "SELECT sequence,source_revision,target_control,reservation,wake_identity,body FROM work_item_capacity_controls WHERE run=? AND invocation=? AND cycle_generation=? AND source_control=? AND invalidated=0",
+    let row: Option<CapacityAssociationRow> = conn.query_row(
+        "SELECT sequence,source_revision,target_control,reservation,planned_receipt,wake_identity,body FROM work_item_capacity_controls WHERE run=? AND invocation=? AND cycle_generation=? AND source_control=? AND invalidated=0",
         params![expected.run.to_string(),expected.invocation,expected.generation,expected.control_generation],
-        |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?)),
     ).optional()?;
-    let Some((sequence, source_revision, target_control, reservation, wake_identity, body)) = row
+    let Some((
+        sequence,
+        source_revision,
+        target_control,
+        reservation,
+        planned_receipt,
+        wake_identity,
+        body,
+    )) = row
     else {
         return Ok(None);
     };
@@ -624,6 +704,7 @@ pub(super) fn read_capacity_association(
         source_control: expected.control_generation,
         target_control,
         reservation,
+        planned_receipt,
         wake_identity,
     };
     let mut original = result.clone();
@@ -667,8 +748,14 @@ fn ensure_candidates_unavailable(
     cycle: &RecoveryCycle,
     stage: &FrozenQuotaStage,
     now_ms: i64,
+    project: Option<&surge_core::id::WorkItemProjectId>,
 ) -> Result<()> {
     for candidate in stage.candidates() {
+        if let Some(project) = project
+            && super::predispatch::validated_current_skip(conn, cycle, project, candidate, now_ms)?
+        {
+            continue;
+        }
         let evidence: Option<String> = conn.query_row(
             "SELECT observation FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=? AND runtime=?",
             params![cycle.run.to_string(),cycle.invocation,cycle.generation,candidate.candidate().runtime()],

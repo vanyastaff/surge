@@ -174,3 +174,24 @@ bot_token_env = "SURGE_TELEGRAM_BOT_TOKEN"
 [inbox]
 snooze_poll_interval_seconds = 300
 delivery_channels = ["telegram", "desktop"]
+
+# Task-owned configured capacity rotation (optional).
+# [capacity]
+# rotation_profile = "implementation-secondary@1.0"
+# Each profile must name a distinct agent registry entry with the same explicit
+# provider_family and a different nonsecret configured_route declaration.
+# [agents.claude.capacity_route]
+# provider_family = "anthropic"
+# configured_route = "primary-subscription"
+# completeness = "complete_configured_sources" # or "opaque" when discovery is incomplete
+# auth_sources = [
+#   { kind = "env", target_key = "ANTHROPIC_API_KEY" },
+#   { kind = "file", path = "/absolute/provider/auth-source" },
+# ]
+# Relative file sources resolve against the actual task launch working directory.
+# Credential values belong in environment/provider files, never these declarations.
+# Complete declared sources can yield an opaque local HMAC snapshot on supported
+# Linux/macOS hosts; unavailable/incomplete sources cannot authorize historical skips.
+# A configured snapshot does not identify or verify the provider's actual account.
+# Start through durable task Start; ordinary unowned flow rotation requires the
+# shared ownership coordinator described in the open Task 12 normalization unit.

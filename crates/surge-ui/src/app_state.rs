@@ -772,6 +772,7 @@ mod tests {
             capabilities: vec![],
             env: std::collections::BTreeMap::new(),
             settings_files: vec![],
+            capacity_route: None,
         }
     }
 
