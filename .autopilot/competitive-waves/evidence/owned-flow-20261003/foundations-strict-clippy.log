@@ -1,0 +1,61 @@
+    Checking tracing v0.1.44
+    Checking chrono v0.4.44
+    Checking schemars v1.2.1
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking futures-util v0.3.34
+    Checking proptest v1.11.0
+    Checking futures-executor v0.3.34
+    Checking futures v0.3.34
+    Checking tokio-util v0.7.18
+    Checking ring v0.17.14
+    Checking rustls-webpki v0.103.13
+    Checking rustls v0.23.37
+    Checking tower v0.5.3
+    Checking idna v1.1.0
+    Checking hyper-util v0.1.20
+    Checking serde_with v3.24.0
+    Checking tokio-rustls v0.26.4
+    Checking tower-http v0.6.8
+    Checking hyper-rustls v0.27.7
+    Checking agent-client-protocol-schema v1.9.1
+    Checking url v2.5.8
+    Checking agent-client-protocol v2.2.0
+    Checking reqwest v0.12.28
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking tracing-subscriber v0.3.23
+    Checking criterion v0.5.1
+    Checking rusqlite v0.32.1
+    Checking r2d2_sqlite v0.25.0
+    Checking process-wrap v9.1.0
+    Checking rmcp v1.6.0
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error: this `if` statement can be collapsed
+   --> crates/surge-persistence/src/work_items/owned_flow/preparation.rs:513:9
+    |
+513 | / ...   if !self.consumed
+514 | | ...       && let Ok(conn) = self.store.pool.get()
+515 | | ...   {
+516 | | ...       if let Err(error)=conn.execute("UPDATE owned_flow_operations SET state='abandoned' WHERE operation=? AND token=? AND st...
+517 | | ...   }
+    | |_______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+514 ~             && let Ok(conn) = self.store.pool.get()
+515 ~             && let Err(error)=conn.execute("UPDATE owned_flow_operations SET state='abandoned' WHERE operation=? AND token=? AND state='preparing' AND receipt IS NULL",params![self.operation.to_string(),self.token]) { tracing::warn!(%error,"could not abandon owned Flow preparation"); }
+    |
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/surge-persistence/src/work_items.rs:809:50
+    |
+809 |             self.validate_owned_flow_association(&conn, claim)?;
+    |                                                  ^^^^^ help: change this to: `conn`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: could not compile `surge-persistence` (lib) due to 2 previous errors

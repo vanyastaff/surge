@@ -1,0 +1,9 @@
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 7.83s
+     Running tests/protected_diagnostics.rs (target/debug/deps/protected_diagnostics-e8779c11e3b714c4)
+
+running 1 test
+test actual_catalog_deadline_spans_pages_and_call_timeout_remains_exact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 1.06s
+

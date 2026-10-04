@@ -1,0 +1,23 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized] target(s) in 34.31s
+     Running unittests src/lib.rs (target/debug/deps/surge_acp-516cd789cd48b346)
+
+running 1 test
+test sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response ... FAILED
+
+failures:
+
+---- sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response stdout ----
+
+thread 'sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response' (31370379) panicked at crates/surge-acp/src/sdk_v1.rs:618:21:
+assertion failed: request["id"].is_number()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 278 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p surge-acp --lib`

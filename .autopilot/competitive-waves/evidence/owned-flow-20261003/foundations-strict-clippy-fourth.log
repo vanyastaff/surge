@@ -1,0 +1,30 @@
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error: this block is too nested
+   --> crates/surge-persistence/src/work_items/owned_flow/tests.rs:230:64
+    |
+230 |                       attempt.state = if mutation == "attention" {
+    |  ________________________________________________________________^
+231 | |                         WorkItemAttemptState::Attention
+232 | |                     } else {
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+    = note: `-D clippy::excessive-nesting` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::excessive_nesting)]`
+
+error: this block is too nested
+   --> crates/surge-persistence/src/work_items/owned_flow/tests.rs:232:28
+    |
+232 |                       } else {
+    |  ____________________________^
+233 | |                         WorkItemAttemptState::Suspended
+234 | |                     };
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: could not compile `surge-persistence` (lib test) due to 2 previous errors

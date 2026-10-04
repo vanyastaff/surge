@@ -1,0 +1,178 @@
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+error: binding's name is too similar to existing binding
+  --> crates/surge-mcp/src/child_settlement/mod.rs:98:13
+   |
+98 |         let sent = panic_boundary::protected(|| {
+   |             ^^^^
+   |
+note: existing binding defined here
+  --> crates/surge-mcp/src/child_settlement/mod.rs:66:14
+   |
+66 |         let (send, ticket) = tracker::reserve().map_err(|_| ChildStartError::OwnerUnavailable)?;
+   |              ^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#similar_names
+   = note: `-D clippy::similar-names` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::similar_names)]`
+
+error: this `continue` expression is redundant
+   --> crates/surge-mcp/src/connection.rs:925:78
+    |
+925 |             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+    |                                                                              ^^^^^^^^
+    |
+    = help: consider dropping the `continue` expression
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_continue
+    = note: `-D clippy::needless-continue` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_continue)]`
+
+error: this could be rewritten as `let...else`
+  --> crates/surge-mcp/src/child_settlement/panic_boundary.rs:23:5
+   |
+23 | /     let previous = match PROTECTED.try_with(|depth| {
+24 | |         let previous = depth.get();
+25 | |         depth.set(previous.saturating_add(1));
+26 | |         previous
+...  |
+29 | |         Err(_) => std::process::abort(),
+30 | |     };
+   | |______^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_let_else
+   = note: `-D clippy::manual-let-else` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+help: consider writing
+   |
+23 ~     let Ok(previous) = PROTECTED.try_with(|depth| {
+24 +         let previous = depth.get();
+25 +         depth.set(previous.saturating_add(1));
+26 +         previous
+27 +     }) else { std::process::abort() };
+   |
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/surge-mcp/src/child_settlement/worker.rs:14:14
+   |
+14 |     receive: mpsc::Receiver<Start>,
+   |              ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+14 |     receive: &mpsc::Receiver<Start>,
+   |              +
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/surge-mcp/src/child_settlement/worker.rs:15:14
+   |
+15 |     control: Arc<AtomicU8>,
+   |              ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+15 |     control: &Arc<AtomicU8>,
+   |              +
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/surge-mcp/src/child_settlement/worker.rs:16:17
+   |
+16 |     completion: Arc<Completion>,
+   |                 ^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+16 |     completion: &Arc<Completion>,
+   |                 +
+
+error: this could be rewritten as `let...else`
+  --> crates/surge-mcp/src/child_settlement/worker.rs:50:9
+   |
+50 | /         let parcel = match owned.as_mut() {
+51 | |             Some(parcel) => parcel,
+52 | |             None => std::process::abort(),
+53 | |         };
+   | |__________^ help: consider writing: `let Some(parcel) = owned.as_mut() else { std::process::abort() };`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_let_else
+
+error: this could be rewritten as `let...else`
+  --> crates/surge-mcp/src/child_settlement/mod.rs:90:9
+   |
+90 | /         let pipes = match pipes(&slot) {
+91 | |             Ok(pipes) => pipes,
+92 | |             Err(_) => {
+93 | |                 fallback(&slot, &reservation);
+94 | |                 return Err(ChildStartError::Preparation);
+95 | |             },
+96 | |         };
+   | |__________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_let_else
+help: consider writing
+   |
+90 ~         let Ok(pipes) = pipes(&slot) else {
+91 +                 fallback(&slot, &reservation);
+92 +                 return Err(ChildStartError::Preparation);
+93 +             };
+   |
+
+error: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+  --> crates/surge-mcp/src/child_settlement/mod.rs:90:21
+   |
+90 |           let pipes = match pipes(&slot) {
+   |  _____________________^
+91 | |             Ok(pipes) => pipes,
+92 | |             Err(_) => {
+93 | |                 fallback(&slot, &reservation);
+94 | |                 return Err(ChildStartError::Preparation);
+95 | |             },
+96 | |         };
+   | |_________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#single_match_else
+   = note: `-D clippy::single-match-else` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::single_match_else)]`
+help: try
+   |
+90 ~         let pipes = if let Ok(pipes) = pipes(&slot) { pipes } else {
+91 +             fallback(&slot, &reservation);
+92 +             return Err(ChildStartError::Preparation);
+93 ~         };
+   |
+
+error: this function's return value is unnecessarily wrapped by `Option`
+   --> crates/surge-mcp/src/child_settlement/mod.rs:121:5
+    |
+121 |     pub(crate) fn id(&self) -> Option<u32> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_wraps
+    = note: `-D clippy::unnecessary-wraps` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_wraps)]`
+help: remove `Option` from the return type...
+    |
+121 -     pub(crate) fn id(&self) -> Option<u32> {
+121 +     pub(crate) fn id(&self) -> u32 {
+    |
+help: ...and then remove the surrounding `Some()` from returning expressions
+    |
+122 -         Some(self.pid)
+122 +         self.pid
+    |
+
+error: this could be rewritten as `let...else`
+   --> crates/surge-mcp/src/child_settlement/mod.rs:133:9
+    |
+133 | /         let parcel = match owner.as_mut() {
+134 | |             Some(parcel) => parcel,
+135 | |             None => std::process::abort(),
+136 | |         };
+    | |__________^ help: consider writing: `let Some(parcel) = owner.as_mut() else { std::process::abort() };`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_let_else
+
+error: could not compile `surge-mcp` (lib) due to 11 previous errors

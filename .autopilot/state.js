@@ -688,6 +688,6 @@ window.STATE =
     "deferred": 1
   },
   "blind": null,
-  "currentExecutableCheckpoint": "T25 initial0/3: ACP readiness47166 actual wire-effectRED (30404/89698 compile-only); typed final-check implementation pending. Runtime45077 protected ownershipPASS;63536 cleanCLI/daemon host guard check. All fault/cold/SQL/secondprocess/native Windows/full project gates and independent5a then5b remain required.",
-  "previousGoalTurnClassification": "progress: committed terminal runtime ownership proof, accepted independently reviewed accounting/readiness plans, and stable module map; full goal remains active."
+  "currentExecutableCheckpoint": "T25 initial0/3: actual seven-method ACP readiness refusal/positive peer, runtime retained-close/capacity/pipe fallback and real registry deadlines PASS (scoped). Prerequisite47240 terminal0; strict fifth21889 terminal101, sixth98209 ongoing at checkpoint. Cold baseline not started. Whole writer-domain authority NEEDS WORK; domain amendment read-only. Generic stage MCP execution, populated cold positive, native Windows, full gates/freeze5a then5b remain required.",
+  "previousGoalTurnClassification": "no progress: previous user-clarification turn acknowledged already recorded multi-provider planning without changing authoritative state; this continuation preserves full capability/cold plans and terminal evidence and advances concrete authority design."
 }

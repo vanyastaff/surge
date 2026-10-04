@@ -1,0 +1,315 @@
+T25 MCP cold-writer capability: owning architecture research, 2026-10-03
+
+VERDICT: NEEDS WORK for unrestricted, portable populated MCP cold recovery.
+There is no real descendant-closure capability in the current source. A successful
+registry shutdown or direct-child settlement cannot authorize that behavior.
+This report is read-only architecture/research; no Cargo, source, formatting,
+Git or process mutation was performed. T25 initial formal repair count remains
+0/3. All accepted requirements remain open until their actual required evidence.
+
+Read in full: owned-flow-normalization-plan.txt; runtime-settlement accepted
+amendment including 6a–6d; cold-oracle plan including section6 refinements.
+Main author confirmed no containment implementation or chosen primitive is pending.
+
+1. Current authoritative source facts
+
+- engine/writer_coverage.rs::McpWriterObserver.before_child records a fresh intent
+  before every launch; local_effects is false. child_started uses observed PID and
+  observe_container(...GroupOnly). There is no settlement callback in the injected
+  HostWriterObserver API. The same original OwnedFlowEffectFence/launch Arc is
+  retained by the current observer; do not replace it with a receipt/token rebuild.
+- surge-mcp runtime worker owns only the actual std Child. Its wait proves leader
+  exit, not process-group or escaped descendant exit. This is explicitly required
+  by runtime amendment sections3/5d/6a. The terminal barrier must stay honest.
+- engine/run_task.rs::execute (currently ~177–200) suppresses pending suspension
+  only if registry.shutdown times out/errors. Success proceeds to seal_suspension.
+  prepare_suspension (~932) constructs cleanup_confirmed:true in advance.
+- engine/work_items.rs::validate_resume validates original startup, graph, accepted
+  context/artifacts and private manifest; it does not examine execution_writers.
+  engine.rs calls it at the real resume entry points (~643/1128/1159).
+- core/run_state.rs folds ExecutionWriterClosed into a bool (~1415) without a
+  domain-proof distinction. It also marks provider writers closed on SessionClosed
+  (~1421). bridge/worker.rs records provider GroupOnly too (~562). A gate examining
+  only MCP cannot prove the complete suspension writer set.
+- persistence/runs/writer.rs::seal_suspension (~496) checks generation, caller bool
+  and snapshot prefix; it does not establish writer closure. Daemon tracked_run,
+  registry controls, recovery handoffs and owned_flow/launch consume that bool.
+  Generic append/event folding or legacy bool must not become proof authority.
+- process_evidence::probe explicitly returns Unknown for empty GroupOnly; no actual
+  production cold authority caller was found. Identity mismatch/unsupported probe
+  also stays Unknown. old_boot_gone is local-machine boot absence only.
+
+These are defects/absent capabilities, not a reason to weaken the cold positive
+or survivor oracle. No production Closed event emitter was found.
+
+2. Exact capability that the engine needs
+
+Separate direct-child settlement from complete local writer-domain closure and
+from unresolved external effects. A host-only, non-Serde capability must carry:
+original item/revision/attempt/run/workspace owner; invocation/writer/launch epoch;
+platform/machine/boot and precise process or kernel-domain identity; primitive
+and version; pre-execution establishment evidence; observation continuity and
+terminal closure evidence. It is minted only by the actual OS owner, not by a
+public transport DTO, server declaration, facade observation, process marker,
+EOF, success code, caller boolean, current config or empty process list.
+
+The durable proof must bind that capability to the same accepted run and journal
+occurrence under its genuine original launch claim. A validated immutable proof
+record/event is needed, with legacy ExecutionWriterClosed/SessionClosed treated
+as indirect evidence unless the relevant complete proof is present. Persist the
+proof BEFORE RunSuspended/registry acknowledgment; a crash after child exit but
+before durable proof remains Unknown unless a retained actual kernel domain can
+be reopened and proved closed. Reject generic append routes that can fabricate
+authority-bearing closure records; use the host-owned closure/seal boundary.
+
+Fold the entire original journal prefix, rejecting duplicate/conflicting/missing
+writer intents/establishments/closures. Require every dispatched executable writer
+in that prefix covered and closed (or an independently established no-child
+outcome), plus every required external-effect obligation settled. Persist a
+closure set/digest binding the suspension prefix; a boolean is only a projection.
+The startup/manifest/cold readers and last physical effect gates must consume this
+validated set before provider or MCP construction/spawn/init/session/prompt/call.
+An unresolved intent from a spawn crash is Unknown, even when no PID was captured.
+
+Close dispatch first, cancel/settle each domain, then commit proof. Final authority
+check after all owner queues/awaits prevents a late new writer after the closure
+prefix. Writer intent/state transitions need one coherent ownership epoch and
+exact control generation. Continuation invalidates authority only for the new
+writer occurrences it creates; it must not rewrite historical identities.
+
+Do not emit Closed merely from the direct-child worker callback. It can emit a
+separate leader-settled observation while retaining the original Arc until the
+actual owner obligations finish. Whole-domain ownership can reside in a second
+runtime-independent owner, but it must receive the SAME original Arc before any
+spawn and remain owned across canceled waiters/runtime drop. Unknown may hold the
+lease and block shutdown or persist Attention; it must never report suspension.
+
+3. Linux: genuine cgroup v2 profile is feasible, setup-dependent
+
+Kernel cgroups inherit child membership, permit migration, report recursive
+populated state and provide cgroup.kill. Their delegation rules restrict moving
+processes outside an appropriate delegated boundary. These facts do NOT make an
+arbitrary writable user cgroup a secure per-writer boundary.
+Source: https://docs.kernel.org/admin-guide/cgroup-v2.html sections Terminology,
+Delegation Containment, Unpopulated Notification, cgroup.kill.
+
+Create a unique operation/writer-bound domain under a verified manager-owned
+boundary before launch. Verify cgroup2 filesystem, boot/domain identity and
+permissions through held descriptors; preserve it while its proof is unresolved.
+The executable must start INSIDE the domain before its first instruction. Prefer
+clone3(CLONE_INTO_CGROUP) via a reviewed launcher backend; moving an already
+running std Child into cgroup.procs has a fork escape window and is rejected.
+Source: https://man7.org/linux/man-pages/man2/clone3.2.html CLONE_INTO_CGROUP.
+
+For a complete per-writer domain, prevent the MCP process and descendants from
+moving outside that recorded domain: no writable common ancestor/outside targets,
+no inherited manager FD/credential, no CAP_SYS_ADMIN escape, and no manager IPC
+that grants migration. A same-UID delegated subtree shared with other runs can
+permit sibling migration; calling it CoveredDomain is unsound. A configured
+privileged manager or reviewed mount+cgroup namespace/permission boundary may
+supply this, but actual capability/setup must be detected, never assumed.
+
+Settlement uses original cgroup handle: admission remains closed, optional
+cgroup.kill for teardown, then recursive populated=0 plus original identity.
+Successfully removing the original empty domain can close future membership;
+remove only the owned domain after durable closure publication under an explicit
+crash protocol. Missing/replaced directory is not proof. On cold reopen verify
+original identity and boundary; permission error/replacement/migration possibility
+is Unknown. Child wait still must reap leader; cgroup emptiness does not reap it.
+No PID-tree enumeration or group signal substitutes for this domain.
+
+Tradeoff: supports forking/setsid servers and exact host executable/argv/env/cwd,
+but requires Linux capability and setup and a new reviewed spawn primitive.
+Current closed std::Child profile has neither cgroup placement nor this proof.
+
+4. Windows: genuine non-breakaway Job is feasible, new backend required
+
+Jobs normally include CreateProcess descendants; breakaway flags weaken coverage,
+and Windows WMI process creation is an explicit exception. Configure neither
+BREAKAWAY_OK nor SILENT_BREAKAWAY_OK. Use a secured/non-inherited Job handle and
+kill-on-last-handle-close where appropriate; never give child a controlling handle.
+Source: https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
+
+Use CreateProcessW with PROC_THREAD_ATTRIBUTE_JOB_LIST so assignment precedes
+userspace execution. CreateProcess suspended then AssignProcessToJobObject has
+a host-crash interval with a suspended unowned process. Post-spawn assignment of
+a running std Child is worse and is rejected.
+Sources: https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute
+https://devblogs.microsoft.com/oldnewthing/20230209-00/?p=107812/
+
+Use native process/job/pipe RAII and exact Windows command-line/env/cwd semantics.
+Query original Job ActiveProcesses==0 with admission permanently closed and no
+permitted reassignment, after all owned process handles/exit observations are
+accounted for. Job termination request/notification alone is not closure. Keep
+an authenticated original domain identity/broker handle across cold inspection;
+missing name/object is not by itself proof. Kill-on-close initiates termination
+on host crash; it is not a persisted completed wait. If the original Job cannot
+be inspected, retain Unknown rather than open a new same-name Job.
+Source: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information
+
+Rust stable does not provide the arbitrary startup attribute API as an accepted
+stable std Command feature: spawn_with_attributes is documented nightly-only.
+Do not change MSRV/stability silently; a reviewed native backend is needed.
+Source: https://doc.rust-lang.org/std/os/windows/process/trait.CommandExt.html
+Native tests must cover assignment failure, host crash, nested jobs, denied
+breakaway and no new provider/MCP effects on uncertain identity. WMI/broker-created
+out-of-domain work remains an external obligation; a Job is not a universal
+external-effect sandbox. Current private-input Windows limitation stays separate.
+
+5. macOS: stock groups cannot prove closure; two real options
+
+A. Limited but useful actual no-descendant observation, without privileged setup.
+This is a NEW spawn/observer profile proposal, not an implemented capability and
+not an upgrade of GroupOnly to CoveredDomain.
+
+Public installed SDK sys/spawn.h defines POSIX_SPAWN_START_SUSPENDED=0x0080;
+spawn.h exposes posix_spawnattr_setflags/add[f]chdir and file actions. XNU stops
+the new task before userspace in kern_exec.c2068–2079. Establish EVFILT_PROC
+NOTE_FORK|NOTE_EXIT on the actual suspended root BEFORE resuming it. Record
+registration receipt, original identity and a permanently sticky ever-fork bit.
+Source: https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_exec.c
+Local evidence: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/spawn.h:60
+
+XNU emits parent NOTE_FORK for fork and posix_spawn; its process filter ORs
+requested flags, and automatically clears on retrieval, so userspace must retain
+an ever-fork bit across every retrieval. Parent exit event after uninterrupted
+registration plus no fork observation can establish that the root created no
+local descendants, independently of process-group membership. Registration after
+std.spawn is insufficient. Any successful fork, even one whose child already
+exited, stays Unknown under this limited profile. No enumeration/tracking claim.
+Sources: https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_fork.c (fork571–572)
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_event.c (filt_procattach1030+, filt_procevent1109+)
+
+Require root actual wait PLUS terminal exit monitor receipt and uninterrupted
+pre-run monitor ownership; every observer error/vanish/close/registration failure,
+host death before durable proof or incomplete exec transition stays Unknown.
+No NOTE_TRACK design: Apple header states unsupported since10.5 and filter
+registration returns ENOTSUP for it. NOTE_FORK does not provide child PID.
+Source: https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/event.h (335–341,234–241)
+Native source/behavior proofs must verify fork, vfork, posix_spawn, exec-image
+switch and concurrent fork/exit terminal draining on each supported macOS version.
+This is a candidate proof for benign Python/no-fork servers, not acceptance for
+arbitrary npm/wrapper servers or external broker launches.
+
+The current std.as_std_mut().spawn profile cannot set START_SUSPENDED or attach
+before first instruction, and std::Child has no public raw-PID adoption. Therefore
+this requires a reviewed native owned-child backend, not unsafe fabricated Child,
+pre_exec callback slipped into the approved profile, or an unreviewed helper.
+A helper that self-stops after start is not automatically trusted: constructors,
+DYLD environment injection and pre-registration fork can break completeness.
+Keep exact interpreter/argv/env/cwd/stdio on native target, preserve original
+claim and silent panic/transfer invariants, and amend runtime primitive approval
+before code. No shell quoting/reconstructed command or target environment edits.
+
+Tradeoff: immediate local-first positive path for actual never-fork writers;
+any forking server requires attention/capability upgrade even if it is benign.
+This cannot substitute for full automatic recovery of arbitrary local servers.
+
+B. Broad process lineage observation through Apple EndpointSecurity.
+Subscribe before launch to fork/exec/exit, retain exact audit-token identities and
+ordered bounded pending attribution until root mapping is known. Track descendants
+across group/session escape. Sequence gaps or observer restart invalidate affected
+open domains; never repair completeness from a process snapshot. Empty complete
+lineage plus root actual reap can produce a durable local-domain closure receipt.
+This is observation, not confinement, and requires a separately reviewed ordered
+terminal-event/drain protocol before acceptance.
+Sources: https://developer.apple.com/documentation/endpointsecurity
+https://developer.apple.com/documentation/endpointsecurity/es_message_t/global_seq_num
+
+This entails an Apple-issued EndpointSecurity entitlement and distribution/setup
+work. A system extension requires signing/notarization and user installation
+approval. Current CLI/daemon does not have this capability. No assumption that
+requesting an entitlement guarantees Apple grants it, and no private SPI bypass.
+Source: https://developer.apple.com/documentation/systemextensions
+https://developer.apple.com/system-extensions/
+
+App Sandbox inheritance alone is not lineage closure. A VM/container changes host
+executable/path/cwd/file-access semantics and does not satisfy exact host MCP
+transport fidelity automatically. Neither is silently substituted for this unit.
+Source: https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html
+
+6. Recommended decision and consequential product options
+
+Choose a platform capability interface with honest Unsupported/Unknown/Alive/
+ProvenClosed outcomes. Preserve current standard child settlement as leader-only.
+Immediately fix authority readers so unsupported GroupOnly never seals suspension
+or admits cold effects; this is a required correctness change, NOT T25 completion.
+
+For broad forking-server support, choose Linux verified cgroup and Windows Job
+backends plus macOS EndpointSecurity observer; this preserves host executable and
+transport fidelity but requires setup/distribution decisions and new native owners.
+If product priority is zero-setup macOS first, adopt the reviewed suspended-spawn
+no-fork observation as an additional real capability, with explicit attention for
+forking/unknown domains and retain the broad requirement as open. Do not change
+all arbitrary server requirements to 'supported no-fork only' to call them done.
+
+These options are concrete enough for a product decision, but the broad portable
+positive requirement presently needs that decision/setup or more capability work.
+Neither direct-child Closed synthesis nor read-only process census is acceptable.
+A successful benign oracle under optionA is legitimate bounded evidence; it must
+not claim unrestricted capability or completion of full T25/native Windows.
+
+7. External-effect and stage-MCP limits remain explicit
+
+Current MCP intent local_effects:false is not a local-closure obligation. Native
+process disappearance cannot prove a remote worker/service or asynchronous effect
+has stopped. Distinguish local writer domain from per-RPC external obligations.
+The production executable tool boundary must journal an actual effect intent,
+receive its actual completion/cancel/settlement evidence, and preserve Unknown for
+unresolved nonlocal work. Do not flip local_effects:true for arbitrary server
+transport or catalog merely because the test endpoint happens to be benign.
+
+Generic external MCP tools/call execution is absent on production stage-MCP:
+ACP tool-call notifications are ToolObserved only; internal stage MCP exposes
+report/human. No ToolObserved-to-execution shim is allowed. Catalog whitelist
+observation does not prove actual allowed tool call/timeout/restart behavior.
+This remains a distinct accepted product requirement; lower-level registry tests
+may prove transport behavior but cannot close missing product-stage execution.
+
+8. Ordered independent RED matrix (author owns actual runs)
+
+R1 Actual leader forks child that setsid and keeps changing a fixture file after
+leader exit. Perform production Stop/park, reap first host, reopen second host,
+Continue/wake. Current code must demonstrate actual inappropriate ACK/effect or
+failure before correction. Require zero provider/MCP frames/spawns under unsafe
+history and original run/item/attempt/workspace, not changed identity or test bool.
+R2 Same-group surviving child; R3 double-fork orphan; R4 quick fork-and-exit plus
+escaped grandchild. Each independently proves GroupOnly closure is insufficient.
+R5 Journaled intent without establishment after genuine spawn/owner crash, duplicate
+or conflicting establishment/closure, stale/foreign run/epoch/domain. Cold refuses
+all effects. Legacy SessionClosed/ExecutionWriterClosed alone must not authorize.
+R6 Terminal child exit but no durable domain proof; failure to persist proof and
+crash in each proof→suspension→registry-ACK window. No synthetic clean ACK/replay.
+R7 Valid positive twin with exact frozen populated transport and changed current
+project/global config MUST actually park, close through chosen real capability,
+reap first host, wake same attempt in second host and execute original transport.
+A fixture that merely cannot resume never passes corruption/survivor negatives.
+R8 Missing/corrupt/transplanted private objects/key/manifest after valid real domain
+closure; second actual host refuses before any MCP/provider effects. Empty and
+HostDefault(empty) retain existing independent poisoned-global counterfactuals.
+R9 macOS no-fork prototype: native suspended target tries to fork on its FIRST
+instruction; NOTE_FORK always retained. Burst fork+exit, vfork, posix_spawn, exec,
+monitor error/loss/close/cancellation, registration failure and host SIGKILL windows
+remain Unknown. Benign never-fork target valid positive twin. No run if monitor
+registration fails; resume signal is a last-gated physical effect too.
+R10 Linux: clone-into-domain failure (zero target instructions), setsid/doublefork,
+sibling/external migration attempt, replaced directory/boot mismatch, unavailable
+cgroup/kernel/permissions, lost manager, active child and recursive kill races.
+Actual permission-boundary tests, not mocks of populated=0. Missing domain Unknown.
+R11 Windows native: atomic Job assignment failure, denied breakaway, nested Job,
+leader exits with live child, kill-on-close crash before drain, identity/name
+collision, retained controlling handle, query failure. Native process/handle proof.
+R12 External effect returns while remote operation remains active/unknown: local
+closure cannot mint external settlement. Actual staged generic tool-call oracle
+only after reviewed product execution API exists; no notification execution shim.
+R13 Canceled close/init waiters, runtime destruction, terminal host barriers and
+second-process launch-lock acquisition: SAME original Arc retained until actual
+required domain/receipt ownership completes. Limits/panic-hook/Taken-slot invariants
+and diagnostics/privacy oracles stay mandatory after any new backend.
+R14 Gate bypass matrix: direct owned resume, daemon Continue, cold reconciliation,
+capacity scheduler wake and last physical spawn/init/prompt/call all use same
+validated original closure authority; whole journal includes late unsafe writers.
+
+Keep setup/compile errors distinct from behavioral RED. Native macOS/Linux/Windows,
+full strict workspace gates and frozen 5a→5b reviews remain required; this research
+has run none of them. No test skip or Unsupported status is completion evidence.

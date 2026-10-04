@@ -1,0 +1,9 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized] target(s) in 13.23s
+     Running unittests src/lib.rs (target/debug/deps/surge_acp-516cd789cd48b346)
+
+running 1 test
+test sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 278 filtered out; finished in 0.01s
+

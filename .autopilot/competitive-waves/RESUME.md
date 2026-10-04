@@ -1,3 +1,44 @@
+## 2026-10-03: actual readiness/runtime evidence and unresolved domain authority
+
+Author terminal receipts, independently read logs: ACP all-method refusal76585
+terminal0 (one test, all seven effects plus retries/cleanup), admitted all-method
+peer68500 terminal0 (one test, actual protocol responses). The first positive
+fixture89510 failed because it assumed numeric SDK request IDs; this is a fixture
+failure, not behavior RED. Runtime7252 terminal0, three tests including actual
+unpolled close with transport retained;17999 terminal0, four tests including128
+real owner slots and failed pipe preparation. One terminal_host_probe is a helper,
+not an additional scenario. MCP52111 terminal0 proves actual paginated catalog
+whole deadline and call timeout in the lower-level registry only.
+
+Prerequisite47240 terminal0: CLI and mock ACP binaries built in1m37s. Strict scoped
+clippy49607/92608/59134/17655/21889 all terminal101, not accepted gates. Fifth failure
+was ACP permission fixture nesting; author extracted the event reader without lint
+suppression. Sixth98209 was still running at this checkpoint. Cold outer file
+handed to main with minor final corrections; baseline has not run yet.
+
+Full owning capability report is retained as
+`evidence/owned-flow-20261003/surge-owned-flow-domain-capability-plan-20261003.txt`.
+Verdict NEEDS WORK: current provider and MCP writer records are GroupOnly; leader
+reap, SessionClosed, raw ExecutionWriterClosed and registry.shutdown success do
+not establish complete descendant closure. Suspension seals and cold/Continue/
+wake readers need host-owned whole-prefix proof for ALL writers and unresolved
+external effects. Domain behavior is not authorized by this research report.
+A concrete authority amendment is being prepared read-only; no fake closure or
+replacement launch claim is allowed. Broad native paths require verified Linux
+cgroup placement, Windows atomic Job placement, and a reviewed macOS capability.
+The pending product preference about optional signed macOS setup is unanswered;
+it grants no installation permission and retires no requirements.
+
+Full cold author test plan (including independent legacy counterfactuals and
+section6 missing production closure/tool-call findings) retained beside report.
+Generic external MCP execution is absent on actual stage-MCP: ToolObserved is an
+observation, report/human are the available internal tools. Registry timeout
+PASS cannot close that product requirement. Positive populated cold twin,
+cross-operation signed envelope donor and native Windows remain open.
+
+T25 stays initial build, formal post-build repairs0/3; no source freeze, full
+workspace acceptance or5a/5b review. Full objective and all requirements remain.
+
 # Текущее продолжение: 2026-10-03
 
 Активная цель — реализовать все требования; полный аудит требований ещё впереди.

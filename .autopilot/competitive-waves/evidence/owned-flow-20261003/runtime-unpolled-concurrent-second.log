@@ -1,0 +1,12 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 25.87s
+     Running unittests src/lib.rs (target/debug/deps/surge_mcp-b4d16c5cdf81c86d)
+
+running 3 tests
+test child_settlement::tests::terminal_host_probe ... ok
+test child_settlement::tests::concurrent_terminal_barriers_hold_pending_reservations_and_close_admission ... ok
+test child_settlement::tests::unpolled_close_and_retained_send_settle_after_runtime_drop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 3.31s
+

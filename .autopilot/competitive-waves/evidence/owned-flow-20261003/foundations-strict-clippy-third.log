@@ -1,0 +1,13 @@
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error: unchecked subtraction of a `Duration`
+    --> crates/surge-mcp/src/connection.rs:1081:24
+     |
+1081 |         let retry_at = Instant::now() - Duration::from_secs(1);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `Instant::now().checked_sub(Duration::from_secs(1)).unwrap()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unchecked_time_subtraction
+     = note: `-D clippy::unchecked-time-subtraction` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::unchecked_time_subtraction)]`
+
+error: could not compile `surge-mcp` (lib test) due to 1 previous error
