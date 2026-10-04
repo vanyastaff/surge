@@ -553,3 +553,17 @@ and typed EffectRefused/no-spawn/Disconnected checks, then29928 formatting under
 before initial actual cold baseline. No source freeze or green integrated gate.
 U01 user planning extension now separately retained in manifest without changing
 or retiring any original wave requirements.
+
+Root FULL read domain authority amendment542lines SHAa6fc2bbb040632bb6814a847a6809f71d45a1cd7b9dcd146fcd9533febbed7c3, including refined original registry CanceledBeforeDispatch/no inferred no-child. Durable report retained; architect integrated verdict NEEDS WORK, not source permission. Independent critic and security/storage plan lenses dispatched read-only. Exact Attention/wholeledger/originalArc/cross-WAL protocol, newcrate/native dependencies and external settlement scope require concrete accepted reshape. Main29928 fmt terminal0;9775 first actual cold baseline build underway. Foundational four expectation fixes await rerun.
+
+Cold baseline9775 terminal101:13tests,7support/probePASS6FAIL,3.70s after64s
+compile. Root FULL log read. Two tests reach actual ReadOnly server spawned
+assertion, genuine sandbox pre-catalog gap (agent.rs mcp_spawn_policy explicitly
+denies ReadOnly). Four readiness exits101 lack retained child diagnostics because
+TempDir unwinds; their cause is unknown/setup, not classified behaviorRED. Main
+adds failure-only retained fixture artifacts before repeat, no weakened assertions.
+No cold valid twin/corruption acceptance; missing production writer proof still
+open. Denial must precede catalog/connect/health effects, not post-catalog filtering.
+Domain review preliminary security finding: native creation BEFORE final admission
+contradicts zero-effects Stop guarantee; create and suspended release require
+separate admitted occurrences. Await full independent verdict, no domain code.

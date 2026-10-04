@@ -1,0 +1,542 @@
+T25 whole-writer authority amendment — consolidated owning architecture plan
+Authored/revalidated 2026-10-04; requested artifact name retains 20261003.
+
+Maintainer verdict: NEEDS WORK for integrated implementation authorization.
+The authority algorithm below is concrete and ready for independent plan review.
+Broad native macOS capability/setup and external-effect settlement remain explicit
+unanswered product/technical decisions; they cannot be replaced by GroupOnly
+refusal and then called complete. This plan does NOT authorize source changes.
+No source/tests/Cargo/format/Git/process writes or execution were performed.
+T25 initial formal post-build repair count remains 0/3.
+
+Basis: /tmp/surge-owned-flow-domain-capability-plan-20261003.txt (root durable copy
+commit c831654), full owned Flow plan and runtime amendment6a–6d, current actual
+work_items/control.rs, owned_flow/launch.rs, registry recovery handoffs, run_task,
+whole-fold inspection, tracked_run, hooks, shell tools, ACP and MCP writer paths.
+
+1. Non-negotiable meaning of authority
+
+A completed direct std Child is leader settlement. It is not descendant-domain
+closure, not remote-effect settlement, not suspension authority, and not proof
+that a caller-canceled awaiter never physically dispatched.
+
+A durable writer obligation exists BEFORE each potential physical writer/effect.
+An unresolved obligation always blocks a clean suspension acknowledgment and a
+new dispatch epoch in the same retained attempt/workspace. A host OS lock may
+vanish on crash; the obligation must remain authoritative without that lock.
+The same original WorkItemLaunchClaim Arc is retained by the actual lower-level
+owner, not replaced with a serialized receipt or a freshly issued claim token.
+
+Clean Continue/wake requires a complete immutable original closure set for the
+prior epoch AND exact original startup/accepted input/journal association. Every
+real provider, MCP child, shell/hook child and host/external operation belongs
+in that set. Success/EOF/SessionClosed and cleanup_confirmed flags are projections,
+not capability constructors. A valid native local-domain closure does not close
+an unresolved external service operation.
+
+2. Dependency direction and shared native owner
+
+Introduce reviewed crate crates/surge-process (13th member if accepted):
+  surge-process -> surge-core, thiserror, tracing, libc/nix (platform), windows.
+  surge-acp -> surge-process; surge-mcp -> surge-process.
+  surge-persistence -> surge-process, surge-core (no ACP/MCP dependencies).
+  surge-orchestrator -> persistence, ACP, MCP, process (existing downward flow).
+No process crate dependency on Tokio, SQLite, MCP, ACP or Git is needed for actual
+OS ownership; async adapters may live in the consumer crates.
+
+Move the existing process identity read-only implementation from surge-acp into
+surge-process/src/identity/{mod,linux,macos,windows}.rs; ACP's public process_evidence
+path re-exports/delegates for compatibility. Do not maintain duplicate parsers or
+independently guessed machine/boot/start identities. Full Windows observation is
+a required implementation path, not a procfs-shaped stub.
+
+surge-process/src/domain/{mod,linux_cgroup,windows_job,macos_observation}.rs owns
+actual native domain primitives. src/owner/{tracker,worker,transfer,panic_boundary}
+owns runtime-independent actual child/domain ownership. Migrate or share the
+existing MCP bounded128 reservations,512KiB threads, retained transfer-slot,
+Taken protocol and silent process-wide panic dispatcher; never run two independent
+hook dispatchers or two kill/wait owners for the same child. Keep existing approved
+standard leader-only mode until a new backend is reviewed. The native profile
+amendment is consequential and must pass owning/security review before code.
+
+Platform APIs return opaque non-Serde PreparedDomain, RunningDomain and
+NativeDomainClosure values with private constructors, not a public 'covered:true'
+flag. Public immutable descriptor getters are diagnostic data, not permission.
+A closure is created only by actual OS observation in the concrete backend and
+binds the exact native domain and original process identities established at birth.
+No public arbitrary wait/probe implementation or CallerClosed constructor exists.
+
+PreparedDomain establishes any actual containment/observation BEFORE target code
+can run. A host observer binds its actual native identity to the reserved writer
+write-once BEFORE the native owner releases the pre-execution hold. Then a last
+synchronous effect gate authorizes exactly that release/spawn. Every post-spawn
+failure retains actual child/domain plus original observer and settles or becomes
+uncertain; no false NoChild. Native owner cancellation/queue/stdio registration/
+thread/Taken panic invariants are the accepted runtime amendment, not reset.
+
+3. Pure model and durable registry schema
+
+crates/surge-core/src/execution_recovery/domain.rs defines only validated immutable
+DATA (serde try_from, never authority):
+- ExecutionEpochId, WriterObligationId, EffectObligationId (typed IDs),
+- NativeDomainDescriptor discriminating actual primitive/version/machine/boot/
+  original domain identity; immutable root identity where applicable,
+- ClosureEvidenceRecord and ExecutionClosureSet with original binding/workspace
+  owner, stable launch-lock identity, dispatch epoch, invocation/writer IDs,
+  journal-origin receipt, exact proof kind, proof revision and schema,
+- Missing/Alive/Unknown/ProvenClosed projections; local and external obligations
+  separate. Raw deserialization only validates structure, never grants permission.
+Legacy hashes/accepted requirements/Flow input serialization stay unchanged.
+
+Registry migration (next available number, do not invent/collide with active author):
+execution_epochs(run,attempt_generation,epoch,stable_launch_identity,state,
+  control_generation,revision,writer_generation,closure_set_id,seal_receipt,...).
+execution_writer_obligations(run,epoch,writer,invocation,kind,reservation_nonce,
+  phase,native_identity,journal_intent_receipt,journal_established_receipt,
+  closure_record,closure_projection_receipt,revision,...).
+execution_effect_obligations(run,epoch,effect,writer,kind,request_occurrence,
+  phase,settlement_contract,settlement_record,journal_receipt,revision,...).
+execution_closure_sets(run,epoch,set_id,canonical_set,digest,writer_generation,
+  closed_count,external_count,journal_seal_receipt,ack_state,...).
+Keys bind immutable accepted item/attempt/workspace identity; write-once fields
+cannot be replaced by restart/Attention. Unique receipt/occurrence constraints
+and conflict rejection prevent second child/foreign proof reuse or fresh-ID
+re-accounting of the same writer. Checked generation arithmetic; unknown remains
+unknown rather than overflow/defaulting into empty closure.
+
+Epoch states: Running -> Quiescing -> ClosedAwaitingJournal -> Suspended.
+Any unresolved obligation/invalid history -> Attention (dispatch closed).
+Continue reservation remains dispatch CLOSED until full previous proof is checked;
+opening the next Running epoch is an explicit one-shot authorized transition.
+No reset of prior ledger or closure records. A new attempt/revision/workspace
+must not bypass the retained unresolved workspace-owner obligations.
+
+4. Exact host-only persistence APIs and issuance boundary
+
+New crates/surge-persistence/src/work_items/execution_authority/{mod,ledger,
+closure,continuation,attention}.rs and runs/execution_authority/{mod,inspection,
+writer_commands}.rs. Proposed API names are concrete contracts, not existing code:
+
+WorkItemStore::begin_execution_epoch(&claim, validated_startup) -> ExecutionEpoch.
+WorkItemStore::reserve_writer(&claim, epoch, invocation, kind) -> WriterReservation.
+WorkItemStore::bind_native_domain(&WriterReservation, &PreparedDomain) -> binding.
+WorkItemStore::bind_writer_journal_origin(&WriterReservation, IntentJournalReceipt).
+WorkItemStore::admit_writer_effect(&WriterReservation, point, expected_epoch)
+  -> HostEffectAdmission (non-Serde, retained by actual owner).
+WorkItemStore::commit_native_closure(&WriterReservation, &NativeDomainClosure)
+  -> StoredClosureReceipt (idempotent exact data, conflict otherwise).
+WorkItemStore::freeze_execution_epoch(&claim, expected_control) -> EpochFreeze.
+WorkItemStore::prepare_closure_set(&EpochFreeze, WholeJournalExecutionEvidence)
+  -> HostSuspensionPermit.
+WorkItemStore::acknowledge_suspension(&claim, SuspensionJournalReceipt)
+  -> exact control (replaces bool-only confirm_suspension).
+WorkItemStore::reserve_continue(&claim, prior_ValidatedSuspension,...)
+  -> HostContinuationPermit; automatic wake uses the same authority transition.
+WorkItemStore::mark_execution_attention(&claim, epoch, observed_revision, reason)
+  -> durable fenced Attention + preserved unresolved ledger.
+
+Every issuance/commit validates genuine descriptor-checked original OS lock,
+claim token/current active run/generation/revision/unarchived workspace/owned Flow
+manifest association, exact epoch/writer occurrence and current controls in ONE
+short registry transaction, bracketed by actual lock verification. No DB connection
+survives async waits or native join. claim token is current ownership validation;
+immutable closure identity binds stable launch object and ORIGINAL epoch, so
+cold claim-token reissuance does not rewrite or invalidate genuine old proof.
+
+WriterReservation stores private issuance nonce, original epoch/identity and a
+clone of SAME original claim. It is not Deserialize or publicly constructible.
+Native descriptor is write-once before execution. A second real child/domain closure
+with copied public IDs cannot settle the first obligation: original native identity
+and reserved receipt must match. Native factory ownership/private constructors
+plus persistence-issued reservation are both needed, neither alone is sufficient.
+
+Threat boundary: source/library host I/O owners and owned SQLite stores are trusted;
+wire callers/public JSON/generic append routes are not authority issuers. This is
+not tamper-proof storage against arbitrary privileged local DB modification.
+No new private HMAC namespace/key is required for Empty: private-input auth remains
+separate and unchanged. No inherited credential capture, raw command/env or panic
+payload enters the closure ledger/journal/diagnostics.
+
+5. Registration/spawn protocol and every cross-DB failure window
+
+Registry DB and per-run events.sqlite are separate WAL databases. Do NOT claim
+an atomic cross-DB transaction, ATTACH-WAL atomicity or synchronous SQL read making
+journal mutation atomic. Use monotonic authority-first protocol:
+
+A. Under original claim, registry reserve_writer commits ReservedUnestablished,
+   epoch/writer_generation increment and irreversible occurrence/nonce BEFORE
+   journal intent enqueue and BEFORE any physical spawn.
+B. A typed RunWriter::commit_writer_intent(reservation-issued permit) commits the
+   actual origin event and returns private IntentJournalReceipt with run/epoch/
+   occurrence/seq/raw-byte digest. Registry binds that receipt write-once.
+C. Native PreparedDomain is actually created/child held as required by backend.
+   Registry binds original domain identity. Typed journal establishment commits;
+   registry binds its receipt. The actual target cannot execute between create
+   and the final gate. Failures retain owner; no replacement domain on same ID.
+D. Final synchronous registry admit_writer_effect checks receipt association,
+   current Running epoch, complete startup and prior closure authority, stable
+   lock, accepted binding/workspace and latest permitting control. It performs a
+   short WRITE admission recording the particular physical occurrence before
+   spawn/resume/first wire enqueue, with no caller await in between.
+E. Actual owner performs that one admitted effect immediately; later Stop may
+   close admission but must settle already admitted owners/operations. A Stop
+   committed BEFORE D causes zero physical effects. Admission receipt is not an
+   exit/completion proof. SDK/OS-internal I/O may finish an already admitted effect;
+   any later Surge-owned await requires another last gate after it.
+
+Crash/cancel between A and B leaves an orphan registry obligation. Missing journal
+intent/PID NEVER means no child. It remains Unknown/Attention and is inspectable.
+A genuine pre-spawn cancellation can close only while the actual retained launch
+factory/reservation proves its unconsumed physical permit and no created child;
+this is a private NoChildProof issued by the same native owner, not Drop/channel
+closure/lost waiter/absence of a PID. If that owner is lost, no NoChild is guessed.
+For a genuine NoChild proof issued after A but before B, typed journal projection
+records CanceledBeforeDispatch with the ORIGINAL registry reservation receipt and
+its immutable writer_generation. The complete closure set includes that obligation
+even though no physical WriterEstablished event exists. This is positive issued
+no-child evidence, never inference from absent intent/PID. A queued intent from a
+pre-Quiescing reservation can only project its already existing origin/cancel/
+closure; it cannot gain execution permission behind freeze. New generation or
+unregistered late intent is refused/conflicting. Registry-only unresolved orphans
+still block the set even if the whole journal contains no writer event.
+
+Crash after journal commit before registry bind retains an unbound obligation;
+reconcile the exact original committed receipt and binding, without spawning.
+Crash after native create before establishment commit is unresolved even if child
+was suspended. Native owner retains it; host-death recovery proves real native
+identity if capability permits, otherwise stays Attention.
+
+Generic AppendEvent/AppendBatch reject new authority-bearing writer/domain/closure/
+seal/continue variants AND owned writer intent/establishment claims. Typed commands
+only accept live host permits bound to actual registry reservations. Legacy old
+events remain readable but cannot mint new authority. All writer-producing APIs
+must follow A–E; a late unknown legacy intent in an owned run is a conflict.
+
+Run writer's own epoch marker/generation is installed through typed birth command.
+Every typed writer append uses the bound permit and serialized writer command
+queue. freeze command closes writer-generation acceptance after registry Quiescing;
+late queued writer intents either settle their PREEXISTING registry obligation
+or are refused, never escape the registry closure set. Every lower-level owner
+has that same bound writer reservation, so unregistered physical effects cannot
+occur through the owned production host boundary.
+
+6. Actual local closure and external obligations
+
+Native owner returns NativeDomainClosure only after all local domain obligations
+are physically proven closed and root reaped. It retains original observer/claim
+until the host persistence acknowledgment or durable uncertainty boundary.
+Registry commit validates exact original domain/nonce and writes actual local
+closure. Typed journal projection follows; if it fails/crashes, registry closure
+is still durable, but suspension remains blocked until exact projection repaired.
+This is not LostReceipt -> new child or a replacement launch lease.
+
+Host operations that can outlive their local process need separate effect IDs
+BEFORE dispatch. Local-RPC completion/pipe EOF/HTTP200 is not remote quiescence.
+Adapters may close an external effect only with their reviewed provider-specific
+terminal/cancel/settlement evidence bound to the actual request occurrence.
+Unsupported/uninterpretable completion remains ExternalUnknown. Retain exact
+pending owner/receipt across canceled waiters. Finite synchronous host filesystem
+operations settle after their real blocking worker completes; future cancellation
+cannot certify completion. Arbitrary shell/MCP is not declared local-only merely
+because the fixture is benign.
+
+Existing MCP and shell/hook begin(...local_effects:false) cannot be flipped to true
+as a shortcut. Introduce explicit LocalWriter and ExternalEffect obligations at
+the real effect boundary, preserving unknown external obligations from existing
+history. Model ambiguity in legacy records as unresolved. Closing transport may
+close its local domain; it does not erase external obligations. A valid positive
+twin requires a supported reviewed settlement contract for its actual effects,
+not a config checkbox saying trust_this_server. This adapter contract still needs
+concrete design and independent review before claiming unrestricted MCP recovery.
+
+7. Freeze/suspension journal/registry protocol (no fictitious atomicity)
+
+1 Run task stops graph dispatch; registry freeze_execution_epoch atomically changes
+  Running -> Quiescing, closes new reservations/admissions, records exact requested
+  control generation and current writer_generation. All subsequent final physical
+  checks refuse. Pending already reserved obligations remain in the set.
+2 Request cancellation/close of provider, MCP, shell/hook and external owners.
+  Always permit denial/cancel/close/wait/reap bookkeeping while dispatch closed.
+  Do not impose success timeout on actual owners. Timeouts become Attention.
+3 Each actual owner commits exact closure/NoChild/effect settlement and journal
+  projection. All existing reservations, including orphan/unbound ones, must be
+  resolved. Independent actual OS survivor/escape observation is mandatory.
+4 Typed journal barrier computes FULL contiguous history in one held read/write
+  transaction, not only startup prefix. Pure reducer checks every origin/domain/
+  closure/scope/epoch, duplicates/conflicts/unknown events/late writers and builds
+  exact closed writer+effect set. Match registry ledger snapshot and generation.
+  Registry freezes immutable closure set only when every obligation is complete.
+5 RunWriter::seal_owned_suspension(HostSuspensionPermit, frozen_cursor_snapshot)
+  serializes behind actual prior owner events. In ONE JOURNAL transaction it checks
+  current head, exact closure projection set, no unregistered/late writer, snapshot
+  pending phase and attempt/startup binding; computes final raw-byte prefix digest;
+  writes ExecutionEpochSealed and RunSuspended plus snapshot. Snapshot at_seq is
+  the final actual prefix BEFORE those seal events, after all closure observations;
+  do not retain the pre-cleanup snapshot_seq used by current prepare_suspension.
+  No caller may supply cleanup_confirmed as proof. Return private journal receipt.
+6 Registry acknowledge_suspension validates that receipt by actual journal inspection
+  under exclusive owner + unchanged closed epoch/generation/set identity, then ONE
+  registry IMMEDIATE transaction updates control Suspended, attempt Suspended,
+  closure ack receipt and capacity association. Only then UI reports suspension
+  and original actual owners may finish releasing launch responsibility.
+
+Crash after step4 before5 is ClosedAwaitingJournal, no clean ACK/effects. Crash
+between5 and6 can replay exact original journal receipt after full inspection;
+it does not resuspend/restart/recreate native writers. Crash before any proof is
+Unknown. Journal/registry discrepancy, late writer or newer control fences step6
+and persists Attention; it never chooses whichever DB looks greener.
+The journal seal cannot be bypassed by a read-only SQL snapshot. Correctness comes
+from registry epoch closure BEFORE any waits plus exclusive original lease and
+restricted RunWriter ownership protocol; every gap retains a blocking obligation.
+
+8. Attention BEFORE unresolved owner release, including disk/runtime failure
+
+mark_execution_attention is ONE registry IMMEDIATE transaction: validates original
+claim/epoch and expected current generation/revision, sets epoch Attention and
+closed-admission, attempt Attention, latest relevant control Attention without a
+clean fence, preserves active_run/workspace and ALL unresolved obligations, invalidates
+wake permits and records bounded reason code. It commits BEFORE intentionally
+dropping the last unresolved launch-owner Arc. No settle(terminal) clears active_run
+while any obligation is unresolved. Task completion/workspace archive/delete/new
+attempt must consult the same obligation ledger and cannot bypass it.
+
+Live actual native children/domains/operations still retain original Arc through
+the independent actual owner until physically settled; Attention is not permission
+to discard child/domain ownership or signal a stale numeric PID. If only incomplete
+observation remains after actual owner exit, durable Attention allows releasing
+that owner's Arc while retaining the blocked obligation forever until real proof
+or an explicit future reviewed resolution exists. Reclaiming the now-free OS lock
+confers reconciliation-only authority, not dispatch permission.
+
+If Attention persistence fails, DO NOT release intentionally. Retain original
+owner and retry with bounded safe diagnostics/backoff; shutdown barrier stays
+unconfirmed. An unavoidable process crash releases OS locks, but BEFORE any effect
+A had durably inserted its unresolved obligation; a new host therefore blocks
+without requiring the missing Attention projection. Storage unreadable is also
+refusal. No kill/abort path pretends it committed Attention or cleanup.
+
+Move daemon supervise_completion's unconditional drop(claim) behind verified
+closure acknowledgment or committed Attention. Runtime-cancelled supervisors cannot
+be sole owners: native/process owner and authority settlement coordinator hold
+original Arc independently, registered before first postspawn await. Admission/
+broadcast completion releases UI slots, not unresolved workspace/process authority.
+
+9. Continue, capacity wake, cold reconciliation and final gates
+
+WholeJournalExecutionEvidence comes from new storage inspector reading complete
+journal to actual terminal/current head, validates exact startup/artifacts/private
+inputs plus closure-set proof and continuous writer/effect ledger. It is not a
+Deserialize/public struct-literal capability. Capture read snapshot, then recheck
+registry revision and epoch; stale/disagreeing evidence refuses. Persisted closed
+journal cannot accept writer events without a new authorized continuation epoch.
+
+- work_items/control.rs request_control: Continue needs ValidatedSuspension/set,
+  not State::Attention with cleanup bool. current operation replay remains stable.
+- confirm_suspension/confirm_continued: typed receipt + exact old/new generation,
+  prior closure set and actual journal origin; no bool-only acknowledgment.
+- owned_flow/launch.rs confirmed_continuation/validate_owned_flow_effect: validate
+  prior acknowledged closure set + fresh next dispatch epoch and latest control;
+  remove cleanup_confirmed shortcut. One current registry snapshot/write admission
+  checks exact current receipt and frozen manifest association.
+- recovery_cycles/handoffs and capacity_fence/reserve_automatic_wake: require same
+  closure set/epoch receipt before consuming wake or reserving next provider.
+  Planned pre-dispatch no-writer capacity park gets genuine empty set ONLY when
+  whole journal/registry prove zero physical obligations, not arbitrary Reserved.
+- engine/work_items.rs validate_resume and engine.rs direct/owned resume: full
+  inspector before constructing any registry/provider/MCP/session; matching prior
+  proof is required regardless whether mutable capacity settings now disabled.
+- daemon work_items launch_attempt/reconcile_page/reconcile_terminal: cold claim
+  acquisition does not bless history. Unresolved/inconsistent history atomically
+  Attention before that reconciler releases its original claimed owner.
+- tracked_run outcome validation: RunSuspended bool/event alone is insufficient;
+  authoritative receipt/proof-set check before registry completion acknowledgment.
+- wake_scheduler fast paths/legacy_resume/native local facade must not bypass;
+  owned run lookup always routes through same durable authority API.
+
+ContinueReservation retains old sealed epoch/digest; no effects while it exists.
+Typed RunWriter::commit_owned_continuation(HostContinuationPermit) appends exact
+RunContinued/new epoch origin in one journal transaction after prior seal. Registry
+ack binds actual receipt, atomically opens new Running epoch/current control under
+same attempt/workspace and then dispatch permits become available. Crash before
+registry ack stays closed; repair exact existing journal origin once. No duplicate
+RunContinued, no fresh attempt, no history wipe. Later new writer registrations
+belong solely to this next epoch; old immutable set remains unchanged.
+
+Final callback APIs must identify writer/epoch/effect point, not merely a generic
+check(): ACP SessionConfig retains bound WriterReservation observer, MCP observer
+retains current server's reservation, shell/hook context retains its occurrence.
+Lower layers call synchronous admission after ALL provider readiness/storage/queue/
+approval/pagination/reconnect waits, immediately BEFORE actual std/native spawn,
+SIGCONT/ResumeThread, initialize/new/load/resume/options/prompt SDK send_request
+CALL, granted permission return, tool-call/ping/health write. Opaque typed refusal
+preserved. Request/receipt ID alone is data; ownership stays in private observer.
+Each admitted RPC occurrence gets a settlement obligation where required. Cleanup
+paths never need a new execution permit. A short read-only check before an outer
+future is specifically insufficient; registry write admission + typed journal
+origin + immutable epoch/closed-set protocol are all required.
+
+10. Full native backend path retained (product preference unanswered)
+
+Linux: verified cgroup2 domain before execution; clone3(CLONE_INTO_CGROUP) or a
+separately reviewed equivalent actual atomic placement backend. Verified permission/
+namespace boundary prevents target/same-domain child migration to siblings/outside,
+no leaked manager handles/capabilities/IPC. Original domain admission closes;
+recursive populated=0 + root reap + original identity establishes local closure.
+Native cgroup.kill handles teardown; request alone is not closure. Actual configured
+capability/setup unavailable -> explicit refusal/Attention, never fallback proof.
+
+Windows: secured nonbreakaway Job assigned by CreateProcessW
+PROC_THREAD_ATTRIBUTE_JOB_LIST before execution, actual native RAII process/pipe/
+job handles, original domain bound before dispatch. Admission closes; root reaped
+and original Job ActiveProcesses=0 proves local closure. Host death/kill-on-close
+is initiation only; retained identity/broker inspection or durable prior proof
+needed. Nightly std spawn_with_attributes is not silently adopted; native windows
+0.58 backend/stable MSRV and actual Windows tests are required.
+
+macOS full path: Apple EndpointSecurity observation established before spawn,
+precise audit-token root/descendant identity, fork/exec/exit lineage across setsid,
+bounded ordered attribution, gap detection via per-client sequence numbers, actual
+terminal-drain protocol + root reap. Lost event/observer/host before durable proof
+makes the affected domain Unknown; process census never repairs it. This requires
+entitlement/distribution/installation architecture and user setup decisions.
+Product preference currently UNANSWERED; installation NOT AUTHORIZED. Do not
+request/install entitlement/system extension or change OS settings from this plan.
+
+macOS optional zero-setup path: native suspended spawn, pre-run EVFILT_PROC
+NOTE_FORK|NOTE_EXIT, uninterrupted monitor, permanent everfork bit and root wait.
+This can prove complete no-descendant history for never-fork writers. XNU may
+suppress NOTE_EXIT while a debugger reparents the process to a tracing parent
+(kern_event.c1130–1136); missing terminal event remains Unknown even when waitpid
+succeeds. Root wait never upgrades incomplete monitoring. Requested event flags
+are ORed, while NOTE_EXIT marks EV_EOF|EV_ONESHOT; drain and store every flag before
+detaching the exact original monitor. Any fork, including quickly exited child,
+or monitor loss stays Unknown. This is an additional
+capability, not the full forking-server requirement. Current approved std Child
+primitive cannot install it before execution/publicly adopt raw pid; review new
+owned native child backend and preserve exact executable/argv/env/cwd/stdio.
+
+Shared dependencies use root workspace managed libc/nix/windows existing pins;
+add required native features in root then {workspace=true}. New macOS ES binding
+must use primary SDK APIs and explicit entitlement availability, feature gate does
+not count as runtime proof. Architecture/AGENTS crate-count/map updates are part
+of accepted new-crate stage, not performed by this research.
+
+Primary sources and detailed native failure boundaries are fully cited in the
+prior domain-capability report. No platform execution was performed in this plan.
+All native profiles preserve original accepted command, ordered args, declared
+minimal env, cwd, sandbox/tool visibility and private-input authentication; no
+VM/rewritten binary/path or trust checkbox replaces that contract.
+
+10a. Exact lower-layer API and cancellation boundaries
+
+Extend core data-only HostEffectPoint with physical class and original writer/epoch/
+request occurrence. ACP bridge HostEffectFence and MCP HostWriterObserver expose
+fn admit_effect(&self, point: HostEffectPoint) -> Result<(), OpaqueRefusal>; their
+private owning orchestrator implementations capture actual WriterReservation and
+retain the persistence-issued HostEffectAdmission internally. The lower layer
+receives permission/refusal only, not a persistence dependency or transferable
+receipt-as-authority. Supplied point data must match captured reservation/scope;
+no public boolean selects bypass. Existing unowned callers remain an explicitly
+legacy mode and cannot populate owned-flow authority with their synthetic observer.
+
+Exact consumer files: surge-acp/src/bridge/{worker,lifecycle,sessions,effect_fence},
+sdk_v1.rs connection-ready/send_request seam and actual permission return seam;
+surge-mcp/src/{connection,writer_observer,registry} and health/reconnect/call paths;
+orchestrator engine/{owned_effects,writer_coverage,run_task,work_items,engine},
+engine/stage/agent.rs, engine/tools/worktree.rs and engine/hooks/mod.rs. Every
+physical writer path uses shared NativeLaunch backend plus captured reservation.
+
+A captured real local result does not depend on delivery to the user future.
+Actual lower-level operation owner publishes a fixed typed LocalRpcSettlement
+observation to its captured host sink BEFORE returning the result to a possibly
+canceled waiter. The sink records only local protocol completion; an external
+settlement adapter must validate its separate occurrence-specific terminal evidence.
+A runtime-independent authority settlement coordinator in persistence retains
+WriterReservation/native closure or external receipt until its registry commit or
+durable Attention boundary. It uses synchronous SQLite transactions on bounded
+standard workers, no Tokio task as sole owner. Actual response/native proof captured
+but canceled projection/awaiter remains pending; do not Drop it as settled.
+Journal projection may fail with runtime destruction: committed registry closure
+remains ClosedAwaitingJournal, effects stay blocked and original receipt is repaired
+on next host. A native closure with registry commit failure remains retained or
+Attention committed before release; no false acknowledgment from channel closure.
+Coordinator bounds cannot evict live responsibility; terminal host barrier joins
+process and authority owners. Loss/poison/panic follows shared silent fatal policy,
+never raw diagnostics or synthetic proof. All producer results and startup/exit
+windows need actual cancellation/fault oracles.
+
+11. Stage implementation/dependency order (keep all full requirements open)
+
+StageA authority ledger/typed journal commands/pure whole-fold inspector + genuine
+physical barrier REDs. No native proof constructor yet; false clean acknowledgment
+is removed but broad cold positives remain red/open. Commit only full dependency
+closure with real gates; label incomplete capability honestly.
+StageB shared runtime-independent native owner/identity migration and exact original
+lease retention/durable Attention protocol. Preserve all accepted transfer/panic/
+resource/host-shutdown tests; no weaker stdchild regression contract.
+StageC native backends + supported external-settlement adapter contracts. Linux,
+Windows and macOS broad path separate native execution gates; product/setup fork
+settled before macOS installation. Optional nofork path additional bounded evidence.
+StageD actual populated initial/park/cold/wake positive twins, corrupt/private/empty
+counterfactuals, all Stop/Continue/reconciliation/final physical gates; source freeze
+and required independent5a then5b. Only then can full T25 be considered accepted.
+No conservative-only stage or nofork fixture completes full requirements.
+
+12. Independent ordered RED matrix
+
+A1 Actual same-group survivor, setsid survivor, double-fork escaped grandchild:
+production Stop/park plus cold second host currently inappropriate ACK/effect;
+corrected authority commits Attention and zero provider/MCP wire effects.
+A2 Crash between registry insertion and journal intent; canceled awaiting caller;
+no PID/empty journal. Ledger remains unresolved; no synthetic no-child cleanup.
+Valid retained pre-spawn factory NoChild twin closes only its exact reservation.
+A3 Crash after journal intent before registry bind; after native creation before
+establishment; after effect admission before spawn/send; after actual exit before
+closure commit. Every boundary preserves identity and conservative original debt.
+A4 Second genuine child's closure, copied writer IDs, foreign run/workspace/epoch,
+stale receipt/control, duplicate/conflicting/late writer/closure or forged generic
+AppendEvent/Batch: atomic rejection, original unresolved ledger unchanged.
+A5 RPC readiness/storage wait and permission response await: Stop before final
+admission -> zero actual spawn/SDK enqueue/grant. Stop after admitted occurrence
+waits its real settlement, not canceled outer waiter/channel success.
+A6 Whole-journal late writer beyond startup and beyond snapshot; journal mutation
+behind seal; queue-draining race: closure set cannot silently omit writer; invalid
+history persists Attention before owner release and prevents all effect entry paths.
+A7 Registry frozen-set/journal seal/registry acknowledgment crash windows: idempotent
+exact original receipt recovery, no duplicate seal/Continue/provider. Separate WAL
+DB fault injection proves no false cross-DB atomicity assumptions.
+A8 Attention persistence failure/canceled supervisor/runtime drop: actual original
+lock unavailable to second process until complete native ownership or durable
+Attention boundary; orphan obligation blocks dispatch after unavoidable host death.
+A9 Terminal outcome while unresolved writer; archive/delete/new revision/newattempt:
+no active_run/workspace release bypass. Actual retained task files keep changing
+under survivor while follow-up effects remain blocked.
+A10 Provider SessionClosed/leader wait, MCP EOF/registry.shutdown, hook/shell timeout
+all fail to prove descendant domain. Real spawn ownership retained for every path.
+A11 Real Linux atomic placement/migration boundary/fork races/replaced domain/permission
+loss/cold identity; real Windows atomic Job/no breakaway/live child/crash/handles/
+query failure; actual macOS lineage no gaps/escape/terminal-drain and entitlement
+availability. Unsupported/skipped/native compile-only is not pass.
+A12 Optional macOS nofork: FIRST-instruction fork; burst fork+exit/vfork/posix_spawn/
+exec, monitor loss/error/registration failure, debugger reparent/EXIT suppression and
+host death; neverfork real positive
+but forking positive remains open unless broad backend passes.
+A13 External operation survives local exit/HTTP200: ExternalUnknown blocks clean
+ACK. Supported adapter terminal/cancel exact-occurrence twin can close; fake server
+success/prose/config trust flag cannot. Generic product stage MCP tools/call stays
+open until real executable API exists, no ToolObserved execution shim.
+A14 Actual populated transport positive twin initial→real quota park→real closure→
+reap host→change current defaults→second cold host→wake same attempt/workspace and
+original exact transport. Private corruption/transplant negatives require this
+working twin; Empty/HostDefault(empty) have poisoned-global spawning counterfactual.
+A15 All actual APIs direct resume/daemon Continue/reconcile/capacity wake/final spawn,
+init/session/options/prompt/grant/call/health reconnect pass same authority gate,
+legacy bool and alternate config paths cannot revive uncertain original writers.
+A16 Regression full strict workspace/native host gates, same-Arc physical second-
+process lease, panic-hook sentinel, bounded128/Taken slot/wait ambiguity, retained
+send/neverpolled close, terminal shutdown/privacy/framing and private-input tests.
+
+Every RED uses independent physical processes/recorders/SQL snapshots, real barriers
+and same original identities; setup/compiler failures logged separately. All full
+acceptance oracles/Windows native/full frozen reviews remain required. No test or
+native execution was run by this read-only architect.

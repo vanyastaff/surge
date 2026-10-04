@@ -1,0 +1,58 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 1m 04s
+     Running tests/owned_flow_mcp_recovery.rs (target/debug/deps/owned_flow_mcp_recovery-694c79adf6187c78)
+
+running 13 tests
+test child_owned_flow_mcp_probe ... ok
+test cold_host::tests::dropping_the_owner_during_panic_reaps_its_actual_child ... 
+thread 'cold_host::tests::dropping_the_owner_during_panic_reaps_its_actual_child' (31409036) panicked at crates/surge-daemon/tests/support/cold_host.rs:340:13:
+exercise owned-child cleanup during unwind
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test cold_host::tests::natural_exit_status_is_preserved_and_exit_timeout_reaps_owned_child ... ok
+test cold_host::tests::owned_child_probe ... ok
+test cold_host::tests::readiness_requires_a_fresh_marker_and_owned_process_can_be_reaped ... ok
+test cold_host::tests::readiness_timeout_and_early_exit_reap_the_owned_child ... ok
+test cold_host::tests::regular_marker_swapped_to_fifo_errors_without_blocking_and_reaps_child ... ok
+test explicit_empty_survives_real_cold_wake_and_changed_global_defaults ... 
+thread 'explicit_empty_survives_real_cold_wake_and_changed_global_defaults' (31409118) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:567:9:
+legacy child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpwxyrxr/cold-host-stdout-aXYsMW; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpwxyrxr/cold-host-stderr-3cYQn1
+FAILED
+test host_default_empty_survives_real_cold_wake_and_changed_global_defaults ... 
+thread 'host_default_empty_survives_real_cold_wake_and_changed_global_defaults' (31409134) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:567:9:
+legacy child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpfqcZ5W/cold-host-stdout-ZLG63l; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpfqcZ5W/cold-host-stderr-wLIZmU
+FAILED
+test missing_and_corrupt_private_inputs_refuse_real_cold_writers ... 
+thread 'missing_and_corrupt_private_inputs_refuse_real_cold_writers' (31409145) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:750:5:
+ReadOnly server spawned
+FAILED
+test populated_cold_valid_twin_keeps_original_transport_and_writer_history ... 
+thread 'populated_cold_valid_twin_keeps_original_transport_and_writer_history' (31409221) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:567:9:
+populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpKzThWg/cold-host-stdout-YFvaui; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpKzThWg/cold-host-stderr-p6ibVf
+FAILED
+test populated_initial_transport_is_exact_and_public_snapshot_opaque ... 
+thread 'populated_initial_transport_is_exact_and_public_snapshot_opaque' (31409243) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:750:5:
+ReadOnly server spawned
+FAILED
+test transplanted_objects_and_changed_manifest_refuse_real_cold_writers ... 
+thread 'transplanted_objects_and_changed_manifest_refuse_real_cold_writers' (31409307) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:567:9:
+populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpXtJukM/cold-host-stdout-qH35e3; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpXtJukM/cold-host-stderr-fzm3ME
+FAILED
+
+failures:
+
+failures:
+    explicit_empty_survives_real_cold_wake_and_changed_global_defaults
+    host_default_empty_survives_real_cold_wake_and_changed_global_defaults
+    missing_and_corrupt_private_inputs_refuse_real_cold_writers
+    populated_cold_valid_twin_keeps_original_transport_and_writer_history
+    populated_initial_transport_is_exact_and_public_snapshot_opaque
+    transplanted_objects_and_changed_manifest_refuse_real_cold_writers
+
+test result: FAILED. 7 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.70s
+
+error: test failed, to rerun pass `-p surge-daemon --test owned_flow_mcp_recovery`

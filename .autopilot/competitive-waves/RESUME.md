@@ -1,3 +1,17 @@
+# Current continuation checkpoint 2026-10-04
+
+Main67524 terminal100:1811PASS/4FAIL/8existingSKIP,1815run. Raw complete failed log
+committed ab7c4e9. Three ACP fixtures had old effectcheck ordinals; one MCP stdio
+fixture expected raw StartFailed rather than accepted opaque EffectRefused. Main
+updated exactwire/refusal/owner oracles, then29928 fmt terminal0. Rerun pending.
+First real cold baseline9775 building daemon at checkpoint; do not consume author's
+handle. ALL source/test/Cargo ownership main; former cold helper now readonly
+independent critic for new domain plan. Root FULL read542-line amended authority
+plan SHAa6fc2bbb... durable owned-flow-20261003 copy; integrated NEEDS WORK, no
+source authorization. Independent critic + security/storage precode plan reviews
+pending. Native, external settlement and full product requirements remain open.
+U01 multi-provider planning user extension recorded separately in manifest.
+
 # Follow-up 2026-10-04
 
 Author scoped strict98209 terminal0 for core/ACP/MCP/persistence alltargets/allfeatures;
