@@ -9,7 +9,7 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-10-04T03:38:37.143325+00:00",
+  "updatedAt": "2026-10-04T03:46:10.544513+00:00",
   "finishedAt": null,
   "previousCheckpoint": {
     "finishedAt": "2026-09-07T14:10:00-05:00",
@@ -63,7 +63,7 @@ window.STATE =
       "id": "build",
       "status": "active",
       "startedAt": "2026-09-05T16:34:13-05:00",
-      "note": "T12 active; configured task-owned predispatch accepted95c5295 (3451PASS36skips, independent5a/5b). T25 initial0/3: daemon receipt/exactbody replay, retained original crossprocess ownership, late journal manifest duplicate, ACP4 scoped and MCP11 actualchild checks verified. Framing privacy genuineRED99726 followed reader suite11PASS (14883 exitreceipt pending author). Main owned_flow_builder now owns ALL source/Cargo/format after MCP helperhandoff. Runtime-independent settlement draft has independent owning/security RESHAPE (Tokio error after physical spawn, owner/ACK/tracker order, panic hook opacity); author revises before new runtime behavior. HostTRACE, realSQL barriers, cold/private/Empty, descendant refusal, nativeWindows, full gates and independent5a/5b still open. Actualproperclean30369 freed14.5GiB; do not manually delete target or kill unknown userprocesses. ACPaccounting nextdependency draft read-only, no codeauthorization. Historical46 requirements not currentlyverified; fullproduct goal remains active.",
+      "note": "T12 active; task-owned predispatch accepted95c5295 (3451PASS36skips, independent5a/5b). T25 initial0/3: daemon receipt/exactbody replay, original ownership, late manifest, ACP4/MCP11 scoped, framing reader11PASS14883 and actualhostTRACE6PASS72167 (oneoracle+fivefixtures), SQL1PASS11484. Runtime settlement exactplan6720ef7c accepted owning/security after retainedstdChild/Arcslot/panichook amendments; author authorized actualruntime RED first thenbuild, all mandatory runtime/cold/secondprocess/nativeWindows retained. Main owned_flow_builder solely owns ALL source/Cargo/format. Fullproject gates and freeze5a→5b remain open. ACPaccounting draftread-only. Historical46 not currentlyverified; fullgoalactive.",
       "finishedAt": null
     },
     {

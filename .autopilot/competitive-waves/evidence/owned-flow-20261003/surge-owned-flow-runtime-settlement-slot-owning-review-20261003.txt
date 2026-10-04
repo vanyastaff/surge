@@ -1,0 +1,63 @@
+Exact transfer-slot amendment owning systems review, 2026-10-03
+
+Verdict: ACCEPTABLE for implementation only.
+Reviewed exact section 6d with earlier sections/6a-6c constraints retained.
+Verified plan SHA256:
+6720ef7ca9cc08c5fee01fa7f6b4a2d69b7129d66f5f9a1c3fe7fa29c9cdfc5f
+No Cargo, source changes, formatting, or process mutation. Initial T25 postbuild
+remains 0/3. This is precode approval, not executable acceptance.
+
+Remaining transfer finding is resolved:
+- Start contains only a cloned Arc to a retained private ownership slot. The
+  caller's outer Arc survives catch_unwind; send/injected-send unwind cannot
+  drop the sole actual child parcel, even if worker races to claim it.
+- Worker takes parcel once under the mutex into its outer local, then sends Taken.
+  The caller retains slot until synchronous Taken; no postspawn await creates a
+  cancellation gap. Empty slot means worker-owned child, not invented NoChild.
+- Failure fallback checks/takes the same slot under mutex. Some gives exclusive
+  actual-child settlement; None requests worker Immediate and waits for actual
+  completion. Neither branch can report success based only on channel closure.
+- Completion after observed exit, dropping child/worker-owned observer, and
+  retained handle join ordering remain mandatory. Initial construction/spawn
+  guard covers the interval before slot deposition; private closed profile
+  prevents custom callback/allocator panic injection into unprotected ownership.
+- Mutex poison aborts while an actual outer owner is retained, without producing
+  raw poison diagnostics. Silent hook scope covers conversion, send, fallback,
+  and child operations; no sole parcel is owned by an unwinding closure.
+
+Race/deadlock assessment:
+The claim mutex serializes worker take versus caller fallback. It must be held
+only across slot borrow/take operations; caller waits for Taken/completion and
+worker sends Taken with no slot or tracker mutex held. A worker seeing None after
+caller fallback cannot invent NoChild or child exit: explicit caller Settled after
+physical settlement remains authoritative. Failed Taken send must not return
+from worker while dropping live parcel; the plan's receiver-failure rule forbids
+that. Completion-before-Taken requires the specified observed-exit completion
+and retained joined handle. These are direct implementation obligations of the
+accepted protocol and deserve injected race tests.
+
+Permanent admission closure and inclusion of pending reservations let helper
+shutdown_background safely overlap task destruction: no late reservation can
+appear behind barrier; every preexisting pending Start/fallback remains joined.
+No barrier/global mutex may be held while waiting for this handoff, joining,
+settling child, dropping observer, or delivering completion. Terminal barrier
+must not be invoked from a cleanup worker. Synchronous Taken/fallback can block
+an async caller, but the reserved std thread does not require that runtime to
+make progress; bounded admission prevents unbounded worker resource growth.
+
+Previous accepted constraints retained: std Child owned before fallible Tokio
+pipe conversion; source-reviewed std exec-error cleanup; no ProcessGroup/JobObject
+wrapper; one direct-child kill only before wait ambiguity; real observer retains
+the original physical claim; release-before-ack; permanent tracker terminal API;
+runtime-before-barrier host ordering with helper stdin special policy; hook
+installation after normal host hook and before admission, never replaced later.
+
+Implementation evidence still required and unchanged: real child outside-runtime
+and runtime-drop settlement; actual second-process secure-lock exclusion until
+owner settlement; transfer/conversion failure and panic races with slot ownership;
+never-polled/canceled close plus retained writer future; wait ambiguity holds
+lease/no extra kill; open-stdin helper correct status/no hang; prior payload-printing
+hook suppressed in worker and synchronous fallback stderr/TRACE subprocesses;
+pending reservation versus terminal barrier; and cold descendant survivor refuses
+continuation/effects. Direct leader completion remains separate from containment.
+Native Windows evidence remains OPEN. No executable criterion is retired here.

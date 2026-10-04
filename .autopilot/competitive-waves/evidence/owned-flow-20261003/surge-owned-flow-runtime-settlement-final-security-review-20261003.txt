@@ -1,0 +1,41 @@
+Independent T25 runtime settlement FINAL SECURITY plan review — 2026-10-03
+
+VERDICT: ACCEPTABLE at design level for the exact final plan, including section 6 superseding conflicting earlier primitive/failure/ACK/hook language.
+
+Reviewed entire /tmp/surge-owned-flow-runtime-settlement-plan-20261003.txt. Independently verified SHA256 88484f30d6c9169ee43bf982b4e00ed4ca9c1c7e87a00484a5c63d7735df3363. This supersedes the bounded RESHAPE verdict in runtime-settlement-security-research. No unresolved security design blocker remains in this amendment. No source/Cargo/format/process mutation, build, test or implementation acceptance occurred. Initial T25 repair count 0/3 and historical completed 3/3 unchanged. Native Windows, real host TRACE/runtime oracles, integrated review and endpoint acceptance remain open.
+
+1. MCP-SETTLE-PANIC-01 resolved
+
+The once-installed dispatch hook captures the prior host hook, uses a private thread-local protected depth, and suppresses all prior hook/payload/backtrace/tracing emission within the settlement scope. Installation before reservations and normal host hooks before dispatcher are explicit production invariants. No operation-specific global hook swapping or restoration races remain. Worker operations and every post-spawn extraction/conversion/transfer/fallback are protected. The parcel remains outside catch_unwind; on Err the payload, parcel and observer stay owned until immediate process abort, with no flag restoration or payload destructor. Mutex poison/lost owner likewise does not format external prose. This is materially stronger than catch_unwind alone: Rust documents that hooks run before catch and panic-payload destruction can itself panic. Outside the protected scope, the prior host hook remains intact.
+
+The design remains conditional on the documented host installation invariant. A downstream host replacing the global hook later can defeat it; this is explicitly outside this bounded guarantee, not silently secured by OnceLock. Implementation must prove every supported entrypoint installation order and real prior-hook sentinel suppression in both worker and synchronous fallback subprocesses. TLS lookup and its state management must not themselves introduce recursive panic/log paths. These are implementation obligations, not new design blockers.
+
+Primary contract: https://doc.rust-lang.org/std/panic/fn.catch_unwind.html ; https://doc.rust-lang.org/std/process/fn.abort.html .
+
+2. Physical spawn and transfer ownership accepted
+
+Pinned Tokio 1.50.0 exposes as_std_mut and all three Child*::from_std conversion APIs. process_group(0) writes the underlying standard Command. Bypassing Tokio Command::spawn avoids an error after actual std spawn during runtime registration. The plan immediately places successful std Child and exact observer into the retained parcel before pipe conversion. Conversion errors, missing stdio and returned failed-send parcels are post-spawn states and synchronously settle; they cannot publish NoChild. The complete post-spawn path is protected until transfer succeeds. No new process-wrap dependency, arbitrary child trait object, group wrapper, unsafe inner extraction or async cleanup owner is admitted.
+
+Source-reviewed installed Rust standard process implementation: normal Unix fork/exec error reporting waits for the failed child before returning its error; normal posix_spawn errors are returned at the OS spawn boundary and success directly produces the owned Process. Windows CreateProcessW failure returns before adoption, while success immediately wraps the process/thread handles into the returned Process without another fallible runtime registration. This reasoning is scoped to the current internal plain Command construction in connection.rs (command/args, env_clear/minimal env, cwd, pipes and Unix process_group), not a universal promise for arbitrary std Command extensions. In particular the installed Linux optional create_pidfd path has a distinct post-spawn PID-query error; current Surge does not configure that path, pre_exec callbacks or externally supplied Command. Adding those later requires renewed boundary review. Preserve this closed profile in implementation and source verification for the actual pinned toolchain.
+
+Pinned Tokio API: https://docs.rs/tokio/1.50.0/tokio/process/struct.Command.html#method.as_std_mut ; standard implementation reference: https://github.com/rust-lang/rust/blob/1.96.0/library/std/src/sys/process/unix/unix.rs .
+
+3. Completion, cancellation, and terminal barrier accepted
+
+Exclusive actual std Child::try_wait/kill authority avoids wrapper waitpid caches and remembered-PID signaling. Only actual Some(status) completes; after wait ambiguity there is no further kill and the owner remains indefinitely. At-most-once kill is recorded before the call. Std Child is dropped after observed exit, then the worker observer, then completion/live removal. All OS JoinHandles survive until joined, including finished workers. Fallback uses the same order and explicit Settled; missing channel notification, join panic or disconnect cannot masquerade as exit. Other registry/engine observer clones may retain the original claim longer and must be accounted for by exclusion tests.
+
+A shutdown control before Start is sticky Immediate, not NoChild. The shared admission/tracker mutex linearizes closure against reservation, all preexisting reservations belong to the barrier, and closure is permanent. Serialized barriers own the complete join set and join without holding the tracker mutex. Post-spawn cancellation cannot cancel an already transferred worker. Retained send futures can keep stdin open, so three-second grace then actual-child kill/wait is necessary; dropping pipes alone is not evidence. Unknown wait may block shutdown honestly rather than release authority.
+
+Rust documents that dropping Child does not kill/wait and that try_wait reaps Unix children on actual exit; this supports the explicit owner/ACK order, not drop-based cleanup: https://doc.rust-lang.org/std/process/struct.Child.html .
+
+4. Hosts and cold recovery remain correctly bounded
+
+Normal CLI/daemon/UI runtime destruction precedes the independent barrier. InternalStageMcp uses shutdown_background to avoid its unrelated uncancellable stdin read; permanent admission closure and tracker control, rather than assumed task destruction, secure its child ownership. Numeric terminal statuses preserve signal/ping/helper outcomes. UI window failure and daemon profile failure no longer bypass the terminal path. Unwind guard order and daemon PID-lock release after settlement remain explicit. No runtime handle is needed by the worker.
+
+Leader exit and joined worker mean only the tracked direct child settled. They are not descendant containment, task suspension, continuation permission or cold recovery authority. Existing original process/journal evidence must reject surviving/escaped/GroupOnly writers and block further provider/MCP effects. The real descendant-survivor cold restart oracle is mandatory. No group/job wrapper addition is authorized by this review.
+
+5. Required evidence before implementation acceptance
+
+Preserve all section 5 and 6 oracles: actual original-claim second-process exclusion through exit; runtime destruction with cached transports; pre-Start Immediate and concurrent barriers; never-polled close and retained send future; pipe conversion/missing-stdio/failed transfer real child settlement; pre-spawn thread/capacity failure no child; bounded finished-handle reaping; ambiguous wait no further kill/no ACK/no reacquire; actual worker and fallback hook sentinels absent from stderr and global TRACE followed by fatal abort/no receipt; exact argv/env/cwd wire fidelity; real helper stdin-open status; daemon shutdown and surviving descendant cold refusal. Native Windows remains unexecuted and OPEN. Source/docs or compiler success cannot close those runtime observations.
+
+No new security design finding from transfer, observer/Arc lifetime, ACK, shutdown or cold semantics in the final wording. Full behavior authorization and acceptance remain the parent/owning review boundary.

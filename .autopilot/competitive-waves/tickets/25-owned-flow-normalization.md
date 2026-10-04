@@ -364,3 +364,20 @@ Sender::send consumes parcel, so the claimed outer catch ownership needs an
 explicit retained Arc slot/worker claim protocol before transfer. Other fixes
 accepted at design level; section6 report retained, security re-review pending.
 No runtime behavior authorized yet; initial0/3, full T25 gates/open scope retained.
+
+Exact final runtime planSHA6720ef7ca9cc08c5fee01fa7f6b4a2d69b7129d66f5f9a1c3fe7fa29c9cdfc5f
+accepted by independent owning+security slot reviews, full reports read by root.
+Sections6a–6d supersede old primitives: ownedstdChild before pipe conversion,
+retained Arc slot/workerTaken ownership protocol, fixed protected panic hook,
+permanent bounded tracker and runtime-independent terminal barriers. Author
+authorized actual runtime-drop/outside-runtime RED first, then implementation.
+This is precode acceptance, not unit behavior acceptance; no required executable
+or native Windows gate retired and postbuild count remains0/3. Evidence files
+accepted-plan and slot-{owning,security}-review retained alongside historical
+RESHAPE reports. Sole main author owns all source/Cargo; root writes docs only.
+
+Author confirms72167 terminal0 corrected actualhostTRACE socket6PASS. SQL11484
+terminal0 one real store mutation testPASS (six cases); other binaries0filtered.
+Initial validStarted owner allows effects; Suspend/archive/generation/Attention/
+Suspended/canceled-intent changes deny while original lock remains Busy. This is
+SQL predicate evidence, not actual worker-boundary or cross-process/cold proof.

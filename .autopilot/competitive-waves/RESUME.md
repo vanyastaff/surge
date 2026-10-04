@@ -22,19 +22,22 @@ MCP actualchild diagnostics/effect/TRACE11PASS6104. Это разные scoped �
 
 Framing JSON private-input reader дал actual behavioralRED99726. Metadata-only
 fix: первый65411 10PASS/1fixtureFAIL (ошибочно требовал положительные позиции),
-повторный framing-private-second-green.log11PASS; exit14883 уточняется автором.
+повторный framing-private-second-green.log11PASS; actual14883 terminal0.
 Оригинальные metadata могут быть0; сравнение с настоящим serde сохранено, как и
-no-secret Display/Debug/source oracle. Реальный hostTRACE socket ещё открыт.
+no-secret Display/Debug/source oracle. Реальный hostTRACE socket72167 terminal0:
+один malformedframe oracle +5fixture tests PASS; zero items/provider calls/private
+inputs/preparation namespaces; actual warning/EOF without sentinel.
 
-Runtime-independent MCP settlement ещё НЕ разрешён к behavior build: точный
-первый draft и независимые owning/security RESHAPE в evidence/owned-flow-20261003/
-surge-owned-flow-runtime-settlement-*.txt. Tokio spawnErr может идти ПОСЛЕ std
-physicalspawn, поэтому proposal меняется на удерживаемый stdChild до pipe from_std.
-Нужны owner-release/ACK/joins порядок, sticky pending-reservation shutdown и
-panic-hook opacity (catch_unwind идёт ПОСЛЕ hook). CLI helper намеренно избегает
-обычного runtimeDrop из-за stdin; draft учитывает shutdown_background/status.
-Автор переписывает exactplan, затем оба focused reviewers должны ACCEPTABLE.
-Оба pre-code review, formal postbuild count остаётся0/3.
+Runtime-independent MCP settlement exactplanSHA6720ef7ca9cc08c5fee01fa7f6b4a2d69b7129d66f5f9a1c3fe7fa29c9cdfc5f
+ПРИНЯТ обоими focused owning/security reviewers; fullreports прочитаны root,
+автору разрешён actual runtime-drop/outside-runtime RED-first → build. Приняты
+6a–6d: stdChild до fallible pipefrom_std, удерживаемый Arc слот/workerTaken,
+фиксированная panic-hook boundary, permanent bounded tracker и terminalbarrier.
+Исторические RESHAPE сохраняются. CLIhelper shutdown_background/status сохранён.
+Evidence accepted-plan и slot-{owning,security}-review рядом с draft/reporthistory.
+Это pre-code approval, не executable acceptance; formal postbuildcount0/3.
+SQL11484 terminal0 one storemutation testPASS6cases; реальные physicalworker /
+secondprocess originallease/cold/privateEmpty/descendants/nativeWindows ещё нужны.
 
 Linker3822 errno28 был environmentFAIL, не RED. Правильный Cargo clean30369
 после terminal children освободил2841files/14.5GiB; первая clean попытка с gpui
