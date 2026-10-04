@@ -1,0 +1,181 @@
+Owned Flow MCP diagnostics amendment — owning maintainer pre-code review
+2026-10-03. Verdict: RESHAPE NEEDED on the proposal as currently described.
+
+This is a bounded design review during the initial T25 build, not implementation
+acceptance or a post-build repair. T25 remains 0/3. I read AGENTS.md, ticket 25,
+owned-flow-normalization-plan.txt and the actual MCP/orchestrator surfaces. RTK.md
+was not located by the repository file search. No repository/Cargo edits,
+builds, child executions, commits or acceptance claims accompany this report.
+
+The core direction is sound: preserve physical spawn transport exactly and
+create a runtime-only literal redactor from the frozen declared command,
+ordered arguments and environment VALUES. Credential-shaped masking alone
+cannot meet the approved arbitrary transport sentinel requirement. The proposal
+needs the following explicit refinements before it can be accepted as the
+complete diagnostic boundary.
+
+1. Ownership and type/API shape
+
+Keep this behavior in surge-mcp/redact.rs and connection.rs. Existing
+surge-acp/shared/secrets.rs is crate-private, holds optional stage credentials,
+performs sequential replace after regex masking, and is explicitly described in
+bridge/worker.rs as chunk-local best effort rather than an information-flow
+boundary. Do not add an ACP dependency, widen that API, or relocate it into core
+for this amendment. project_context.rs has a different line/key heuristic and
+also does not implement this transport contract. Reuse the existing MCP
+credential scanner as a secondary pass, with a local transport-specific type.
+
+Preferred shape: private DiagnosticRedactor, owned through Arc by each
+McpServerConnection and its stderr task; constructor takes &McpTransportConfig;
+private literals; no Serialize/Deserialize; Debug emits only the type name.
+Derive from the exact config at connection construction, once, and reuse across
+restarts. Read no std::env, auth files, cwd snapshots or provider credentials to
+build it. The existing minimal_child_env behavior is unchanged; inherited
+essential environment is not a source for this set. Ordered arguments remain
+ordered in the actual config; deduplication for matching does not reorder spawn.
+
+No explicit private-context API is needed merely for masking: all connections
+already possess the exact transport. Automatic masking in both new and
+new_owned avoids a caller that accidentally omits the protection. It modestly
+changes legacy/probe diagnostic text, not legacy storage, transport or ownership.
+If the chosen alternative suppresses whole diagnostics only for owned Flows,
+then a separate typed runtime diagnostic policy passed by the authenticated
+owned-flow host is appropriate. Do not overload writer_observer presence:
+new_owned also serves other run-owned callers and is not Flow authentication.
+The diagnostic policy grants no private hydration or execution authority.
+
+configuration()/configured_servers() intentionally return runtime raw config
+for independent registry creation. Do not change those values into the public
+manifest; audit their callers so they cannot be formatted/journaled as a
+public diagnostic. McpServerConnection Debug already omits config.transport.
+Core McpServerRef and McpTransportConfig derive raw Debug, so never log these
+objects on the protected path; local redactor Debug alone does not fix that.
+
+2. Matching, bounds and framing
+
+Do not filter literals by token shape or minimum length. Empty values have no
+redactable content: skip them to prevent empty-string replace. Nonempty short
+values are masked even when this removes useful words. A declared command such
+as npx or sh will be overmasked in raw child diagnostic text. That is an
+acceptable diagnostic cost; do not redact unrelated public server identity or
+manifest names just because they independently collide with a command string.
+The meaningful acceptance oracle uses distinguishable sentinels and checks
+private-source disclosure, not absence of every possible one-character string
+throughout public static text.
+
+Sequential String::replace is insufficient for overlaps: find/union original
+input match spans, then emit replacements once (or suppress an entire matching
+record). Preserve UTF-8 boundaries; no lossy byte slicing/panic. Do not search
+replacement markers recursively. Run literal matching before token heuristics:
+heuristics can otherwise split a declared multiword value and leave pieces.
+CR/LF-containing values need an explicit rule: redact each nonempty line
+fragment as well as the whole value, or suppress protected raw diagnostic
+records entirely. JSON/Debug escaping is another representation boundary;
+either cover the actual escaped forms used by error formatting with tests or
+use fixed reason codes for those untrusted diagnostic paths. Literal masking
+does not claim to defeat arbitrary child re-encoding of private inputs.
+
+Current stderr_forwarder uses BufReader.lines().next_line(), so split writes
+within one line are joined, but line size is UNBOUNDED, invalid UTF-8 terminates
+the loop, and MAX_STDERR_LINES=500 bounds only count. Do not replace it with
+independent chunk redaction. Adopt a bounded byte record reader that drains the
+pipe, handles newline/CRLF and final EOF record, and suppresses the entire
+oversized or invalid-UTF8 record until its delimiter. Never emit the raw prefix
+before knowing whether a record exceeds the limit. For example 16 KiB raw
+records, bounded redacted output and 500 bounded retained records establish a
+real memory/file bound. A typed suppression/truncation reason is sufficient;
+do not put original bytes in that reason. A record can contain a whole literal
+split over many OS reads. No-newline megabytes must remain bounded and drained.
+
+Specify limits on total literal count/bytes and per-render diagnostic input/
+output. Existing private-object size limits alone are not a useful CPU bound
+for repeated matching on every stderr record, especially numerous tiny args.
+For a simple scanner, bound counts/bytes at acceptance or fall back to suppress
+raw diagnostics when limits are exceeded; never silently drop excess literals.
+No new crate/dependency is required for a bounded small-set scanner. If a
+multi-pattern matcher is selected, dependency belongs at the workspace root.
+
+3. Actual diagnostic/error surfaces that must be covered
+
+connection.rs currently emits raw observer errors before_child and
+child_started, spawn errors, handshake errors in StartFailed.reason;
+handle_service_error sends ServiceError.to_string into Service/Transport;
+shutdown logs raw join error and puts it in CleanupError::ServiceJoin.reason.
+Sanitize before constructing the public error and before tracing, so both
+Display and Debug are safe. A redacted Display wrapped around raw String
+fields is insufficient. RegistryCleanupError formats failures with Debug;
+registry worker-join panic diagnostics also need safe handling. Preserve typed
+error classification, health/backoff transitions and numerical facts.
+
+RoutingToolDispatcher turns McpError Display into agent-visible error strings;
+stage/agent.rs logs list_all_tools errors. More subtly, successful protocol
+responses with is_error=true carry arbitrary text and Other Debug summaries:
+registry.rs currently returns them raw and routing.rs joins them into
+ToolResultPayload::Error. Treat those as child diagnostic errors and sanitize
+before returning them. ToolResultReceived journals a result HASH, not the raw
+message, but the message is still sent onward to ACP. Catalog metadata and
+ordinary successful tool outputs are separate product payloads; do not silently
+rewrite schemas or successful tool semantics under this amendment. Tests must
+distinguish these paths and document that separation.
+
+CRITICAL bypass: the locally resolved dependency rmcp-1.6.0 logs child protocol
+payloads before Surge sees them. service.rs:759 logs ?peer_info at INFO;
+:985 logs ?notification at INFO; :851 logs ?evt at TRACE; :1082 logs
+?quit_reason at INFO. service/client.rs:108 logs unexpected ?notification and
+:137 unexpected ?message at WARN during handshake. These can contain a child
+echo of declared command/args/env. Postprocessing McpError and stderr does not
+protect these traces. A default RUST_LOG recommendation is not enforcement.
+
+Before acceptance choose an actually enforced dependency logging boundary,
+with descendant rmcp tasks covered, or a scoped patch/wrapper that prevents raw
+protocol payload logging. A global invariant disabling all rmcp payload events
+is also possible if consciously owned by application logging and effective
+even with verbose operator settings. Prove it with a capture subscriber at
+TRACE and child handshake/notification/error echoes; do not infer task dispatcher
+inheritance from instrumenting the outer spawn future. No solution is approved
+here merely by source inspection. If keeping rich untrusted diagnostics cannot
+be bounded and contained cleanly, fixed protected reason codes plus suppression
+of raw protocol diagnostic traces is the safer bounded alternative.
+
+4. Design options and readiness gate
+
+Option A (closest to author proposal): automatic per-connection literal set,
+bounded complete stderr records, safe stored error strings and is_error content,
+plus effective rmcp logging containment. Preferred provided the builder can
+state and prove all these boundaries. Public manifest/wire DTO unchanged.
+
+Option B: typed protected diagnostic policy for authenticated owned Flows that
+suppresses raw child diagnostics and exposes bounded identifiers/reason codes,
+plus the same effective rmcp logging containment. Keep legacy/probe semantics
+explicit and regression-tested. This avoids pretending literal masking handles
+arbitrary formatting/encoding, but requires a deliberate API/policy amendment.
+
+Neither option changes actual Command::new/args/env layering or resolves frozen
+MCP inputs from current defaults. Initial/cold/wake use the authenticated frozen
+transport as already required. No new private persistence is introduced for
+the redactor, and no inherited provider auth is collected for tests/evidence.
+
+Required behavior gates after design acceptance:
+- Real child records exact physical command/path, ordered distinguishable args
+  and env value into a private test oracle; emits the same values in stderr
+  (plain short/multiword/Unicode, multiple writes, overlap, final EOF record).
+  Public captured file and tracing lack those sentinels while actual values
+  remain exact. A fabricated sanitizer-only oracle does not prove this.
+- Real child produces handshake rejection, tools/list error, tools/call JSON-RPC
+  error and is_error result; assert safe McpError/CleanupError Display AND Debug,
+  public probe/agent diagnostics, and capture subscriber. Exercise dependency
+  peer_info/notification/unexpected-message payloads at verbose levels.
+- Huge no-newline stderr, a literal crossing OS read boundaries, CRLF, invalid
+  UTF-8, newline-containing values and a multi-byte scalar crossing reads prove
+  bounded draining/no leaks/no panic. Empty/one-character/overlap cases have
+  explicit expected results, not a pattern-shaped substitute sentinel.
+- Initial and actual cold/wake paths instantiate protection from the frozen
+  original transport after host defaults change; no unowned/global fallback.
+  Regression proves ordinary caller/probe transport still spawns exact values.
+- Public attempt/config/journal/receipt/error/log absence is checked against
+  actual outputs; provider-auth absence is inspected without copying auth into
+  a new runtime redaction snapshot or evidence. Full unit gates remain open.
+
+Design can become ACCEPTABLE once the author commits to one concrete bounded
+shape including the dependency-tracing bypass. This report does not approve
+behavior writes based on the current incomplete two-surface description.

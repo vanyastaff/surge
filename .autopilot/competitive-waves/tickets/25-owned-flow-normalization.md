@@ -135,3 +135,28 @@ Root inspected the actual native operation/test inventory, but no Windows
 compile or runtime proof exists at this checkpoint. Native UNC testing requires
 SURGE_WINDOWS_TEST_UNC_ROOT; reparse/privilege limitations must be explicit and
 may not stand in for the mandatory ordinary ownership/lifecycle scenarios.
+
+First outer owner submission is GREEN: actual daemon socket test session 14868
+terminated exit 0, six tests passed (five shared mock fixture laws and one first
+owned submission). Root read `owned-flow-outer-second.log` and the actual test: it
+asserts owned_flow_started after cancellation and server join. Despite its future
+replay-oriented name, this version only asserts the first receipt, not source
+removal, changed settings, exact replay, conflicts, execution or recovery. The
+author is extending the same outer oracle. `owned-flow-outer-first.log` retains
+a moved-request compiler failure; it is not new behavior RED evidence. The
+original pre-implementation missing-endpoint RED remains outer-red-final.log.
+Coordinator second check is confirmed session 4970 terminal exit 0 and clean.
+
+MCP diagnostic amendment pre-code gate: both independent owning maintainer and
+security lenses returned RESHAPE NEEDED on a literal-set-only proposal. Full
+reports are retained as surge-owned-flow-mcp-diagnostics-*-plan-20261003.txt in
+this evidence directory. Current credential-shape masking misses arbitrary
+frozen transport values, multiline/escaped forms and additional error surfaces.
+Root independently read actual stderr framing and pinned rmcp 1.6.0 peer_info
+INFO logging; dependency peer payloads can bypass Surge wrappers. The revised
+plan must bound framing, safely construct diagnostic/error/cleanup/is_error
+fields and enforce dependency tracing containment across spawned tasks, while
+preserving exact physical transport and functional non-error tool results.
+No diagnostic behavior writes preceded review or are authorized by the incomplete
+proposal; the author is reshaping the plan while independent owner/endpoint
+tests continue. This is initial-author design work; formal repair count is 0/3.
