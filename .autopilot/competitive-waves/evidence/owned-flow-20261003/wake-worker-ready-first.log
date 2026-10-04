@@ -1,0 +1,35 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error[E0609]: no field `record` on type `surge_core::work_item::WorkItemDetail`
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:233:39
+    |
+233 |             expected_version: current.record.version };
+    |                                       ^^^^^^ unknown field
+    |
+    = note: available fields are: `item`, `revision`, `pr`, `usage`, `control`
+
+error[E0061]: this method takes 5 arguments but 2 arguments were supplied
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:234:29
+    |
+234 |         let stopped = store.mutate(&command, 100).unwrap();
+    |                             ^^^^^^--------------- three arguments of type `std::option::Option<&surge_core::work_item::WorkItemWorkspace>`, `std::option::Option<&str>`, and `&str` are missing
+    |
+note: method defined here
+   --> crates/surge-persistence/src/work_items.rs:414:12
+    |
+414 |     pub fn mutate(
+    |            ^^^^^^
+...
+417 |         workspace: Option<&WorkItemWorkspace>,
+    |         -------------------------------------
+418 |         config: Option<&str>,
+    |         --------------------
+419 |         actor: &str,
+    |         -----------
+help: provide the arguments
+    |
+234 |         let stopped = store.mutate(&command, /* std::option::Option<&surge_core::work_item::WorkItemWorkspace> */, /* std::option::Option<&str> */, /* &str */, 100).unwrap();
+    |                                              ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0609.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `surge-persistence` (lib test) due to 2 previous errors

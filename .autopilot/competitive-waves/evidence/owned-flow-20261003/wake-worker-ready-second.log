@@ -1,0 +1,72 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+warning: variants `Committed` and `CommitUnknown` are never constructed
+  --> crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:22:5
+   |
+19 | enum State {
+   |      ----- variants in this enum
+...
+22 |     Committed { key: ContentHash, hash: ContentHash },
+   |     ^^^^^^^^^
+23 |     CommitUnknown { key: ContentHash, hash: ContentHash },
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `State` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated items `reserve` and `publish` are never used
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:102:19
+    |
+101 | impl PreparedRefusal {
+    | -------------------- associated items in this implementation
+102 |     pub(super) fn reserve(guard: Arc<PreparationLock>, resources: DeliveryResources, run_hint: RunId) -> Result<Self> {
+    |                   ^^^^^^^
+...
+146 |     pub(super) fn publish(mut self, key: ContentHash, hash: ContentHash, uncertain: bool) {
+    |                   ^^^^^^^
+
+warning: function `close_admission` is never used
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:188:15
+    |
+188 | pub(crate) fn close_admission() {
+    |               ^^^^^^^^^^^^^^^
+
+warning: function `join_all` is never used
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:197:15
+    |
+197 | pub(crate) fn join_all() {
+    |               ^^^^^^^^
+
+warning: fields `manifest` and `state` are never read
+  --> crates/surge-persistence/src/work_items/owned_flow/launch.rs:58:16
+   |
+53 | pub(super) struct AcceptedLaunch {
+   |                   -------------- fields in this struct
+...
+58 |     pub(super) manifest: String,
+   |                ^^^^^^^^
+59 |     pub(super) receipt: OwnedFlowReceipt,
+60 |     pub(super) state: String,
+   |                ^^^^^
+
+warning: `surge-persistence` (lib test) generated 5 warnings
+    Finished `test` profile [unoptimized] target(s) in 15.75s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-c518d542763c3ed7)
+
+running 1 test
+test work_items::owned_flow::refusal_owner::tests::ready_wait_is_outside_registry_transaction_and_newer_stop_wins ... FAILED
+
+failures:
+
+---- work_items::owned_flow::refusal_owner::tests::ready_wait_is_outside_registry_transaction_and_newer_stop_wins stdout ----
+
+thread 'work_items::owned_flow::refusal_owner::tests::ready_wait_is_outside_registry_transaction_and_newer_stop_wins' (31558830) panicked at crates/surge-persistence/src/work_items/owned_flow/refusal_owner.rs:264:9:
+assertion failed: store.claim(receipt.run).is_ok()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    work_items::owned_flow::refusal_owner::tests::ready_wait_is_outside_registry_transaction_and_newer_stop_wins
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p surge-persistence --lib`

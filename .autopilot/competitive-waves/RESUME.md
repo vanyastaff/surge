@@ -1,3 +1,31 @@
+# Authoritative Ready primitive GREEN and current source checkpoint 2026-10-04
+
+Author44885 terminal101:firstReadylog fixture compile E0609/E0061. Author8403
+terminal101:second actualReady/normalSuspend/freshsnapshot runs, finalassertion
+wronglyexpectedstoppedpendingflowclaimable. Authorcorrected oracle to raworiginal
+FlowLaunch reacquisition plus ongoing typeddispatchrefusal. Author95896 terminal0:
+third1primitiveReady/secondconnectionStop/rollback/originalguardPASS0.06s. Root
+FULLread allthree rawlogs and actualtest; no productionentry Obsoleteacceptance
+claimed. No liveCargo atauthorreceipt. Allthree logsretained.
+
+Root currentownerread c9995ca2 confirms nonwaitingreap join-domain selection,
+fastclosed plus finalatomicclosed/capacitycheck; delivery ab42f453 fieldorder now
+Connection BEFOREWriterLease. Earlierreaper/fielddrop findings structurallyresolved,
+newactualshutdown/faultbarriersstillOPEN. Authorcomplete draft wires typedquota
+entry/refusalreceipt/ACK/existing-only JournalOwner/coldreclaim/3hostbarriers/
+Attention-beforeworktree; integratedcompileandfaultoraclesremain. Root readactual
+refusal.rs ReadybeforeBEGIN, rollbackbeforePreparedDrop, CommitUnknown afterTX
+consume; no frozen5a5b/sourceacceptance inferred. Root flagged originalsourceworkspace
+coherence anchor for authorverification, not an established securitydefect.
+
+Existing architect now read-only inventories nativeC/D dependencygaps and actual
+primary-platform evidence; no source/buildlane/OSinstallation delegated. Main sole
+allsource/Cargo/format/build/processowner. StageB authorized AFTER wakemilestone;
+fullnative/productivecold/malformed/fullgates/freeze5a→5b remain, formalinitial0/3.
+Previous goalturn: actualsource-grounded shutdowncorrections/filelockevidence changed
+nextactions. Currentturn confirms updatedcode, Readyprimitivegate and extends actual
+integration/nativeacceptance preparation. Fullgoalactive, no requirementsretired.
+
 # Independent bounded shutdown seam confirmation 2026-10-04
 
 Root FULLread independentreportb93471f9, retainedexact. OriginalReady-abort and
