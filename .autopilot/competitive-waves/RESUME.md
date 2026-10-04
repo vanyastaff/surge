@@ -1,3 +1,33 @@
+# Authoritative owner corrections and filelock gate 2026-10-04
+
+Author87446 terminal0: four substantive owningfilelock cases+childprobeNOOP,
+5harnessPASS, including actualsecondprocess busy/deathrelease and existing-only
+missingpath nofilecreation. Root FULLread testsource and rawlog; macOSlocalgate,
+not Windows/native descendant containment. Rawlog now retained. No liveCargo
+receipt atthatcheckpoint; owner/delivery draft not yet compiled or verified.
+
+Author reports both shutdown lifecycle races alreadycorrected DURING wiring;
+root rereadactualsource confirms close onlynewadmission and Condvar waiting for
+handlepublication/provenspawnfailure. Actual creation/precommit barriers still
+required. Related reap_finished-beforeclosed check can wait on unrelatedindefinite
+join; authornotified, independentboundedcheckongoing. No formalreview/countchange.
+Previous primary notes retained as supersededmutable observations wherecontradictory.
+Main sole allsource/build/processowner; fullscope/native/freeze5a→5b remainopen.
+
+# Primary shutdown lifecycle races identified 2026-10-04
+
+Root revalidated currenttree: refusal_owner.rs and migration0030 now exist;
+author work continues. Read-only primary inspection found two concrete incomplete
+shutdown seams: Ready reservation can be aborted/joined before late committed
+publish; registered handleNone can be skipped before actualspawn/handlepublication.
+Author notified with actualbarrier requirements; independent bounded seamcheck
+running, no source/buildlane duplication/no formal5b or repaircountincrement.
+Root exactnote refusal-owner-shutdown-primary-seams-20261004.txt retained. Existing
+filelock log shows5testsPASS including actualsecondprocess exclusion/deathrelease
+and missingexistingpathzerocreation, but author terminal receipt pending; no broad
+native containment claim. Allfullscope open, previous goalturn had realplanacceptance
+and sourceauthorization progress; this turn adds current source-grounded corrections.
+
 # Stage B effective plan independently accepted 2026-10-04
 
 Root FULLread final independentreportb84bc1bf: effective f289f1cb+3147543a

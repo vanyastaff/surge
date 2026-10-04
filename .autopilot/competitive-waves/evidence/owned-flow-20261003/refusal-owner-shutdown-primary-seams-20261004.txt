@@ -1,0 +1,49 @@
+Primary source inspection of incomplete refusal owner — 2026-10-04
+Scope: read-only observation of author-owned mutable candidate, not frozen review,
+not formal5a/5b or source acceptance. T25 formal initial0/3 unchanged.
+
+Actual refusal_owner.rs reserve registers Entry {slot, handle:None}, unlocks
+registry, spawns worker, then installs Some(handle). reserve returns after Ready.
+close_admission permanently closes admission but also flips Preparing/Ready to
+Aborted. Worker returns on Aborted. join_slot consumes only Some(handle); a None
+entry is skipped. publish unconditionally sets Committed/CommitUnknown afterwards.
+
+Two concrete lifecycle races must be prevented by the finished implementation:
+1. Existing Prepared returned Ready, transaction in flight, shutdown aborts worker
+and joins/removes entry, then transaction commits and caller publishes after its
+worker exited. Durable receipt can then lack a live delivery owner and shutdown
+may have completed before this admitted obligation resolved.
+2. Outer slot registered but thread creation/handle publication not yet complete:
+shutdown join sees None and returns, then reserve creates/publishes worker after
+the alleged terminal barrier. Handle absence is not actual joined/no-worker proof.
+
+Minimal behavior required: closing admission denies NEW reservations; every
+already registered reservation remains tracked until actual creation result,
+commit/rollback/ambiguous-commit resolution and actual worker join. No reset from
+terminal Aborted/Delivered to Committed after join. No registry or slot mutex may
+span SQL, readiness wait, thread scheduling or actual handle join. Retain the
+original PreparationLock Arc across every transition. Rollback abort/join remains
+after transaction drop. Confirmed absence is distinct from inaccessible storage.
+
+Required actual barriers: pause registered-before-spawn then close/join; pause
+Ready-returned before commit then close/join and publish; rollback alternative;
+preReady close; original second-process ownership contention and only actual
+joined completion. Existing state RED33168 and actor49412→94000 remain independent.
+Root notified author immediately. Existing independent reviewer is checking this
+bounded seam without source/build/process modifications. This does not claim the
+partial candidate is final or all other worker/delivery seams were inspected.
+
+Author response and primary reread of subsequent candidate:
+Both races were already corrected during active wiring. close_admission now only
+sets closed; existing Preparing/Ready remain accountable. join_slot now waits on
+REGISTRY_CHANGED for Some(handle) or confirmed entry removal after spawn failure,
+releasing the registry mutex while waiting. Root reread actual updated source.
+Actual registered-before-spawn and Ready/precommit shutdown barrier tests remain
+uncompiled/unverified; source reading alone is not acceptance. Historical source
+observation above is retained rather than claimed as a current unresolved defect.
+
+Related current admission behavior notified to author: reserve calls reap_finished
+before closed/capacity check. Finished-slot reaping shares join_domain with an
+unrelated deliberately indefinite shutdown join. A new closed-admission reserve
+could therefore block before returning Busy. Need immediate closed refusal and
+nonblocking reclamation/capacity behavior; literal blocked-join reserve oracle.
