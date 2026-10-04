@@ -281,3 +281,19 @@ cold/wake/private/Empty acceptance. ObservedTransport Drop uses tokio::spawn:
 helper flags runtime-unavailable/shutdown behavior for host verification; present
 inner has an actual child until cleanup_task takes it in pinned rmcp API. Whole
 unit remains initial build0/3, final project gates and independent5a/5b open.
+
+### Framing test linker failure and shutdown investigation
+
+`framing-private-red.log` currently ends before test execution: ld write errno28
+(No space left on device). This is an environment/linker failure, not required
+behavioral RED. Root read disk151Mi available, workspace target25G; sole author
+reaps actual Cargo handle and chooses proper cargo clean after terminal children.
+No manual target deletion or unknown daemon/UI process termination authorized.
+
+Root inspected current daemon main438–458: bounded drain observes server,
+bootstrap, admission active and broadcast registration, then aborts remaining
+server/bootstrap and returns from rt.block_on. Detached MCP settlement tasks are
+not directly included in that predicate. Initial-build author must establish
+actual shutdown context/cold-survivor refusal or harden settlement ownership
+before freeze. Direct-child PID reap does not establish descendants absent.
+MCP helper handed all source back to author; helper is now read-only.
