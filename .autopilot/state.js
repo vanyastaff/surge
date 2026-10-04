@@ -9,7 +9,7 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-10-04T03:18:09.396457+00:00",
+  "updatedAt": "2026-10-04T03:38:37.143325+00:00",
   "finishedAt": null,
   "previousCheckpoint": {
     "finishedAt": "2026-09-07T14:10:00-05:00",
@@ -63,7 +63,7 @@ window.STATE =
       "id": "build",
       "status": "active",
       "startedAt": "2026-09-05T16:34:13-05:00",
-      "note": "T12 remains active. Configured task-owned pre-dispatch accepted95c5295 (3451 PASS,36 skips, independent5a/5b). T25 initial build0/3: actual daemon first receipt and same-body replay after deleted source/changed config pass; real cross-process retained ownership and canceled-preparation tests pass; late journal input-manifest repeat RED then GREEN1PASS. Accepted final effect-fence and opaque diagnostic design is being implemented. owned_flow_builder exclusively owns Cargo and source outside MCP helper exclusive partition; owned_flow_mcp_diagnostics_builder owns connection/registry/cleanup/error/writer_observer and adjacent tests. MCP first-green named log is compile failure, not GREEN. ACP/MCP actual final-boundary, cold/private/Empty proofs, project gates, independent5a/5b and native Windows proof remain open. Historical46 requirements not currently verified; full product scope remains open.",
+      "note": "T12 active; configured task-owned predispatch accepted95c5295 (3451PASS36skips, independent5a/5b). T25 initial0/3: daemon receipt/exactbody replay, retained original crossprocess ownership, late journal manifest duplicate, ACP4 scoped and MCP11 actualchild checks verified. Framing privacy genuineRED99726 followed reader suite11PASS (14883 exitreceipt pending author). Main owned_flow_builder now owns ALL source/Cargo/format after MCP helperhandoff. Runtime-independent settlement draft has independent owning/security RESHAPE (Tokio error after physical spawn, owner/ACK/tracker order, panic hook opacity); author revises before new runtime behavior. HostTRACE, realSQL barriers, cold/private/Empty, descendant refusal, nativeWindows, full gates and independent5a/5b still open. Actualproperclean30369 freed14.5GiB; do not manually delete target or kill unknown userprocesses. ACPaccounting nextdependency draft read-only, no codeauthorization. Historical46 requirements not currentlyverified; fullproduct goal remains active.",
       "finishedAt": null
     },
     {

@@ -7,31 +7,46 @@
 initial build, formal post-build repair count 0/3.
 
 Основной план — owned-flow-normalization-plan.txt. Переносимость/Empty MCP и
-финальные physical effect fences приняты до реализации; точные дополнения и
-вердикты — evidence/owned-flow-20261003/surge-owned-flow-final-effects-*.txt.
-Core/Windows helpers передали source основному owned_flow_builder. Только он
-владеет Cargo/format lane. Отдельный owned_flow_mcp_diagnostics_builder владеет
-MCP connection/registry/cleanup/error/writer_observer и смежными тестами; основной
-автор не редактирует эту зону до явной передачи. Root пишет docs/evidence.
-Windows API исследованы и source написан, но native Windows proof обязателен
-и отсутствует; cross-compilation его не заменяет.
+physical effect fences приняты до реализации; точные дополнения/вердикты —
+evidence/owned-flow-20261003/surge-owned-flow-final-effects-*.txt.
+Core/Windows/MCP helpers передали ALL source основному owned_flow_builder;
+он один владеет Cargo/format и текущим source. Root пишет docs/evidence.
+Native Windows proof обязателен и отсутствует; cross-compilation его не заменяет.
 
-Подтверждены core origin10PASS, Unix work-items72PASS, private inputs7PASS,
-реальный daemon socket receipt и exact-body replay после удаления flow.toml и
-повреждения текущего config6PASS, original retained launch/canceled caller и
-cross-process ownership6selectedPASS. Это узкие результаты разных прогонов,
-не единый финальный gate. Поздний повтор OwnedFlowInputsBound после StageEntered
-дал настоящий RED; исправление проверки всего journal дало GREEN1PASS
-(manifest-late-repeat-green.log, actual terminal52485 exit0).
+Узкие доказательства: core10PASS, Unix work-items72PASS, private inputs7PASS;
+actual daemon receipt/exact replay после удаления source/изменения config6PASS;
+original cross-process ownership/canceled caller6selectedPASS; поздний duplicate
+OwnedFlowInputsBound RED57535 → GREEN52485 1PASS; ACP physical worker4PASS26842;
+MCP actualchild diagnostics/effect/TRACE11PASS6104. Это разные scoped прогоны,
+не финальный integrated gate. mcp-diagnostics-first-green.log — compilerFAIL.
 
-MCP actualchild privacy и post-intent/post-child effect barriers дали четыре
-настоящих RED (mcp-diagnostics-second-red.log, actual12960 exit101). Реализация
-идёт; mcp-diagnostics-first-green.log вопреки имени содержит compiler errors и
-не является GREEN. Основной автор закрывает ACP final checks, coherent SQL
-snapshot и host adapters; helper сохраняет actual child/observer при отмене.
-Cold/private/Empty, все physical barrier cases, TRACE socket/subscriber proofs,
-полные project gates и замороженные независимые5a затем5b ещё открыты.
-Нельзя считать текущий Flow или весь продукт завершённым по узким тестам.
+Framing JSON private-input reader дал actual behavioralRED99726. Metadata-only
+fix: первый65411 10PASS/1fixtureFAIL (ошибочно требовал положительные позиции),
+повторный framing-private-second-green.log11PASS; exit14883 уточняется автором.
+Оригинальные metadata могут быть0; сравнение с настоящим serde сохранено, как и
+no-secret Display/Debug/source oracle. Реальный hostTRACE socket ещё открыт.
+
+Runtime-independent MCP settlement ещё НЕ разрешён к behavior build: точный
+первый draft и независимые owning/security RESHAPE в evidence/owned-flow-20261003/
+surge-owned-flow-runtime-settlement-*.txt. Tokio spawnErr может идти ПОСЛЕ std
+physicalspawn, поэтому proposal меняется на удерживаемый stdChild до pipe from_std.
+Нужны owner-release/ACK/joins порядок, sticky pending-reservation shutdown и
+panic-hook opacity (catch_unwind идёт ПОСЛЕ hook). CLI helper намеренно избегает
+обычного runtimeDrop из-за stdin; draft учитывает shutdown_background/status.
+Автор переписывает exactplan, затем оба focused reviewers должны ACCEPTABLE.
+Оба pre-code review, formal postbuild count остаётся0/3.
+
+Linker3822 errno28 был environmentFAIL, не RED. Правильный Cargo clean30369
+после terminal children освободил2841files/14.5GiB; первая clean попытка с gpui
+не прошла. Не удалять target вручную и не останавливать чужие daemon/UI процессы.
+Cold/private/Empty, SQLStop/archive/generation barriers, actual originallease /
+descendant survivor refusal, hostshutdown, final projectgates, freeze+independent
+5a затем5b и nativeWindows остаются открыты. Не считать весь Flow/продукт готовым.
+
+Read-only next ACP accounting draft: evidence/acp-accounting-draft-plan-20261003.txt.
+Физические turns, raw receipts, versioned launched artifact semantics и атомарная
+run normalization ещё только предложены. Registry catch-up — eventual, не общая
+DB transaction. No source/Cargo authorization для этого dependency пока.
 
 Исторические разделы ниже описывают Linux-среду 2026-09-05/06. Текущая сборка
 выполняется на macOS с `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1
