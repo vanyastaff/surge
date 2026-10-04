@@ -1,0 +1,26 @@
+Stage B maintainer routing-ID ordering supplement — 2026-10-04
+Applies to revised plan f289f1cb3a28bb2d3ce9785b1709c29db8459258ff22bb38eb28ee9158f87718.
+
+Section2 malformed routing-ID rejection before SDK typed classification remains
+an explicit OWNED compatibility delta. If an id property is present, only a
+checked JSON integer in the supported correlation range or a string of at most
+4096 decoded UTF8 bytes passes this preflight. Null, booleans, arrays/objects,
+fractional or out-of-range numbers refuse before the compatibility fallback.
+Duplicate routing keys also refuse. This does not alter the legacy unowned codec.
+
+Section7's upstream should_ignore_notification expression remains verbatim for
+objects passing this preflight and failing typed decoding. Its property-presence
+rule is retained: statelessly null is present, but owned preflight already refuses
+it. Do not claim exact whole upstream behavior for malformed-ID objects. Valid
+noncolliding string/integer IDs on unknown notifications/custom still reach the
+compatibility ignore predicate, including its id-bearing second branch. The
+separately declared response/collision guard remains in force.
+
+Acceptance adds literal id:null/bool/object/array/fractional/out-of-range peers,
+plus valid string/integer controls. Malformed-ID frames refuse whole, retain
+existing debt/Attention, and create no result, cleanup reply or terminal receipt.
+Ignored valid-shape controls recycle bounded storage and allow the following
+actual pending response to settle. Array-envelope rejection remains separate.
+
+This is a bounded maintainer choice, not source acceptance, native closure or a
+new public legacy behavior. Full original A/B/C/D scope and formal0/3 remain.

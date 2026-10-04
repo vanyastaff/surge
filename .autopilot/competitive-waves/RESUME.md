@@ -1,3 +1,13 @@
+# Stage B routing-ID clarification 2026-10-04
+
+Root pinned supplement3147543a to planf289f1cb: malformed routing ID preflight
+refusal (null/bool/array/object/fractional/out-of-range) is explicit OWNED
+compatibility delta, before typeddecode/fallback. Exact upstreamignorepredicate
+is preserved after admittedshape preflight; validnoncolliding unknownnotifications/
+with string/integerid stillignored. Legacyunownedunchanged. Literalbadshape and
+validcontrols added acceptance. Effective f289+314 tuple under independentreview;
+no StageBsourcepermission yet. Wake author source remains separatelyauthorized.
+
 # Authoritative Stage B correction dispatched for review 2026-10-04
 
 Root FULL read revised planf289f1cb (all sections1-9) and verified hash.
