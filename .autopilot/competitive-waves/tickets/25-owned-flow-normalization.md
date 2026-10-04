@@ -649,3 +649,16 @@ changing exactly1 row with independent raw-byte verification. Production schema
 unchanged; does not claim hostile same-UID defense or descendant closure.
 Root source inspection verified production SQL run.to_string() vs bare serde ULID;
 fixture ID normalization preserves actual immutable first-snapshot trigger rejection.
+
+Focused no-dispatchStop critic ACCEPTABLE for pinned4c58467 draft; root FULLread
+report. PendingStartup firstseal and newerStop3 canceledContinue2 proof permit
+nextContinue4 without rewriting epoch0 seal1. Must bind exact new snapshot/event
+range, original pendingphase/cursor and allowed ancestry; current duplicate-pending
+Suspend semantics remain unchanged. Security rereview pending; code not authorized.
+Owning architect concrete B reshape dispatched against exact actual SDK report;
+ACP no unnecessary patch, rmcp prepared enqueue/bootstrap seam, Unix exact physical
+byte owner, shared original lease/panic coordination remain precode prerequisites.
+Scoped strict74326 terminal1019 orchestrator issues, raw complete log retained;
+author fixes without lint suppression. Actual forwarded SessionConfig.tools
+whitelist bothstart/resume and275ms catalogdeadline pair remain author verification
+work; no generic production tools/call claim. Formal0/3, fullC/D/native open.

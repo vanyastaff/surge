@@ -1,0 +1,98 @@
+T25 canceled-opening Stop — focused independent critic PLAN review
+2026-10-04
+
+VERDICT: ACCEPTABLE for the proposed bounded no-dispatch transition design.
+The remaining canceled-opening B2 gap is resolved at PLAN level. This is not
+implementation/source authorization, native proof certification or formal5a/5b.
+StageB coordinator/SDK/rmcp frame precode prerequisite remains HELD; initial0/3
+unchanged. Original productive T25/native/external/full cold requirements remain.
+
+Read COMPLETE proposal, verified SHA256
+4c58467e25164064b6f57edf680f651aab50322cf1f5e321aade2234ddb90f33,
+against revised5bdd46, root1944f0 and my retained focused report. Rechecked actual
+PendingStagePhase, snapshot shape, restore_suspended_phase and current control
+routing. Only this /tmp report written; no source/tests/Cargo/Git/build/process
+actions or polling. No behavioral test was run by this reviewer.
+
+WHY THE REMAINING TRANSITION IS COHERENT
+
+1. Committed initial startup is handled as a real special state, not a fictitious
+   Running epoch: full original startup plus PendingStartup0, zero registry debt
+   and completed original host preparation permit its first suspension/closing1.
+   ACK changes it to Suspended0, so stale startup ACK cannot subsequently issue
+   Running0. A later independent Continue opens the normal next epoch. Missing/
+   conflicting/uncommitted journal is not used as an empty proof.
+
+2. Continue2-origin/Stop3 uses a CURRENT control3 no-dispatch proof rather than
+   rewriting epoch0 closing1. Frozen canceled opening2 cannot receive ACK or
+   reservations. Typed OpeningCanceled plus fence/snapshot3 and actual raw receipt
+   are verified in a separate registry CAS. No epoch2/capability exists. Both
+   prior genuine terminal set/seal1 and current canceled-opening receipt3 remain
+   required; RunContinued2 alone is display/history data, not dispatch authority.
+
+3. Continue4 explicitly validates the current Stop3 association and old original
+   terminal proof. This provides the missing legitimate next transition without
+   overwriting the old seal, reviving canceled2 or leaving Stop3 permanently pending.
+   Repeated later canceled openings link their immutable actual control receipts,
+   with complete bounded-paged ancestry checking rather than numeric assumptions.
+
+4. Caller loss, origin/journal commit before registry ACK, conflicting raw bytes,
+   and newer current control all have meaningful replay/refusal outcomes. Historical
+   receipt repair does not overwrite newer operator decisions. Original runtime-
+   independent owner must retain pending authority/receipt until ACK or durable
+   Attention; disk-full does not release it. Those physical ownership guarantees
+   remain StageB evidence, not consequences of this storage design alone.
+
+5. Startup not committed has a distinct private NoStartupDispatch issuer: surviving
+   original unconsumed startup-command slot, completed preparation, zero obligations
+   and no admitted execution. A newly claimed lease, empty DB, missing PID or failed
+   callback cannot issue it. Consumed/in-flight/crashed/unknown transaction states
+   require original receipt inspection/repair or Attention. This is not native
+   NoChild and cannot settle any created child/domain/request debt.
+
+IMPLEMENTATION / TEST PRECISION TO PRESERVE
+
+- Define the snapshot anchor explicitly in the typed journal transaction: actual
+  pre/post OpeningCanceled sequence chosen by the contract, actual fence.snapshot_seq,
+  raw snapshot digest/schema and final receipt event range. Do not reuse old snapshot
+  seq while appending cancellation events or derive receipt from reserialized data.
+  Exact replay must compare the committed snapshot and all receipt associations.
+- For CaseC preserve the prior trusted cursor/frame/traversal/graph-revision and
+  pending phase; full intervening fold may contain authority/audit data but no route,
+  stage/provider/host dispatch. RunContinued2 clearing a display suspension must not
+  erase the authentic saved phase. Test CommittedOutcomeAwaitingRoute, WaitingHumanGate,
+  PlannedCapacity and Interrupted as well as BetweenStages: later Continue must route
+  once or restore the same invocation/session/plan as appropriate, never recreate it.
+- CaseS must construct the initial cursor from actual accepted graph/startup, no
+  synthetic StageEntered/invocation/plan. Existing BetweenStages can represent this
+  pre-stage phase if validated against that exact initial state. No schema extension
+  is inferred merely to make an early-start fixture pass.
+- Pin the complete allowed event-kind list for repeated ancestry. It must include
+  prior authenticated NoDispatchStop projections/RunSuspended and typed canceled
+  origins, not accidentally reject a valid repeat chain; unrelated generic stage,
+  artifact mutation, control or execution events still invalidate this route.
+- 'No dispatch' concerns executable epoch operations. Startup/control authority
+  transactions and completed host preparation can already have made local writes;
+  distinguish them explicitly from the Running-only execution invariant. An
+  unconsumed startup-command slot proves no startup transaction dispatch, not
+  necessarily that an events.sqlite file was never created. Any host preparation/
+  journal-creation responsibility must be accounted for and complete as specified.
+- Actual current request_control rejects a duplicate pending Suspend today. A
+  Stop-again test must use a legitimately admitted newer control under the reviewed
+  state machine; otherwise exercise the race as a storage CAS fault oracle and
+  label it honestly. Do not silently loosen public command semantics or inject
+  fake control generations and call that a real daemon-route positive.
+
+Mandatory real-route tests retain the proposal's literal startup/Stop-beforeACK
+and Continue2/Stop3/Continue4 positives, repeat-chain/lostreply/current-CAS faults,
+late ACK/reserve/spawn/call/frame/route refusal, immutable old proof bytes, actual
+second-process lease exclusion and disk-full owner retention. Negative registry-only
+debt, unexpected post-origin event, missing old native/external proof and snapshot
+mutation must not produce a clean current Stop. The no-dispatch positive relies on
+the real enforced admission/barrier/owner protocol, never a caller bool or public
+proof constructor. Native/external productive cold twins remain independently OPEN.
+
+No blocking finding remains in this focused proposal. Integrate it into the
+foundation spec/transition map, then obtain the independent concrete StageB seam/
+bounded-owner reviews before domain source implementation. This verdict does not
+retire other reviewers' findings, original requirements or final frozen gates.
