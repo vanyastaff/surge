@@ -38,3 +38,23 @@ The full T12/product goal remains open. This unit does not implement actual ACP
 spending, remaining-window estimates, provider-session restoration, multi-provider
 planning, complete native UI lifecycle or PR/review/CI/merge orchestration.
 No requirement in the manifest is retired.
+
+## Author build evidence
+
+The baseline outer IPC test submitted `owned_flow_start` to an actual daemon
+socket and failed because no durable owner receipt was returned (EOF/null).
+Session `34238` terminated exit 101; the test cancelled and joined the server
+before asserting the missing receipt. Five fixture tests passed and the required
+owner submission failed. Root independently read
+`../evidence/owned-flow-20261003/outer-red-final.log`. Earlier compiler/setup
+failures are retained separately and are not behavior RED evidence. Production
+endpoint and persistence implementation had not begun at that checkpoint.
+
+Pre-code API mapping found a platform amendment: existing launch claim identity
+checking ignores opened identity on non-Unix; the secure preparation lock only
+supports Linux/macOS. Neither may stand in for stable Windows provisional
+ownership. Owning architecture is preparing a held-handle Windows backend plan;
+independent security review must accept the amendment before platform behavior
+code. Pure accepted-origin work is independent and continues within its approved
+contract. This is design amendment during initial build, not a post-build repair
+dispatch. Current post-build repair count remains 0/3.
