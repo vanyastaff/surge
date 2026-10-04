@@ -9,12 +9,20 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-10-03T20:47:37Z",
+  "updatedAt": "2026-10-04T01:36:55.522951+00:00",
   "finishedAt": null,
   "previousCheckpoint": {
     "finishedAt": "2026-09-07T14:10:00-05:00",
-    "requirements": { "total": 53, "done": 46, "deferred": 7 },
-    "tests": { "passed": 2638, "failed": 0, "skipped": 38 },
+    "requirements": {
+      "total": 53,
+      "done": 46,
+      "deferred": 7
+    },
+    "tests": {
+      "passed": 2638,
+      "failed": 0,
+      "skipped": 38
+    },
     "note": "Historical checkpoint only. T12 is reopened; deferred requirements remain required by the current goal."
   },
   "stages": [
@@ -55,14 +63,14 @@ window.STATE =
       "id": "build",
       "status": "active",
       "startedAt": "2026-09-05T16:34:13-05:00",
-      "note": "T12 reopened: configured pre-dispatch rotation is in development; budget, cold process recovery, source invalidation and final gates remain required. The previous 46 completed requirements are historical; none is counted as currently verified until the full requirement audit is rerun.",
+      "note": "T12 remains active. Configured task-owned pre-dispatch and actual-worktree preparation accepted in 95c5295 after full3451PASS/36skip and independent5a/5b. Owned ordinary Flow normalization is now building from reviewed plan and ticket25. Actual ACP spending/window estimation, session restoration and full product requirements remain open. Historical46 requirements are not counted as currently verified.",
       "finishedAt": null
     },
     {
       "id": "review",
       "status": "pending",
       "startedAt": "2026-09-05T17:02:31-05:00",
-      "note": "The current T12 implementation still requires final spec compliance and independent code/security review.",
+      "note": "Configured task-owned slice accepted independently; owned ordinary Flow normalization still requires current executable gates and independent5a then5b. Full T12 review remains pending.",
       "finishedAt": null
     },
     {
@@ -89,9 +97,12 @@ window.STATE =
     "f0dac44 feat(engine): биндинг скиллов на ноде + trust-гейт, доходящий до человека (#3)",
     "1d68fe2 feat(cli): surge skill list|show|verify + гонка убрана в корне (#4)",
     "5597c9b feat(engine): guard'ы цикла и spill, подключённые к каждой агентской ноде (#13)",
-    "864dcc8 feat(engine): след срабатывания guard'а — запросом, а не разбором прозы (#17)"
+    "864dcc8 feat(engine): след срабатывания guard'а — запросом, а не разбором прозы (#17)",
+    "95c5295 feat: accepted configured task starts and pre-dispatch capacity routes",
+    "c6743fb docs: independent acceptance evidence and retained limits",
+    "6ef1810 docs: activate reviewed owned Flow normalization"
   ],
-  "branch": "feat/competitive-waves",
+  "branch": "main",
   "tickets": [
     {
       "id": "01",
@@ -458,7 +469,7 @@ window.STATE =
       "repairs": 12,
       "concerns": [
         "Historical M0-M5 commits do not close R37/R38/R41. Full T12 acceptance remains open in competitive-waves/tickets/12-capacity-scheduling.md.",
-        "Current routing tests pass scoped scenarios; nonzero host budget, cold process recovery, source invalidation, full gates and independent parent review are still pending.",
+        "Configured task-owned pre-dispatch accepted95c5295: full3451PASS36skip, strict/fmt and independent spec/quality/architecture/security reviews. Durable evidence in tickets/12-capacity-scheduling.md; ordinary Flow normalization now active in ticket25, actual ACP spend and window estimates remain open.",
         "livelock найден зондом на M3: одна 429 паркует рантайм навсегда; закрыт тремя механизмами, каждый проверен мутацией",
         "два несущих пути были невидимы для набора: подавление гейта оставляло 642/642 зелёными, откат проводки конфига 1571/1571",
         "M5 сузил показ ёмкости для терминальных ранов — записано как долг с названным способом снятия"
