@@ -1,0 +1,107 @@
+T25 no-dispatch Stop completion — root proposed reshape, 2026-10-04
+READ-ONLY draft. No source approval, no native closure issuer. Precode review needed.
+Basis: original revised5bdd46 + root supplement1944f0 + focused critic B2 gap.
+Do not modify reviewer snapshot or silently declare the gap resolved.
+
+Problem: old epoch0 sealed at Stop1, Continue2 origin committed but registry ACK
+not yet opened Running2; new Stop3 arrives. Old epoch0 closing1 is immutable, no
+Running2 exists, journal has RunContinued2, latest control SuspendRequested3.
+Without an explicit Stop3 receipt route, legitimate Continue4 is permanently stuck.
+Analogous startup journal committed in PendingStartup0 when Stop1 arrives before ACK.
+
+Invariant: no native/RPC/host/stage/control effect is admitted without Running epoch
+capability issued AFTER registry ACK. Typed origin is data, not that capability.
+Thus an unacknowledged opening cannot admit new reservations or execute restored
+routing. It can still have historical origins/receipts needing durable cancellation;
+no bool or absence of PID proves no dispatch. Inspect whole journal+registry.
+
+Case S: PendingStartup0 with committed exact startup and no Running acknowledgement.
+Current Stop1, original owner and journal barrier permit freeze of PendingStartup0
+ONLY after full registry has zero obligations and startup/full journal matches exact
+pending association. No outstanding host preparation operation may be silently
+excluded: its actual owner must have completed/settled before no-dispatch issuance.
+Typed initial suspension commits snapshot/RunSuspended under Stop1; epoch0's first
+closing generation is1. ACK1 validates exact latest control, immutable empty-set
+receipt+startup association; PendingStartup0->Suspended0. Startup ACK can never
+later open Running0 because current control/pending state changed. Continue2 refers
+that seal1 and opens new Running2 through the normal typed sequence.
+If startup NOT committed, use original durable CanceledBeforeDispatch start path:
+no synthetic RunStarted/empty journal seal. Final typed cancellation receipt must
+bind original start occurrence + zero registry obligations/actual finished host
+preparation and newest Stop; cancel task start once, preserve retained workspace.
+Conflicting/missing startup association is Attention, not automatic empty proof.
+
+Case C: Continue2 journal origin exists, Running2 has NOT been created/ACKed.
+Current Stop3 and old Suspended epoch0 with exact immutable seal1. Add typed
+prepare_no_dispatch_stop(claim,currentStop3,unacknowledgedContinue2) -> private
+NoDispatchStopPermit. It is issued only after registry freezes opening2 intent,
+marks it CanceledByControl3, prevents any ACK/reservation for2, captures exact full
+journal prefix and confirms no epoch2/obligations/admission/state mutations occurred.
+Original seal1 is verified with snapshot/schema/rawbytes/full authority ledger;
+all previous local/external/native obligations are actually terminal per that
+original proof. Any unknown/pending obligation, opened epoch2, post-origin effect
+or unmatched event denies this route and enters normal cleanup/freeze instead.
+
+Permit consumes ONCE in actor typed commit_no_dispatch_stop, associates Continue2
+origin raw receipt, prior epoch0 seal1, newest Stop3 operation/generation and frozen
+ledger generation. Atomically appends typed OpeningCanceled/control-association
+projection + RunSuspended fence3 with a new immutable snapshot at its new prefix.
+Snapshot uses prior trusted pending phase/graph state plus actual whole-prefix fold;
+only no-dispatch origin and allowed audit events may lie between seal1 and receipt3.
+No staged routing/provider/host effect may have happened in that interval; if it
+has, this no-dispatch route is invalid. Prior seal/snapshot1 remains unchanged.
+Returned private NoDispatchStopJournalReceipt is data, no dispatch capability.
+
+Registry ACK_no_dispatch_stop validates ACTUAL exact raw new receipt/snapshot,
+original seal1/full terminal set, immutable canceledContinue2/currentStop3 and
+all frozen generations, then CAS current Stop3 SuspendRequested->Suspended with
+fence3. Store new proof on EXISTING control3 authority columns: proof kind
+ReusedClosedEpochWithCanceledOpening, old epoch0 and seal1, canceled control2
+origin, current Stop3 receipt/snapshot. Do NOT overwrite epoch0 closing1 or its seal.
+No Running2 row/capability is created. Old Continue2 history retains its actual
+journal origin + CanceledByControl3 association, never converted to successful
+Executing; generic fold is display-only and cannot override registry authority.
+
+Continue4 may consume exact latest Stop3 proof with old seal1/canceled2 linkage,
+not demand epoch0 closing generation become3. Its new intent references receipt3;
+typed journal Continue4 then registry current-CAS opens Running4. It must inspect
+both original terminal epoch0 set and latest control3 no-dispatch proof. A new Stop5
+before ACK4 repeats the same general route with canceled4; associations chain by
+immutable existing control receipts, do not rewrite earlier rows/proofs. Validate
+bounded paged complete ancestry/rawbytes with no cycle/conflict; indexed candidates
+are not proof. Unknown ancestry refuses. Reuse checked existing IDs, not new IDs.
+
+Crash/replay: commit origin/cancel journal but missing registry ACK -> re-read exact
+original raw receipt and repair same occurrence. Exact replay idempotent, changed
+snapshot/bytes atomic refusal. Stop5 races ACK3 -> preserve historical3 proof, never
+overwrite latestStop5; revalidate a NEW no-dispatch Stop completion against actual
+current association. Never reopen an unacknowledged canceled epoch. Cancel receipt
+must be durable before intentionally releasing authority; StageB same original
+non-Tokio owner retains original lock/receipt/pending projection across canceled
+caller/runtime loss. Attention disk-full retains owner, not success on timeout.
+
+Tests required: literal startup0/Stop1-beforeACK -> actual typed seal/ACK1 ->
+Continue2 Running2 positive; epoch0 Stop1 seal -> Continue2 journal -> Stop3 before
+registry ACK -> typed stop3 proof -> Continue4 Running4 positive; repeat5 chain;
+Stop during cancel journal/ACK; lost replies at EACH cross-WAL boundary; attempted
+late ACK2/reserve2/spawn2/call2/frame2/route2 all refuse; old proof immutable rawbytes;
+real current owner second-process lock exclusion, no old owner drop on disk-full;
+inject unexpected post-origin event, registry-only debt, late snapshot mutation,
+missing old native/external proof -> zero new effect and no false Stop completion.
+No pure count arithmetic reimplementation as oracle, and no fake NoChild/Closed.
+All full native/provider/external/Cold positives remain open pending real B/C/D.
+
+Clarification before independent review:
+Startup-before-commit cancellation may use CanceledBeforeDispatch ONLY when the
+surviving original StageB coordinator retains an unconsumed typed startup-command
+slot and can attest actual no journal-birth dispatch plus completed original host
+preparation, zero registry obligations and no admitted native/RPC operation. This
+is private host-issued NoStartupDispatch evidence, not native NoChild. DB absence
+alone or a newly constructed claim never supplies it. Consumed/startup-in-flight,
+crashed owner, missing original marker or unknown transaction outcome requires
+original receipt inspection/repair or Attention; cannot synthesize cancellation.
+OpeningCanceled is a proposed new typed authority-bearing event, denied on generic
+append and carried only by consumed original permit. StoreArtifact and all private
+file mutation helpers obey the same actor/freeze admission BEFORE filesystem write.
+Owned deletion remains held/fail-closed until its retention/tombstone lifecycle is
+independently accepted; no cascading original proof to regain legacy delete.

@@ -640,3 +640,12 @@ checks writer activity today. Root supplement is proposed design, not acceptance
 real source behavior remains unchanged until reviewed implementation. Legacy globals
 resume oracle uses first host stalled provider/nonterminal journal, actual host
 teardown and new-host ResumeRun, not fake Closed or owned domain shortcut.
+
+
+T25initial0/3:46767 terminal0 real legacy global START+freshhost RESUME allowedA/readOnlyB positive, original nonterminal; metadata fidelity extensions pending.87626 terminal101 fixture operation-vs-kind mistake.69344 terminal101 integrated11PASS3FAIL;15773 terminal101 corrected12PASS2FAIL. Actual missing/corrupt key/object/server/purpose cold refusal now PASS. Genuine populated cold missing writer cleanup proof RED remains; manifest mutation hits immutable snapshot trigger1811, production refusal must be retained separately from explicitly authorized tempfile-only offline damaged-storage negative.74326 scoped strict running at author receipt, root must not poll. StageA focused rereview RESHAPE one no-dispatch Stop completion gap; root proposed4c58467 typed receipt/currentCAS/prior immutable proof and NextContinue, critic re-review pending. StageB exact ACP/rmcp seam report RESHAPE, root FULLread: ACP sync enqueue/retain ID workable, rmcp prepare/bootstrap, physical pipe/frame/result owner/shared coordinator concrete amendments needed. Domain sourceheld, fullnative/externalC/D/allrequirements remainopen.
+Offline corruption permission is fixture-only after actual host teardown/child
+barrier, exclusive SQLite transaction, removing ONLY named immutable trigger and
+changing exactly1 row with independent raw-byte verification. Production schema
+unchanged; does not claim hostile same-UID defense or descendant closure.
+Root source inspection verified production SQL run.to_string() vs bare serde ULID;
+fixture ID normalization preserves actual immutable first-snapshot trigger rejection.

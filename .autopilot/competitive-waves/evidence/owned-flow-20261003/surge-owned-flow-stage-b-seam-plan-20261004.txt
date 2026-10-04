@@ -1,0 +1,277 @@
+Stage B seam discovery / bounded precode dependency plan — 2026-10-04
+Verdict: RESHAPE NEEDED before Stage B source authorization.
+
+Scope: actual installed ACP/rmcp seams, private occurrence/frame/result ownership,
+and bounded runtime-independent responsibility coordination. Basis: FULL revised
+Stage A/domain artifact 5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8
+and root Stage A reshape supplement. No production files, Cargo, tests, builds,
+git, processes, handles, or installation changed. Report only. T25 formal 0/3;
+no frozen 5a/5b, native factory certification, C/D or full product acceptance.
+The proposal below is a concrete candidate requiring pinned integrated review,
+not an assertion that existing code implements it.
+
+Primary sources and exact versions
+Repo root: /Users/vanyastafford/Develop/surge
+Installed registry root: /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f
+Cargo.lock:113–116 ACP 2.2.0 checksum
+13f780597b2c88ab83d02509bcc3e86366751f86fa12114005e35c55ed691763;
+8158–8161 rmcp 1.6.0 checksum
+e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad;
+10218–10221 Tokio 1.50.0. Other installed Tokio versions are NOT the locked version.
+ACP installed src/jsonrpc.rs:60–85 public RawJsonRpcMessage/TransportFrame;
+3950–4067 public synchronous send_request, but readiness and response-route-hook
+methods are pub(crate), some behind unstable_protocol_v2; 4077–4158 allocates UUID,
+registers pending reply then synchronously unbounded-enqueues; 5450ff SentRequest
+owns response/cancellation; 5720 id(); callback consumption 6196ff. Do not propose
+calling a private response hook from Surge.
+Surge ACP sdk_v1.rs:179 effect_connection awaits connection readiness then checks
+HostEffectFence; send wrappers immediately call send_request then block_task.
+sdk_v1/transport.rs:9–46 Channel duplex/full-frame serialization/write_all/flush;
+49–103 capped inbound line reading and parsing before SDK send. Currently neither
+pipe bytes nor incoming settlement have durable per-occurrence ownership.
+rmcp installed src/service.rs:270ff private Peer queue/provider; 321ff public
+RequestHandle with id/rx; 431–487 send_notification/send_request_with_option;
+742ff serve_inner, 900ff transport.send spawned future; 1030ff responses remove
+responder and send result to caller. RequestHandle.cancel/drop/timeout is NOT
+proof the original operation ended. src/service/client.rs:194ff client startup;
+224ff allocates init ID and sends initialize directly before Peer creation; later
+initialized notification also directly uses transport. A Peer wrapper misses both.
+rmcp transport/async_rw.rs:49ff stores FramedRead and Arc<Mutex<Option<FramedWrite>>>;
+101ff send clones writer and awaits mutex then SinkExt.send, receive 119ff parses.
+FramedWrite hides individual serialization/physical-write mapping and can buffer.
+Surge MCP child_settlement/mod.rs:55–111 ObservedTransport embeds that AsyncRw;
+174–195 delegates send/receive/close. connection.rs:337ff spawn_and_serve,
+435 .serve handshake; 462ff paged list_tools; 502ff call_tool; 596ff health loop.
+registry.rs:283 selected list validates names, :336 call timeout; current owned
+OnDemand policy prevents proactive monitor use but does not eliminate SDK handshake.
+
+1. ACP: local wrapper is sufficient for the declared enqueue-before-ID contract
+
+Keep the plan's explicit sequence, rather than inventing SDK preallocated IDs.
+Proposed private OwnedRequestDispatcher::dispatch_acp(reservation, request):
+(a) coordinator slot already retained and registry RequestReservation committed;
+(b) await SDK readiness before enqueue admission;
+(c) synchronous current admission, SDK send_request, retain SentRequest in outer
+slot, read SentRequest.id(), bind exact connection-incarnation + typed request ID,
+with NO await/caller delivery between these steps;
+(d) coordinator-owned callback/result waiter consumes SDK handle; caller gets a
+separate outcome waiter. Retention must precede any fallible bind DB operation.
+
+Crash/panic in (c) remains reserved EnqueuedUncorrelated/Unknown. No lookup by
+method, payload equality, last prompt, provider session or newest occurrence.
+A private transport correlation latch prevents a frame from writing while binding
+is pending, including if transport executes on another thread. Once bound, both
+ID type and bytes are exact; numeric 1 and string "1" are distinct. Reconnect
+incarnation is a host-created monotonically unique identity, not server name.
+For UUID collision/repeated ID, conflicting bind is refused atomically; no overwrite.
+ACP SDK's private readiness hooks are not required. SDK callback APIs alone are
+insufficient for ownership after runtime destruction, so inbound capture below
+must exist before callback/caller delivery.
+
+Cancellation notification generated automatically by SentRequest Drop has no
+new host permission. Explicit cancellation reserves its OWN cleanup occurrence
+related to original request and registers exact cancellation routing before SDK
+emission. Unmatched automatic frames fail closed and retain old debt; do not
+attach them by method. Incoming permission reply uses its exact incoming RPC ID,
+not the active prompt's ID. Request and reply namespaces/direction are distinct.
+
+2. rmcp: required narrow pinned dependency amendment, not ACP-shaped guess
+
+Public send_request_with_option allocates ID and then awaits internal tx.send
+before exposing it. A check before calling it is stale at internal enqueue; the
+caller can be canceled while blocked. Merely wrapping transport.send stops bytes
+but fails the plan's BEFORE-SDK-enqueue current admission requirement.
+
+Recommended minimal rmcp patch candidate, kept generic and unaware of Surge DB:
+Peer::prepare_request(request, options) -> Future<Result<PreparedRequest<R>, ...>>
+waits for an owned mpsc queue-capacity permit and allocates exact ID/progress token;
+PreparedRequest::id() -> &RequestId;
+PreparedRequest::enqueue(self) -> RequestHandle<R> consumes the held queue permit
+synchronously, without an await. PreparedRequest remains opaque/non-Clone and
+Drop before enqueue provably emits no request/cancel notification. Its enqueue
+returns only after responder ownership is installed in the queue payload. Mirror
+PreparedNotification for explicit cleanup notifications. No public JSON token,
+caller boolean, serialized authority, or user-defined arbitrary proof callback.
+
+Surge wrapper first has retained slot + durable reservation, awaits prepare,
+binds exact ID, performs current EnqueueAdmission and calls enqueue synchronously;
+immediately retains RequestHandle/rx in slot before outcome waiter delivery.
+Queue permit exhaustion/connection shutdown before enqueue is a separate genuine
+NotEnqueued path, not response cancellation. Existing methods preserve legacy
+behavior by implementing prepare+enqueue internally; no blanket public API break.
+ID allocation must not wrap into live/reused IDs: current AtomicU32 provider is
+actually AtomicU64 -> i64 cast. Patch defines checked exhaustion/no reuse during
+connection lifetime, including init's allocated ID and progress token.
+
+Initialization requires an additional exact bootstrap seam. Recommended generic
+client startup prepared-frame hook accepts actual typed initialize ID before
+transport.send, and a separate initialized-notification occurrence. Hook invoked
+synchronously after capacity/readiness and before enqueue. Host private constructor
+provides bootstrap reservations before .serve; hook cannot manufacture authority.
+Alternative replacing the entire rmcp client handshake is larger and risks divergent
+protocol negotiation; do not silently choose it. Both direct client initialization
+and normal Peer operations must use the same private owner table. Incoming callback
+response/error, explicit cancellation, notifications and SDK-internal frames require
+separate typed origin binding at their actual creation seam; unmatched owned frame
+is refused. Freeze the finite supported list; no "all method strings are safe".
+This patch must be vendored/version-pinned or accepted upstream with a locked source;
+editing the installed Cargo registry is not a deliverable. Workspace Cargo patch,
+lock/source checksum and dependency license/reproducibility are part of dependency
+closure. No install or source changes authorized by this report.
+
+3. Physical frame transport: replace owned AsyncRw use, preserve legacy path
+
+Proposed private FrameEnvelope contains occurrence key, connection incarnation,
+direction, exact typed RPC ID/notification origin, immutable complete serialized
+bytes INCLUDING newline, private owner slot, and cursor. Memory only: no payload,
+prompt, env, argument, response, or capability bytes in logs/ledger. Protocol JSON
+never carries FrameAdmission. Serialize once; do not hash one buffer and send another.
+ACP source already exposes whole outgoing frame; rmcp custom Transport<RoleClient>
+sees typed complete message at send. Owned path must not delegate physical writing
+to opaque FramedWrite. Legacy/unowned AsyncRw remains unchanged unless separately
+verified. Bounded line decoder must preserve the locked rmcp compatibility policy
+or explicitly reject unsupported inputs; no raw-frame debug diagnostics.
+
+A generic AsyncWrite wrapper checking before poll_write is NOT an after-writable-
+wait gate: inner poll_write may itself wait for readiness/buffer data. Candidate
+concrete Unix implementation uses original owned stdin/stdout descriptors in a
+single nonblocking pipe worker: safe nix fcntl O_NONBLOCK (existing fs feature),
+PollFd/poll readiness (new explicit nix poll feature if required), safe write/read.
+No native domain factory/kill/wait proof is created. Poll writable, then synchronous
+current admission/revalidation immediately before actual write syscall. No await
+between gate and syscall. EAGAIN with 0 bytes retains exact frame, retries only
+with a fresh current check; never consumes a second dispatch occurrence. Registry
+FrameAdmission records the one occurrence; private retry state certifies no prior
+bytes, revalidates current right on EVERY attempt. Positive write increments cursor;
+first >0 byte makes all later cancellation/error PartialFrame/Unknown, never NoEffect.
+Frames cannot interleave. After first byte Stop forbids subsequent frames; owner may
+finish remaining bytes of this already admitted frame or close transport under an
+explicit frozen policy. This policy must be chosen in the pinned plan, not guessed
+in implementation; either leaves operation/domain debt until genuine terminal proof.
+
+Use bounded coordinator/IO slots and bounded bytes BEFORE SDK enqueue. Pipe fullness
+cannot block worker forever: readiness loop also services control/read-side, bounded
+backpressure and shutdown. EOF/WriteZero/error/runtime loss is observed by retained
+owner, not by detached caller. Descriptor closure is private original-owner action;
+no numeric PID cleanup, no second child waiter. Windows physical IO is a separate
+unresolved seam; don't claim Unix poll proves Windows overlapped-write semantics.
+Generic test AsyncWrite remains useful for cursor properties but cannot establish
+real first-byte behavior. If this Unix IO amendment is rejected, byte-gating seam
+is BLOCKED, not satisfied by checking once before write_all.
+
+4. Incoming result ownership before SDK/caller routing
+
+ACP: immediately after capped complete line parsing, before queue-capacity sleep
+or sender.unbounded_send, copy/move exact response/error envelope into coordinator
+retained IncomingSlot; correlate only exact incarnation+direction+ID. rmcp: custom
+receive captures private typed incoming response/error before returning it to
+serve_inner. Capture valid result delivery and application terminal observation
+separately; parse success is not an adapter terminal certificate. No copied raw
+receipt becomes a serializable/public host authority.
+
+Proposed IncomingSlot::capture(envelope) -> PrivateProtocolObservation;
+coordinator retains slot BEFORE capture acknowledgment/SDK delivery. Sender holds
+slot through Taken; duplicate identical observation is idempotent; conflicting
+result for same ID keeps evidence and Attention, never replaces first terminal.
+Bound capture capacity pre-registration and refuse/stop reads on exhaustion;
+never evict oldest pending result. Malformed response, unknown ID, batch mismatch,
+EOF or timeout does not settle an operation. Incoming provider permission request
+gets its own ordinal and request ID namespace; final approved reply must pass both
+current dispatch and final-byte gate, even if decision was obtained earlier.
+
+Normal response proves ProtocolSuccess/Error only. External/native obligations
+remain open until exact adapter/domain terminal proof. Caller timeout/drop sends
+CancelRequested, not AdapterTerminal. Async callback awaiting registry projection
+cannot be sole proof owner. Runtime destroyed after capture preserves IncomingSlot
+and durable attention protocol; no receipt invention from the user's JSON result.
+
+5. One bounded coordinator and original lease identity
+
+Place ledger/registry coordinator in surge-orchestrator (already depends on storage,
+ACP and MCP), injected into ACP/MCP via opaque traits. Avoid MCP -> ACP/storage or
+core I/O. Proposed Coordinator::register(original WorkItemLaunchClaim, binding,
+capacity) -> ResponsibilitySlot completes BEFORE registry reserve. Its registered
+entry owns clone of original underlying LaunchLock Arc, not a reacquired lock or
+new wrapper inferred equal. Slots cover writer, RPC, frame and incoming-result
+responsibility, have stable keys, bounded per-run/global count/bytes; capacity
+failure is effect-free and leaves no registry reservation. Finite initial capacities
+must be pinned with overflow behavior; no per-RPC worker thread/unbounded queue.
+
+Reuse child_settlement tracker slot/Taken ownership discipline and existing direct
+child worker; do NOT move Child into coordinator or add kill/wait implementation.
+Current ChildSlot transfer takes parcel into worker; coordinator receipt transfer
+instead retains slot in registered table before Taken and uses an idempotent slot
+key to survive lost acknowledgment. Native worker remains sole Child owner.
+Independent standard coordinator thread handles typed journal projection/registry
+Attention and survives Tokio loss. It must not synchronously block forever waiting
+on dead Tokio RunWriter: nonblocking command submit/liveness state, terminal-journal
+notification, then protocol(b) exact pending projection in registry. If live journal
+is merely slow, no fabricated terminal loss. On Attention disk failure keep original
+Arc and retry bounded diagnostics; shutdown remains unconfirmed. Frozen settlement
+uses opening generation; ACK checks closing generation/current CAS from supplement.
+
+Shared panic implementation currently lives privately in surge-mcp, not globally
+accessible to ACP/shell. Exact dependency reshape required: expose a narrow opaque
+shared panic/ownership utility from an existing I/O crate acceptable to all owners,
+or add a minimal leaf runtime-ownership crate (not surge-core). The latter is clean
+but changes workspace/AGENTS and requires full dependency closure review. One hook
+installed before ANY ACP/shell/MCP registration, preserving existing host hook;
+protected panic currently aborts process (not a recoverable receipt). Poison is not
+empty; durable debt survives process death. Do not claim catching panic proves
+Attention was committed or native handles closed.
+
+6. Safe edit map and genuine acceptance closure
+
+Main sole source lane, after pinned plan acceptance only:
+- rmcp version-pinned dependency patch: service Peer prepare/enqueue + client bootstrap
+and exact internal response/notification origin seams; Cargo/lock closure.
+- ACP sdk_v1 wrappers/effect fence/transport: retained handle, exact ID latch,
+full-frame and pre-SDK incoming capture; no SDK patch demanded for existing sequence.
+- MCP connection and child_settlement transport: custom owned frame pipes and private
+bootstrap/request interface; observer injection retains existing child worker/Taken.
+- orchestrator private coordinator + writer_coverage callbacks, startup ownership
+handoff, runtime-loss ordering; persistence Stage A typed reservations/settlement/
+projection authority, supplement startup/seal/Continue/deletion guards.
+- one shared panic utility/dependency path, platform-gated safe pipe IO modules.
+- preserve catalog policy getters/ownedEmpty/override precedence and unowned helpers.
+No native C factory or external terminal certification inserted as a test shortcut.
+
+Required independent oracles (not implementation-derived green fixtures):
+B1 real daemon/subprocess peer records fixed expected wire IDs/methods/count; two
+concurrent same-method requests return in reverse order, exact separate settlement;
+reconnect repeats an ID but distinct incarnation, wrong namespace doesn't settle.
+B2 fill actual stdin pipe so writable wait blocks, queue request, Stop, drain peer;
+fixed independent byte count is ZERO. Exercise init, initialized, tools/list pages,
+tools/call, permission response and explicit cleanup occurrences independently.
+B3 force partial real frame then Stop/EOF/caller timeout/runtime teardown; exact
+peer prefix >0 and <frame length; ledger remains PartialFrame/Unknown, never NoEffect.
+B4 capture response then destroy Tokio before SDK callback delivery; retained owner
+commits exact historical settlement/pending Attention before original lock release.
+Independent second process cannot acquire launch authority early; afterward can
+reconcile only, not launch with pending debt. Disk-full projection/Attention failure
+keeps lease. No SQL-only ownership assertion.
+B5 queue exhaustion/cancel while rmcp prepare waits: no SDK enqueue/wire bytes;
+prepared drop proves no request; enqueue gate after wait sees newest Stop. Test
+bootstrap bypass independently; no reliance only on call_tool wrapper.
+B6 Lost Taken/duplicate transfer/panic/poison/full coordinator exercise original slot
+identity, no second Child owner, bounded threads/bytes, shell-first panic sentinel
+absent from diagnostics. Preserve prior unowned 6a–6d pipe/cancel/shutdown tests.
+B7 productive initial owned Empty/HostDefaultEmpty/populated flows AND legacy start/
+resume; exact accepted metadata from same resolved registry; existing child owners
+retained; no proactive owned monitor. Refusal-only success cannot close A+B.
+
+Open acceptance boundary: A+B can preserve productive initial dispatch but cannot
+prove full native descendant/external closure without Stage C/D. If an existing
+owned cold Continue test demands genuine closed domain after launching an arbitrary
+ACP/MCP executable, B cannot make that green by reclassifying GroupOnly as Closed.
+Specify which productive restart positives have genuine already-supported proofs;
+keep unsupported cold continuation explicitly open. No test-injected receipt is
+proof real providers have terminal contracts. This is a consequential acceptance
+boundary requiring parent resolution in the integrated pinned plan, not user
+permission or a reason to silently weaken lease/debt rules.
+
+Required precode reshapes: pin rmcp patch/bootstrap APIs; pin safe physical pipe IO
+and partial-write Stop policy; pin shared panic utility/dependency and coordinator
+capacities/runtime-loss API; bind all supported internal frames and incoming result
+slots; state productive A+B closure separately from C/D cold closure. Until then
+RESHAPE NEEDED. No installation/build/source approval or full completion implied.

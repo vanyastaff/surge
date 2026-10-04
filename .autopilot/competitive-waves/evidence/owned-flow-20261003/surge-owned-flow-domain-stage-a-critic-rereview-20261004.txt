@@ -1,0 +1,130 @@
+T25 StageA foundation — focused independent critic re-review
+2026-10-04
+
+VERDICT: RESHAPE NEEDED, one remaining control-transition gap.
+B1 startup, B3 acceptance dependency choice and securityR3 helper barriers are
+resolved at PLAN level. B2 normal receipt sequencing is resolved, but clean
+completion of a newer Stop canceling an opening still needs a concrete contract.
+No native/external StageC certification or A/B source approval is inferred.
+
+Objects: COMPLETE revised plan SHA
+5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8
+plus COMPLETE root supplement sections1–6 SHA
+1944f0f784197d52e3a14759ff4b93864bba0a4112647ba7b443208570d61c54.
+First reports retained. Rechecked current engine startup/RunWriter actor, registry
+controls and daemon wait/Continue routing, snapshot/stage/gate/rebuild/delete paths.
+Only this /tmp report was written; no source/tests/Cargo/Git/build/process action
+or polling. Not formal5a/5b; initial0/3 unchanged.
+
+RESOLVED IN THE FOUNDATION PLAN
+
+B1: The supplement correctly retracts the nonexistent existing typed startup path.
+It introduces durable owned-pending metadata BEFORE journal opening, private actor
+configuration/command internals, association-derived enforcement on every public
+create/open, genuine StartupPermit and atomic exact ordered startup transaction.
+PendingStartup0 -> actual StartupOriginReceipt -> separately verified registry CAS
+is a viable cross-WAL protocol. Missing marker cannot downgrade an owned reservation
+to legacy; marker/registry conflict refuses. Startup bytes/artifacts/private-input
+semantics remain bound, not reconstructed. Actual engine producer/storage/writer/
+module edit closure now covers the missing seam.
+
+B2 normal path: Explicit typed seal/Continue one-shot consumption -> private stored
+raw receipt -> registry inspection/current CAS -> constrained Running epoch removes
+the two-consumptions ambiguity. Distinct opening generation0 versus closing1 and
+new opening2 avoids rekeying writer obligations to Stop generation. Historical
+Continue rows can retain stale origins without replacing epoch0's immutable seal.
+No open_epoch(None) bypass or generic RunContinued authority remains authorized.
+
+B3: Root explicitly chooses A+B dependency acceptance closure. A-only all-owned
+dispatch denial is not a green runtime checkpoint. Source approval stays held for
+independent concrete B coordinator and ACP/rmcp ID/frame review. This is a coherent
+dependency decision, provided structural foundation acceptance remains separate
+from real owner/physical tests and C/D native/external recovery positives. Empty
+means no MCP inputs, not no ACP; its productive cold tests must remain executable
+and unmet when genuine domain/operation closure is unavailable.
+
+SecurityR3: The all-command actor barrier, exact write-once sealed snapshot bytes,
+typed stage/gate association, owned bool-seal denial, display-only rebuild and
+debt/tombstone deletion fencing cover the concrete current bypasses. In actual
+writer.rs:344ff snapshot uses INSERT OR REPLACE; stage/gate helpers are independent
+commands; storage.rs:466ff deletion currently checks only active writers before
+registry deletion/filesystem removal. New guards must apply to these real paths,
+not only generic event append.
+
+REMAINING B2 BLOCKER — how the newer Stop becomes complete after a canceled opening
+
+The stale-origin storage is specified; the subsequent executable current-control
+transition is not. Exact scenario:
+1 epoch0 is sealed/ACKed with closing Stop1.
+2 ContinueReserved2 commits typed RunContinued2 origin.
+3 Stop3 becomes newest before acknowledge_continue_origin2.
+4 ACK2 correctly refuses, preserving origin in control2. No Running epoch2 exists;
+  epoch0 remains immutable closing1; newest control3 is SuspendRequested.
+
+How is Stop3 now acknowledged cleanly, with exact evidence, so a legitimate later
+Continue4 can be issued? Ordinary freeze/seal/ACK assumes a Running epoch to freeze
+with CURRENT closing control. Reusing epoch0 seal/closing1 as a Stop3 seal violates
+the specified exact generation match; rewriting it violates immutability. Keeping
+Stop3 pending/Attention permanently contradicts the explicit 'no permanent Attention
+merely because current control changed' and meaningful later validated intent.
+Current request_control only permits Continue from a confirmed suspension, and
+daemon work_items.rs:347ff waits for the latest SuspendRequested to change. Simply
+retaining control2's old receipt does not complete that route.
+
+The analogous initial case is Stop1 after PendingStartup0 journal commit but before
+Running0 ACK: startup ACK must refuse, yet no Running epoch exists for normal freeze.
+Startup-before-commit cancellation also needs an explicit outcome when registry
+PendingStartup exists but its owned journal is missing, rather than pretending a
+missing journal is a debt-free proof.
+
+Required focused reshape: specify a typed canceled-opening/no-dispatch suspension
+or equivalent explicit current-control reconciliation transition. Pin its required
+actual original startup/Continue receipt, prior seal when applicable, canceled
+opening association, complete ledger/journal and current original lease predicates;
+prove no dispatch could have been admitted in the unopened generation. Define its
+journal command/receipt then registry CAS, snapshot/pending-phase projection and
+current Stop state, without modifying old seal or opening canceled generation.
+Keep any uncertain/missing journal or unresolved reservation blocked, not inferred
+NoChild. Show how the NEXT independently issued Continue references that new
+current control's verified association and returns to productive execution once
+the remaining real capabilities exist. Preserve all historical origins and newer
+operator decisions. If another valid approach is chosen, provide its complete
+transition/receipt map; no new duplicate generic bool acknowledgment.
+
+Required real-route scenarios: startup0 -> Stop1 before ACK -> confirmed current
+Stop -> independently validated Continue; seal0/Stop1 -> Continue2-origin -> Stop3
+before ACK -> no epoch2 effects -> verified Stop3 -> Continue4; crash/lost reply at
+each receipt/CAS boundary; conflicting raw origin; newer Stop again while canceled-
+opening completion is queued; actual no duplicate startup/Continue/provider effects.
+No full native closure may be inferred from these no-dispatch transitions.
+
+NONBLOCKING IMPLEMENTATION GUARDS
+
+- Actual private actor enforcement must initialize from trusted registry association
+  before command execution and deny mutations on failed owned load; public generic
+  Storage handles cannot select legacy. Private visibility narrowing is compatible
+  with surveyed workspace consumers, but a public export change still needs normal
+  API review/checks; compiler success is not authority evidence.
+- ALL helpers includes StoreArtifact (writer.rs:256ff writes named files), snapshot,
+  stage/gate, old seal, rebuild and delete. Guard before file/DB mutation. Retain
+  exact snapshot digest/schema/pending phase and reject same-prefix different bytes.
+- Final owned deletion contract remains separately reviewed as the supplement says.
+  FK RESTRICT plus retained historical epoch rows can prohibit literal deletion of
+  their parent run row even after settlement; use an explicit retention/tombstone
+  contract, not cascade/removing ledger to satisfy old delete_run. Until that cleanup
+  contract is accepted, fail closed for owned deletion; legacy positive remains.
+- StageB owner must retain original underlying lock Arc through permit/receipt
+  handoff and protocol(b) Attention. The supplement doesn't certify its queue bounds,
+  panic/Taken/response owner or frame seam; those independent prerequisites remain.
+  Genuine historical settlement behind newer Stop uses its original identity and
+  authenticated cleanup owner, never current Running dispatch predicates.
+- A+B foundation does not supply native CoveredDomain/external terminal factories.
+  Do not demand all cold positives green by fabricating proof, nor hide their
+  failures. Pin actual A+B scope/gates and list which productive native/external
+  cold tests still depend on C/D; full T25 remains unaccepted until those pass.
+
+This remaining transition is implementable without platform installation or new
+universal remote guarantees. Fix it before calling the foundation state machine
+closed; then the independently reviewed StageB prerequisite remains the source
+authorization gate. No original requirement, native/full-platform proof, frozen
+5a/5b or formal count is retired by this focused re-review.
