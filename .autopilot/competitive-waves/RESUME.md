@@ -1,3 +1,23 @@
+# Current committed foundation suite GREEN — 2026-10-04
+
+Author42885 terminal0: wake-foundations-nextest.log on source b622bd4,
+core/ACP/MCP/persistence/newprocess selection,1830PASS8inheritedSKIP,
+64testbinaries,2threads,no-failfast,81.632s after2m58s build. Root inspected raw
+header/terminalsummary and exact sharedslot/realOSlock/Ready/publicentry/isolated
+lifecycle/MCP actualruntime cases. ActorDrop/cancelledclose/fullqueue exclusion all
+PASS; productionReady/newerStop storage model PASS; child-settlement retained
+send/unpolledclose actualruntime PASS. Some child/lifecycle probe harness cases
+are NOOP by themselves; outer substantive cases retained, no fabricatednative proof.
+Neutralpanic boundary compiles/participates, not a claimed full panic-fault matrix.
+This is FIVE selected crates, NOT fullworkspace tests, daemon/UI/native acceptance.
+Strict fullworkspace/fmt previously green on sourcecheckpoint remain separately
+recorded. Source unchanged atreceipt; no repeated build restart byroot.
+
+Main nextauthors test-only uncertainreceipt lookup/unavailable-vs-definitiveabsence,
+8owner capacity/preflightStop/remainingwake faults using existing isolated harness.
+Independent Windows integration critic/security now running, sourcepermission/native
+unsafe/platformrunner/fullrequirements/freeze5a→5b remain open, initialformal0/3.
+
 # Concrete native broker integration draft independently dispatched 2026-10-04
 
 Root FULLread integration supplement e4d64ebbf8f85ba9df3dfbec9ba473ba4a4ddaf8a0bf492b15f0d275101b689b,
