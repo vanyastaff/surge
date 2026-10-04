@@ -1,3 +1,26 @@
+# Authoritative actor exclusion RED and Stage B review checkpoint 2026-10-04
+
+Actual actor lease baseline49412 terminal101: three cases fail because dropped
+RunWriter, cancelled close and cancelled full-queue close release exclusion
+before the actual journal actor exits. Raw log retained, fully read by root;
+fixtures drain old actors before assertion. Main implements authorized shared
+actor/wrapper lease and owning FileLock alongside neutral panic extraction.
+A first-green raw log exists but awaits author terminal receipt; it is not a
+fresh full-workspace gate or source acceptance. New surge-process crate exists
+in the working tree; root structural docs are updated and held for its source
+checkpoint. Source/Cargo/format/build/process remain exclusively main-owned.
+
+Root FULL read independent combined Stage B review736fb656, verdict RESHAPE:
+4096 decoded UTF8 ID can require24576 encoded JSON bytes, exceeding proposed
+cleanup backing; exact rmcp notification-ignore ordering must precede unknown
+routing refusal, including unknown notifications/ with IDs. Architect revises
+both; B source held. This is one combined critic/security reviewer, not two
+independent opinions. Formal initial0/3 unchanged; full native C/D, cold writer
+settlement, malformed manifest and freeze5a then5b remain open. U01 multiple
+provider planning remains accepted/open. No requirements retired.
+
+Earlier entries below are superseded history where contradictory.
+
 # Authoritative full strict GREEN before wake implementation 2026-10-04
 
 Author39737 terminal0 fullworkspace/allfeatures/alltargets-Dwarnings1m52s; root

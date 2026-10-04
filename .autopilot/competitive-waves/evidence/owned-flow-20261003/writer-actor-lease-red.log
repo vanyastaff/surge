@@ -1,0 +1,30 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized] target(s) in 28.99s
+     Running tests/writer_actor_lease.rs (target/debug/deps/writer_actor_lease-22f3a3a22e28e449)
+
+running 3 tests
+test cancelled_close_retains_exclusion_until_actual_actor_exit ... 
+thread 'cancelled_close_retains_exclusion_until_actual_actor_exit' (31538608) panicked at crates/surge-persistence/tests/writer_actor_lease.rs:98:5:
+caller loss released journal exclusion before actual actor exit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test cancelled_full_queue_close_retains_exclusion_until_actual_actor_exit ... 
+thread 'cancelled_full_queue_close_retains_exclusion_until_actual_actor_exit' (31538624) panicked at crates/surge-persistence/tests/writer_actor_lease.rs:98:5:
+caller loss released journal exclusion before actual actor exit
+FAILED
+test dropped_writer_retains_exclusion_until_actual_actor_exit ... 
+thread 'dropped_writer_retains_exclusion_until_actual_actor_exit' (31538640) panicked at crates/surge-persistence/tests/writer_actor_lease.rs:98:5:
+caller loss released journal exclusion before actual actor exit
+FAILED
+
+failures:
+
+failures:
+    cancelled_close_retains_exclusion_until_actual_actor_exit
+    cancelled_full_queue_close_retains_exclusion_until_actual_actor_exit
+    dropped_writer_retains_exclusion_until_actual_actor_exit
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p surge-persistence --test writer_actor_lease`
