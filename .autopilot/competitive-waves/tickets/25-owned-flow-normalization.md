@@ -192,3 +192,31 @@ and before spawn/init plus direct health/reconnect RPCs. Store token/association
 control rules need a single coherent SQL snapshot. Cleanup and denial/internal
 bookkeeping stay available after Stop. Author is amending those changed sections
 for the same independent reviewers before behavior writes there; T25 stays 0/3.
+
+Corrected effect design accepted by both independent lenses: section 6a–6d
+of surge-owned-flow-final-effects-plan-20261003.txt explicitly supersedes its
+old section 4/effect oracle. Final owning/security reports retained alongside
+it. Root read both complete reports and authorizes the corrected shape within
+the same initial T25 unit (0/3). ACP carries a non-Serde host fence through real
+queues/session/prompt/callback owners, checks after waits immediately before
+each effect, and defines already-admitted SDK IO versus later Stop ordering.
+MCP checks after awaited observations and at every page/tool/health/reconnect
+boundary. Claim/token/association/current control are read in one coherent
+SQL snapshot; startup provenance scans the real whole journal. Actual barrier,
+cleanup/descendant containment and native Windows proofs remain required.
+
+Actual ownership oracles session 64307 terminated exit 0: six selected tests
+passed in coordinator-third-tests.log, including the child fixture, separate
+process exclusion across finalization/claim handoff, kill/wait and original
+object reacquisition, and caller cancellation with a still-owning blocking
+worker. Root read test names/results. Session 9557 is confirmed reaped exit 101
+for the preceding test Debug-bound compiler failure, fixed with cancellation
+pattern matching rather than exposing private owner Debug. These are scoped
+checks, not full gates or final unit acceptance.
+
+Narrow owned_flow_mcp_diagnostics_builder now owns MCP connection/registry/
+error/cleanup/writer_observer and private stderr helper/tests; main holds edits
+in those files until handoff and implements ACP/SQL/orchestrator/global filters.
+Helper must hand off an actual diagnostic child RED test before behavior fixes;
+main remains sole Cargo/build/link/format owner. Final independent 5a then 5b
+will evaluate the complete integrated unit, not these design verdicts.

@@ -1,0 +1,296 @@
+T25 bounded amendment: opaque MCP diagnostics and exact host effect fences
+Author proposal for owning + independent security pre-code review, 2026-10-03.
+No MCP behavior edits are authorized by this proposal until both accept it.
+
+Decision: use opaque external diagnostic payloads, automatically for ALL Surge
+MCP connections, plus a mandatory application-global dependency logging veto.
+Do not preserve arbitrary child stderr/service/cleanup error prose. Do not add
+a caller private/redact bool, inspect inherited auth, modify spawn transport,
+re-encode functional successful tool output, or certify literal masking as an
+information-flow boundary. Existing credential heuristics remain a separate
+legacy public helper; the protected transport no longer depends on them.
+
+1. Mandatory logging containment
+
+Pinned rmcp1.6.0 has no logging-disable feature. Its ServiceExt spawns service
+tasks internally; an outer future dispatcher scope cannot prove descendant
+containment. Choose the reviewed global-invariant alternative, not scope tricks
+or a source/vendor patch. Add a small surge-mcp diagnostics metadata predicate
+which rejects the entire target namespaces rmcp and process_wrap (exact root
+or root followed by ::). It rejects spans as well as events, before subscriber
+fields are visited. process_wrap instrumentation can format subprocess wrappers;
+its SDK numeric records are also suppressed to prevent a platform-specific gap.
+
+CLI, daemon and UI main install a Registry with this predicate as a GLOBAL
+filter layer, before every formatting/output layer, plus the ordinary EnvFilter.
+The EnvFilter remains useful for Surge levels, but RUST_LOG=trace or
+rmcp=trace cannot bypass this AND-composed mandatory veto. All production
+entrypoints were inventoried: these three initialize tracing; the CLI MCP
+server subcommand shares the CLI subscriber. No additional output layer may
+be installed outside this filtered Registry by these entrypoints. New logging
+outputs must reuse the same global predicate; document this structural rule.
+Safe Surge-owned replacement records preserve bounded public server identity,
+operation/category, retry count, timeout, child PID and exit code when known.
+No external payload fields accompany them.
+
+This is the Surge application's logging invariant, not a promise that a
+downstream consumer choosing an unrelated subscriber cannot expose its own
+dependency events. Library entrypoints document the required logging boundary;
+integration tests install the exact shared mandatory filter with a TRACE
+capture layer as a process-global subscriber BEFORE Tokio runtime/tasks. This
+explicit global placement covers rmcp descendant tasks regardless of dispatcher
+inheritance. A dedicated integration binary isolates the global subscriber
+from other tests; captures are bounded and returned as test-owned observations.
+Test confirms safe Surge records remain visible, actual peer/notification/codec
+payload records do not, with rmcp=trace explicitly enabled. A host-process
+smoke under verbose RUST_LOG proves entrypoint enforcement too.
+
+2. MCP diagnostic origin policy
+
+connection.rs stores only fixed bounded diagnostic categories in McpError and
+CleanupError textual fields BEFORE returning/logging/formatting them. Keep the
+existing typed variants/classifications/health/backoff and numerical facts.
+Observer errors, spawn error, handshake error, service/transport failure,
+shutdown join failure and registry worker join failure get separate static
+reason codes. Do not retain the raw error as a source chain or Debug field.
+Derived public Debug/Display then only see safe strings. Public server/tool
+identity remains public metadata, not copied from external diagnostic text.
+configuration()/configured_servers remain exact runtime transport APIs and
+are not formatted/journaled by the owned path.
+
+The connection recognizes successful RPC envelopes with is_error=true and
+replaces ALL diagnostic content and structured error metadata with one static
+text reason while preserving is_error=true. Registry also enforces this before
+forming its public McpToolResult, so direct connection callers and routing/
+agent hashes cannot accidentally retain diagnostic prose. Ordinary non-error
+tools/list metadata and tools/call functional content remain byte/field-faithful.
+They are product payloads, not opaque diagnostics. No universal promise is made
+that a malicious server cannot deliberately return private inputs as ordinary
+successful product data; tests distinguish successful functional outputs from
+error/diagnostic channels. Their dependency traces are still vetoed.
+
+3. Bounded stderr drain
+
+Replace lines().next_line with a byte drain using a fixed 4KiB input buffer.
+Retain no raw record text, only a saturating byte count, delimiter state and
+record classification. Newline, CRLF, final EOF, invalid UTF8, split multibyte
+values and accepted multiline arguments cannot expose any fragment because no
+raw byte is ever rendered. Emit an opaque category per completed record;
+records larger than 16KiB use a distinct overlong category and are drained to
+delimiter. Huge no-newline stderr remains constant memory and is drained until
+EOF/cancellation. A maximum 500 fixed-size safe records bounds the retained
+public log and tracing rate; further records are drained without publication,
+with one bounded suppression-total record at EOF if useful. No raw prefix,
+lossy decoding, truncation fragment or invalid UTF8 error appears publicly.
+File capture stores these safe records, never raw private diagnostics. Existing
+owner-only file handling is retained; no private redaction literal snapshot is
+persisted, nor any inherited provider environment copied. Reconnect owns the
+same automatic policy. Actual Command::new, ordered args, env_clear + essential
+environment + declared env, cwd, timeout, whitelist and sandbox remain exact.
+
+4. Actual effect-time ownership (bounded companion seam)
+
+Public trait boundary: extend surge-mcp HostWriterObserver with async
+before_effect(server) default Ok for existing non-owned users. This conveys no
+new hydration authority; an owned Flow observer is constructed only by Engine
+with its existing WorkItemStore + retained real WorkItemLaunchClaim + existing
+McpWriterObserver. Its before_child and child_started recheck ownership before
+delegating durable writer records, and before_effect validates immediately
+before tools/list or tools/call RPC after lazy ensure_connected. Initialization
+is already fenced by child_started before rmcp serve. Cleanup remains allowed
+after Stop so provider/child reaping is never blocked by cancellation controls.
+No private snapshot serialized bool selects this observer; Engine chooses it
+only from the authenticated input capability AND actual same-run claim.
+
+Private per-run ACP BridgeFacade decorator retains that same claim Arc and
+store. Immediately before open_session and send_message, it calls
+validate_owned_flow_effect; permission refusals expose safe typed bridge reason
+codes. close_session and cleanup are always delegated. Tool/permission replies
+which can advance provider execution also recheck before forwarding. Session
+state/subscription are read-only and delegated. No public BridgeFacade trait
+change or recipe opening behavior change is required. The raw bridge remains
+inside the host decorator; run-task initial and cold paths use the decorator,
+and run-task stage checks also call this exact store effect validator.
+
+Store effect rules already drafted: real current claim/token/binding, unchanged
+typed accepted Flow graph/hash/workspace and immutable op/intent; started intent
+requires actual unique authenticated startup validation + pending ACK first.
+No control permits Reserved/Launched only. Executing permits Reserved/Launched
+only with exact latest run/item/attempt generation. ContinueReserved permits
+the retained nonterminal run only with the real exact latest generation and
+confirmed cleanup fence; prior Attention/Suspended alone never grants effects.
+SuspendRequested/Suspended/Attention/Terminal or canceled/missing intent refuse.
+Initial Pending remains a separate exact Reserved/no-control launch permission,
+never treated as Started continuation. A successful earlier stage check or
+receipt does not substitute for the last check before the physical write.
+
+5. Independent behavior oracles and platform limits
+
+Tests use a real child recording exact executable/args/env into a private
+test-owned file, then echoing distinct transport sentinels through stderr,
+handshake peer info/instructions, notifications, malformed protocol, JSON-RPC
+errors, is_error text/other/structured fields and cleanup. Include short,
+overlapping, quoted/backslash, Unicode, multiline/CRLF, fragmented writes,
+invalid UTF8, huge no-newline and final EOF records. Check actual public tee,
+TRACE capture, Display/Debug/reason/source, agent error hash inputs, public
+attempt/journal/receipt, and host process logs for raw and escaped sentinels.
+Non-error functional tool output remains exact. Original private capture and
+frozen cold/wake runtime use exact original transports after defaults change.
+
+Effect race oracle parks AFTER stage entry/before actual delegated provider
+open/send or MCP spawn/call. Change real SQL control via Stop/archive where
+legal, then release barrier and assert raw bridge/real child zero new effects.
+Hold same real claim through await cancellation; cleanup reaps actual owned
+processes. Test startup missing/duplicate/foreign manifest independently; Empty
+SQL equality cannot stand in for actual startup journal validation.
+
+MacOS runs these actual tests locally; Windows ordinary ownership tests are
+implemented but native runner acceptance remains OPEN. Sensitive populated MCP
+remains explicit unsupported on Windows, with zero private/spawn effects.
+No tests or implementation acceptance are claimed by this proposal.
+
+
+6. Corrected effect seam, superseding section 4 and its effect oracle in section 5
+
+Changed-section pre-code review request. Sections 1–3 diagnostics have owning
+and independent security ACCEPTABLE design verdicts and parent authorization.
+The following effect behavior remains held until both reviewers accept it.
+This amendment resolves OF-DIAG-OWN-01/02/03 and OF-EFFECT-01/02/03; it grants
+no implementation acceptance and keeps initial build repair count 0/3.
+
+6a. ACP worker/session capability, rather than facade-only authority
+
+Add an ACP-owned public HostEffectFence: Send + Sync trait with synchronous
+check() -> Result<(), HostEffectRefused>, a small typed thiserror reason with
+no external payload/source. SessionConfig gains optional Arc<dyn
+HostEffectFence>, nonserializable like its existing runtime sandbox. Legacy
+constructors supply None. No persistence dependency is added to ACP. The
+orchestrator implements the trait using its WorkItemStore and a clone of the
+REAL same WorkItemLaunchClaim; its Debug never exposes tokens or configuration.
+Only the host-owned Flow construction supplies this callback, after actual
+startup journal validation/ACK and private/Empty hydration. Public callbacks
+are not accepted startup provenance and cannot mint that host capability.
+
+A private run facade installs this callback in SessionConfig before delegating
+to RecipeAdmissionBridge/raw ACP. RecipeAdmissionBridge preserves it unchanged;
+its registry admission may await but never substitutes for the later fence.
+OpenSession commands carry the complete config through open_slots and mpsc
+queues. The worker owns it during opening/retry/handshake; AcpSession stores the
+same Arc for its entire lifetime and BridgeClient retains it for callbacks.
+The caller future dropping cannot drop queued work's claim. Session lifecycle
+clones the stored Arc into each prompt task before any await, so even concurrent
+session removal/close cannot drop a queued/admitted prompt's guard. Cleanup
+retains session ownership until the actual child and tasks have been settled.
+
+Map final checks in worker.rs: immediately before cmd.spawn after command
+construction; immediately before polling initialize; before EACH session/new,
+resume, load and set_config_option dispatch after preceding awaits; and in
+send_message_impl immediately before polling connection.prompt, AFTER lifecycle
+mpsc admission and any worker barrier. No await occurs between synchronous
+host check and starting that one SDK request. Handshake retries repeat checks.
+A refusal before spawn creates no child; refusal after an earlier admitted
+spawn stops IO and awaits owned group kill/reap using existing failed-open
+cleanup, rather than treating kill_on_drop as containment proof.
+
+BridgeClient request_permission checks before returning any AllowOnce or
+AllowAlways option. For parked elevation it checks AFTER rx.await and matches
+selected option_id to the original request's actual PermissionOptionKind;
+reject selections and Cancelled bypass the effect fence. Automatic sandbox
+allow uses the same check. On refusal return Cancelled, allowing prompt/agent
+settlement. Worker permission reply may additionally refuse an approval before
+oneshot delivery, but it cannot substitute for the final callback check after
+that await. Unknown option IDs cannot be interpreted as grants. reply_to_tool
+is internal bookkeeping in current ACP v1 and remains available after Stop.
+close/cancel/denial/reap remain unconditionally available. State/subscription
+and legacy event adapter are faithfully delegated; no invented authority bool.
+
+Ordering contract: the synchronous coherent SQL check admits exactly the one
+immediately following physical spawn or SDK request. There are no additional
+Surge admission/worker waits between this final check and initiating it. SDK
+internal IO queues carry an already-admitted in-flight request; it may complete
+if Stop races after this final admission. No atomic SQLite-plus-provider write
+is promised. Stop/archive committed BEFORE that final check refuses the request
+with zero new admission/write. Subsequent pages/retries/requests require new
+checks. Cleanup settles already-admitted work and retains the same guard.
+
+6b. MCP exact paths and post-observation ordering
+
+HostWriterObserver gains synchronous before_effect(server) -> Result<(),
+WriterObservationError>, default Ok for legacy observers. Owned Flow observer
+contains the same real claim and delegates durable writer observation to the
+existing McpWriterObserver. Preliminary before_child/child_started checks may
+help avoid useless records but do not establish final admission.
+spawn_and_serve awaits before_child durable writer intent, builds the exact
+Command, THEN synchronously checks before_effect immediately before child
+spawn. After spawn it awaits child_started publication, THEN checks again
+immediately before rmcp serve/initialize. If child_started/final check refuses,
+explicitly terminate/reap the actual owned process wrapper; do not rely on Drop
+or claim that an orphan intent means child establishment. Failed observation
+still owns cleanup. No physical transport command/args/env is rewritten.
+
+Public tools/list must not rely on rmcp list_all_tools's hidden pagination loop:
+use equivalent explicit cursor pagination, check before EACH rs.list_tools
+page, preserve original tool order and data, and retain existing call timeout
+bounds. call_tool checks after lazy ensure_connected and immediately before
+rs.call_tool. spawn_health_monitor directly checks immediately before its
+rs.list_tools(None) probe, after tick/state lock awaits. Refusal is permission
+refusal, not a liveness failure: no mark_crashed/restart or health RPC follows
+it. Proactive reconnect still routes through spawn_and_serve's two final gates;
+it also checks before beginning reconnect after health awaits, so stale
+monitor state cannot authorize replacement work. Every restart/backoff retry
+repeats final checks. Observer Arc survives each task and actual child cleanup.
+Registry catalog, bootstrap and cold-resume/wake paths construct this observer
+whenever authenticated owned inputs are present; no global fallback observer.
+
+6c. Coherent current store snapshot and actual journal provenance
+
+Refactor real-claim validation into a connection/transaction-scoped internal
+helper, preserving legacy public validate_claim behavior. Owned final effect
+checks verify actual lock, acquire ONE connection and ONE short read transaction,
+then validate SQL claim token, run/item/current active generation/archive,
+accepted revision graph/hash/workspace, original op/launch object association,
+exact current attempt, immutable manifest and started intent, latest control
+and exact fence in that SAME SQLite snapshot. Verify held lock again before
+return. No await or provider work occurs inside it. Pending validation and ACK
+use the same transaction-scoped claim helper, not earlier connection reads.
+
+Started is dispatchable only after owning Engine has checked actual unique
+RunStarted + PipelineMaterialized + WorkItemAttemptBound + OwnedFlowInputsBound
+and immutable artifacts, authenticated private envelope or host Empty manifest,
+then ACKed exact Pending/Reserved/no-control. Cold recovery uses that same actual
+journal validator before constructing its run effect callback. Stored public
+manifest equality or a caller boolean cannot produce that guard. Inspect whole
+journal for duplicate manifest bindings, including after startup-open closes.
+
+No-control/Executing permit only exact Reserved or Launched attempt. Latest
+Executing must match item/run/attempt generation. ContinueReserved additionally
+requires current exact control generation, original matching cleanup fence
+(control generation/run/current attempt generation, cleanup_confirmed), a real
+prior acknowledged suspension control/fence in durable history, and retained
+nonterminal run. An Attention state/failed cleanup cannot be substituted for
+confirmed suspension. Continue cannot authorize replacement workspace/provider
+session without existing explicit replacement rules. Suspended,
+SuspendRequested, Attention, Terminal, canceled/missing intent, changed active
+item/archive/revision/token always refuse. Admission does not mutate controls.
+
+6d. Independent acceptance barriers at actual delayed boundaries
+
+Add test-only deterministic barriers at ACP worker spawn/prompt boundaries
+AFTER open-slot/mpsc/lifecycle queuing and after recipe admission. Use real
+bridge/mock ACP child and recorder, commit Stop/archive/current generation
+mutation while parked, release, and prove no new spawn/prompt/approval. Cancel
+an awaiter AFTER enqueue, retain worker/session Arc claim, and use a second
+process lease exclusion oracle until refusal or cleanup/reap completes.
+Permission oracle parks after engine oneshot approval and before final client
+return, commits Stop, then observes Cancelled/zero execution grant. Include
+already-admitted effects racing later Stop and prove actual settled cleanup.
+
+MCP oracle parks AFTER awaited writer intent before cmd.spawn, and separately
+AFTER awaited child_started before initialize; mutate real control and release.
+Observe zero spawn/init respectively and reaped child for the latter. Park
+actual tools/list pagination/tool-call/health-probe and proactive reconnect at
+the final gate, then Stop/archive before release; require zero new RPC/spawn.
+Test coherent latest control/generation and separate missing/duplicate/foreign
+startup journal, key loss/foreign envelope, Empty changed-global-default cases.
+None are replaced by an outer decorator barrier or earlier stage-entry check.
+Native Windows runtime acceptance remains open; no Mac proof substitutes.

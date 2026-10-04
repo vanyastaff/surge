@@ -1,0 +1,98 @@
+T25 section 6 corrected effect seam — owning maintainer pre-code review
+2026-10-03. Verdict: ACCEPTABLE for the amended design.
+
+This accepts section 6 of /tmp/surge-owned-flow-diagnostics-effects-plan-
+20261003.txt, explicitly superseding section 4 and its old effect oracle.
+Diagnostics sections 1–3 retain their separate ACCEPTABLE verdict. This is
+initial-author design acceptance only: no implementation acceptance, no build/
+process execution, no repository source changes/commits. T25 stays 0/3.
+
+I reread the changed section and the actual SessionConfig, AcpBridge queue,
+lifecycle prompt/session ownership, worker spawn/handshake/prompt, BridgeClient
+parked permission callback and rmcp child wrapper APIs. The revised shape is
+viable in the existing crate boundaries and resolves OF-DIAG-OWN-01/02/03.
+
+OF-DIAG-OWN-01 resolved: ACP owns a synchronous injected HostEffectFence with
+typed opaque refusal. Orchestrator implements it using the retained actual
+claim and store, rather than making ACP depend on persistence. SessionConfig
+is already a runtime non-Serde carrier with sandbox callbacks, so adding an
+optional Arc is the appropriate lower boundary. The public BridgeFacade can
+stay unchanged. Existing constructors use None, preserving legacy behavior.
+RecipeAdmissionBridge forwards the config without replacing the effect fence.
+The facade may perform preliminary admission, but final checks occur inside
+the worker after open-slot/mpsc/lifecycle waits. The opening config, AcpSession,
+BridgeClient and cloned prompt task each retain authority beyond caller future
+cancellation. State/subscription remain read-only; reply_to_tool remains the
+documented internal bookkeeping path. Close/cancel/denial/reap stay available.
+
+The explicit last-admission ordering is sound: the synchronous check authorizes
+one immediately initiated spawn/SDK request, with no subsequent Surge wait
+before initiation. Already-admitted SDK IO may complete if Stop races afterward;
+cleanup settles it. This is an honest bounded admission contract and does not
+claim atomic SQLite-plus-provider transport. For async SDK calls, implement the
+check in the future immediately before its first poll/dispatch, not before
+constructing a future that will be stored/polled later. Initialize/new/resume/
+load/set-config-option retries each require their own check. Mapping host
+refusal must preserve the typed opaque reason, never raw SQL/transport detail.
+
+BridgeClient approval checks after rx.await, using the original option-kind
+mapping, close the remaining permission queue gap. Unknown IDs cannot grant
+execution; reject/cancel bypass the fence. Check automatic grants too. No
+RefCell borrow may survive the synchronous store callback or awaits. Prompt
+task cloning happens while the session entry is still owned, before session
+removal can race, and failed-open cleanup must retain its callback until actual
+child and IO tasks settle.
+
+OF-DIAG-OWN-02 resolved: MCP final synchronous checks follow awaited durable
+before_child and child_started publications, immediately precede physical spawn
+and initialization, and cover tool calls, every tools/list page, direct health
+probe and proactive reconnect. Permission refusal is not a liveness failure and
+must not trigger automatic crash/restart. Explicit pagination is necessary
+because rmcp list_all_tools hides requests; keep the original whole catalog
+call deadline rather than granting a fresh full timeout per page. Preserve
+cursor semantics, tool order and functional data. Every restart repeats gates.
+
+The rmcp 1.6.0 wrapper exposes into_inner() and graceful_shutdown(), so explicit
+pre-service child settlement is possible without a dependency patch. Beware:
+graceful_shutdown takes the child out before awaiting transport close; error/
+cancellation handling must retain actual process ownership, not assume the
+wrapper's Drop is containment proof. The parent's process group/descendant
+writer coverage must also settle where applicable; a successful direct-child
+wait alone does not certify descendant disappearance. This is an implementation
+caution within the stated owned cleanup requirement, not a new design blocker.
+The observer/claim Arc lasts through each task and actual cleanup.
+
+OF-DIAG-OWN-03 resolved: one transaction-scoped claim helper reads token,
+association, active attempt, accepted graph/workspace/manifest, started intent,
+latest control and exact cleanup fence from one short SQL snapshot. Actual lock
+verification brackets the check. No provider work/await inside it. Pending and
+ACK use the same coherent helper. No-control/Executing allow only the exact
+Reserved/Launched attempt; ContinueReserved additionally requires real prior
+acknowledged suspension history, current continuation generation, exact
+confirmed fence and retained nonterminal journal. The historical fence's
+suspension generation must link to the current continuation intent, not be
+mistakenly required to equal a newer control generation. Failed cleanup or
+Attention never substitutes for confirmed suspension.
+
+Actual startup provenance and whole-journal duplicate scanning resolve the
+public-manifest-equality concern. Initial startup validates unique RunStarted,
+PipelineMaterialized, WorkItemAttemptBound and OwnedFlowInputsBound plus actual
+artifacts/authenticated inputs before ACK. Cold recovery reuses this actual
+validator before constructing the effect guard. A caller callback or bool
+cannot mint authenticated Flow input or durable launch ownership. The host
+guard must be constructed only from the same run/binding/workspace claim.
+
+Required behavior evidence remains exactly section 6d: barriers inside actual
+ACP worker and MCP post-observation boundaries, real committed control/archive
+changes, zero new effects before final admission, and explicit settled cleanup
+for admitted races. The after-enqueue canceled-awaiter second-process exclusion
+oracle is necessary to prove retained ownership. Approval must be tested after
+oneshot reception. Include health/reconnect and pagination, latest generation,
+missing/foreign/duplicate startup bindings (also after startup closes), key loss,
+foreign envelope, and frozen empty/global-default behavior. No mock outer
+decorator barrier replaces these tests. Native Windows proof remains open.
+
+Disposition: author may implement section 6 within this accepted shape once
+the independent security reviewer also accepts it. There are no residual
+pre-code architectural blockers in the corrected section. The implementation
+and independent post-build acceptance gates remain open.

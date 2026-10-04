@@ -1,0 +1,74 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized] target(s) in 30.83s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-398c17c63c22ea95)
+
+running 6 tests
+test work_items::owned_flow::tests::abandoned_first_body_ids_and_source_are_retained_without_an_accepted_item ... ok
+test work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority ... ok
+test work_items::owned_flow::tests::canceled_caller_leaves_the_real_blocking_worker_as_preparation_owner ... ok
+test work_items::owned_flow::tests::owned_launch_child ... ok
+test work_items::owned_flow::tests::queued_stop_without_any_memory_queue_cancels_the_real_intent ... ok
+test work_items::owned_flow::tests::launch_owner_handoff_excludes_a_real_process_and_death_reacquires_original_object ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.26s
+
+     Running tests/bootstrap_operation_schema.rs (target/debug/deps/bootstrap_operation_schema-4a4b2f9f0b3b195c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/migration_0002.rs (target/debug/deps/migration_0002-0241bf3d9c40ea6e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/migration_0003.rs (target/debug/deps/migration_0003-e5d892279701efa0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/migration_0004.rs (target/debug/deps/migration_0004-48ae27e1ace6975c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/migration_0005.rs (target/debug/deps/migration_0005-69a9a033cce422d7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/migration_0010.rs (target/debug/deps/migration_0010-67c347a8f3be9b29)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/migration_payload_v1.rs (target/debug/deps/migration_payload_v1-c8f1c52e8aa00e54)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/runs.rs (target/debug/deps/runs-4c4d444cee2b2b6c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/runs_proptest.rs (target/debug/deps/runs_proptest-58df31323cebc507)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/task_ledger_sync.rs (target/debug/deps/task_ledger_sync-546f71dad30981dd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
