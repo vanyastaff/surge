@@ -460,3 +460,25 @@ unchanged-health/restart-budget oracle required. runtime-mcp-regression.log ends
 11PASS but no author terminal receipt yet and existing selected tests do not
 prove this moved-gate classification. Initial implementation observation, not
 formal5a/5b or postbuild repair dispatch; count0/3 remains.
+
+Author confirms72854 terminal0 all11actual MCP regression tests PASS after std
+child ownership change. Typed refusal43375 terminal101 actualRED (lost typed
+classification); mapped structurally.65794 terminal101 prior-state actualRED
+(reset crash history); removed reset.83829 terminal0 prior-state/counter/
+backoff/last-exit/unhealthy flag test1PASS across eight refusals. Root FULL logs
+and test/source read.88704 actual post-intent/after-reservation subprocess
+GREEN log ends1PASS, terminal receipt pending. All scoped, not full acceptance.
+
+Main requests and root authorizes narrow parallel AUTHOR test helper
+owned_flow_cold_oracle_builder: initially read-only API/oracle proposal. Proposed
+exclusive NEW crates/surge-daemon/tests/owned_flow_mcp_recovery.rs only after
+root+main agreement. No production/shared fixture/Cargo/format/git/process
+writes by helper; main retains all other source and sole Cargo/build/link.
+Real daemon IPC + subprocess initial/cold/wake fidelity/Empty/key-loss/transplant
+and original-attempt ownership proof required. Author helper is not independent
+5a/5b; formal postbuild count remains0/3. No source freeze/commit accepted yet.
+
+Root staged-doc check flagged trailing blank EOF in untouched raw Cargo logs;
+original logs preserved byte-for-byte. Strict non-log staged-doc diff check
+passed. This is not a source gate waiver; final project/source checks remain
+required before freeze and independent review.

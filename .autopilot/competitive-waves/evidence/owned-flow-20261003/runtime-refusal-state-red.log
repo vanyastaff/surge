@@ -1,0 +1,22 @@
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 6.77s
+     Running unittests src/lib.rs (target/debug/deps/surge_mcp-b4d16c5cdf81c86d)
+
+running 1 test
+test connection::tests::spawn_refusal_preserves_prior_restart_state_and_counter ... FAILED
+
+failures:
+
+---- connection::tests::spawn_refusal_preserves_prior_restart_state_and_counter stdout ----
+
+thread 'connection::tests::spawn_refusal_preserves_prior_restart_state_and_counter' (31345461) panicked at crates/surge-mcp/src/connection.rs:1047:13:
+host refusal reset prior crash history
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    connection::tests::spawn_refusal_preserves_prior_restart_state_and_counter
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p surge-mcp --lib`

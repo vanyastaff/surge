@@ -73,6 +73,14 @@ synchronous SDK enqueue; typed refusal/+2 checks/live-driver no-byte probe pendi
 45077 terminal0 protected runtime ownership rerunPASS;63536 terminal0 clean
 CLI+daemon host guard check. These do not close full T25 or native Windows.
 
+Source ownership update: main всё ещё единственный production/Cargo/format
+владелец. Narrow cold-oracle helper initially READ-ONLY, одна proposed NEW daemon
+testfile owned_flow_mcp_recovery.rs только после root+main API agreement.
+Author tests ≠ независимое acceptance review. Full cold/Windows/gates обязательны.
+ACP93392 terminal0 exact typed readiness1PASS. MCP classification43375 actualRED,
+prior-state65794 actualRED →83829 counter/state1PASS; subprocess88704 receipt
+pending. Required runtime fault/all-method/SQL/cold/full proofs остаются открыты.
+
 Исторические разделы ниже описывают Linux-среду 2026-09-05/06. Текущая сборка
 выполняется на macOS с `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`; сборки последовательны.
