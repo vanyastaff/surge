@@ -1,0 +1,203 @@
+Surge ACP accounting dependency plan — 2026-10-03
+Self maintainer verdict: ACCEPTABLE as a next-dependency design for independent
+pre-code review, NOT implementation acceptance. No source/Cargo/format/process
+changes or checks were performed. T25 ownedFlow keeps sole source/Cargo ownership
+and its initial 0/3; pre-dispatch stays exhausted 3/3. No requirement is retired.
+
+Scope/outcome
+Implement actual provider-reported usage for persistent tasks across physical
+prompts, feedback, retries, attempts, suspend/wake and restart, with retained raw
+evidence, normalized totals and explicit coverage. Subscription availability is
+quota; token history and optional monetary observations are different projections.
+Neither context occupancy nor a USD budget authorizes a quota availability claim.
+This dependency is complete only with real subprocess-through-daemon task-ledger
+evidence and a justified contract for an actually launched provider version;
+injected receipt/legacy budget tests alone cannot close it.
+
+Authoritative evidence read
+Repository root: /Users/vanyastafford/Develop/surge. Paths below are relative to it.
+- AGENTS.md; requested @RTK.md is absent at root and no RTK.md was found in the
+  searched Develop/skills trees. No substitute instruction was invented.
+- .autopilot/competitive-waves/evidence/acp-usage-source-inventory-20261003.txt;
+  .autopilot/competitive-waves/tickets/12-capacity-scheduling.md:637-691,892-906.
+- crates/surge-acp/src/bridge/tokens.rs returns None and explicitly describes
+  occupancy. worker.rs:945-970 discards PromptResponse usage and maps cancellation
+  to an error; lifecycle.rs:168-170 can drop the RPC future. command.rs/facade.rs/
+  acp_bridge.rs return Result<(),SendMessageError>. worker.rs handshake retains
+  restore capabilities but not initialized.agent_info in its result.
+- crates/surge-orchestrator/src/engine/stage/agent.rs:1300,1336 dispatch initial
+  and feedback prompts; :2057 adds broadcast snapshots as legacy TokensConsumed.
+  triage.rs:363 and project_context.rs:297 also prompt; recipe_admission.rs and
+  engine/owned_effects.rs wrap the facade and must preserve the new contract.
+- crates/surge-persistence/src/runs/writer.rs owns atomic event/view writes;
+  work_items.rs:1044-1165 pages journals and uses a cursor CAS, not receipt dedup.
+  Core WorkItemAttempt currently merges pricing and token uncertainty in one bool.
+- Primary installed schema:
+  /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/agent-client-protocol-schema-1.9.1/src/v1/agent.rs:3121-3247
+  describes response usage per turn but component counts across session; optional
+  usage/buckets use DefaultOnError. client.rs:609-673 defines occupancy/window
+  separately from cumulative cost with explicit currency.
+- Primary distributed Claude implementation:
+  /Users/vanyastafford/.npm/_npx/1dc75ec3ac70fd95/node_modules/@zed-industries/claude-agent-acp/dist/acp-agent.js:221-233,338-388,1110-1118.
+  It resets each prompt, sums independent buckets, may include previous background
+  results, and omits usage on cancellation/error. This is SOURCE evidence for
+  0.23.1 only, not proof Surge launched it. The ticket cites Codex 0.16.0 source
+  lacking response usage; I have not independently verified that remote source.
+
+1. Freeze contract and leaf types first (surge-core + surge-acp)
+Add an accounting module in core with validated PhysicalTurnId, AccountingScope
+(TaskAttempt binding or explicit Auxiliary operation), immutable prepared-turn
+context, SourceContractId/version, UsageReceiptV1, independent u64 reported total,
+input/output/thought/cache-read/cache-write fields, and per-field presence/validity.
+Do not derive Deserialize around constructor invariants without try_from checks.
+Receipt includes actual opening/writer occurrence, host/provider session identity,
+physical-turn sequence, stop/outcome, adapter artifact/version evidence, nullable
+model and explicit measurement extent. Unknown, per-turn, session-cumulative and
+reported-processing-window are distinct contracts. Claude 0.23.1 is the last of
+these, not a claim of all work attributable only to the triggering request.
+No guessed subset sums: reported total is independent, bucket overlap rules must
+come from the contract. Zero, missing, malformed and unsupported are distinct.
+
+Add surge-acp bridge/usage_contract.rs registry keyed by runtime adapter artifact,
+version and protocol feature/schema. Establish identity once during launch and
+initialize, tied to the actual launched artifact, not npx cache/discovery version.
+Prefer resolved/pinned absolute executable or package artifact plus content digest,
+captured launch descriptor and matching initialize implementation identity.
+An unpinned launcher or unsupported/unproved version selects Unknown and retains
+observations without normalizing them. Protocol V1 alone never selects semantics.
+Provider claims are observations, not authentication of vendor identity. Recheck
+artifact continuity on reopening; no probing subprocess per prompt. Preserve the
+existing launch hash/fencing behavior; add evidence rather than repurpose it.
+
+2. Make the physical RPC boundary durable and completion reliable
+Add a persisted prepared physical turn and one-use BeginPhysicalTurn operation to
+the run writer. Stage code prepares a fresh id before each initial/feedback call;
+worker claims it through an injected object-safe accounting sink after existing
+effect admission and BEFORE polling connection.prompt. The durable claim binds
+run, exact StageEntered/invocation, opening, source and task binding. Await storage;
+failure means zero RPC. Reusing a claimed id never repeats an RPC after restart;
+ambiguous claim-before-wire crash remains unobserved, not automatically replayed.
+Bridge/acp_bridge.rs, facade.rs, command.rs, lifecycle.rs and worker.rs carry the
+prepared context and typed completion receipt. Core owns data; ACP owns protocol
+capture and an injected sink trait; orchestrator implements the sink using the
+RunWriter handle, avoiding ACP -> persistence dependency.
+
+The worker commits the completion/usage before replying, even if the caller's
+oneshot is dropped. Lifecycle owns the prompt task through bounded cancellation;
+close must drain/account the response before dropping IO. Provider cancelled
+response may still contain valid usage: persist it before expressing cancellation
+as execution failure. Transport error, timeout, task panic, host death or missing
+receipt leaves a durable coverage gap. Returning Result<PromptCompletion,...> is
+useful but NOT alone sufficient; dropped callers must not lose already received
+usage. Broadcast is only UI telemetry. Storage failure retains a bounded pending
+receipt and stops further prompts for that session; do not acknowledge success or
+silently continue spending. On host restart unmatched begun turns remain unknown.
+
+DefaultOnError prevents typed SDK receipts being exact wire evidence. Add narrow,
+bounded observation at the existing worker stdin/stdout compatibility boundary,
+correlating outbound session/prompt request id and inbound response before typed
+decode. Keep only accounting subtrees/envelope outcome, not prompts/tool content
+or arbitrary _meta. Strictly parse original usage fields and record malformed raw
+field evidence; typed reserialization must not masquerade as raw receipt. This
+transport seam needs a small prototype proving framing/id correlation with SDK
+2.2.0 before implementation is committed. An SDK extension is an alternative if
+the boundary cannot safely preserve framing; no broad transport rewrite by default.
+
+3. One authoritative run transaction (surge-persistence)
+Add runs/accounting.rs and run migrations; writer.rs commands delegate to it.
+Unique key (physical_turn,source occurrence); compare immutable receipt bytes plus
+versioned domain-separated hash on replay. Exact replay returns original receipt
+and adds zero; conflicting replay rejects with ALL transaction state unchanged.
+Validate begun turn/binding, insert raw receipt, compute contracted delta, update
+baseline and coverage, append UsageAccountedV1/coverage event, and maintain views
+in ONE transaction. Add indexes for turn receipt lookup and session contract
+baseline; no scan of the historical journal per completion.
+
+Cumulative normalization baseline is scoped to exact provider session lifetime
+and contract, with an explicitly proven continuity link across host reopening.
+New empty sessions can start at zero only when the contract guarantees it. Loaded
+sessions without trusted prior baseline store the first value as an unattributed
+baseline, NOT a task charge; later positive deltas are known lower-bound usage.
+Missing/invalid fields or declines invalidate affected baseline coverage, never
+subtract charges or silently reset to zero. Contract/artifact change begins an
+unknown chain; avoid charging historical session work to a new task. Even later
+cumulative recovery cannot assert complete turn attribution unless the contract
+and exclusive session ownership prove that interval. Per-turn 100/300/50 and
+cumulative 100/400/450 produce 450 under their explicit, different contracts.
+
+Store u64 counters as fixed eight-byte unsigned big-endian blobs (strict length)
+or one uniformly chosen lossless encoding, not SQLite INTEGER/REAL. Choose blobs
+here; all sums are checked Rust arithmetic. Aggregate overflow rejects projection
+transaction with a surfaced accounting error; no wrapping/saturation advertised
+as exact total. Optional bucket omission never means numeric zero by accident.
+Coverage is per bucket/extent with durable gaps, not usage_seq>0. Separate token
+coverage, attribution coverage, pricing coverage and projection caught-up cursor.
+
+Registry and run DB are separate databases: there is no honest cross-DB atomic
+task projection with the current architecture. Run event transaction is the
+authority; work_items sync applies normalized events in bounded pages with a
+registry transaction/CAS updating ALL new buckets, coverage and cursor together.
+Catch-up is crash-idempotent and eventual. Query reports projection prefix/lag;
+read-after-sync can await target prefix. Never describe an incomplete registry
+cache as complete accounting. Persistent task totals conserve all attempts;
+superseded requirements do not erase historical spend.
+
+4. Additive migration, consumers and monetary separation
+Keep existing TokensConsumed shape, interpretation, decoding and historical blobs
+unchanged; never convert cumulative receipts into that legacy variant. Bump event
+schema from current 14 with additive migration and golden wire/hash fixtures.
+Keep old hashed requirement/config structures stable; use side tables/new DTOs
+instead of adding serialization defaults to old hashed inputs. Backfill old
+ledger values as legacy observations with unproved coverage, not fabricated turns.
+Choose migration numbering only after T25's exclusive source work is landed.
+
+Update run_state.rs, run_report/mod.rs, persistence runs/views.rs, work_items.rs,
+daemon task query DTOs and UI/CLI displays to consume new normalized events.
+Expose nullable model, each bucket, extent, gaps and pricing independently.
+Cost observations use separate source/sequence/baseline and explicit currency;
+never attach UsageUpdate cost to a prompt without provider evidence for its
+window. Preserve original amount, validate finite nonnegative amounts and avoid
+currency mixing. No automatic USD conversion/model price estimate. Any later
+estimate needs provenance and stays distinct from reported money. Existing USD
+legacy projection remains historical-only, not subscription availability.
+Migrate auxiliary triage/project-context callers to explicit auxiliary accounting
+scope; their spending cannot silently vanish into a complete task ledger.
+Archetype estimates consume only compatible measured extents/coverage; this does
+not implement or retire the separate remaining-window quota scheduling requirement.
+
+RED-first acceptance / ordered stages
+A. Independent fixed-value fixtures and actual mock subprocess emit real
+PromptResponse usage. First demonstrate current outer failure: nonzero usage
+does not reach persisted task totals. Do not retain vacuous monotonic-only
+bridge_token_tracking.rs acceptance. Then contracts/types/strict raw capture.
+B. Physical-turn durable fence and completion sink through production bridge;
+storage-before-wire refusal, initial plus feedback distinct ids, caller dropped,
+cancel response race, missing/error, lost broadcast and bounded close.
+C. Receipt transaction/migrations and restart replay: exact duplicate zero,
+conflict rollback including raw rows/events/baselines/views; both 450 oracles;
+load trusted/missing baseline, new/reconnected/wake sessions, declines/source
+changes; counters >i64::MAX/u32::MAX, optional malformed cache/thought, occupancy
+only and non-USD monetary separation. Compare DB rows and fixed oracle values.
+D. Production daemon persistent-task Start through actual ACP subprocess, multiple
+feedback prompts/attempts and cold suspend/wake, run/registry restart and bounded
+page catch-up. Assert full ledger conservation and coverage, not injected budget.
+E. Launch a resolved/pinned supported adapter artifact and record its identity
+and source-contract evidence; demonstrate its actual response capture end to end.
+If credentials/provider access prevent this, preserve it as an explicit unpassed
+provider acceptance gate. Mock proves host pipeline, not vendor completeness.
+Run affected Rust tests/lint/fmt and appropriate repository integrated gates only
+under the designated builder's Cargo lane; commit dependency-complete stages with
+checks actually run. Independent 5a then 5b remain necessary.
+
+Independent review lenses and unresolved evidence
+Minimum: (1) protocol/provider semantics + artifact identity/raw decode loss,
+(2) crash/cancel/ownership and pre-RPC fence, (3) storage replay/migration/u64 and
+cross-DB conservation, (4) adversarial outer acceptance and task/UI coverage vs
+pricing vs quota. Prefer reviewers not authoring the corresponding implementation.
+Consequential evidence still needed: actual launched Claude artifact identity,
+Codex version-specific source/response capability, SDK raw observation feasibility,
+and provider interruption/background attribution guarantees. Tactical defaults
+above keep Unknown/incomplete coverage without stopping useful measured lower
+bounds; they do not fabricate a universal provider contract or downgrade the goal
+to test injection. Real providers that omit data cannot yield complete measured
+spend without additional provider-supported evidence, and that remains visible.

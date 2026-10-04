@@ -904,3 +904,19 @@ unique receipt replay/conflicts and transactional deltas/coverage as the next
 required accounting dependency. It is discovery, not an accepted design, source
 implementation or execution proof. T25 remains the active build; no requirement
 or full T12 is closed.
+
+### Actual ACP accounting next-dependency draft (read-only, 2026-10-03)
+
+`../evidence/acp-accounting-draft-plan-20261003.txt` retains the planner's
+self-maintainer ACCEPTABLE proposal for independent pre-code review, not accepted
+implementation. It builds on the actual source inventory and preserves the full
+real-provider/task accounting gate. Durable physical turn identity, raw response
+usage capture before SDK DefaultOnError, versioned launched-artifact semantics,
+atomic run receipts/baselines/events, lossless counters and task conservation are
+proposed. Run and registry databases remain separate: registry catch-up is bounded,
+idempotent and eventual, with lag/coverage exposed; no cross-database atomic claim.
+
+Actual launched provider artifact evidence and SDK raw-capture prototype remain
+unproven. Independent protocol/storage/cancellation review and RED-first actual
+subprocess/daemon/provider acceptance must precede completion. No source/Cargo
+changes, no T25 ownership overlap, no budget reset or requirement retirement.
