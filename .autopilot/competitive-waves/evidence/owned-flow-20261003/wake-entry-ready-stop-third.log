@@ -1,0 +1,9 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error[E0277]: the trait bound `SandboxMode: std::default::Default` is not satisfied
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal.rs:356:65
+    |
+356 |                 bootstrap_edit_loop_cap: None, sandbox_default: Default::default(),
+    |                                                                 ^^^^^^^^^^^^^^^^^^ the trait `std::default::Default` is not implemented for `SandboxMode`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `surge-persistence` (lib test) due to 1 previous error

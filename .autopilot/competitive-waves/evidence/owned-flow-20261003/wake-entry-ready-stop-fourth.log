@@ -1,0 +1,22 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized] target(s) in 17.38s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-c91195b7b9d1880a)
+
+running 1 test
+test work_items::owned_flow::refusal::tests::production_entry_waits_ready_before_transaction_then_observes_real_newer_stop ... FAILED
+
+failures:
+
+---- work_items::owned_flow::refusal::tests::production_entry_waits_ready_before_transaction_then_observes_real_newer_stop stdout ----
+
+thread 'work_items::owned_flow::refusal::tests::production_entry_waits_ready_before_transaction_then_observes_real_newer_stop' (31594556) panicked at crates/surge-persistence/src/work_items/owned_flow/refusal.rs:399:9:
+assertion failed: matches!(allowed, OwnedFlowWakeAdmission::Ready(_))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    work_items::owned_flow::refusal::tests::production_entry_waits_ready_before_transaction_then_observes_real_newer_stop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p surge-persistence --lib`

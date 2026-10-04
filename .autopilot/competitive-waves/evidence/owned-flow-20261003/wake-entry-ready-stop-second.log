@@ -1,0 +1,9 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error[E0599]: no associated function or constant named `default` found for struct `RunConfig` in the current scope
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal.rs:355:55
+    |
+355 |             config: surge_core::run_event::RunConfig::default() })).await.unwrap();
+    |                                                       ^^^^^^^ associated function or constant not found in `RunConfig`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `surge-persistence` (lib test) due to 1 previous error

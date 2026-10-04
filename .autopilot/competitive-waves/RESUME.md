@@ -1,3 +1,34 @@
+# Published worker ownership proved across processes 2026-10-04
+
+Author39344 terminal0: exact populated IPC host test
+`published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery`
+1PASS1.23s. Root FULLread raw log, producer branch and outer test. Actual normal
+RunWriter blocks informational delivery after caller scheduler/launch guards exit;
+separate parent process original FlowLaunch File::try_lock returns WouldBlock and
+outbox ACK remains NULL. Closing the actual writer permits real journal event,
+ACK, explicit owner join and original lock reacquisition. This is local macOS
+postpublication ownership/delivery evidence, not host runtime-consumption, cold
+recovery, native descendant closure, CommitUnknown or disk-full acceptance.
+
+Author70958/1824/14275 terminal101: first/second/third production-entry Ready/Stop
+logs are fixture compile failures (RunConfig path, RunConfig Default, SandboxMode
+Default), preserved without claiming behavioral RED. Author2843 terminal101: fourth log paired positive Ready assertion failure
+is fixture eligibility failure, not production behavioral RED.
+Root source confirms due_recovery_wakes → capacity_fence requires
+cleanup_confirmed=true; current storage-only fixture explicitly false cannot
+reach worker reservation. Main notified: preserve production eligibility, obtain
+valid cleanup evidence or explicitly limit a storage model and retain actual
+integration acceptance. Root authorizes serialized cleanup=true storage model solely
+for public-entry/SQL ordering; no fake Closed, provider/native proof or full capacity
+acceptance. Actual ColdHost Ready/Stop seam remains required. Exact lasting-refusal independent lineage assertions now
+authored; fresh execution remains pending. Main alone owns source/build/processes.
+
+User reconfirms U01 complex planning via distinct Flow nodes with different
+providers. Existing manifest and accepted multi-provider contract already capture
+this; implementation/acceptance remain open. All original requirements, fullnative
+C/D, productivecold, malformed manifest, final gates and freeze5a→5b remain open;
+formal initial0/3 unchanged. No requirements retired.
+
 # Authoritative lasting Attention GREEN and lifecycle gates 2026-10-04
 
 Author20861 terminal0:firstcoldgreen0tests/18filtered WRONGFILTER, setup-only.

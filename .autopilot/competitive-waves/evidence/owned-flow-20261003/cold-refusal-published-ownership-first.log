@@ -1,0 +1,9 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 7.15s
+     Running tests/owned_flow_mcp_recovery.rs (target/debug/deps/owned_flow_mcp_recovery-3be8aaf6f8210b6a)
+
+running 1 test
+test published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 1.23s
+
