@@ -1,3 +1,20 @@
+# Independent bounded shutdown seam confirmation 2026-10-04
+
+Root FULLread independentreportb93471f9, retainedexact. OriginalReady-abort and
+handleNone-skip races corrected structurally in snapshot01c13dda; actualbarrier
+acceptanceOPEN. Remaining pre-admission blockingreap sourceconfirmed; fastclosed
+check alone insufficient close-betweencheck/reap; nonblockingtryjoin/reap+final
+atomicclosed/capacitycheck required. Main notified exactreport/oracles A-D, including
+completedunreapedB beside genuinelypendingA, caller/extraguard destruction AFTER
+publication before secondPROCESS contention, and actual append/ACK/join success.
+JournalOwner fielddrop must closeConnection BEFORE lease/FileLock release; author
+notified separately. No sourceedit byroot or formal5a5b/countincrement.
+
+NewReadyfirstlog showsfixtureAPIcompileerrors, secondshowspostcompletion claim
+assertionFAIL; rootreadraw, authorterminalreceipt/explanationpending. These are
+not claimed Ready/TX behaviorRED or productionacceptance. Main continuesallsource/
+buildlane. Fullgoal/nativeC/D/fullcold/malformed/finalgates5a→5b remainopen.
+
 # Authoritative owner corrections and filelock gate 2026-10-04
 
 Author87446 terminal0: four substantive owningfilelock cases+childprobeNOOP,
