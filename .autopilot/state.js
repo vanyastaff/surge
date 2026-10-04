@@ -9,7 +9,7 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-10-04T04:13:18.307618+00:00",
+  "updatedAt": "2026-10-04T06:29:32.059243+00:00",
   "finishedAt": null,
   "previousCheckpoint": {
     "finishedAt": "2026-09-07T14:10:00-05:00",
@@ -63,7 +63,7 @@ window.STATE =
       "id": "build",
       "status": "active",
       "startedAt": "2026-09-05T16:34:13-05:00",
-      "note": "T12 active; task-owned predispatch accepted95c5295 (3451PASS36skips, independent5a/5b). T25 initial0/3: daemon receipt/exactbody replay, original ownership, late manifest, ACP4/MCP11 scoped, framing reader11PASS14883 and actualhostTRACE6PASS72167 (oneoracle+fivefixtures), SQL1PASS11484. Runtime settlement exactplan6720ef7c accepted owning/security after retainedstdChild/Arcslot/panichook amendments; author authorized actualruntime RED first thenbuild, all mandatory runtime/cold/secondprocess/nativeWindows retained. Main owned_flow_builder solely owns ALL source/Cargo/format. Fullproject gates and freeze5a→5b remain open. ACPaccounting draftread-only. Historical46 not currentlyverified; fullgoalactive.",
+      "note": "T12 active; accepted predispatch95c5295. T25 initial0/3: cold27730 14PASS2FAIL, once-tick33168 genuine permanent-refusal durable-state RED. Catalog/classification amendments implemented; strict sixth author-owned pending. Foundation A precode accepted; concreteB2fe0fd3 security RESHAPE cleanup freeze membership and downstream byte leases, critic pending. Wake-refusal985863 proposed, source held. Main sole ALL source/process owner. Full gates/freeze5a→5b/native/external/product/U01 remain open; no requirements retired.",
       "finishedAt": null
     },
     {
@@ -690,4 +690,4 @@ window.STATE =
   "blind": null,
   "currentExecutableCheckpoint": "T25initial0/3: root FULLread foundation security rereview ACCEPTABLE combined5bdd46+1944f0+4c58467 design; critic alsoACCEPTABLE, source/integrationheld pending concreteB owning plan. Actual nix/ACP1MiB/queue31/rmcpunboundedcodec primaryfacts retained. Main corrected9 orchestrator lintissues withoutsuppression, no liveCargo at receipt; next actual forwarding SessionConfig.tools whitelist start+resume,275ms catalogdeadline pair and fixture-only offline immutable-manifest corruption, then tests/strict. Genuine populated cold writerproof RED persists; native/externalC/D and wholefullgoal remainopen.",
   "previousGoalTurnClassification": "progress: previous continuation retained actual cold12PASS2FAIL and missing writer proof, accepted focused no-dispatch critic and realSDK seam report in e1ad36f/4922264. Current continuation full foundation security design accepted, exact source compatibility/IO API risks inspected, author9 strictlint corrections and actual whitelist/deadline fixture extension underway."
-}
+};

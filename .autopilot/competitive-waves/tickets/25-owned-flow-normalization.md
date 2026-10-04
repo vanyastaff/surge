@@ -669,3 +669,20 @@ Foundation ACCEPTABLE verdict is for combined pinned documents only; original
 5bdd46 alone retains superseded startup/control defects. Exact snapshot anchor/
 raw receipts/current control links/StoreArtifact gate/owneddeletionhold must survive
 consolidation. No B source/native closure/5a/5b approval follows.
+
+## 2026-10-04 concrete B and lasting-state evidence
+
+Concrete B proposal2fe0fd3 (368 lines) and complete security RESHAPE are retained
+in evidence/owned-flow-20261003. Cleanup needs registered pre-seal debt membership
+and downstream full SDK payloads need delivery byte leases beyond compact protocol
+projection. Independent critic full review is pending; no A+B source approval.
+
+Actual integrated cold27730 terminal101:14PASS2FAIL. Required populated cold writer
+closure remains RED. Corrupt manifest refusal is isolated by once-tick33168
+terminal101: durable Suspended instead of Attention, with unchanged claim/effects
+and no resource timeout. Exact wake-refusal985863 remains a precode proposal;
+immutable receipt/mutable outbox acknowledgement and retained original guard need
+review. Per-reader r2d2 thread-resource finding remains a separate proposal.
+
+Scoped strict failures remain evidence, not accepted gates. Initial formal repair
+count0/3 unchanged; full source freeze,5a then5b and full product goal remain open.

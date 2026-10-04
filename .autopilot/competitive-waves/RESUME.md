@@ -1,3 +1,33 @@
+# Authoritative checkpoint: concrete B review and lasting-state RED 2026-10-04
+
+T25 initial formal0/3; all source/process ownership remains owned_flow_builder.
+Concrete B proposal SHA2fe0fd3fabff859c6aa12ff3c22a54a15cf388c9b4363c3051e589aa840f2179
+fully read; security RESHAPE fully read and retained: cleanup exact frozen membership
+and post-seal zero-byte authority, downstream SDK/callback/oneshot delivery byte
+leases including overlapping decoded copies. Critic complete review pending;
+preliminary resource arithmetic/cleanup backing/unsolicited-frame fairness findings.
+Foundation A design accepted only; A+B production remains held.
+
+27730 terminal101: actual cold fourth14PASS2FAIL, metadata whitelist both legacy
+start/resume and actual catalog deadline pair pass. Populated cold genuine writer
+closure proof missing; corrupt manifest reaches real association refusal but repeats
+Suspended. Independent once-tick RED33168 terminal101,1.34s: actual immutable
+association refusal, unchanged claimant and recorder effects, two durable state
+observations Suspended rather than required Attention; no timeout/resource panic.
+Pinned bounded wake-refusal proposal985863 fully read, production held for exact
+current-generation transaction/outbox/guard review. Root requires immutable receipt
+separate mutable delivery acknowledgement and runtime-independent original guard
+handoff; source-reviewed independently before authorization.
+
+Secondary per-tick r2d2 reader-pool worker accumulation is source-grounded, separate
+from child leakage; no production resource change authorized. Strict8389/1104/15119/
+53865 terminal101; fixture-only lint/accessor fixes without suppression. Sixth78458
+live at author receipt, root must not consume handle/stage live log. Full workspace,
+freeze5a then5b, native Windows/macOS/Linux domain/external closure and full product
+requirements including U01 multi-provider planning remain open. No requirement retired.
+
+Earlier checkpoints below are history and superseded where contradictory.
+
 # Authoritative foundation checkpoint 2026-10-04
 
 T25initial0/3: root FULLread foundation security rereview ACCEPTABLE combined5bdd46+1944f0+4c58467 design; critic alsoACCEPTABLE, source/integrationheld pending concreteB owning plan. Actual nix/ACP1MiB/queue31/rmcpunboundedcodec primaryfacts retained. Main corrected9 orchestrator lintissues withoutsuppression, no liveCargo at receipt; next actual forwarding SessionConfig.tools whitelist start+resume,275ms catalogdeadline pair and fixture-only offline immutable-manifest corruption, then tests/strict. Genuine populated cold writerproof RED persists; native/externalC/D and wholefullgoal remainopen.

@@ -1,0 +1,22 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 19.76s
+     Running tests/owned_flow_mcp_recovery.rs (target/debug/deps/owned_flow_mcp_recovery-694c79adf6187c78)
+
+running 1 test
+test manifest_binding_refusal_must_persist_attention_after_actual_wake ... 
+thread 'manifest_binding_refusal_must_persist_attention_after_actual_wake' (31488436) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:1396:5:
+assertion `left == right` failed: permanent association refusal must durably enter Attention
+  left: String("suspended")
+ right: "attention"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp40z5RM
+FAILED
+
+failures:
+
+failures:
+    manifest_binding_refusal_must_persist_attention_after_actual_wake
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 1.34s
+
+error: test failed, to rerun pass `-p surge-daemon --test owned_flow_mcp_recovery`

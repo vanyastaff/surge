@@ -1,0 +1,45 @@
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 40.61s
+     Running tests/owned_flow_mcp_recovery.rs (target/debug/deps/owned_flow_mcp_recovery-694c79adf6187c78)
+
+running 16 tests
+test child_owned_flow_mcp_probe ... ok
+test cold_host::tests::dropping_the_owner_during_panic_reaps_its_actual_child ... 
+thread 'cold_host::tests::dropping_the_owner_during_panic_reaps_its_actual_child' (31473160) panicked at crates/surge-daemon/tests/support/cold_host.rs:340:13:
+exercise owned-child cleanup during unwind
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test cold_host::tests::natural_exit_status_is_preserved_and_exit_timeout_reaps_owned_child ... ok
+test cold_host::tests::owned_child_probe ... ok
+test cold_host::tests::readiness_requires_a_fresh_marker_and_owned_process_can_be_reaped ... ok
+test cold_host::tests::readiness_timeout_and_early_exit_reap_the_owned_child ... ok
+test cold_host::tests::regular_marker_swapped_to_fifo_errors_without_blocking_and_reaps_child ... ok
+test explicit_empty_survives_real_cold_wake_and_changed_global_defaults ... ok
+test host_default_empty_survives_real_cold_wake_and_changed_global_defaults ... ok
+test legacy_engine_catalog_enforces_actual_configured_275ms_deadline ... ok
+test legacy_global_policy_references_survive_actual_start_and_resume ... ok
+test missing_and_corrupt_private_inputs_refuse_real_cold_writers ... ok
+test ordinary_accepted_manifest_updates_preserve_exact_first_snapshot ... ok
+test populated_cold_valid_twin_keeps_original_transport_and_writer_history ... 
+thread 'populated_cold_valid_twin_keeps_original_transport_and_writer_history' (31473934) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:1097:13:
+MCP cold twin has no genuine persisted cleanup proof
+failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpX9j18f
+FAILED
+test populated_initial_transport_is_exact_and_public_snapshot_opaque ... ok
+test transplanted_objects_and_changed_manifest_refuse_real_cold_writers ... 
+thread 'transplanted_objects_and_changed_manifest_refuse_real_cold_writers' (31474114) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:746:9:
+refuse child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpuaXqSa/cold-host-stdout-0LGNN6; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpuaXqSa/cold-host-stderr-nAxEzd
+failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpuaXqSa
+FAILED
+
+failures:
+
+failures:
+    populated_cold_valid_twin_keeps_original_transport_and_writer_history
+    transplanted_objects_and_changed_manifest_refuse_real_cold_writers
+
+test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.62s
+
+error: test failed, to rerun pass `-p surge-daemon --test owned_flow_mcp_recovery`
