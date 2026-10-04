@@ -8,6 +8,15 @@ verification, reports, inbox and capacity mechanisms are the starting point.
 
 ## Sequence and acceptance
 
+Configured task-owned pre-dispatch and actual-worktree Start preparation were
+accepted on 2026-10-03 and committed in `95c5295`. The final canonical test run
+passed 3451 tests with 36 existing skips; independent specification, quality,
+architecture and security/unsafe reviews accepted the frozen candidate. Detailed
+scope, historical failures, two retained advisories and review evidence are in
+`.autopilot/competitive-waves/tickets/12-capacity-scheduling.md`. Ordinary Flow
+ownership normalization is the next accepted plan; real ACP spending, session
+restoration and the remaining product stages are still open.
+
 ### Accepted multi-provider planning extension (2026-10-03)
 
 For a difficult question or planning decision, the orchestrator may construct

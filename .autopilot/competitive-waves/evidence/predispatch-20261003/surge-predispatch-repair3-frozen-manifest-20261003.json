@@ -1,0 +1,331 @@
+{
+  "created_utc": "2026-10-04T01:18:40.628210+00:00",
+  "head": "8f679043825e92fe5b79c6c45d8dde536a31898c",
+  "parent_repair_count": "3/3; unfrozen author corrections completed; independent5a5b pending",
+  "workspace": "/Users/vanyastafford/Develop/surge",
+  "source_files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "f2481b96de870c4d5f45e9c748e1ee9776d325d1129b5942016b54b3e284c76c"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "664c083c895a894721696d3b7c881d59d9ac6f1c3ac74565598694986049190c"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "9711661f13bc117f0d75a69099b3c4ff4b3260ea94b6cad1170b1cfd6d8eca03"
+    },
+    {
+      "path": "crates/surge-acp/src/discovery.rs",
+      "sha256": "83bb12d5341da2f923345f2afcc730e560dbd09b1bf6eba327db50f3d2c1a90b"
+    },
+    {
+      "path": "crates/surge-acp/src/pool.rs",
+      "sha256": "ef85a54155b359de6c34b850be0bf1b55d59a7e2996d208fcc998c7cd4e63b9d"
+    },
+    {
+      "path": "crates/surge-acp/src/registry.rs",
+      "sha256": "f0c89a07a4dd5cf0a4d0557e9430b9e123a440d71f862c973f65cc414663be8e"
+    },
+    {
+      "path": "crates/surge-acp/src/transport.rs",
+      "sha256": "05a53c05de74815910cd1736cdc794f5393d5324e541e97b28cdfae032840914"
+    },
+    {
+      "path": "crates/surge-acp/tests/health_integration_test.rs",
+      "sha256": "a20da73881eb217f217fd05f6ee9b4b95737f416433fdb13dfc44790434a7789"
+    },
+    {
+      "path": "crates/surge-acp/tests/platform_process_test.rs",
+      "sha256": "5855840ffacb4b7265775ae83bd16b643d93017976ac1401f137fec1d16f1957"
+    },
+    {
+      "path": "crates/surge-acp/tests/reconnect_integration_test.rs",
+      "sha256": "64e63a41e4dcc3fc69c11d0fa5bad7e24663f5dca0415d9395f0f679fb3ca4ce"
+    },
+    {
+      "path": "crates/surge-acp/tests/sdk_pool_usage.rs",
+      "sha256": "f600fb7dc57432d99ab04693e38bf7134e073833faf0df48101fedc800b17da1"
+    },
+    {
+      "path": "crates/surge-core/src/config/agents.rs",
+      "sha256": "6d2246f49d5b75f53e5172b78ddf5cc02a555f9dd76e8630d32ecba8d251195f"
+    },
+    {
+      "path": "crates/surge-core/src/config/tests.rs",
+      "sha256": "fa7307711072a4cb68521c7ddedc24a80e5f0624b078db74bcca7ecfb1c9a90b"
+    },
+    {
+      "path": "crates/surge-core/src/execution_recovery.rs",
+      "sha256": "f7b72158f8488593c57d3efc0821f26eabe5d19f32ecf6813e2627fc032a78f4"
+    },
+    {
+      "path": "crates/surge-core/src/run_event.rs",
+      "sha256": "2492ef6e7e647072075cfb6ddc2798164711aceb68d70327e53705d22ea2dbbc"
+    },
+    {
+      "path": "crates/surge-core/src/run_report/mod.rs",
+      "sha256": "b222cc660f6223889b8518d34f7bd8921282cafad4c1a2a74fa7d1c2f976213f"
+    },
+    {
+      "path": "crates/surge-core/src/run_state.rs",
+      "sha256": "b8952e4cf91f1166c35542bf66f364dcee12c1b05c02d54bd8f2bd46abcc5d8c"
+    },
+    {
+      "path": "crates/surge-core/tests/snapshots/fold_hook_events__fold_hook_events_memory.snap",
+      "sha256": "09be7a87e5dec2aec2c141df4f2df97128054c225dfcf45bc13e7195470a2716"
+    },
+    {
+      "path": "crates/surge-daemon/src/bootstrap_supervisor_tests.rs",
+      "sha256": "869d4ea8f2130bf746a4edf72b602cf5a8a15f8d5630d1901dbb2cb1ad687147"
+    },
+    {
+      "path": "crates/surge-daemon/src/work_items.rs",
+      "sha256": "86ece6df456b3634a33b97ed93d273fd92e95f5d892fdc25ac32d95398fd4992"
+    },
+    {
+      "path": "crates/surge-daemon/src/work_items/start_preparation_barrier.rs",
+      "sha256": "960b0bc43b25c38c33188742e6c57b7017bca70497c2bb19d7549932bd570f23"
+    },
+    {
+      "path": "crates/surge-daemon/tests/fixtures/wire_bridge.rs",
+      "sha256": "15536c18f302902de6d452cdb9e0a04fb6ce7dc6f6681e5eabd1bc2163cc8cec"
+    },
+    {
+      "path": "crates/surge-daemon/tests/quota_recovery_route_test.rs",
+      "sha256": "dcbe3afe576d6f67aa4e3ba4c2e643f8714759b5999444b55662c28baba50a16"
+    },
+    {
+      "path": "crates/surge-daemon/tests/support/cold_host.rs",
+      "sha256": "dad2f003b610d2c8fdde0a479a963ab98b5b8327a10bc6523733ef90aeb230b4"
+    },
+    {
+      "path": "crates/surge-daemon/tests/support/host_budget_bridge.rs",
+      "sha256": "37b46fa74c8a2d44d5f3b6b6c7f82cbe186ef3b723c7679935ec273502cde93e"
+    },
+    {
+      "path": "crates/surge-daemon/tests/work_item_route_test.rs",
+      "sha256": "fd0d0c8b9084d9e1b87e9e2f2bb3c5bb4787ec3af28fcfec6308554c4c481eda"
+    },
+    {
+      "path": "crates/surge-orchestrator/Cargo.toml",
+      "sha256": "c4d4a9a863847c2d0d09e0013091e2a07fc523b817ae39fa7768ed281fbb2fda"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/capacity_routes.rs",
+      "sha256": "3cd36372451c7eaa15c817bda0851503068e3a830aebeb6710334041f71b0dde"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/configured_route_pin.rs",
+      "sha256": "163e03d09293cba820dd489539a6bc90d7ce0b16790f7a2dcea31242ebd2a474"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/engine.rs",
+      "sha256": "6378d794abc6d53f2af64f79cda30325e859c9166cefc62c98a0f34a8ba2d9de"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/mod.rs",
+      "sha256": "d3071f0c929bcfb3096d4e43406d3a5843b4ad3c2411c43c061534cc8c2be01e"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/run_task.rs",
+      "sha256": "6390cff675d7d9b031b25fc3dbdf8e6ccf193682bd018519480054433a7ee033"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/stage/agent.rs",
+      "sha256": "a01a9e30782b85f561ad2844fcb90c51a50aa760ea8d4349f3f8370bf363b129"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/engine/stage/mod.rs",
+      "sha256": "bea02d05acf68b0a33e81aedb4451bf5015b05b1402107dfbf8134fbf3b5ce5d"
+    },
+    {
+      "path": "crates/surge-orchestrator/src/recipe_admission.rs",
+      "sha256": "9e4f1f99e07bedf80867e3f5c017a3cf7da75d18aabde9513b55478375d40983"
+    },
+    {
+      "path": "crates/surge-orchestrator/tests/engine_capacity_park_test.rs",
+      "sha256": "b718472f71eea1f8971d5f4b86d2c19ed10feebbe473504e49d012ce684c9831"
+    },
+    {
+      "path": "crates/surge-orchestrator/tests/engine_skill_binding_test.rs",
+      "sha256": "110a11958dcff139fc3da3383172e30cf0747942de31632efdebb156f1b1c5fc"
+    },
+    {
+      "path": "crates/surge-orchestrator/tests/fixtures/mock_bridge.rs",
+      "sha256": "626993a7f5ec1ce6eb4b9c93eb5e137bb159abc1e05646e64ca301d11f620f15"
+    },
+    {
+      "path": "crates/surge-persistence/Cargo.toml",
+      "sha256": "903aae8faaae3604c9e4702dd033a8cd27ba5d41210cd3674cb6b51b88a1294c"
+    },
+    {
+      "path": "crates/surge-persistence/src/runs/migrations.rs",
+      "sha256": "9c91e8bc395c237a72ddb3786949e78b8b404b9012875cdddd5ac3289eb52657"
+    },
+    {
+      "path": "crates/surge-persistence/src/runs/migrations/registry/0027_quota_plans.sql",
+      "sha256": "f25ab5675e1081991ca0a9954780348a1ddd7ed8cae81198e66f0f98a47fa6a5"
+    },
+    {
+      "path": "crates/surge-persistence/src/runs/migrations/registry/0028_start_preparations.sql",
+      "sha256": "c64f45e351b6565d4b3987fc230c331c54c0a97512fc24c87e4a6cf376b7d75d"
+    },
+    {
+      "path": "crates/surge-persistence/src/runs/views.rs",
+      "sha256": "1840bb81b754c01cfadfb359805bc70a187243faf15bae334daad1164c8d5639"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items.rs",
+      "sha256": "6a8f2665ce992ea328936fb9de7a5c547c35b3bc686feb008045d354bd196ce0"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recipe_capacity.rs",
+      "sha256": "bbe6abccff9c4e61057dc9e6e109f206e116089bc6b7f88a1c3a0e315bb471c6"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles.rs",
+      "sha256": "b46385eb6218f01ff282fdaa2acb2ae88532ea62dd42b8a2626f07dd98d16394"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/handoffs.rs",
+      "sha256": "4e9af1672ec18544baa1e72459c85448df9ccce10558047b8d14c406584c4d97"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/handoffs/capacity_intent.rs",
+      "sha256": "5643a232abd327a5323fe4b894a3e6e26df30dd78faf6ff61e4140e4d8e17bcd"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/handoffs/opening.rs",
+      "sha256": "bf0c02984f696caac692265f19d21f151d5fd800651c83c57e52fb079ff43ad6"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/handoffs/opening/tests.rs",
+      "sha256": "cc52018fc31af935147fd952ebeeebff3a2b80fbeee772357b3df83c3c4e30c8"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/policy.rs",
+      "sha256": "1610e489fe4dc8b217380e81370d11886950521a93812b56d5198bfcd1726543"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/predispatch.rs",
+      "sha256": "3aaeb979e7e3f9e7329e317c4d0a10a3124335cdc43783ad6195e8076f2bff4a"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/recovery_cycles/rate_limit.rs",
+      "sha256": "227aa6023cd19ee7b5e9c45cf5a31508eea363d57dcc7d4f1a662af101c616a5"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/start_preparation.rs",
+      "sha256": "a656e92a6814d0dfb634457c340f0f8132e523603c8578a416e4f28c0d7aa457"
+    },
+    {
+      "path": "crates/surge-persistence/src/work_items/start_preparation/secure_lock.rs",
+      "sha256": "fffae29bae7d28363f5ae8207b2d9b8d713fd76753d210a1b646129edecef3ca"
+    },
+    {
+      "path": "crates/surge-persistence/tests/runs_inner/snapshots/runs__runs__snapshot__linear_flow_stages.snap",
+      "sha256": "af76840af4008b927eefc673b2333da553bf00f066a55b35fd28c3c29eaef57d"
+    },
+    {
+      "path": "crates/surge-ui/src/app_state.rs",
+      "sha256": "751d20182555fe4f3915234cd947a14fb2004866988da103529526e4520d9ba7"
+    },
+    {
+      "path": "surge.example.toml",
+      "sha256": "84d6ac58d49f946ff759f9e24f4af77540e4f32e4bf1fd86b4d2bcce532d98e8"
+    }
+  ],
+  "gates": [
+    {
+      "session": "9448",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo nextest run --workspace --exclude surge-ui --no-fail-fast --test-threads 2",
+      "log": "/tmp/surge-predispatch-author-repair3-workspace-freeze-20261003.log",
+      "sha256": "6efffbbfeb0983a802d4e2244c1299d75800876bdcf60d42fe0a639b14b9e3ef",
+      "exit_code": 0,
+      "result": "3451 passed, 36 skipped, 0 failed; 211.044s"
+    },
+    {
+      "session": "90772",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "log": "/tmp/surge-predispatch-author-repair3-strict-freeze-20261003.log",
+      "sha256": "687b541063195d64fc22ae5735b5ecf82e256ab6c8401518d47448c96b9f3407",
+      "exit_code": 0,
+      "result": "exit 0;4.17s"
+    },
+    {
+      "session": "75403",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo check -p surge-daemon --release",
+      "log": "/tmp/surge-predispatch-author-repair3-release-corrected-20261003.log",
+      "sha256": "3a0412fc4ef36d676f22ef117fcc01a3a058a7de03181b4203b2a938aefd8f7f",
+      "exit_code": 0,
+      "result": "exit 0;26.97s; production unchanged since"
+    },
+    {
+      "session": "86694",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --workspace --exclude surge-ui --doc",
+      "log": "/tmp/surge-predispatch-author-repair3-doc-corrected-20261003.log",
+      "sha256": "190ca67d953722dbc06735b214122faa2369f8823712b8102e5777c2ee472fef",
+      "exit_code": 0,
+      "result": "5 passed,7 ignored,0 failed;production unchanged since"
+    },
+    {
+      "session": "95312",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo build -p surge-acp --bin mock_acp_agent -p surge-cli --bin surge",
+      "log": "/tmp/surge-predispatch-author-repair3-bins-corrected-20261003.log",
+      "sha256": "eaca417f4d5d6236d73c2a499937d80517c5ee977bdba3fc961c0f8af9baafcf",
+      "exit_code": 0,
+      "result": "exit0;production unchanged since"
+    },
+    {
+      "session": "11472",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo nextest run -p surge-persistence --lib -E 'test(start_preparation_concurrent_exact)' --stress-count 30 --test-threads 1",
+      "log": "/tmp/surge-predispatch-author-repair3-prep-concurrency-green-20261003.log",
+      "sha256": "892e8a9ad43ee0786c6b0616a2e334af72b5f09388826a57e9ff5faf25d11e61",
+      "exit_code": 0,
+      "result": "30/30 stress iterations passed"
+    },
+    {
+      "session": "59950",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo nextest run -p surge-persistence --lib -E 'test(start_preparation_) | test(preparation_lock_) | test(live_start_preparation_)' --test-threads 2 --no-fail-fast",
+      "log": "/tmp/surge-predispatch-author-repair3-prep-laws-final-20261003.log",
+      "sha256": "fb51125a7c9a6fcaf91449359f0dcd09c1ccbcea1406a2ce4e41aa8f9bbedf3e",
+      "exit_code": 0,
+      "result": "12 passed450 filtered"
+    },
+    {
+      "session": "56553",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo nextest run -p surge-daemon --test quota_recovery_route_test -E 'test(planned_no_open_park_survives_killed_host)' --stress-count 10 --test-threads 1",
+      "log": "/tmp/surge-predispatch-author-repair3-cold-park-final-20261003.log",
+      "sha256": "f1774b11bd84e7c1572fb1de12b1616cd27c29cc731938e32a092023c64131c4",
+      "exit_code": 0,
+      "result": "10/10 stress iterations passed"
+    },
+    {
+      "session": "61160",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo nextest run -p surge-daemon --test work_item_route_test -E 'test(killed_continue_)' --stress-count 10 --test-threads 2",
+      "log": "/tmp/surge-predispatch-author-repair3-continue-final-20261003.log",
+      "sha256": "806f9ac157a7e5588f0ee84bd7804bdd05febd7f7ba9c0ca17b26ae9e169b900",
+      "exit_code": 0,
+      "result": "3 tests x10 iterations passed; before mechanical extraction, current full9448 reverified"
+    }
+  ],
+  "final_checks": [
+    {
+      "session": "20534",
+      "command": "CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "limits": [
+    "UI excluded from canonical tests and docs per macOS CI; included in all-target all-feature strict clippy.",
+    "36 preexisting skipped tests unchanged.",
+    "Full normal-flow ownership normalization, real ACP spent usage/budget, available-quota estimation, actual same-ACP-session restoration remain open.",
+    "Historic3061 failure remains unexplained; newer66117 projection-only failure separately diagnosed and fixed."
+  ]
+}

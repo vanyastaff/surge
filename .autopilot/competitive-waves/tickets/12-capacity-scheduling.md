@@ -482,7 +482,35 @@ the registry. The bounded fixture correction waits within the same eight-second
 deadline for active readiness and the exact durable state, generation, operation
 and attempt binding; existing assertions and journal counts remain. It is still
 unfrozen author work in repair 3/3; final full gates and both review stages remain
-pending.
+pending at that checkpoint.
+
+### Configured task-owned pre-dispatch slice accepted (2026-10-03)
+
+Final full run `9448` terminated successfully: 3451 passed, 36 existing skipped,
+0 failed in 211.044 seconds. Final strict clippy `90772` passed the complete
+workspace/all-target/all-feature warnings-denied gate; formatting `20534` and
+diff checks passed. The three real cold Continue scenarios passed 30 runs in
+`61160`; subsequent helper extraction resolved two nesting lints from historical
+`22088`, and the full final run checked the extracted helper. Production remained
+unchanged from the successful release/docs/binary gates recorded above.
+
+Independent Phase 5a accepted specification compliance. Only then, independent
+quality, owning architecture and security/unsafe reviewers each returned
+ACCEPTABLE without blocking findings. Root and reviewers verified all 58 source
+hashes and gate-log hashes against the frozen manifest; root checked the exact
+changed-file set again before commit. Reports and manifest are retained under
+`evidence/predispatch-20261003/`. Implementation commit: `95c5295`.
+
+Two advisories remain: SQL row extraction readability (quality P3) and repeated
+full journal reads per configured occurrence (OWN-ADV-01). Neither establishes a
+current correctness failure or measured acceptance-threshold failure. A later
+measured optimization must preserve authenticated occurrence/suffix checks.
+Formal repair count remains exhausted at 3/3 for this accepted unit. Terminal-only
+compatibility means task-owned Start; ordinary unowned Candidate starts refuse
+all graphs until ownership normalization. Full T12 and the product goal remain
+open, including actual ACP spending, remaining-window estimation, provider
+session restoration, native UI and PR/review/CI/merge requirements. The earlier
+lost-diagnostic failure `3061` remains unexplained; no requirement is retired.
 
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
