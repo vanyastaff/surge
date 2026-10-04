@@ -1,3 +1,28 @@
+# Maintainer placement and live-review checkpoint 2026-10-04
+
+B owning architect /root/acp_accounting_plan actually resumed and acknowledged
+sampling after root interrupted stale pending_init then followup_task. Revised
+coherent B report in progress; no source approval. Main consolidated final wake
+precode artifact still pending, current critic awaits exact completed hash.
+
+Maintainer revised earlier tactical no-newcrate preference: shared exact panic
+primitive goes in neutral surge-process::owner_panic, exports
+install_owner_panic_protection and abort_on_owner_panic, std-only exact moved
+OnceLock/TLS/hook/catch-abort. Core stayspure, persistence neverMCPimports, no
+duplicatehook. Initial bounded extraction needs no wholeB native/domain APIs;
+future B extends sameleaf only under separate accepted API. This is placement
+decision, NOT production permission. Root updates AGENTS structuralmap only
+after actual newcrate exists. Worker still needs exact actor-held sharedWriterLease,
+existing-only owningFileLock/append/commitabort/cold/tokens and hostbarrier proof.
+
+Main optionalcatalog59228 log contains fixture-only ReadEvent Serialize compile
+errors; not behaviorRED, author terminal/fix owned. Root instructed compare typed
+startup/serializable payload rather than add production Serde for tests. Full
+foundation81728 remains1819PASS8existingSKIP, current daemon oracle/fullworkspace
+strict remain next. Fullgoal active/formal0/3/native/fullrequirements open.
+
+Earlier checkpoint entries below are superseded history where contradictory.
+
 # Authoritative foundation GREEN checkpoint 2026-10-04
 
 81728 terminal0 actual four-crate foundation nextest:1819PASS8existingSKIP,104.026s.
