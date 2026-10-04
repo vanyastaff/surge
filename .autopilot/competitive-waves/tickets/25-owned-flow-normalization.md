@@ -323,3 +323,20 @@ does NOT install group/job wrappers; rawTokio try_wait fuses direct child, kills
 leader only. Exact revised draft now maps CLI helper shutdown_background and
 status-return paths. Independent owning/security plan verdicts remain pending;
 no runtime amendment behavior is authorized until both ACCEPTABLE. Initial0/3.
+
+Independent exact runtime-settlement plan reviews both RESHAPE NEEDED before
+behavior. Owning report finds Tokio spawn Err can follow std physical spawn and
+fallible async pipe conversion; NoChild would falsely release authority. Proposed
+repair uses configured command.as_std_mut().spawn() returning owned stdChild,
+then Tokio pipe from_std conversion while real child/observer remain held. Also
+requires explicit postspawn unwind ownership, sticky shutdown for pending
+reservations, permanent admission closure, retained join handles and ordered
+observedexit/owner release/ACK. AsyncRwTransport retained send future may keep
+stdin open; Drop is not physical close proof.
+
+Security report MCP-SETTLE-PANIC-01: catch_unwind runs AFTER panic hook, so fixed
+caught category does not suppress default raw payload/backtrace. Required exact
+production-hook policy includes worker and synchronous fallback or a justified
+closed-profile guarantee. Latest helper exit/status mapping was accepted at
+plan level. Full reports retained beside draft; author reshapes, behavior held.
+This is initial-build precode review, formal postbuild count remains0/3.

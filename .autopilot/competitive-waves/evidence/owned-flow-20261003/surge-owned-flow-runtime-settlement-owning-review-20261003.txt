@@ -1,0 +1,107 @@
+Exact-plan precode owning systems review, 2026-10-03
+
+Verdict: RESHAPE NEEDED.
+Reviewed /tmp/surge-owned-flow-runtime-settlement-plan-20261003.txt in full.
+This is independent precode design review only, NOT implementation or acceptance;
+T25 initial postbuild remains 0/3. No Cargo/source/format/process mutation.
+
+Material defect requiring amendment before implementation:
+
+The explicit NoChild rule treats a process-wrap/Tokio spawn Err as evidence that
+no physical process exists. That is false in the pinned implementation. Tokio
+1.50.0 src/process/mod.rs863-866 calls self.std.spawn()? and only THEN
+self.build_child(child). build_child951 delegates fallible platform conversion.
+Unix src/process/unix/mod.rs118-137 first converts three pipes with transpose()?,
+can fail pidfd setup Err((Some(err), _child)), and can fail signal registration.
+Windows src/process/windows.rs69-72 likewise converts pipes fallibly after spawn.
+These paths can drop StdChild after physical spawn without returning any handle.
+Std Child Drop does not kill or wait. CommandWrap around the plain Command adds
+no protective hook. Sending NoChild and dropping cloned observer on such error
+would therefore release the original launch lease while a real child survives.
+The promised missing-stdio fallback only covers SUCCESSFUL Tokio spawn and cannot
+repair this upstream Err path.
+
+Recommended smallest safe replacement:
+- Preserve current configured Tokio Command and use public as_std_mut().spawn()
+  (Tokio process/mod.rs329), yielding an actual owned std::process::Child before
+  any runtime pipe registration. Worker parcel owns this std Child directly.
+- Take standard child pipes while the parcel retains child+observer, and convert
+  them with public Tokio ChildStdin::from_std / ChildStdout::from_std /
+  ChildStderr::from_std (1512/1527/1542). Each conversion Err or panic must settle
+  the exact retained child; it cannot produce NoChild. Configured args/env/cwd/
+  stdio and process_group(0) remain on the underlying std Command. No existing
+  kill_on_drop option is configured, so this boundary loses no configured option.
+- Runtime-free worker uses std Child.kill() and try_wait(); rmcp AsyncRwTransport
+  wire behavior is retained. process-wrap dependency is then unnecessary. A
+  separate local runtime-free owner trait can support private failure injection.
+- Explicitly guard ALL physical-spawn-to-transfer operations against unwind;
+  catch only worker operations is insufficient if a panic during pipe conversion
+  or parcel handoff can drop caller-owned live child. Own parcel outside caught
+  closure; synchronous fallback or fatal abort retains authority through failure.
+  If the plan insists on Tokio spawn, an Err must be uncertain retained ownership
+  (with no available actual handle), not NoChild; that is inferior to std boundary.
+
+Required precision in otherwise sound design:
+
+1. Release-before-completion: exact plan states worker drops observer after exit,
+   but does not order ack versus drop/removal. Require observed Some(status),
+   drop child and worker-owned observer, then publish completion, then leave
+   thread joinable. Removing live registration before dropping owner is safe only
+   if global barrier still retains/joins that handle. Keep every successful
+   reservation's handle until joined, including finished workers. Other observer
+   clones in live connection/engine may retain lease; tests must account for them
+   rather than assuming worker ack releases every clone globally.
+2. Pre-start terminal shutdown: barrier must deliver a sticky Immediate control
+   state to pending reservations and join them without interpreting no parcel yet
+   as NoChild. Reservation Drop may send NoChild ONLY before physical spawn or
+   after confirmed pre-spawn OS spawn failure. After successful physical spawn,
+   fallback settlement is its own explicit Settled state, not NoChild.
+3. Admission closure must be permanent/linearized with reservation insertion;
+   late shutdown_background tasks cannot reserve a new child after barrier begins.
+   A reservation inserted just before closure must be included in join snapshot.
+   Close barrier mutex cannot be held across joining, fallback, observer Drop,
+   or completion publication. Concurrent barriers must not miss taken handles.
+4. AsyncRwTransport src/transport/async_rw.rs stores writer Arc<Mutex<Option>>;
+   send clones Arc into a 'static future. close is ASYNC and takes this lock.
+   Dropping AsyncRwTransport synchronously drops owned read and writer refs, but
+   a retained send future can keep stdin open. Do not promise physical pipe-close
+   from dropping transport alone. Three-second grace then direct kill is safe
+   regardless; test retained send future and never-polled close explicitly.
+5. Use lost ack/join failure as fatal/uncertain cleanup, never success. Abort after
+   caught operation panic while parcel lives is a coherent last-resort policy,
+   but panic logging/hook may themselves run before catch. Explicitly avoid any
+   logging/raw diagnostic in fatal path before abort that can unwind owner.
+
+Accepted parts of plan (conditional on amendments above):
+- Pre-spawn thread and bounded registered reservation removes thread-spawn
+  failure after physical child creation. 128 slots and 512KiB stack bound reconnect
+  resource growth; thread exhaustion refuses new spawn instead of evicting owner.
+- std channel transfer SendError recovers parcel; synchronous fallback retains
+  child+observer. Disconnected completion receiver does not cancel worker.
+- Current child is plain raw child, no ProcessGroup/JobObject wrapper added;
+  at-most-once kill with permanent wait-error ambiguity prevents repeated numeric
+  group/PID signaling. Direct exit still does not prove descendant containment.
+- Runtime drop then barrier then daemon PID/socket release closes normal host
+  ownership race. Explicit CLI main and ExitRequested preserve exit statuses.
+- InternalStageMcp shutdown_background avoids uncancellable stdin blocking task;
+  Tokio runtime/runtime.rs449-453 calls handle.inner.shutdown then zero-time
+  blocking pool shutdown. Async owners may still be dropping asynchronously, but
+  pre-spawn registration + permanently closed admission + worker-based control
+  let barrier include all preexisting children independent of transport Drop.
+  Do not claim background shutdown means every task has already dropped. Real
+  open-stdin helper oracle is mandatory.
+- UI guard drop before runtime drop corrects enter borrow order; native quit must
+  actually reach barrier. Intentional runtime guard for unwind requires source
+  check of field/scope ordering, not only a comment. Other exit branches converted.
+- A natural leader exit can be acknowledged as leader exit only. GroupOnly/
+  escaped descendants must keep durable containment proof unresolved and cold
+  launch/continuation denied. Aborting process inevitably drops OS locks on host
+  death; cold journal refusal therefore remains essential, not optional.
+
+Independent executable evidence still required: real outside-runtime/runtime-drop
+child settlement; real second-process secure-lock exclusion until actual owner
+release; never-polled/canceled close and transfer/pipe conversion failure; pending
+reservation versus shutdown_background admission race; open-stdin helper correct
+status and no hang; wait ambiguity retains lock/no extra kill; fatal panic yields
+no completion receipt; cold survivor cannot gain continuation authority; native
+Windows remains OPEN. Source feasibility cannot retire those criteria.
