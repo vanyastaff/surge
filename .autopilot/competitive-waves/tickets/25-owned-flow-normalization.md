@@ -411,3 +411,24 @@ descendant/native Windows and integrated gates remain unproved. Initial0/3.
 Root inspected tracker join/panic scope implementation and requested conformity
 with accepted no-mutex-across-join and protected postspawn worker/fallback scopes.
 These are initial implementation observations, not formal5a/5b verdicts.
+
+Host guards first95876 terminal101 was module-placement compiler setup failure,
+not behaviorRED; corrected63536 terminal0 clean CLI+daemon dev check5.95s.
+Root read private HostRuntime and actual main ordering. Join-domain token now
+releases mutex during actual joins; worker/fallback outer parcel and protected
+receive/take/ACK/completion scopes revised.45077 runtime protected rerun live
+at checkpoint (log looked PASS; actual receipt still required).
+SDK readiness bounded plan retained beside evidence: same retained fence in
+private ClientConnection, readiness await -> synchronous check -> same-poll SDK
+send_request; private typed SdkCallError preserves existing public host refusal
+and cleanup availability. Root FULL maintainer ACCEPTABLE; independent focused
+security precode review pending, author authorized genuine held-readiness RED
+only before behavior. Callback oracle is not real SQL/cold/secondprocess proof.
+Initial formal postbuild count remains0/3.
+
+SDK readiness bounded amendment independent security verdict ACCEPTABLE; root
+read FULL report and pinned synchronous send_request/ready wait reasoning.
+Author authorized exact scoped private implementation AFTER genuine readiness
+behaviorRED. Report retained as surge-owned-flow-sdk-ready-fence-review-20261003.txt.
+Design acceptance only; zero-frame callback oracle, ALL effect methods, typed
+refusal, cleanup and actual SQL/original lease integration still required.

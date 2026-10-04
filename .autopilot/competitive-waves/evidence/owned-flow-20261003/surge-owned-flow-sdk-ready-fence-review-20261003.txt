@@ -1,0 +1,25 @@
+Independent T25 bounded ACP SDK readiness SECURITY plan review — 2026-10-03
+
+VERDICT: ACCEPTABLE at design level for the complete /tmp/surge-owned-flow-sdk-ready-fence-plan-20261003.txt. No bounded security reshape finding. This is pre-code review, not implementation or full 5a acceptance; initial T25 0/3 and historical completed 3/3 unchanged. No source/Cargo/git/process changes; only this requested report written.
+
+Actual gap confirmed
+
+sdk_v1.rs ClientConnection::connection awaits watch.ready.changed() before returning ConnectionTo. Current initialize/new/load/resume/set_session_mode/set_session_config_option/prompt all call that async helper then send_request. bridge/effect_fence.rs admitted checks only before the future's first poll; it can therefore pass, enter this Surge-owned readiness wait, and later send after a Stop changed control. This is not an already admitted SDK request under the accepted section 6 contract.
+
+Actual enqueue seam confirmed
+
+Pinned agent-client-protocol 2.2.0 jsonrpc.rs send_request3950 synchronously delegates to send_request_to_with_options4077. That method serializes the typed request, registers its pending reply, and invokes message_tx.unbounded_send at call time (approximately4143). There is no Surge await between that call and SDK enqueue. Its later block_task await waits for an already admitted response. Thus effect_connection awaiting readiness then performing a synchronous check, immediately followed by caller send_request in the same poll, reaches the correct final Surge boundary. It does not claim atomicity with a concurrent SQL control update; a successful check admits the immediately following SDK call, and SDK-internal later actor scheduling remains the explicitly accepted in-flight contract.
+
+Fence retention and authority
+
+ClientConnection privately retains the exact SessionConfig Arc<dyn HostEffectFence>, installed by the raw worker before starting its driver. Session and queued prompt retain that same Arc. This extends existing original-claim ownership through readiness without reconstructing an authority receipt, public boolean or serialized field. Legacy None remains the existing unfenced pool behavior; no owned-flow constructor may silently leave None or replace the injected fence. All seven effect methods and each retry invocation must use the helper. Returning a connection after the helper is safe only because each private caller immediately invokes send_request with no intervening Surge queue/await; keep that constraint explicit in code review.
+
+Typed error and cleanup shape
+
+Private SdkCallError::HostEffectRefused carries the existing fixed typed refusal; Protocol carries the existing schema error. Exhaustive worker handshake/options/prompt mapping preserves public OpenSessionError/SendMessageError::HostEffectRefused rather than formatting it into protocol prose or a invented protocol code. Existing protocol sanitization/classification remains the boundary for Protocol. The private wrapper must not introduce raw Debug/Display/source chains into host logs, journals or public errors; the plan already requires existing sanitized mappings. Legacy domain error handling remains unchanged in meaning and has no fence capable of producing host refusal.
+
+Keep readiness/driver errors in their existing schema Result and cancel notification on the unfenced connection() path. Cancel, denial and local bookkeeping must remain available after refusal so Stop can settle admitted work. Permission approval still requires its separate final host check; this amendment does not bypass or replace it. A handshake refusal after spawn must follow existing cancellation/child cleanup ownership and must never become successful opening, quota evidence or a retryable protocol failure. That follows the exhaustive typed mapping and retained original owner.
+
+Required behavioral evidence
+
+Real unpolled driver/watch-ready RED must first prove the preliminary callback check passed, then change permission while initialize is actually waiting, release the driver, and inspect actual peer bytes for zero initialize plus typed refusal. Positive control must observe exact initialize. Apply equivalent final checks to new/load/resume/mode/config/prompt and retries; prove cleanup cancel still dispatches. Real SQL Stop/generation after queued worker readiness and original-claim second-process exclusion are required integration evidence beyond the callback oracle. Preserve existing subprocess/bridge/quota/callback ordering and wire fidelity checks. Runtime settlement, descendant/cold, native Windows and endpoint gates remain open. No tests were executed by this review.

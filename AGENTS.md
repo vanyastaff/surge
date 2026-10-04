@@ -102,6 +102,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-persistence/src/work_items/recovery_cycles.rs` | Durable quota candidates, observations, reservation receipts and generation-fenced wake cycles; `recovery_cycles/policy.rs` and `handoffs.rs` contain frozen policy and provider opening capability types. |
 | `crates/surge-orchestrator/src/engine/writer_coverage.rs` | Run-scoped pre-dispatch ownership records for executable writers and external effects. |
 | `crates/surge-mcp/src/writer_observer.rs` | Injected host observation boundary for MCP child ownership without ACP/storage dependencies. |
+| `crates/surge-mcp/src/child_settlement/mod.rs` | Runtime-independent direct-child ownership, retained launch observer and permanent terminal shutdown barrier. |
 | `crates/surge-git/src/task_workspace.rs` | Retained task workspace planning and original-owner reconciliation. |
 | `crates/surge-daemon/src/work_items.rs` | Durable task controls, engine admission and restart reconciliation. |
 | `crates/surge-daemon/src/owned_flows.rs` | Ordinary Flow owner submission, preparation and retained-claim handoff to engine admission. |

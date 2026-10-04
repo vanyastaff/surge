@@ -1,0 +1,56 @@
+T25 bounded private ACP SDK readiness effect fence amendment (initial0/3)
+
+Actual code: crates/surge-acp/src/sdk_v1.rs ClientConnection::connection waits
+watch.ready.changed(). The worker's admitted(check -> first SDK future poll)
+can check before that Surge-owned await. After Stop commits during the wait,
+initialize/new/load/resume/options/prompt currently call send_request without
+another host check. This is before SDK request admission, so the previously
+accepted in-flight SDK completion allowance does not cover it.
+
+Scope: preserve preliminary facade/worker spawn/recipe checks and raw command
+ownership. Add private ClientConnection optional Arc<dyn HostEffectFence>, default
+None for legacy pool. Worker installs the same existing SessionConfig Arc before
+starting the driver. No persistence dependency, serialized bool, reconstructed
+receipt or replacement claim enters ACP. Session and queued prompt already retain
+the same Arc, so this addition extends ownership through the readiness wait.
+
+New private helper effect_connection() awaits connection(), then invokes the
+synchronous host check and returns its current connection. Each effect method
+immediately invokes synchronous send_request after that helper returns; no other
+Surge await/intermediate caller queue occurs between check and send_request.
+Check is in the same poll: helper's final ready return and caller's send_request
+run without yielding. send_request at call time is the final SDK admission; its
+block_task awaiting response follows that admission. Every retry method invocation
+and initialize/new/load/resume/options/prompt gets this final check. Pure cancel
+notification and denial/bookkeeping callbacks retain their cleanup availability.
+
+Return a private typed SdkCallError enum { HostEffectRefused(HostEffectRefused),
+Protocol(schema::v1::Error) }, using thiserror and From conversions. Preserve the
+existing schema Result for driver connection/readiness and cancel cleanup. Effect
+methods return Result<T,SdkCallError>; no public SDK export/Serde change. Worker
+handshake/options/prompt mappings branch exhaustively: HostEffectRefused maps to
+the existing public typed OpenSessionError/SendMessageError::HostEffectRefused;
+Protocol keeps existing sanitized protocol mapping/classification. Legacy pool
+maps the private protocol wrapper via its existing domain-owned error boundary;
+its None fence cannot produce the new Host refusal variant. Do not encode host
+refusal as a made-up protocol error code or string and later pattern-match text.
+
+Precode exact owning inspection requested; no behavior edits before accepted
+shape and actual readiness behavioral RED. RED setup: hold the real SDK driver
+before ready publication using actual existing driver future not polled; start
+initialize so it passes the existing worker-like admitted host check and waits
+ready. Commit an actual changed permission at the callback fixture/barrier, then
+start driver. Actual peer wire recorder must show zero initialize request with
+typed HostEffectRefused. Current baseline sends initialize, which is the real
+behavior RED (compile errors do not count). Use callback-count barrier to prove
+earlier check happened and actual output duplex bytes/peer SDK to prove absence.
+Positive control permits the same ready transition and observes exact initialize.
+
+Required after implementation: each effect method readiness race gets final
+check and matching typed refusal; allowed cleanup notification still dispatches;
+real host SQL Stop/generation mutation after queued raw worker readiness must
+produce no new physical request with original claim retained through cancellation.
+Existing ACP actual subprocess, bridge, callback ordering, quota/error and SDK
+tests remain required. Generic callback readiness oracle alone is not full SQL
+control/second-process acceptance. Runtime settlement and Windows/cold/full gates
+remain open. This is same approved foundational unit, not accounting scope.

@@ -1,0 +1,41 @@
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+error: an inner attribute is not permitted in this context
+ --> crates/surge-cli/src/main.rs:6:1
+  |
+6 | #![allow(clippy::excessive_nesting)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+9 | use std::io::{self, Write as _};
+  | -------------------------------- the inner attribute doesn't annotate this `use` import
+  |
+  = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+help: to annotate the `use` import, change the attribute from inner to outer style
+  |
+6 - #![allow(clippy::excessive_nesting)]
+6 + #[allow(clippy::excessive_nesting)]
+  |
+
+error: an inner attribute is not permitted in this context
+ --> crates/surge-cli/src/main.rs:7:1
+  |
+7 | #![allow(clippy::identity_op)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 |
+9 | use std::io::{self, Write as _};
+  | -------------------------------- the inner attribute doesn't annotate this `use` import
+  |
+  = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+help: to annotate the `use` import, change the attribute from inner to outer style
+  |
+7 - #![allow(clippy::identity_op)]
+7 + #[allow(clippy::identity_op)]
+  |
+
+error: could not compile `surge-cli` (bin "surge") due to 2 previous errors
