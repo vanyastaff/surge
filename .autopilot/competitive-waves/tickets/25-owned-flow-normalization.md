@@ -297,3 +297,15 @@ not directly included in that predicate. Initial-build author must establish
 actual shutdown context/cold-survivor refusal or harden settlement ownership
 before freeze. Direct-child PID reap does not establish descendants absent.
 MCP helper handed all source back to author; helper is now read-only.
+
+Author confirmed3822 terminal101 and no owned Cargo/link children before cleanup.
+First targeted clean failed101 on nonexistent package gpui (resource-clean.log).
+Corrected proper Cargo clean30369 terminal0 removed440files/14.0GiB
+(resource-clean-second.log); root independently df now14Gi free. Source/logs and
+current ACP mock fixture retained. Framing behavioral RED still needs execution.
+
+Author proposed runtime-independent child settlement via stdthread retaining
+actual ChildWrapper+observer, acknowledged channel/host shutdown barrier and
+tracker until observed exit. Proposal is not approved behavior yet: exact written
+plan and independent owning/security reviews requested, particularly transfer/
+spawn failure, dropped runtime, original launch lease and cold descendant proof.
