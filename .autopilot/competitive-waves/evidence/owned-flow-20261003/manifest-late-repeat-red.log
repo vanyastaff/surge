@@ -1,0 +1,22 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error[E0433]: cannot find `SandboxMode` in `surge_core`
+    --> crates/surge-persistence/src/runs/inspection.rs:1259:195
+     |
+1259 | ...None, sandbox_default: surge_core::SandboxMode::WorkspaceWrite, approval_default: surge_core::ApprovalPolicy::OnRequest, auto_p...
+     |                                       ^^^^^^^^^^^ could not find `SandboxMode` in `surge_core`
+
+error[E0433]: cannot find `ApprovalPolicy` in `surge_core`
+    --> crates/surge-persistence/src/runs/inspection.rs:1259:254
+     |
+1259 | ..., approval_default: surge_core::ApprovalPolicy::OnRequest, auto_pr: false, mcp_servers: vec![], budget: surge_core::budget::Bud...
+     |                                    ^^^^^^^^^^^^^^ could not find `ApprovalPolicy` in `surge_core`
+
+error[E0063]: missing field `project_path` in initializer of `surge_core::EventPayload`
+    --> crates/surge-persistence/src/runs/inspection.rs:1259:20
+     |
+1259 | ...   V::new(E::RunStarted { pipeline_template: None, initial_prompt: String::new(), config: surge_core::run_event::RunConfig { bo...
+     |              ^^^^^^^^^^^^^ missing `project_path`
+
+Some errors have detailed explanations: E0063, E0433.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `surge-persistence` (lib test) due to 3 previous errors

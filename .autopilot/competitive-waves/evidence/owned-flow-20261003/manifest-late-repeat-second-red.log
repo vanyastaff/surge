@@ -1,0 +1,22 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized] target(s) in 32.18s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-398c17c63c22ea95)
+
+running 1 test
+test runs::inspection::paged_owned_history_tests::input_manifest_repeat_after_startup_closes_is_rejected ... FAILED
+
+failures:
+
+---- runs::inspection::paged_owned_history_tests::input_manifest_repeat_after_startup_closes_is_rejected stdout ----
+
+thread 'runs::inspection::paged_owned_history_tests::input_manifest_repeat_after_startup_closes_is_rejected' (31271578) panicked at crates/surge-persistence/src/runs/inspection.rs:1266:9:
+late duplicate must not escape the startup-only retention check
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    runs::inspection::paged_owned_history_tests::input_manifest_repeat_after_startup_closes_is_rejected
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p surge-persistence --lib`

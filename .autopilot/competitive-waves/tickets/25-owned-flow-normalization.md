@@ -220,3 +220,20 @@ in those files until handoff and implements ACP/SQL/orchestrator/global filters.
 Helper must hand off an actual diagnostic child RED test before behavior fixes;
 main remains sole Cargo/build/link/format owner. Final independent 5a then 5b
 will evaluate the complete integrated unit, not these design verdicts.
+
+New actual inner behavior REDs (before affected fixes):
+- Session 57535 terminal exit 101, manifest-late-repeat-second-red.log: an actual
+  OwnedFlowInputsBound duplicate appended after StageEntered closed startup was
+  accepted by the inspector. Root read the assertion failure. Author added the
+  whole-journal count/late-binding refusal; affected verification remains pending.
+  The preceding manifest-late-repeat-red.log is compile/setup-only evidence.
+- Session 12960 terminal exit 101, mcp-diagnostics-second-red.log: all four actual
+  child oracles fail at required behavior assertions, direct/registry diagnostic
+  disclosure and missing post-intent spawn/post-observation initialize gates.
+  Root read the complete terminal log. Exact transport recorder checks now pass
+  before the privacy assertion. Helper is authorized to implement accepted code.
+  Prior 72913 also ended 101: its two effect assertions were genuine RED, but its
+  two privacy tests stopped early at macOS Python launcher identity setup. The
+  original log is retained and is not privacy-behavior RED evidence.
+These are initial-build inner loops; no independent review repair is dispatched.
+Full cold/private/empty/TRACE/physical-control and Windows proofs remain open.

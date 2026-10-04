@@ -1,0 +1,75 @@
+   Compiling serde v1.0.228
+   Compiling futures-channel v0.3.34
+   Compiling tokio v1.50.0
+   Compiling darling_core v0.23.0
+   Compiling futures-util v0.3.34
+   Compiling chrono v0.4.44
+   Compiling serde_json v1.0.151
+   Compiling futures-executor v0.3.34
+   Compiling darling_macro v0.23.0
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling memchr v2.8.0
+   Compiling toml_edit v0.22.27
+   Compiling schemars v1.2.1
+   Compiling darling v0.23.0
+   Compiling futures v0.3.34
+   Compiling humantime-serde v1.1.1
+   Compiling ulid v1.2.1
+   Compiling process-wrap v9.1.0
+   Compiling rmcp-macros v1.6.0
+   Compiling toml v0.8.23
+   Compiling tokio-util v0.7.18
+   Compiling tokio-stream v0.1.18
+   Compiling bincode v1.3.3
+   Compiling async-trait v0.1.89
+   Compiling rmcp v1.6.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling tempfile v3.27.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 50.92s
+     Running tests/protected_diagnostics.rs (target/debug/deps/protected_diagnostics-69e67a0dfe9df9f1)
+
+running 4 tests
+test actual_child_diagnostics_are_opaque_and_transport_is_exact ... FAILED
+test final_initialize_gate_follows_awaited_child_observation_and_reaps ... FAILED
+test final_spawn_gate_follows_awaited_writer_intent ... FAILED
+test registry_error_payload_is_opaque_and_success_remains_exact ... FAILED
+
+failures:
+
+---- actual_child_diagnostics_are_opaque_and_transport_is_exact stdout ----
+
+thread 'actual_child_diagnostics_are_opaque_and_transport_is_exact' (31273832) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:70:9:
+assertion `left == right` failed: executable altered
+  left: Some("/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9")
+ right: Some("/usr/bin/python3")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- final_initialize_gate_follows_awaited_child_observation_and_reaps stdout ----
+
+thread 'final_initialize_gate_follows_awaited_child_observation_and_reaps' (31273841) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:177:5:
+post-child refusal must prevent initialize
+
+---- final_spawn_gate_follows_awaited_writer_intent stdout ----
+
+thread 'final_spawn_gate_follows_awaited_writer_intent' (31273846) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:163:5:
+post-intent refusal must prevent spawn
+
+---- registry_error_payload_is_opaque_and_success_remains_exact stdout ----
+
+thread 'registry_error_payload_is_opaque_and_success_remains_exact' (31273851) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:70:9:
+assertion `left == right` failed: executable altered
+  left: Some("/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9")
+ right: Some("/usr/bin/python3")
+
+
+failures:
+    actual_child_diagnostics_are_opaque_and_transport_is_exact
+    final_initialize_gate_follows_awaited_child_observation_and_reaps
+    final_spawn_gate_follows_awaited_writer_intent
+    registry_error_payload_is_opaque_and_success_remains_exact
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+error: test failed, to rerun pass `-p surge-mcp --test protected_diagnostics`

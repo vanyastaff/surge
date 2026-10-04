@@ -1,0 +1,43 @@
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 3.20s
+     Running tests/protected_diagnostics.rs (target/debug/deps/protected_diagnostics-69e67a0dfe9df9f1)
+
+running 4 tests
+test actual_child_diagnostics_are_opaque_and_transport_is_exact ... FAILED
+test final_initialize_gate_follows_awaited_child_observation_and_reaps ... FAILED
+test final_spawn_gate_follows_awaited_writer_intent ... FAILED
+test registry_error_payload_is_opaque_and_success_remains_exact ... FAILED
+
+failures:
+
+---- actual_child_diagnostics_are_opaque_and_transport_is_exact stdout ----
+
+thread 'actual_child_diagnostics_are_opaque_and_transport_is_exact' (31275447) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:84:13:
+external diagnostic escaped into public observation
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- final_initialize_gate_follows_awaited_child_observation_and_reaps stdout ----
+
+thread 'final_initialize_gate_follows_awaited_child_observation_and_reaps' (31275456) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:182:5:
+post-child refusal must prevent initialize
+
+---- final_spawn_gate_follows_awaited_writer_intent stdout ----
+
+thread 'final_spawn_gate_follows_awaited_writer_intent' (31275466) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:168:5:
+post-intent refusal must prevent spawn
+
+---- registry_error_payload_is_opaque_and_success_remains_exact stdout ----
+
+thread 'registry_error_payload_is_opaque_and_success_remains_exact' (31275471) panicked at crates/surge-mcp/tests/protected_diagnostics.rs:84:13:
+external diagnostic escaped into public observation
+
+
+failures:
+    actual_child_diagnostics_are_opaque_and_transport_is_exact
+    final_initialize_gate_follows_awaited_child_observation_and_reaps
+    final_spawn_gate_follows_awaited_writer_intent
+    registry_error_payload_is_opaque_and_success_remains_exact
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+error: test failed, to rerun pass `-p surge-mcp --test protected_diagnostics`
