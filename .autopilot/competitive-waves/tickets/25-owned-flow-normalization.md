@@ -567,3 +567,17 @@ open. Denial must precede catalog/connect/health effects, not post-catalog filte
 Domain review preliminary security finding: native creation BEFORE final admission
 contradicts zero-effects Stop guarantee; create and suspended release require
 separate admitted occurrences. Await full independent verdict, no domain code.
+
+Root FULL read independent critic and security/storage542-line-plan reports;
+BOTH RESHAPE NEEDED, durable fullreports retained. Shared blockers: separately gate
+actual native Birth and held-target Release; concrete every-RPC occurrence lifecycle;
+pre-registered no-gap responsibility holding SAME original lock Arc; historical
+settlement legal behind closed/newer dispatch control; runtime-loss release protocol;
+versioned productive external settlement and concrete native/unsafe/setup boundaries.
+Root selected runtime-loss protocol(b): durable fenced Attention with exact pending
+proof/projection BEFORE intentional authority release; live native/operation owner
+still retained. Newer operator decisions are not overwritten by historical cleanup.
+Architect reworks plan read-only; no domain source permission, no integrated approval
+or5a/5b, initial formal0/3 unchanged. Same-UID direct store attack is not silently
+included/excluded; existing trusted configured-binary ADR scope must be explicit,
+without universal remote-quiescence promises or benign-fixture pseudo-proof.

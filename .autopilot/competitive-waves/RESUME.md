@@ -1,3 +1,17 @@
+# Latest precode boundary 2026-10-04
+
+Both domain authority plan reviewers returned RESHAPE NEEDED; root read full critic
+and security/storage reports, durable evidence owned-flow-20261003. Architect now
+reshapes concrete native Birth/Release, every-RPC lifecycle and no-gap same-original-
+Arc owner. Root tactical runtime-loss choice: commit fenced Attention with exact
+pending proof/projection before intentionally releasing authority; live physical
+owners remain retained. Historical cleanup separate from latest dispatch decisions.
+Native/external productive contracts remain required and open; domain code held.
+This is precode plan repair, not frozen5a/5b or formal dispatch count consumption.
+Main cold baseline9775 terminal101,7support/probePASS6FAIL. Two actual ReadOnly
+spawns are genuineRED; four readiness exits need retained diagnostics. Follow-up
+retained-setup.log exists; await main terminal receipt/cause. No cold positive yet.
+
 # Current continuation checkpoint 2026-10-04
 
 Main67524 terminal100:1811PASS/4FAIL/8existingSKIP,1815run. Raw complete failed log

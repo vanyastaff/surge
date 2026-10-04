@@ -688,6 +688,6 @@ window.STATE =
     "deferred": 1
   },
   "blind": null,
-  "currentExecutableCheckpoint": "T25 initial0/3: foundations67524 terminal100,1811PASS4FAIL8existingSKIP; exact fixture corrections done, rerun pending. Fmt29928 terminal0; coldbaseline9775 building. Domain authority542-line plan NEEDS WORK, independent critic/security review pending, no source authorization. Whole native capabilities/external settlement/product gates remain required.",
+  "currentExecutableCheckpoint": "T25 initial0/3: foundations67524 terminal100 (1811PASS4FAIL8existingSKIP), exact fixture corrections pending rerun; cold9775 terminal101 (7support/probePASS6FAIL),2actualReadOnlyspawnRED4unknownreadyfailures, retained diagnostics underway. Both domainprecode reviews RESHAPE NEEDED; architect revising, sourceheld. Runtime-loss Attentionbeforeauthorityrelease selected, live ownersretained. Whole native/external/product/fullgates/freeze5a then5b open.",
   "previousGoalTurnClassification": "progress: previous continuation committed full domain/cold reports and stage execution discovery plus actual strict/helper receipts (c831654/a91cd83). This continuation verified cold handoff hash and primary XNU constraints, inspected lossy successful MCP product projection; no source acceptance inferred."
 }

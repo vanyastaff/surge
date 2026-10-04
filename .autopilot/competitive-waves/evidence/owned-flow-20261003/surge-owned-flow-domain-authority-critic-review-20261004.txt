@@ -1,0 +1,213 @@
+T25 independent adversarial precode authority-plan review — 2026-10-04
+
+VERDICT: RESHAPE NEEDED. Not integrated implementation authorization.
+
+Reviewed the COMPLETE consolidated 542-line amendment, SHA256
+a6fc2bbb040632bb6814a847a6809f71d45a1cd7b9dcd146fcd9533febbed7c3,
+the original owned-flow-normalization-plan.txt, complete runtime-settlement
+amendment including 6a–6d, and complete cold-oracle plan including section6.
+Compared actual writer observer/effect fence/SDK send seams, suspension writer,
+run_task preparation, daemon completion supervisor, original launch-claim Arc,
+owned-flow hydration/launch validation and control APIs. No source/test/build/
+format/Git/process-control changes or execution. This is PLAN review, not 5a/5b,
+not implementation acceptance; T25 initial formal count remains 0/3.
+
+The durable-obligation/closed-epoch approach is directionally sound. Registry-first
+reservation, complete journal inspection, immutable closure sets, typed host-only
+receipts and cold fail-closed validation address actual current weaknesses. In
+particular run_task.rs:936 manufactures cleanup_confirmed:true; writer.rs:492ff
+seals from that bool; daemon work_items.rs:748 unconditionally drops the claim.
+Those are genuine target boundaries. However the proposed protocol still has
+contradictory physical linearization and missing lifecycle contracts. Conservative
+refusal alone does not satisfy the accepted populated cold/wake positives.
+
+BLOCKING FINDINGS AND REQUIRED RESHAPES
+
+B1. Separate physical birth from execution release; the current A–E contract is
+    internally contradictory (sections2/5/9/10).
+
+StepC explicitly creates a child held before execution. StepD authorizes
+spawn/resume/first enqueue, while StepE claims Stop BEFORE D produces ZERO physical
+effects. A child already physically exists at C. Also the private NoChildProof
+is described using an unconsumed physical permit, which cannot imply no child if
+the permit being checked is the later release permit. A suspended child must be
+retained/reaped even if target instructions never ran.
+
+Required rewrite: enumerate distinct native operations and their linearization:
+(i) prepare an empty domain/observer where possible, (ii) final gated Birth,
+(iii) establish actual held child's immutable root/domain/observation identity,
+(iv) final gated Release/Execute. Bind a pre-existing domain before Birth where
+the backend permits it; bind root identity after Birth while target is held. Give
+each irreversible boundary its own one-shot admission occurrence and owner state.
+State precisely what an OS primitive combining birth+execution requires instead.
+Stop before Birth means zero child; Stop after Birth but before Release means zero
+target execution and an outstanding physically owned child, not NoChild. NoChild
+requires the exact unconsumed Birth capability or reviewed no-process spawn error.
+NoChild cannot come from unconsumed Release/stdio/initialization permission.
+
+Add real barriers/tests at both boundaries, including registry admission committed
+but native call not yet made, child born but identity journal not yet committed,
+and Stop while the held child exists. Preserve original final-spawn zero-child
+oracle and runtime6a error semantics. Avoid weakening that oracle to zero RPC.
+
+B2. Per-operation effect reservation/settlement is not an executable API contract
+    yet (sections4/5/6/9/10a).
+
+The schema declares effect obligations; the named API only reserves writers and
+commits native closure. admit_effect(point)->Result<(),...> internally retains an
+admission, but does not define effect reservation, one-shot consumption, request
+correlation, response-owner handoff, or independent concurrent RPC lifecycle.
+Actual sdk_v1.rs:178ff acquires readiness then performs send_request().block_task()
+await. A provider/server lifetime can contain many concurrent sends. A single
+captured writer reservation cannot identify which canceled request a later local
+result or external terminal receipt settles. The child protocol A–C also does not
+describe an RPC using an already established native domain.
+
+Before StageA API/schema freeze, specify a separate request-occurrence protocol:
+reserve_effect while the original writer/epoch is permitting; typed original
+journal origin and receipt binding; final single-use enqueue/grant admission;
+actual operation owner and its private settlement sink; exact local result/error/
+cancel/EOF states; optional adapter-issued external terminal proof; idempotent
+registry settlement and typed journal repair. Define concrete methods/types for
+these transitions and how SDK request identity is bound without persisting payload
+or credentials. Define what happens if send_request constructs/enqueues successfully
+but the caller disappears before obtaining the response task. Admission versus
+actual dispatch must remain distinguishable; neither admits an inferred NoEffect.
+Specify health/reconnect/initialize/catalog/permission-return correlation as well
+as prompt/tool operations. Last synchronous gate stays at the actual lower seam.
+
+B3. The original-Arc/proof handoff needs an explicit acknowledged ownership
+    protocol before native-owner migration (sections2/6/8/10a/11).
+
+SameArc retention is correctly required, but 'publishes ... to sink' and coordinator
+'retains ... until commit' leave a missing handoff failure window. Runtime6b's
+current accepted leader owner deliberately drops child, then observer, then
+publishes completion. New authority requires a surviving holder until durable
+registry closure/Attention; neither a later Tokio callback nor successful channel
+send proves the coordinator acquired that responsibility. The actual claim is a
+clone containing the original Arc<PreparationLock>, not an Arc to a new claim object
+(work_items.rs:86–105). Preserve that exact underlying guard identity.
+
+Required rewrite: register a bounded authority-coordinator reservation retaining
+the original claim before Birth/enqueue; describe a retained outer ownership slot
+and Taken/ack (or equivalent reviewed no-gap transfer) for native proof/effect
+receipt. Define ownership before/after send, receive, acknowledgment, canceled
+waiter, send panic, coordinator thread failure and registry commit error. Join
+ordering must ensure process owners cannot finish dropping the final original Arc
+while settlement authority exists only in a canceled task/message. State precisely
+which runtime6b completion ordering is superseded for owned runs and preserve the
+unowned std-child regression profile. A durable Attention record permits releasing
+authority only under the specified uncertainty case, never abandoning a live
+physical child/operation. Do not convert this into a second child kill/wait owner.
+
+B4. Define the supported external-settlement contract and responsibility boundary
+    before claiming StageC or the mandatory populated positive twin.
+
+The plan honestly says this is unanswered, but StageC/A13/A14 require a working
+adapter without selecting any real adapter or identifying the actual request that
+the existing test transports exercise. The original task is frozen transport and
+safe continuation of the retained attempt. It is not a provable universal claim
+that arbitrary remote systems have ceased every causally initiated effect.
+Conversely a benign MCP fixture, HTTP200 or leader exit cannot establish absence
+of asynchronous remote work. Current engine writer_coverage.rs passes
+local_effects:false for MCP launch; do not relabel old history as local-only.
+
+Required contract table: each real operation class -> local writer obligation,
+potential external obligation, terminal semantics, evidence source, correlation,
+unsupported outcome. Distinguish startup/catalog/health from executable tool calls;
+the current stage surface lacks generic tools/call execution (coldplan section6).
+Choose at least one reviewed production adapter with a concrete positive terminal
+receipt and an independent surviving-remote negative. Specify whether the adapter
+settles a request's protocol-defined operation or asserts wider provider/account
+quiescence; do not promise the latter without a real boundary. No trust checkbox,
+synthetic ToolObserved shim, SQL-only closure or caller-provided settled flag.
+If unrestricted shell/MCP cannot provide that contract, keep that capability open
+and obtain an explicit product decision about unsupported-operation recovery.
+Do not silently revise all useful ordinary recovery into permanent Attention.
+
+B5. Native capability/setup and cold authority need platform-specific concrete
+    design gates; the current full-backend enumeration is not approval to build
+    or install them (sections2/10/11).
+
+The Linux permission/namespace boundary preventing migration, Windows retained
+job/broker identity after host death, and macOS observer entitlement/distribution/
+terminal-drain lifecycle remain consequential designs. Naming cgroup/Job/ES does
+not specify who retains the original handle, who can alter containment, how target
+permissions differ from the manager, what survives host death, or how a second
+host distinguishes the original domain from a replacement. Data descriptors are
+not capabilities. No fresh snapshot/process census can reconstruct missing lineage.
+
+Before each native StageC authoring gate, provide the concrete backend ownership,
+creation/Birth/Release sequence from B1, manager-handle/permission boundary, cold
+proof issuer and loss matrix, host setup availability, actual required test runner,
+and an executable API map preserving stdio and exact accepted command/argv/env/cwd.
+Windows native and full forking macOS positives remain required/open; compile-only,
+feature-disabled tests and optional neverfork fixtures do not substitute. Resolve
+the macOS product/setup fork before installation or integrated completion; this
+review grants no OS changes. Keep unsupported-platform refusal explicit without
+adding a Unix-only requirement to ordinary Empty/no-private-input requests.
+
+ADVISORY / STAGE SHAPING
+
+1. A new process crate is defensible to prevent persistence->ACP/MCP dependency
+   reversal and duplicate OS parsers. Accept it only with its public API/durable
+   dependency map: native proof constructors private, sealed backend implementations,
+   no user-provided wait/probe, no SQLite/Tokio dependency in the OS owner. Reuse the
+   existing identity code, 128-slot tracker, transfer-slot, panic dispatcher and
+   descriptor-checked lock. Do not simultaneously introduce another dispatcher or
+   kill owner. The dispatcher must precede ANY shared native reservation, including
+   ACP/shell-first hosts, not merely an MCP-first setup assumption.
+
+2. Four tables plus many new IDs/modules are a large change. Supply an actual
+   migration/key/constraint map, version and canonical closure encoding, checked
+   counters, and ownership of every transition. Reuse existing accepted binding,
+   control generations and recovery-cycle association instead of parallel sources
+   of truth. Define legacy owned history classification explicitly: no backfilled
+   closed proofs; readers stay compatible; report unresolved legacy state without
+   replacing accepted IDs/artifacts/private transport or resurrecting defaults.
+
+3. StageA should be a smaller approved unit after B1/B2's state machine and APIs
+   are fixed: one registry obligation/freeze ledger, typed journal origin/seal
+   commands and full inspector, wired through every actual owned entry gate with
+   current-process barriers. Native proof factories may remain unavailable. Keep
+   StageA's broad positives visibly failing/open and retain their executable tests.
+   Define that stage's exact source/dependency closure, REDs and gates. StageB then
+   needs B3's reviewed transfer contract. B4/B5 gate StageC; StageD remains complete
+   initial/park/cold/wake integration and frozen 5a followed by 5b.
+
+4. Enumerate ALL generic journal variants that can influence authority, including
+   legacy provider/session projections; actual run_state.rs:1415–1431 can mark
+   writer cleanup from ExecutionWriterClosed/SessionClosed. Neither generic append
+   nor a pure reducer should promote them to host capability. Generic public data
+   may remain readable, but typed authority inspection must reject inconsistent
+   or unregistered projections. State which metadata appends remain allowed after
+   seal, and why they cannot change the sealed writer/effect set.
+
+5. Registry-first freeze and original lock plus restricted writer queue are a
+   viable cross-WAL strategy. Keep the exact replay matrices for reserve->intent,
+   origin->binding, birth->establishment, closure->projection, set->seal,
+   seal->ack and continuation origin->new epoch opening. Specify read generation
+   and CAS failure retries for genuine closure/Attention during a newer Stop;
+   cleanup must remain legal while dispatch is closed. A stale generation must
+   not make the final owner discard responsibility. No cross-WAL atomicity claim.
+
+FULL ORIGINAL REQUIREMENTS REMAIN OPEN
+
+Preserve stable submission/replay before config or file reads; canonical explicit
+inputs and immutable origins/raw prompts; atomic original task/attempt/workspace
+identity; actual pending Start/Stop/Continue fencing; frozen HostDefault and Explicit
+MCP selection; private authenticated object/envelope binding, key-loss/corruption/
+transplant refusal before child AND provider effects; exact transport/catalog/tool/
+timeout/sandbox behavior and public diagnostics opacity; provider inherited-auth
+exclusion; genuine Empty/no-namespace/no-key twins with nonempty mcp_add and legacy
+fallback positive control; initial→real quota park→cold wake with changed defaults
+using the SAME original attempt/workspace/journal/control/startup identities.
+Private negatives require the working populated valid twin, not a fixture already
+blocked by missing local-domain capability. Actual lower registry timeout coverage
+does not invent a stage generic tool-call route. Broad native/full-platform tests,
+resource/panic/shutdown regression gates and independent final 5a/5b stay open.
+
+No author self-signoff, no fabricated Closed or native authority, no requirement
+retirement, no formal repair-count consumption. Root/main should first revise
+B1–B3's concrete contracts, then request renewed bounded StageA/B authorization;
+integrated acceptance additionally depends on B4/B5 and all original positives.
