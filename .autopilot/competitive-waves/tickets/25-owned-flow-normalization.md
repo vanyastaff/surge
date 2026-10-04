@@ -300,7 +300,7 @@ MCP helper handed all source back to author; helper is now read-only.
 
 Author confirmed3822 terminal101 and no owned Cargo/link children before cleanup.
 First targeted clean failed101 on nonexistent package gpui (resource-clean.log).
-Corrected proper Cargo clean30369 terminal0 removed440files/14.0GiB
+Corrected proper Cargo clean30369 terminal0 removed2841files/14.5GiB
 (resource-clean-second.log); root independently df now14Gi free. Source/logs and
 current ACP mock fixture retained. Framing behavioral RED still needs execution.
 
