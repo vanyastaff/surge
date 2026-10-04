@@ -1,0 +1,98 @@
+FINAL exact-plan precode owning systems review, 2026-10-03
+
+Verdict: RESHAPE NEEDED; one exact transfer-ownership mechanism remains unresolved.
+Entire plan read, including section 6 superseding conflicting earlier wording.
+Verified SHA256:
+88484f30d6c9169ee43bf982b4e00ed4ca9c1c7e87a00484a5c63d7735df3363
+No Cargo, source changes, formatting, or process mutations. T25 initial postbuild
+remains 0/3. Executable criteria and native Windows evidence remain outstanding.
+
+Previous material defect is closed at the design level: configured Tokio Command
+now calls as_std_mut().spawn to obtain std Child before any pipe registration.
+Each Tokio ChildStdin/Stdout/Stderr::from_std conversion occurs with the actual
+std Child and exact observer retained. Conversion/missing-pipe/transfer errors
+invoke actual-child settlement; they cannot send NoChild. Process-wrap dependency
+and open arbitrary wrapper profile are removed. This avoids the pinned Tokio
+spawn Err-after-physical-spawn ownership loss previously identified.
+
+Additional source inspection of locally installed stable rust-src:
+library/std/src/sys/process/unix/unix.rs55-165 sets up pipes before fork/spawn.
+Fork exec-failure protocol receives errno then p.wait()149 before returning Err;
+read/protocol errors wait before panicking. Successful exec returns owned Process.
+Windows library/std/src/sys/process/windows.rs279-439 performs fallible command,
+environment, cwd, and pipe setup before CreateProcessW; after successful process
+creation the result immediately wraps process/thread handles and returns Ok.
+These sources support the standard error boundary, unlike Tokio's later runtime
+registration boundary. Target-toolchain/native standard library evidence still
+belongs in implementation checks; these installed sources do not prove all
+platform executions. No user pre_exec callback or custom spawn hook is admitted.
+
+Other previous findings addressed explicitly:
+- Exact observed exit then drop child, drop worker observer, completion publication,
+  registration removal; JoinHandle remains retained until joined. Fallback reports
+  explicit Settled, never NoChild. Other lease-bearing clones must be accounted.
+- Permanent admission closure linearizes with insertion. Pending reservations
+  belong to barrier join set; sticky Immediate before Start does not terminate
+  reservation or invent no-child proof. Serialized barriers retain all handles.
+- Post-spawn unwind guard owns parcel outside caught operations. Fatal panic
+  aborts with parcel and panic payload retained, no logging or payload Drop.
+- Process-wide OnceLock hook dispatcher installed after normal host hook and
+  before reservation; private TLS protected scope suppresses prior hook. No global
+  per-operation hook swaps/restores. Scope remains protected until fatal abort.
+- Explicit retained writer Arc qualification avoids claiming transport Drop closes
+  stdin. Grace then one direct-child kill plus actual try_wait covers that case.
+- Helper shutdown_background is not task-destruction proof; permanently closed
+  admission and independent controls for registered preexisting children provide
+  the barrier's safety. Blocking stdin may outlive runtime without owning worker.
+
+Required final amendment:
+1. Sender::send consumes its message by value. The plan says parcel remains
+   outside catch while protecting transfer but specifies no mechanism making
+   that true; moving sole parcel into send can drop it during unwind before catch.
+   Specify transfer of an Arc clone to an outer retained ownership slot containing
+   Option<ChildParcel>, rather than transfer of sole raw parcel. Caller retains
+   slot outside catch until handoff; worker claims parcel under a defined protocol.
+   During failure/unwind the actual parcel must remain in outer slot or already
+   be exclusively worker-owned, never owned only by an unwinding message. Alternatively
+   provide pinned primary-source proof for a closed non-unwinding sender, including
+   every admitted private injection path. The outer retained-slot approach is
+   easier to audit and protects deliberate send-panic injection. Once this is
+   explicit the rest of the design is acceptable for implementation.
+
+Other implementation audit points implied by the plan:
+2. Fallback worker must not signal its own reservation completion before dropping
+   retained observer. Barrier must not miss pending/fallback registrations or
+   handles taken for another reservation's finished-thread reaping. No global
+   mutex held across join, child operation, observer Drop, or fatal callback.
+3. Protect diagnostics and teardown operations that could panic while a live
+   parcel exists. A success-path guard restoring TLS depth must not restore it
+   on unwind before catch sees panic; retained panic payload must never be dropped.
+   Installing OnceLock dispatcher before reservation must complete atomically for
+   concurrent first callers. Normal host hook installation order is audited in
+   actual CLI/daemon/UI entrypoints, not asserted only in documentation.
+4. Terminal guard must implement runtime-before-barrier on unwind and ordinary
+   return; UI enter guard lifetime ordered ahead of runtime destruction. Helper
+   branch must preserve special background policy under both normal and unwind
+   paths. No remaining process::exit bypass or cached-transport dependency.
+5. The tracker is process-terminal and permanently closed after barrier. Tests
+   requiring fresh admission must isolate processes/private test tracker scopes;
+   production API must never silently reopen admission to make tests pass.
+
+Performance/API assessment: bounded worker-per-child admission is defensible for
+this local host profile. The 128x512KiB stack allocation upper bound is roughly
+64MiB of requested stacks, plus OS overhead; bounded refusal is safer than owner
+eviction. Completion handle reaping keeps reconnect history bounded. Grace runs
+concurrently under normal worker shutdown; synchronous post-spawn fallback may
+block a caller indefinitely after wait ambiguity, an explicit accepted outcome.
+The public shutdown barrier is terminal and blocking; callers must invoke after
+runtime shutdown, never from a worker or while holding ownership/tracker locks.
+
+Apart from that transfer mechanism, no plan-level owning-system blocker remains.
+Acceptance still requires real
+runtime-drop and outside-runtime child oracles, actual second-process launch-lock
+exclusion until settlement, caught wait ambiguity retaining authority/no kill,
+open-stdin helper correct status/no hang, protected worker AND synchronous fallback
+panic subprocesses with payload-printing prior hook under stderr/TRACE capture,
+pending-reservation/admission shutdown race, and cold descendant survivor refusal.
+Direct leader exit/worker completion is NOT descendant containment or suspension
+authority. Native Windows remains OPEN; code compilation does not retire it.

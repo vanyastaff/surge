@@ -1,0 +1,14 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 5.89s
+     Running tests/owned_flow_framing_trace.rs (target/debug/deps/owned_flow_framing_trace-a99e7eea399d70a3)
+
+running 6 tests
+test mock_bridge::tests::last_prompt_reflects_last_send_message ... ok
+test mock_bridge::tests::records_reply_to_tool ... ok
+test mock_bridge::tests::records_open_session ... ok
+test mock_bridge::tests::pumps_scripted_event ... ok
+test mock_bridge::tests::admission_rejects_changed_descriptor_closes_and_never_prompts ... ok
+test malformed_private_owner_frame_is_opaque_and_has_no_effects ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

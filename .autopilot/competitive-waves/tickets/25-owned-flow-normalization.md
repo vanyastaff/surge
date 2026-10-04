@@ -349,3 +349,18 @@ ends11PASS/0FAIL,419filtered; actual14883 terminal exit receipt being reaped by
 sole author. Includes custom decode/encode, unknown field/type, syntax, invalid
 UTF8, EOF and bounded/valid frame behavior. Actual host TRACE socket malformed
 request with zero accepted operations/external effects remains required.
+
+Framing reader14883 terminal0 confirmed author,11PASS. Actual hostTRACE socket
+77702 terminal0 sixPASS (one real socket oracle plus five shared fixture tests).
+Corrected private namespace/preparation-lock assertions rerun72167 log ends sixPASS;
+author terminal receipt pending. Root inspected actual server warning/EOF, zero
+bridge calls, zero durable items, absence of actual production namespaces
+work-items/private-flow-inputs and work-items/preparation-locks.
+
+Runtime section6 exact SHA88484f30d6c9169ee43bf982b4e00ed4ca9c1c7e87a00484a5c63d7735df3363
+closes stdspawn error ownership, explicitSettled/admission/ACK and proposes fixed
+panic-hook scope. Independent owning re-review RESHAPE remains: raw byvalue
+Sender::send consumes parcel, so the claimed outer catch ownership needs an
+explicit retained Arc slot/worker claim protocol before transfer. Other fixes
+accepted at design level; section6 report retained, security re-review pending.
+No runtime behavior authorized yet; initial0/3, full T25 gates/open scope retained.
