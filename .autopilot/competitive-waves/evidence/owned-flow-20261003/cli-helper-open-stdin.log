@@ -1,0 +1,12 @@
+   Compiling float-cmp v0.10.0
+   Compiling predicates v3.1.4
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+   Compiling assert_cmd v2.2.1
+    Finished `test` profile [unoptimized] target(s) in 20.18s
+     Running tests/cli_stage_mcp_startup.rs (target/debug/deps/cli_stage_mcp_startup-5c0d22698ed88900)
+
+running 1 test
+test revoked_stage_helper_exits_with_provider_stdin_still_open ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.07s
+

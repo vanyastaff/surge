@@ -1,3 +1,15 @@
+# Follow-up 2026-10-04
+
+Author scoped strict98209 terminal0 for core/ACP/MCP/persistence alltargets/allfeatures;
+not fullworkspace gate. Actual helper95640 terminal0 exits status0 after authenticated
+endpoint revoke while provider stdin remains open. Root read logs and source.
+Main67524 scoped nextest running at checkpoint; helper completing final disjoint
+cold test corrections. Domain authority revised plan read-only, source held.
+Root production Stage MCP discovery retained as unreviewed NEEDS WORK draft in
+owned-flow-20261003/stage-mcp-execution-discovery-20261004.txt; registry tests cannot
+prove missing actual provider tool execution. Full scope, native platforms,
+freeze5a then5b and T25 initial formal repairs0/3 unchanged.
+
 ## 2026-10-03: actual readiness/runtime evidence and unresolved domain authority
 
 Author terminal receipts, independently read logs: ACP all-method refusal76585

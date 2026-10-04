@@ -688,6 +688,6 @@ window.STATE =
     "deferred": 1
   },
   "blind": null,
-  "currentExecutableCheckpoint": "T25 initial0/3: actual seven-method ACP readiness refusal/positive peer, runtime retained-close/capacity/pipe fallback and real registry deadlines PASS (scoped). Prerequisite47240 terminal0; strict fifth21889 terminal101, sixth98209 ongoing at checkpoint. Cold baseline not started. Whole writer-domain authority NEEDS WORK; domain amendment read-only. Generic stage MCP execution, populated cold positive, native Windows, full gates/freeze5a then5b remain required.",
-  "previousGoalTurnClassification": "no progress: previous user-clarification turn acknowledged already recorded multi-provider planning without changing authoritative state; this continuation preserves full capability/cold plans and terminal evidence and advances concrete authority design."
+  "currentExecutableCheckpoint": "T25 initial0/3: four-crate strict98209 terminal0; actual CLI helper95640 terminal0 holds provider stdin through authenticated endpoint revocation/status0. Scoped nextest67524 running at checkpoint; cold newfile final correction pending. Writer-domain authority amendment read-only; stage MCP execution draft NEEDS WORK. Wholeworkspace/nativeWindows/cold positive/freeze5a then5b remain open.",
+  "previousGoalTurnClassification": "progress: committed complete writer-domain/cold plans and terminal evidence c831654; inspected production stage-MCP execution gap and retained a concrete unreviewed draft. Full goal active."
 }

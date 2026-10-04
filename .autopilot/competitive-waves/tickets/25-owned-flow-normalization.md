@@ -524,3 +524,12 @@ cross-operation signed envelope donor and native Windows remain open.
 
 T25 stays initial build, formal post-build repairs0/3; no source freeze, full
 workspace acceptance or5a/5b review. Full objective and all requirements remain.
+
+2026-10-04 follow-up: author98209 terminal0 scoped strict core/ACP/MCP/persistence
+alltargets/allfeatures -Dwarnings clean; root read exact sixth log. CLI helper95640
+terminal0 actual authenticated initialize/catalog + endpoint revoke, exit status0
+while provider stdin stayed open (one test2.07s). Full workspace gate remains open.
+Root read actual stage MCP catalog/admission/dispatcher/receipt sources and retained
+stage-mcp-execution-discovery-20261004.txt as an unreviewed NEEDS WORK draft. Agent
+thread limit prevented separate scout; no independent verdict claimed. Main67524
+scoped nextest running at checkpoint, cold fixture final corrections underway.

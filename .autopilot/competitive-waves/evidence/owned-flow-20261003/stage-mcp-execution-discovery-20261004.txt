@@ -1,0 +1,84 @@
+Production stage MCP execution: root read-only discovery, 2026-10-04
+STATUS: draft NEEDS WORK; not reviewed or authorized for source implementation.
+Full product goal remains unchanged. Main owns all production/Cargo/process lanes.
+Attempted independent read-only scout delegation could not start: agent thread
+limit reached. Discovery performed inline; this is not an independent verdict.
+
+Authoritative source inspected:
+- surge-acp/bridge/worker.rs handle_tool_call emits ONLY ToolObserved. It must
+  stay observational; a provider notification is not an executable command.
+- surge-acp/bridge/session.rs SessionConfig.stage_tools constructs injected
+  report/human tools only, filters sandbox, adds a stable call_id into schemas.
+- orchestrator/engine/stage/stage_tools.rs prepare exports that catalog through
+  authenticated StageEndpoint. StageCalls.event rejects every other name.
+- agent.rs actual stage_requests select admits authenticated requests and maps
+  only report/human into corresponding stage events. Existing ToolDispatcher
+  routing has reusable MCP executor, loop guard/output spill/escalation behavior,
+  but ACP notifications are not the input authorization boundary.
+- surge-mcp/registry.rs call_tool performs actual request and timeout; catalog
+  observation/lower-level call success does not prove actual stage exposure.
+- core/stage_tool.rs receipts currently support OutcomeCandidate/HumanResponse/
+  Rejected only. Pending and receipt lookup in StageCalls is an in-memory map;
+  actual durable receipt replay/index hydration must be designed for cold retry.
+
+Candidate architecture for independent review:
+1. One stage-owned immutable dispatch catalog built from the accepted resolved
+   tools, exact server identity and frozen private manifest. Exposed names must
+   have deterministic conflict handling for duplicate servers/builtin collisions;
+   plain name lookup must never select another server by accident. Explicit
+   wrapper schema separates engine call_id from untouched server arguments,
+   avoiding collision with a server's own call_id field/schema. Exact provider
+   compatibility and tool naming rules need primary SDK/source verification.
+2. Preserve authenticated StageEndpoint context and stage generation checks.
+   Native authenticated StageToolCall, never ToolObserved, enters execution.
+   Revalidate visibility/sandbox/whitelist against frozen catalog at invocation,
+   not merely during tools/list. Reuse canonical dispatcher for loop guard,
+   timeout/output spill and typed escalation instead of a second executor.
+3. Durable invocation identity includes original item/revision/attempt/run/
+   workspace + invocation/stage generation + server occurrence/tool + canonical
+   exact argument digest + stable caller operation ID. Validated identity and
+   original launch Arc remain host-owned; model inputs cannot mint authority.
+   Generic journal append cannot forge an executable intent or settlement proof.
+4. Register durable effect obligation BEFORE any possible physical call; only
+   then journal projection. Respect registry/run DB separation, monotonic causal
+   receipts, crash windows and reconciliation. After ALL queues/awaits use the
+   shared synchronous final host fence immediately before actual SDK enqueue.
+   Known no-dispatch can settle through owner evidence; uncertain dispatch is
+   not retried automatically. Need exact reviewed completion semantics: a tool
+   response proves RPC outcome, not completion of arbitrary asynchronous remote
+   work. Remote continuation stays an external obligation without true proof.
+5. Persist exact successful MCP content/structured/meta without lossy conversion
+   through debug text. Error diagnostics remain opaque per accepted boundary.
+   Durable result BEFORE provider reply supports exact replay; changed-body same
+   ID rejects without effects. Cancellation/timeout/lost reply after dispatch
+   remains uncertain until actual settlement, never false clean shutdown. A
+   returned result cannot retire an unrelated external obligation or grant
+   suspension by caller boolean.
+6. Cold receipt hydration must bind original journal occurrence, closed dispatch
+   epoch and accepted revision; reject malformed/foreign/stale/duplicate records.
+   Retried same ID replays only a proven stored result, otherwise reports the
+   unresolved state without repeating side effects. New stage generation must
+   not accidentally reuse/relabel an old uncertain invocation.
+
+Required actual outer tests, separate from registry-only evidence:
+- Real ACP provider opens stage descriptor and calls an approved generic tool
+  through actual helper and real external server; successful content reaches
+  provider, exact frozen cmd/args/env/cwd used and one durable invocation exists.
+- Positive twin and forbidden tool/server/sandbox/builtin name collision controls.
+- Call_id belongs to engine envelope; original arguments including own call_id
+  arrive untouched, key-order equivalent engine ID replays, changed body rejects.
+- Stop/archive/generation race during queued connection/ready waits denies actual
+  tool bytes and preserves health/restart budget; cleanup replies remain allowed.
+- Configured whole timeout, multipage catalog, actual crashes/restart exhaustion,
+  result spill and loop guard tested from provider boundary.
+- Host crash in obligation->journal->physicalcall->result->reply windows; second
+  real host neither repeats uncertain effects nor fabricates receipt/closure.
+- Remote work still active despite successful response remains unresolved, and
+  blocks suspension/Continue/wake according to shared authority design.
+- Original launch lease, no raw private diagnostics, malformed request and native
+  platform behavior remain required. Full gates/freeze independent5a then5b.
+
+Dependencies: T25 whole writer/domain authority revised contract; stage result
+transport retaining MCP fidelity; durable effect/receipt stores and canonical
+naming/schema policy. Pre-code maintainer + independent critic/security reviews
+must accept a consolidated executable plan before any source change.
