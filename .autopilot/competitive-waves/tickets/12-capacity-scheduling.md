@@ -424,6 +424,21 @@ these errors and verify resource-bounded full execution without skipping tests o
 weakening assertions. Source is still unfrozen author WIP within repair 3/3;
 neither final spec compliance nor independent code/security review has begun.
 
+The shared fixture's runtime annotation was corrected without weakening the
+descriptor mismatch law. Targeted `24224` passed 4/4 with two test threads,
+including both unchanged eight-second post-ack assertions (5.259/5.317 seconds).
+The full skill-binding suite passed 10/10 in `96579`, also with two threads.
+These results do not establish a global pass or prove every previous failure was
+resource contention. Test-only owned-child cleanup and bounded journal diagnostics
+were then added; deadlines, SQL trigger and behavioral assertions remain intact.
+
+Workspace doctests excluding UI passed in `74437`: 5 passed, 7 existing ignored,
+0 failed. Metadata-only `cargo check -p surge-daemon --release` passed in `52788`,
+including compilation without the debug-only preparation hook/call. Formatting
+passed in `29181`. Final strict check `18822` and a complete, unfiltered canonical
+nextest run with two test threads still need terminal confirmation on the latest
+fixture source; source freeze and independent 5a/5b remain pending.
+
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
 Configured rotation on ordinary CLI/daemon flow launches must enter the same
