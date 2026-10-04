@@ -533,3 +533,23 @@ Root read actual stage MCP catalog/admission/dispatcher/receipt sources and reta
 stage-mcp-execution-discovery-20261004.txt as an unreviewed NEEDS WORK draft. Agent
 thread limit prevented separate scout; no independent verdict claimed. Main67524
 scoped nextest running at checkpoint, cold fixture final corrections underway.
+
+Cold test helper final handoff independently SHA-verified39f3c380d9aea9f93a392b048ecbb58d3136c4465727fb832570481a6590aae5; ALL newfile write/format ownership main. Actual67524 still building (author live handle + owned cargo-nextest/cargo/rustc chain); no terminal receipt/cold baseline yet. Root primary XNU recheck confirms unsupported descendant tracking and debugger exit-observation caveat; retained domain-primary-source-recheck-20261004.md. No native behavior/authority approval inferred.
+
+Foundational nextest actual log now ends Summary1815 run /1811PASS/4FAIL/8skip
+101.041s; author terminal receipt not yet received at this write. Root read all
+four failing assertions. Three ACP tests target old check ordinals after the
+accepted SDK-ready final fence (old4/5 now blocks opening); actual opening must
+cover spawn + outer/ready init/new/options, queued prompt both gates, permission
+post-approval gate, preserving typed refusal/exact actual wire/retained owner.
+The fourth MCP stdio oracle expects StartFailed with raw observer text, which
+contradicts accepted EffectRefused and opaque diagnostics. Main notified; no raw
+reason restoration or assertions removed. This is initial build regression
+repair, not formal5a/5b and not a green gate. Whole source ownership remains main.
+
+Author reaped67524 terminal100 (not assumed101):1811PASS/4FAIL/8existingSKIP,
+1815run. Failed full scoped log retained. Main updated fixture ordinals/exactwire
+and typed EffectRefused/no-spawn/Disconnected checks, then29928 formatting underway
+before initial actual cold baseline. No source freeze or green integrated gate.
+U01 user planning extension now separately retained in manifest without changing
+or retiring any original wave requirements.

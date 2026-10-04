@@ -689,5 +689,5 @@ window.STATE =
   },
   "blind": null,
   "currentExecutableCheckpoint": "T25 initial0/3: four-crate strict98209 terminal0; actual CLI helper95640 terminal0 holds provider stdin through authenticated endpoint revocation/status0. Scoped nextest67524 running at checkpoint; cold newfile final correction pending. Writer-domain authority amendment read-only; stage MCP execution draft NEEDS WORK. Wholeworkspace/nativeWindows/cold positive/freeze5a then5b remain open.",
-  "previousGoalTurnClassification": "progress: committed complete writer-domain/cold plans and terminal evidence c831654; inspected production stage-MCP execution gap and retained a concrete unreviewed draft. Full goal active."
+  "previousGoalTurnClassification": "progress: previous continuation committed full domain/cold reports and stage execution discovery plus actual strict/helper receipts (c831654/a91cd83). This continuation verified cold handoff hash and primary XNU constraints, inspected lossy successful MCP product projection; no source acceptance inferred."
 }

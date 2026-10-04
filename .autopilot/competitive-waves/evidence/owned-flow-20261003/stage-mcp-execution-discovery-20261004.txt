@@ -82,3 +82,15 @@ Dependencies: T25 whole writer/domain authority revised contract; stage result
 transport retaining MCP fidelity; durable effect/receipt stores and canonical
 naming/schema policy. Pre-code maintainer + independent critic/security reviews
 must accept a consolidated executable plan before any source change.
+
+Additional authoritative source inspection, 2026-10-04:
+The current McpToolResult has only content/is_error. Registry projection strips
+text annotations, converts non-text blocks into Other debug summaries, and drops
+structured content/meta. Routing then serializes these summaries. In contrast,
+opaque_error_result correctly leaves raw successful rmcp results unchanged and
+only erases diagnostics on is_error. These are distinct boundaries: the opacity
+fix must not be blamed for pre-existing lossy product projection. A reviewed
+stage execution plan needs a faithful successful result representation through
+registry/dispatcher/stage receipt/helper/provider. Actual structured content,
+image/resource annotations and metadata roundtrip tests are required; a successful
+text-only tool does not prove that full contract. No source changes authorized.
