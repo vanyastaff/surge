@@ -65,6 +65,14 @@ evidence/acp-accounting-revised-plan-20261003.txt. Два независимых
 storage re-review выполняются; implementation ещё не разрешён до T25 ownership/
 dependency handoff. Plan acceptance не означает provider или accounting proof.
 
+ACP readiness actual47166 terminal101 genuineRED reproduced outgoing initialize
+AFTER Stop during held ready wait;30404/89698 were compiler-only fixtureFAIL.
+Bounded sdk-ready-fence plan and focused security FULL ACCEPTABLE; root maintainer
+ACCEPTABLE. Author implements exact typed final check after ready.await before
+synchronous SDK enqueue; typed refusal/+2 checks/live-driver no-byte probe pending.
+45077 terminal0 protected runtime ownership rerunPASS;63536 terminal0 clean
+CLI+daemon host guard check. These do not close full T25 or native Windows.
+
 Исторические разделы ниже описывают Linux-среду 2026-09-05/06. Текущая сборка
 выполняется на macOS с `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`; сборки последовательны.

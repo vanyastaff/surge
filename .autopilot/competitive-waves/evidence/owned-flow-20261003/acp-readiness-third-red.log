@@ -1,0 +1,22 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized] target(s) in 14.48s
+     Running unittests src/lib.rs (target/debug/deps/surge_acp-516cd789cd48b346)
+
+running 1 test
+test sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission ... FAILED
+
+failures:
+
+---- sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission stdout ----
+
+thread 'sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission' (31337840) panicked at crates/surge-acp/src/sdk_v1.rs:409:21:
+Stop during Surge-owned readiness wait admitted actual initialize bytes
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 276 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p surge-acp --lib`

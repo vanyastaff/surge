@@ -1,0 +1,15 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+error[E0433]: cannot find type `ProtocolVersion` in this scope
+   --> crates/surge-acp/src/sdk_v1.rs:380:137
+    |
+380 | ...n.initialize(InitializeRequest::new(ProtocolVersion::V1))));
+    |                                        ^^^^^^^^^^^^^^^ use of undeclared type `ProtocolVersion`
+
+error[E0433]: cannot find type `ProtocolVersion` in this scope
+   --> crates/surge-acp/src/sdk_v1.rs:395:129
+    |
+395 | ..."],"result":InitializeResponse::new(ProtocolVersion::V1)});
+    |                                        ^^^^^^^^^^^^^^^ use of undeclared type `ProtocolVersion`
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `surge-acp` (lib test) due to 2 previous errors

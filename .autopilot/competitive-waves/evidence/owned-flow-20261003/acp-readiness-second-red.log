@@ -1,0 +1,11 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+error[E0432]: unresolved import `agent_client_protocol::ProtocolVersion`
+   --> crates/surge-acp/src/sdk_v1.rs:369:13
+    |
+369 |         use agent_client_protocol::ProtocolVersion;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^---------------
+    |                                    |
+    |                                    no `ProtocolVersion` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `surge-acp` (lib test) due to 1 previous error

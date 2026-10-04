@@ -432,3 +432,31 @@ Author authorized exact scoped private implementation AFTER genuine readiness
 behaviorRED. Report retained as surge-owned-flow-sdk-ready-fence-review-20261003.txt.
 Design acceptance only; zero-frame callback oracle, ALL effect methods, typed
 refusal, cleanup and actual SQL/original lease integration still required.
+
+Author reaped45077 terminal0 protected runtime ownership outer PASS; root read
+actual independent launch probe + runtime_drop lease test. This confirms the
+revised outer protected ownership path only; private fault/panic/race scenarios
+remain mandatory. ACP readiness30404 and89698 terminal101 were fixture compiler
+failures, not behaviorRED. Actual47166 terminal101 genuine readinessRED: positive
+peer initialize succeeded, then Stop during held ready wait still admitted actual
+initialize bytes. Root FULL acp-readiness-third-red.log read; compiled14.48s,
+one test FAIL at precise wire-effect assertion. Accepted private typed final-fence
+implementation follows this genuine RED; exact typed refusal/+2 checks/live-driver
+no-byte oracle required for GREEN. Initial postbuild count unchanged0/3.
+
+Author reaped93392 terminal0 acp-readiness-green.log1PASS: actual peer positive
+initialize, exact nested SdkCallError::HostEffectRefused after readiness Stop,
+two checks and live-driver delayed no-byte assertion. Root read log and actual
+source/helper/all seven callsites/sameArc worker injection; scoped initialize
+race closed, real SQL/control and all-method integration still unproved.
+
+Runtime reservation/reaping adds a wait before physical MCP spawn. Author moved
+final observer.before_effect after reserve to immediately before standard spawn.
+Root source inspection found new EffectRefused mapping to StartFailed instead
+of existing typed McpError::EffectRefused. ensure_connected treats StartFailed
+as Crashed/backoff/restart-budget failure, violating accepted no-liveness-change
+on execution refusal. Author notified structural mapping and actual zero-child/
+unchanged-health/restart-budget oracle required. runtime-mcp-regression.log ends
+11PASS but no author terminal receipt yet and existing selected tests do not
+prove this moved-gate classification. Initial implementation observation, not
+formal5a/5b or postbuild repair dispatch; count0/3 remains.
