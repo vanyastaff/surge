@@ -9,7 +9,7 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-10-04T03:46:10.544513+00:00",
+  "updatedAt": "2026-10-04T04:03:22.828154+00:00",
   "finishedAt": null,
   "previousCheckpoint": {
     "finishedAt": "2026-09-07T14:10:00-05:00",
@@ -687,5 +687,6 @@ window.STATE =
     "fixed": 19,
     "deferred": 1
   },
-  "blind": null
-};
+  "blind": null,
+  "currentExecutableCheckpoint": "T25 initial0/3: runtime84128 actualRED;50438 compilerFAIL;95591 ownershipPASS;44473 terminal-barrier/original-launch-reacquisitionPASS. Host guards implemented, CLI/daemon95876 check pending; ACP readiness/final enqueue gap pending. ALL full gates/Windows/cold/faults/independent5a then5b remain required. Revised next accounting plan independent re-review only."
+}

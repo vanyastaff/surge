@@ -51,6 +51,20 @@ Read-only next ACP accounting draft: evidence/acp-accounting-draft-plan-20261003
 run normalization ещё только предложены. Registry catch-up — eventual, не общая
 DB transaction. No source/Cargo authorization для этого dependency пока.
 
+Новые executable runtime доказательства:84128 genuineRED (future Drop после
+runtime разрушения);50438 compilerFAIL;95591 terminal0 actual ownershipPASS;
+44473 terminal0 barrierPASS с actual child reap и independent original lease
+reacquisition. HostRuntime guards CLI/daemon/UI реализованы, но check95876
+на checkpoint был live; faults/panic/Taken/helper/cold/descendants/UI/Windows
+ещё открыты. Root проверяет no-mutex-across-join/protected fallback scope.
+ACP sdk_v1 connection().await readiness gap открыт: предыдущий first-poll fence
+не заменяет final check перед synchronous send_request; author ACK RED-first.
+
+NEXT accounting consolidated revised plan сохранён как
+evidence/acp-accounting-revised-plan-20261003.txt. Два независимых протокольный/
+storage re-review выполняются; implementation ещё не разрешён до T25 ownership/
+dependency handoff. Plan acceptance не означает provider или accounting proof.
+
 Исторические разделы ниже описывают Linux-среду 2026-09-05/06. Текущая сборка
 выполняется на macOS с `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`; сборки последовательны.

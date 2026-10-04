@@ -1,0 +1,261 @@
+Surge real ACP accounting — consolidated next-dependency design, 2026-10-03
+Self maintainer verdict: ACCEPTABLE for independent re-review; NOT implementation
+acceptance or code authorization. Both protocol and storage reviews were read in
+full and their required reshapes are incorporated here, replacing the draft's
+ambiguous enqueue, settlement and overflow rules. No source/Cargo/format/git/process
+mutation or tests. T25 main retains sole source/runtime/Cargo ownership, initial
+0/3; pre-dispatch remains exhausted 3/3. No requirement is retired. This design
+does not justify or repair an existing readiness/fence regression; T25 handles
+its current seam separately. No consequential user design fork is required.
+
+Evidence and goal
+Repo root /Users/vanyastafford/Develop/surge. Read AGENTS.md (RTK.md absent),
+.autopilot/competitive-waves/evidence/acp-usage-source-inventory-20261003.txt,
+tickets/12-capacity-scheduling.md under that run, and the full durable draft
+.autopilot/competitive-waves/evidence/acp-accounting-draft-plan-20261003.txt.
+Reviews: /tmp/surge-acp-accounting-protocol-plan-review-20261003.txt and
+/tmp/surge-acp-accounting-storage-plan-review-20261003.txt. Independently read the
+current sdk_v1.rs prompt path, sdk_v1/transport.rs, lifecycle.rs close, and SDK
+2.2.0 jsonrpc.rs send_request/id creation after receiving the reviews.
+
+Installed primary schema 1.9.1 src/v1/agent.rs:3121-3247 contradicts itself about
+turn/session semantics and DefaultOnError erases malformed optional usage; its
+client.rs:609-673 defines occupancy separately from cost. Installed Claude
+0.23.1 dist/acp-agent.js:221-233,338-388,1110-1118 resets per prompt but includes
+prior background results and omits cancellation/error usage. These paths are
+under the cargo registry and npm cache listed in the durable inventory. Cache
+presence does not prove the launched provider. Codex 0.16.0 unsupported-response
+claim is ticket source evidence, not an independently verified provider test.
+
+Deliver durable actual provider-reported usage for persistent tasks across
+initial/feedback prompts, attempts and cold continuation, conserving receipts
+without inferred semantics or silent coverage loss. Quota means subscription
+availability. Context occupancy, token measurements and monetary observations
+remain separate. Mock outer evidence proves host plumbing; the real supported
+provider/version/response gate stays mandatory and unpassed until demonstrated.
+
+Types, contracts and crate ownership
+surge-core new accounting module owns validated PhysicalTurnId, PreparedTurnV1,
+FrozenUsageSourceV1, CompletionReceiptV1, NormalizedUsageV1 and coverage/status
+types. PreparedTurn freezes task-attempt binding or auxiliary operation, run and
+exact stage/invocation, opening/writer occurrence, host/provider session lifetime,
+physical sequence, expected source occurrence and contract/artifact evidence.
+Deserialization validates constructors (try_from), not unchecked private literals.
+At most ONE authoritative token completion per physical RPC. Other observations
+have explicit kinds (e.g. monetary notification), ordered source sequence and
+one declared projection owner; two token sources cannot both charge one measure.
+Receipt delivery timestamps are diagnostics, excluded from replay equality.
+Semantic/wire evidence, ordered identity and the frozen source are included.
+
+Buckets are independent u64 reported-total/input/output/thought/cache-read/
+cache-write with per-field Present/Absent/Null/Malformed/Unsupported states;
+missing is not zero. Nullable model; no inferred subset sum or overlapping bucket
+sum. Contract semantics: Unknown, PerTurn, SessionCumulative, or ReportedProcessing
+Window, with separately specified bucket relationships and measurement extent.
+Unknown retains observations without populating normalized exact totals. Claude
+0.23.1 qualifies for processing-window semantics only with actual artifact proof;
+its reported window is not proof of task-only attribution or vendor billing.
+
+surge-acp new bridge/usage_contract.rs selects only supported contracts from
+launched executable/entrypoint identity plus usage-producing dependency/runtime
+closure and version-specific source proof. Freeze what each digest covers (for
+Claude include adapter, ACP JS SDK, Claude SDK and relevant runtime/pins). Capture
+initialize agentInfo as a self-report and cross-check; npx/node digest alone,
+unpinned cache discovery, missing closure or protocol V1 selects Unknown. Preserve
+existing launch hashes/fences and add evidence; no hash repurposing or per-prompt
+version subprocess. Reopen validates artifact continuity again.
+
+surge-acp owns wire capture and injected object-safe AccountingSink trait;
+surge-orchestrator implements it via persistence RunWriter, with no ACP->storage
+dependency. Update bridge/facade.rs, command.rs, acp_bridge.rs, worker.rs,
+lifecycle.rs, sdk_v1.rs and sdk_v1/transport.rs. Engine stage/agent.rs initial and
+feedback paths prepare fresh ids; recipe_admission.rs and engine/owned_effects.rs
+delegate the contract. Inventory ALL bridge and legacy pool/connection prompts:
+migrate task-relevant production paths; explicitly expose excluded path coverage.
+
+Exact initiation boundary
+PrepareTurn and one-use BeginPhysicalTurn are dedicated writer transactions,
+awaited before any prompt initiation. Durable begin forbids RPC replay after
+restart; claim-before-wire crash is an unknown dispatch gap. Readiness and any
+correlation/settlement capacity reservation also complete before final admission.
+At the actual sdk_v1 prompt seam: begin.await + connection-readiness.await + any
+other await -> session-retained HostEffectFence.check -> synchronous SDK
+ConnectionTo::send_request(request), with NO intervening await. Preserve existing
+final fences for setup/tools/spawn and every prompt. sdk_v1 currently awaits
+connection() before send_request; SDK send_request ALLOCATES/ENQUEUES at call time,
+not at block_task's first poll. Outer facade/first-poll checks alone are insufficient.
+If final admission refuses, settle the begun turn as known NotDispatched; never
+erase the begin. No automatic retry of the same physical id.
+
+Reserve bounded correlation capacity first. Read SentRequest::id (current string
+UUID) and register it synchronously before yielding; the transport outbound
+observer confirms method/session/id/context before emitting the frame. Prototype
+must prove that registration and outbound actors cannot race; gate first write
+on registration or refuse it if necessary, never guess correlation. Readiness or
+registration waits cannot move AFTER the final host check. All production entry
+paths must enforce this ordering, including auxiliary prompts.
+
+Raw capture and independent settlement
+Actual transport is crate::sdk_v1, using Channel::duplex and a single-message
+newline adapter; keep existing 1 MiB line cap/31 queued SDK frames and batch
+rejection. Capture approved accounting field BYTE SPANS before transport
+serde_json::from_slice and before SDK typed decoding. Bind opening/connection,
+direction, outbound string request id, exact session/prompt method, provider
+session and physical turn. Response id is sufficient only through this mapping;
+latest-session notifications are not. Unknown ids, callbacks, old openings and
+duplicate late replies cannot manufacture a turn. Keep bounded tombstones; after
+eviction an unknown reply remains unchargeable, never becomes a fresh receipt.
+
+Use a strict bounded span parser: reject duplicate envelope/accounting keys,
+invalid structure and batches; counters require nonnegative decimal integer
+syntax and u64 range (no fractional/exponent coercion). Retain presence/null/
+malformed states and approved scalar spans only, excluding arbitrary _meta,
+prompt/tool content and error-message bodies. Preserve envelope validity/outcome;
+valid raw usage can survive malformed typed stopReason with envelope validity
+explicit. Oversize or malformed/partial EOF yields capture-gap evidence, not a
+valid charge. A complete valid final line without newline follows current adapter
+behavior. serde Value reserialization is never labeled original wire bytes.
+
+State machine: Prepared -> Begun -> AwaitingWire -> Captured -> Settling ->
+Committed(Projected | Unprojectable), or Gap/NotDispatched when no receipt exists.
+Before any cancellable await or SDK forwarding/backpressure await, raw capture
+transfers the bounded receipt into a bridge/session-owned settlement owner.
+Reserve capacity before dispatch so transfer is synchronous and lossless; full
+capture queues backpressure ingestion without evicting retained receipts.
+Settlement futures and buffers are independent of public waiter, biased cancel
+select, prompt RPC task and provider IO. SDK response acknowledgment is not a
+Surge accounting acknowledgment. Commit before publishing accounting completion.
+Return typed PromptCompletion with accounting status; broadcast is telemetry only.
+
+Cancellation bounds wire waiting, not captured settlement. Separate wire_done
+from accounting_done. Close may stop/reap provider IO after its wire deadline,
+but must retain/drain settlement independently; accounting timeout reports pending
+or unconfirmed status and keeps ownership. Failed persistence blocks further
+prompts for that session and retains bounded raw pending evidence for retry.
+Host death before durable capture can leave a begun gap; do not claim exactly-once
+capture across that unavoidable window. A captured cancelled response is settled
+before execution cancellation is reported. Terminal task fencing follows receipt
+settlement or explicit pending/gap status, never assumes transport close flushed it.
+
+Authoritative storage, ordering and overflow
+surge-persistence new runs/accounting.rs owns immutable begins/receipts/baselines
+and dedicated writer commands; runs/run_writer.rs exposes only validated APIs.
+Generic AppendEvent/AppendBatch (and all generic route/batch append helpers) reject
+ALL new accounting authority variants. Only accounting transactions emit them.
+Prepared source is immutable: receipt cannot select another source to evade dedup.
+Unique physical completion, frozen source and exact replay evidence enforce:
+duplicate returns original result even after later baselines/restart; conflict
+rolls back ALL receipt/event/view/baseline/status changes.
+
+Normal transaction validates begin/ownership/order, inserts raw receipt/hash,
+computes contracted deltas, advances baseline, appends immutable normalized event
+with enough fields/status for deterministic view replay, and updates views together.
+Index turn/completion and session/source baseline: no full journal scan per receipt.
+Physical sequence and source sample sequence, not command arrival, establish order.
+Late/out-of-order samples are retained Unprojectable without moving baseline or
+charging. Serialized same-session prompts cannot advance while settlement pending.
+
+Cumulative baseline needs exact session-lifetime/contract and exclusive ownership.
+Cross-opening/run continuity imports a proven predecessor receipt/baseline plus
+exclusive handoff fence; provider id or recipe equality alone is insufficient.
+Fresh zero is valid only if source contract proves an empty session. Loaded or
+unproved continuity starts with unattributed baseline, never historical task charge.
+Missing sample followed by larger sample may prove an interval delta only when
+contract/ownership justify it; numeric recovery does not heal turn/attribution
+gaps. Decline/contract change records coverage failure without negative delta or
+silent reset. Two tasks reusing the same provider id cannot share a baseline by
+string equality. Unknown sources never normalize under a guessed contract.
+
+Choose fixed eight-byte unsigned big-endian blobs on disk for all new u64 values;
+checked Rust arithmetic only, no SQLite SUM/additions/REAL for new totals. New
+daemon DTO counters use decimal strings with strict u64 decoding; CLI/UI retain
+exact digits (including >2^53), never JavaScript floating-point coercion.
+If normalization or an aggregate exceeds u64, ACCEPT the immutable raw receipt
+as Unprojectable with explicit error/coverage event in the same transaction,
+preserving previous numeric totals and baseline. No partial charge. Exact replay
+adds zero; conflicting replay still rolls back everything. Block further spending
+where required; expose known prefix plus unprojected evidence, not complete total.
+This chooses explicit u64 overflow status, not an unannounced wider aggregate.
+Registry aggregate overflow across attempts similarly retains imported normalized
+evidence/status and projection cursor atomically while preserving affected prior
+numeric aggregates; recovery/rebuild cannot conceal it or truncate the query.
+
+Authority tables are never reset as views. Rebuild replays immutable normalized
+events twice identically, without recomputing deltas, changing baselines, or
+creating new receipts/charges. Status/error events retain the unprojected evidence
+reference, so rebuild preserves overflow and coverage failures.
+
+Task projection, migration and money
+Run DB transaction is authoritative; registry is eventual. sync_usage reads all
+registry buckets/coverage/cursor in one transaction, pages normalized run events
+under unique exact WorkItemAttemptBound, and CAS updates all state/cursor together.
+Zero CAS rows means conflict/retry, not success. Capture target run prefix and sync
+through it; report reached prefix/lag. Task totals have per-attempt prefixes or a
+coherent registry snapshot, not one universal live-run cursor. Sweep terminal,
+failed, superseded and archived-task attempts too; >256-event catch-up stays
+bounded. Durable gaps are separate from transient projection lag.
+
+Task-triggered auxiliary work uses its own durable turn but includes parent task
+binding in task totals exactly once. Unrelated auxiliary work has separate scope;
+unknown attribution is visible and prevents complete task-only claims. Processing
+window totals and attributable task-only totals have separate labels/coverage.
+Do not duplicate a parent charge when displaying auxiliary records.
+
+Keep old TokensConsumed bytes/meaning/decoding/hash unchanged. Add events/schema,
+side tables and query DTOs AFTER T25 lands; allocate migration number then.
+Disjoint legacy and new projections: do not seed new totals from legacy attempt
+totals then replay legacy events again. Legacy counts stay uncertain historical
+observations. Golden fixtures cover old events and hashed requirement/origin/config
+structures. Update core run_state/run_report, runs/views, work_items, daemon task
+queries and actual CLI/UI; route all NEW accounting away from old i64/f64 sums.
+
+Money has separate observation kind/source order/baseline, currency and coverage.
+Preserve raw amount and numeric precision; finite nonnegative f64 is not exact
+fixed-point billing. No currency mixing/USD guess/model price guess. UsageUpdate
+cost is not assigned to a prompt without source window proof; occupancy never
+becomes spend or quota. Price-unknown does not make valid tokens unknown.
+Archetype estimates use compatible extent/coverage; remaining subscription-window
+scheduling remains its separate open requirement.
+
+Ordered stages and independent executable oracles
+A. BEFORE production changes, actual mock ACP subprocess emits PromptResponse
+usage through production daemon persistent-task Start/initial+feedback; literal
+100/300/50 must expose existing failure to reach 450. Independent cumulative
+100/400/450 contract oracle also expects 450. No copied accumulation helper or
+vacuous monotonic-only test. Freeze types/contracts and prototype actual sdk_v1
+predecode capture/correlation with split/coalesced lines, string ids, interleaved
+callbacks/notifications, duplicate keys/ids, malformed fields, batches/caps/EOF.
+B. Durable turn + final enqueue fence + independent settlement. Hold begin/storage
+or connection readiness, revoke Stop/ownership, release, assert ZERO prompt frames
+on real child stdin. Hold receipt storage beyond close wire timeout; child emits
+cancelled response with usage, drop public waiter/close IO, release storage: exactly
+one durable receipt/charge, or explicitly retained pending failure and no next
+prompt. Include simultaneous cancel/response, malformed stopReason valid usage,
+error response, lost broadcast, panic and unmatched begun turn after cold restart.
+C. Storage/compatibility: exact replay after later turns/restart zero; conflicting
+replay ALL-state unchanged; forged generic authority event and fresh-source replay
+refused. Load missing/trusted baseline, exclusive handoff, same provider id/two
+tasks, out-of-order sample, missing interval, decline/source change; both 450 laws.
+Single counters >i64::MAX/u32::MAX; aggregate-only overflow across turns/attempts/
+cache/thought commits raw Unprojectable and preserves previous totals/baselines.
+Rebuild twice then restart/replay; compare fixed receipts/events/rows/status.
+D. Real daemon task ledger across superseded attempts and cold suspend/wake,
+registry reopen, repeated/delayed catch-up, >256 events with boundary charges,
+CAS conflict and target-prefix lag; exact >2^53 serialization AND actual display
+readback, auxiliary conservation, occupancy-only, Unknown source and non-USD cost.
+Inspect beginnings/raw receipts/baselines/coverage/events/views/attempt/task totals.
+E. Launch identified supported REAL provider artifact/dependency closure and
+capture its actual responses through production daemon to ledger. Source-supported
+window semantics and observed response proof are required. Missing credentials,
+omitted provider reports or cancellation guarantees leave that gate/coverage open;
+mock identity injection never substitutes vendor evidence or proves completeness.
+
+One designated builder lane runs affected/integrated repository gates and commits
+dependency-complete stages with actual check records only AFTER code authorization.
+Minimum independent re-review lenses: protocol/artifact/attribution; enqueue and
+cancel/settlement ownership; storage authority/replay/overflow/migration; outer
+task conservation/display/coverage. Independent 5a then 5b are still required.
+Remaining evidence: capture/correlation prototype, actual provider artifact closure,
+version-specific response capability and interruption/background attribution proof.
+Safe default is explicit Unknown or incomplete measured lower bounds, never a
+fabricated universal contract or a reduced injected-only accounting goal.

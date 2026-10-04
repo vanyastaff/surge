@@ -932,3 +932,16 @@ baselines and deterministic rebuild, plus exact query/UI values and prefix/lag.
 Planner revises read-only; no accounting source authorization, no requirement
 retirement or T25 postbuild count change. Current sdk_v1 readiness seam is also
 being fixed independently inside already accepted T25 actual-effect scope.
+
+Next real ACP accounting consolidated plan accepted for pre-code design by
+independent protocol and storage re-reviews; root read both FULL reports.
+Durable evidence/acp-accounting-revised-plan-20261003.txt and
+evidence/surge-acp-accounting-{protocol,storage}-revised-review-20261003.txt.
+All previous required reshapes addressed: final enqueue after every owned await,
+independent captured receipt settlement, original byte-span capture/correlation,
+frozen single-source authority and generic append rejection, durable overflow
+Unprojectable status, ordered exclusive baselines, replay-only projection rebuild,
+lossless displays and bounded prefix/CAS conservation. Not implementation
+authorization; T25 sole owner/dependency/full gates first. Real mock-daemon450
+and supported actual provider/artifact evidence remain mandatory and unpassed.
+No T25 formal repair count change, no requirement retirement.

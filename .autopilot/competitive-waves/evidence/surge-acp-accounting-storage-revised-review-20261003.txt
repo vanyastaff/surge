@@ -1,0 +1,93 @@
+Independent revised ACP accounting design review — storage / compatibility / outer acceptance
+2026-10-03
+Verdict: ACCEPTABLE as a NEXT-dependency design. No unresolved storage design blocker found.
+
+Reviewed FULL /tmp/surge-acp-accounting-revised-plan-20261003.txt against my prior report
+/tmp/surge-acp-accounting-storage-plan-review-20261003.txt and re-read the current production
+writer append/rebuild, registry usage synchronization/binding/cursor, task aggregate, migration
+version and daemon reconciliation seams. No source/Cargo/git/process mutation, build, formatting,
+tests, subagents or implementation acceptance. Only this /tmp report was written. T25 main keeps
+sole source/runtime/Cargo ownership. No T25 counter/status change, source authorization, requirement
+retirement or independent 5a/5b pass is implied.
+
+Resolution of prior REQUIRED reshapes
+
+1. Authority / dedup: resolved. The revision explicitly rejects ALL new authority variants from
+AppendEvent, AppendBatch and other generic helpers. Prepared source freezes observation identity;
+one authoritative token completion per physical RPC prevents a fresh source occurrence from
+charging it again. Separate observation kinds/projector ownership preserve monetary evidence
+without duplicate token charging. Semantic/wire replay identity excludes delivery timestamps;
+exact replay returns its original result even after baseline advancement/restart, and conflicting
+replay rolls back ALL receipt/event/view/baseline/status changes. This preserves the original
+atomic conflict invariant, rather than weakening it for raw retention.
+
+2. Overflow / unsigned encoding: resolved. Raw evidence plus explicit Unprojectable status/event
+commits atomically while previous totals/baseline remain unchanged. Replay remains idempotent;
+conflicts fully roll back. Registry cross-attempt overflow retains evidence/status/cursor and
+never exposes a truncated exact total. All new u64 values use strict eight-byte blobs, checked
+Rust arithmetic, decimal-string DTOs and exact UI digits. Old INTEGER/REAL/SQL SUM paths remain
+historical and are explicitly excluded from new accounting authority. The chosen u64 overflow
+policy is clearly stated and does not require a new user decision.
+
+3. Baseline order / ownership / rebuild: resolved. Physical/sample sequences, not arrival order,
+control normalization. Late observations remain unprojected; pending settlement prevents another
+same-session prompt. Session continuity requires predecessor evidence and an exclusive handoff
+fence; string-equal provider IDs cannot transfer historical charges between tasks. Loaded unknown
+baselines remain unattributed; interval recovery does not heal turn attribution gaps. Rebuild
+uses immutable normalized events and preserves authority tables/baselines without recomputation
+or charge creation. Task-triggered auxiliaries include the parent binding and enter totals once;
+unrelated and uncertain scopes remain visibly separate.
+
+Other prior issues covered explicitly
+- Registry buckets/coverage/cursor read and update atomically, zero CAS rows mean conflict/retry.
+- Captured target prefixes, per-attempt prefixes/coherent registry snapshot, visible lag and durable
+  gaps are distinct; all attempt states continue catch-up, including superseded/archived history.
+- Legacy/new projections are disjoint. No seeding new totals from old aggregates plus replay;
+  old event meaning/bytes/hash and hashed inputs remain stable, with goldens and additive migration
+  numbering after T25 landing.
+- Pricing, money precision/currency, token completeness, processing-window attribution and quota
+  remain separate. Auxiliary records do not create a second parent charge.
+- Outer RED uses actual mock subprocess responses through daemon persistent-task Start; literal
+  100/300/50 and cumulative 100/400/450 independently demand 450. Restart, late receipts, page
+  boundaries, duplicate/conflict, CAS lag, >2^53 display, overflow, missing/cancelled/unknown data,
+  forged authority events and real adapter proof are required. Existing synthetic budget events
+  and vacuous monotonic bridge assertions cannot substitute for these gates.
+
+Implementation details that must preserve the accepted contract (not new plan blockers)
+A. Per-field omission/malformed handling must keep independent field coverage and invalidate only
+   the affected cumulative baseline as justified by the source contract. Neither a valid total
+   nor valid input/output may manufacture absent cache/thought data. A larger later sample can
+   establish only the contract-proven interval and ownership, never erase durable attribution gaps.
+B. Normalized events must carry immutable error/receipt identity and enough state for deterministic
+   replay. Run and registry overflow prefixes/status must remain sticky until an explicit supported
+   projection recovery; subsequent pages must not silently clear an earlier overflow merely because
+   the latest delta fits. At registry scope retain imported evidence even where a task sum overflows.
+C. Pending captured receipts are session/bridge-owned independently of callers and IO. Host death
+   before durability honestly produces a begun gap; do not treat in-memory captured evidence as a
+   durable exactly-once proof. This limitation is acknowledged by the revision and needs the outer
+   crash/close acceptance evidence already specified.
+D. Target-prefix catch-up must not hold an unbounded registry transaction while awaiting a live
+   writer. Use bounded pages with exact snapshot/CAS semantics; report the captured prefix and
+   future appends separately. This follows the revision's bounded eventual projection contract.
+
+Current primary source evidence rechecked
+Repository: /Users/vanyastafford/Develop/surge
+- crates/surge-persistence/src/runs/writer.rs:190-233 accepts arbitrary generic events today;
+  :364-387 rebuilds views by replaying immutable events.
+- crates/surge-persistence/src/runs/views.rs:648-664 clears projections, currently preserving
+  durable execution snapshots. New accounting authority must remain outside this reset set.
+- crates/surge-persistence/src/work_items.rs:165-182 reads attempts and uses SQL task SUM;
+  :1054-1165 performs legacy paged usage sync, validates the unique exact task binding, uses
+  SQL additions, ignores zero CAS rows and reads pricing independently. The revision replaces
+  these paths for NEW accounting, rather than assuming they already enforce its contract.
+- crates/surge-daemon/src/work_items.rs:803,825-838 invokes bounded catch-up before skipping
+  terminal attempts, a conservation property to preserve.
+- crates/surge-core/src/work_item.rs:55 hashes serialized requirements; :180-208 and :296-314
+  contain the old usage shapes, which cannot be silently reinterpreted as complete new accounting.
+- crates/surge-core/src/migrations/mod.rs:99 currently supports version 14; current T25 changes
+  already occupy it, so the next event/migration version must be allocated after landing.
+
+The consolidated design is acceptable to proceed to its authorized implementation lane only
+when root separately authorizes that next dependency. Actual raw correlation feasibility and
+provider artifact/version/response proof remain executable gates, not satisfied design facts.
+No implementation or provider acceptance is inferred from this review.

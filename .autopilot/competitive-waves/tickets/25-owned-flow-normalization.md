@@ -397,3 +397,17 @@ Surge-owned readiness wait. Author acknowledged actual readiness-barrier RED
 then final-check-after-readiness fix, preserving typed HostEffectRefused/owner.
 Previous fourACP tests cannot close this newly inspected physical boundary.
 This is initial build correctness, not postbuild5a repair or count reset (0/3).
+
+Runtime first implementation build50438 terminal101 is a compiler setup failure
+(close future captured self while inner was borrowed) plus two unused warnings,
+not behavioral GREEN. Author corrected it;95591 terminal0 runtime ownership
+outer PASS. Explicit terminal barrier rerun44473 terminal0 PASS confirms actual
+child reaping after runtime destruction and independent reacquisition of the
+original accepted launch guard. Root read runtime-ownership-barrier-green.log.
+Tiny fallback cleanup correction is subsequent source; full rerun still required.
+HostRuntime guards now implemented in CLI/daemon/UI; CLI+daemon check95876
+was live at this checkpoint. Native UI, faults/panic/Taken races/helper/cold/
+descendant/native Windows and integrated gates remain unproved. Initial0/3.
+Root inspected tracker join/panic scope implementation and requested conformity
+with accepted no-mutex-across-join and protected postspawn worker/fallback scopes.
+These are initial implementation observations, not formal5a/5b verdicts.

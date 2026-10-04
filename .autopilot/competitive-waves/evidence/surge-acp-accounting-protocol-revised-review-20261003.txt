@@ -1,0 +1,94 @@
+Independent protocol/cancellation re-review — 2026-10-03
+Verdict: ACCEPTABLE as the next-dependency PRE-CODE design.
+
+Scope: Read the full consolidated /tmp/surge-acp-accounting-revised-plan-20261003.txt,
+compared it against every finding in my prior protocol report, and re-read current
+primary code listed below. No source/Cargo/git/build/format/test/process mutations,
+subagents, or implementation checks. Only this /tmp report was written. This is
+not implementation acceptance, T25 repair or source authorization. Main/T25 retains
+sole source/runtime/Cargo ownership; counters are unchanged and no requirement
+is retired. No consequential user design fork is needed.
+
+Prior findings resolved
+
+1. Admission ordering: RESOLVED.
+The revised Exact initiation boundary explicitly orders durable begin, readiness
+and any capacity/correlation waits before the session-retained HostEffectFence
+check, then synchronous send_request with no intervening await. It explicitly
+preserves existing setup/tool/spawn fences and makes post-begin refusal a known
+NotDispatched settlement rather than replay permission. The delayed-begin and
+readiness Stop/revocation oracle checks zero physical prompt frames. This addresses
+the draft's misleading after-existing-admission phrasing.
+Primary corroboration: current sdk_v1.rs:207-213 awaits connection before SDK
+send_request; installed SDK 2.2.0 jsonrpc.rs:4088 onward assigns a string UUID,
+registers a pending reply and queues at send_request call time. The revised plan
+uses that actual initiating seam, not block_task's first poll. Current worker.rs
+still has outer admitted(prompt(...)); this review does not claim that current
+source has implemented the revised design or settle active T25 acceptance.
+
+2. Cancellation/close ownership: RESOLVED.
+The revised state machine transfers bounded raw receipts synchronously into an
+independent settlement owner before SDK forwarding or backpressure awaits.
+Settlement is independent of public oneshot, prompt task, biased cancellation
+select and provider IO. It separates wire_done and accounting_done, retains pending
+receipts on close timeout, blocks additional session prompts after persistence
+failure, and requires terminal task fencing to account for pending/gap state.
+It explicitly allows unavoidable host-death-before-durable-capture gaps instead
+of advertising exactly-once capture across them. The delayed receipt-storage /close
+wire-timeout oracle covers the original loss window.
+Primary corroboration: current lifecycle.rs:165-171 can drop send_message_impl
+when cancel wins; close():245-282 stops IO after a 500 ms wire budget. SDK block_task
+(jsonrpc.rs:5965-5999) acknowledges response routing before typed conversion and
+return. The design correctly avoids equating either completion with durable Surge
+settlement. Pending ownership must survive removal of a session from the active
+map; the revised requirement that settlement be independent of provider IO and
+remain owned through close is sufficient to require that implementation behavior.
+
+3. Raw transport and correlation: RESOLVED.
+The revision names actual sdk_v1/transport.rs and captures approved BYTE SPANS
+before serde_json::from_slice. It preserves current caps and single-message/batch
+rejection. It reserves mapping capacity before final admission, reads the public
+SentRequest::id synchronously before yielding, and verifies the outbound frame
+before emission. Unknown/old/directional IDs, duplicate replies and evicted
+tombstones cannot manufacture turns. Strict duplicate-key, integer syntax/range,
+null/missing, EOF and oversized-message rules close the prior raw-evidence ambiguity.
+It excludes arbitrary _meta/prompt/tool/error bodies and explicitly distinguishes
+malformed typed stopReason from the validity of raw usage.
+Primary corroboration: current transport.rs wraps Channel::duplex, caps incoming
+lines, waits on queued-frame capacity, then deserializes raw frames. That is the
+place the prototype must move capture ahead of the existing backpressure await.
+SDK SentRequest::id is public (jsonrpc.rs:5720); generic SDK batch capability does
+not authorize silently broadening Surge's adapter protocol. The revised prototype
+requires the relevant framing and correlation adversaries.
+
+4. Artifact and processing-window attribution: RESOLVED.
+The revision freezes entrypoint plus usage-producing dependency/runtime closure,
+records what each digest covers, treats initialize agentInfo as self-report, and
+falls back to Unknown on unproved continuity. It separates observed processing
+windows from attributable task-only totals and complete vendor billing. Real
+provider closure/response evidence stays an explicit gate; injected identity or
+mock success cannot substitute for it.
+Primary corroboration: installed schema 1.9.1 agent.rs:3121-3247 still mixes turn
+and session descriptions and erases malformed optional usage with DefaultOnError.
+Installed Claude 0.23.1 acp-agent.js:338-388 accumulates background results before
+returning usage, omits usage on cancellation and throws on certain errors. Those
+sources justify the safe contract boundaries; they do not prove the artifact
+Surge actually launched. Unsupported Codex source claims remain unverified rather
+than being promoted to tested semantics.
+
+5. Auxiliary/readonly coverage: RESOLVED.
+The consolidated plan inventories all bridge and legacy pool/connection entrypoints,
+requires durable auxiliary turns, includes task-triggered auxiliary totals once
+with parent binding, separates unrelated/unknown attribution, and prevents complete
+task-only claims while coverage is excluded. Readonly behavior does not exempt
+provider token spend. Occupancy, monetary precision/currency and quota remain
+separate projections.
+
+No unresolved protocol design defect found in the FULL consolidated plan.
+Acceptance here means the ordering/ownership/data contracts are suitable to guide
+implementation. It does not mean the capture prototype, race oracles, real daemon
+ledger, artifact closure, provider version/source capability, interruption guarantees,
+or actual display checks have passed. Preserve stages A-E and independent 5a/5b.
+The next builder must implement the specified settlement ownership rather than
+placing receipt persistence inside the still-cancellable prompt future. Until
+real supported-provider stage E evidence exists, that acceptance gate remains open.
