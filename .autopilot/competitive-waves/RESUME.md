@@ -1,3 +1,19 @@
+# Authoritative full strict GREEN before wake implementation 2026-10-04
+
+Author39737 terminal0 fullworkspace/allfeatures/alltargets-Dwarnings1m52s; root
+readcompletedrawlog. Existingupstream block0.1.6 futureincompatibility advisory
+retained; no source lintsuppression. This gate is BEFORE new wake/lease changes,
+notfinalfreeze. Main nowprepares actual blocked-clock publicStorage/recorder actor
+Drop/cancelledclose/fullqueue contentionRED with real cleanup before assertion.
+NewworkerReady API absent inbaseline: compilefailure is notbehaviorRED; actual
+33168 Attention RED alreadyanchors statebehavior. Actual Ready/newerStop barrier
+comes onceprepared seam exists BEFORE statewiring, as plan supplement requires.
+
+Main FULLread73a102+e97a123+independentdaa266 and has boundedsourceauthorization
+only. Allsource/process remains main-owned. B82 independentprecode rereviewactive,
+sourceheld. Fullgoal/native/wholeproductivecold/malformed/fullspec5a→5b remainopen;
+formalinitial0/3 unchanged. Earliercheckpoint entries supersededwherecontradictory.
+
 # Authoritative bounded wake implementation authorization 2026-10-04
 
 Root FULLread independent finalreportdaa266 (SINGLE combinedcritic/security reviewer),
