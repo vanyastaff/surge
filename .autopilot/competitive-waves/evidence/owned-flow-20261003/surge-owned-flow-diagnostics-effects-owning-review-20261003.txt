@@ -1,0 +1,149 @@
+T25 opaque diagnostics + effect fences: owning maintainer pre-code re-review
+2026-10-03. Overall verdict: RESHAPE NEEDED for the effect companion seam.
+The revised opaque diagnostic design is ACCEPTABLE as specified below.
+Initial-author design amendment only; T25 post-build repair stays 0/3.
+
+Reviewed /tmp/surge-owned-flow-diagnostics-effects-plan-20261003.txt against
+the previous owning report and actual MCP connection/registry/error/cleanup,
+observer, orchestrator writer observer/engine/work_items/run_task, persistence
+owned_flow/launch and ACP facade/acp_bridge/worker/lifecycle source. No behavior
+edits, Cargo/build/process changes, commits or implementation acceptance.
+
+A. Diagnostics: ACCEPTABLE pre-code design
+
+Automatic all-connection opaque external diagnostic fields eliminate the literal
+matching, escaping, overlapping/short/newline values and inherited-env snapshot
+problems. Ownership is correct in surge-mcp. Existing core transport types and
+configuration()/configured_servers() remain exact runtime APIs; they must not
+be formatted or journaled by protected orchestration. No ACP sibling helper
+should be widened or imported: the old heuristic remains a separate public
+compatibility helper and is not this boundary.
+
+The metadata-only predicate belongs in surge-mcp as a small dependency-free
+helper. CLI/daemon/UI already depend on it and own their subscribers. A TRUE
+global Registry filtering layer over every sink, AND-composed with EnvFilter,
+rejecting both exact rmcp/process_wrap root targets and their :: descendants,
+addresses dependency service tasks spawned outside a scoped dispatcher.
+Do not implement only a per-fmt filter if another output layer exists. Reject
+spans as well as events, and do not inspect/render field values to decide.
+Initialization precedes application effects and host tasks; a failure to install
+the required subscriber must not silently leave a previously installed unsafe
+subscriber active. Document the application guarantee and downstream-library
+subscriber requirement exactly as proposed. EnvFilter never selects the
+mandatory predicate out. Inventory future custom tracing targets when the
+transport dependencies change; target-prefix tests include near misses such as
+rmcp_extra and exact namespace roots.
+
+4 KiB raw drain buffer, saturating record counts, no rendered raw prefix, at
+most 500 fixed-size records and one final suppression category establish actual
+memory/file/output bounds. No UTF-8 decode is necessary. CRLF delimiter state
+must avoid duplicate opaque records and correctly finish a nonempty EOF record.
+An IO failure is a fixed reason, not its Display prose; it cannot stop draining
+without leaving teardown responsible for pipe/process settlement. The task
+retains its own automatic policy across reconnect. If cancellation stops the
+drain before pipe EOF, actual cleanup must already own termination/reaping and
+must not assert stderr completion as process containment proof.
+
+Opaque stored StartFailed/Service/Transport/observer/cleanup/worker-join strings
+before public Error construction satisfy derived Debug, Display and sources:
+never preserve raw source or panic payload alongside the fixed code. Sanitizing
+is_error=true inside the connection AND registry must clear every content,
+structured-content/metadata/extension field that can retain child diagnostic
+bytes, then preserve true and one fixed text block. Direct connection callers
+must get that same sanitized envelope. Non-error catalog/schema/functional
+output must stay exact; the explicit malicious-success-payload limitation is a
+sound product distinction, not a claim that literal masking guarantees secrecy.
+Public configured identity fields are not copied from diagnostic prose.
+
+The actual-child/private physical-transport oracle, global TRACE capture before
+Tokio tasks, escaped and raw sentinel checks, ordinary successful-output fidelity
+and real verbose host-process smoke are appropriate. Required host-entrypoint
+source wiring must also be inspected for all CLI/daemon/UI sinks. MacOS evidence
+must not stand in for Windows native runtime acceptance. No observed passing
+behavior is claimed by this design verdict.
+
+B. Effect companion seam: RESHAPE NEEDED
+
+Retained real WorkItemLaunchClaim and authenticated same-run inputs are correct
+domain authority. Persistence owns immutable association/token/control rules;
+orchestrator owns the host adapters; surge-mcp/ACP own their physical transport
+boundaries and should receive injected host callbacks, never persistence types
+or SQL dependencies. Legacy default Ok for MCP before_effect is compatible
+provided authenticated owned Flow construction ALWAYS supplies the guard.
+Cleanup/close/kill/reap remain unconditionally callable after Stop; safe refusal
+must not turn cleanup into an execution permission request.
+
+OF-DIAG-OWN-01: An outer private BridgeFacade decorator cannot implement the
+proposed last check before physical provider effects. Actual AcpBridge::
+open_session waits on open_slots then awaits command-channel enqueue; the
+bridge lifecycle receives it later and launches an opening task. send_message
+also enqueues and worker.rs:945 issues connection.prompt later. Control can
+change after the facade check while a slot/channel/worker is blocked. If its
+caller is canceled after enqueue, retaining a claim only in the outer future/
+decorator does not prove the queued opening/prompt retains that guard until its
+worker finishes. The proposed oracle parking before delegated facade call
+would miss these actual post-validation queue boundaries.
+
+Required refinement: convey a nonserializable host effect-guard capability to
+the ACP worker/session/queued operation so it holds the same claim Arc, and
+invoke it at actual child spawn, prompt dispatch and advancing permission
+response boundaries after queue waits. The injected trait belongs to ACP and
+has no persistence dependency; orchestrator implements it with the store.
+The public BridgeFacade trait can remain unchanged, but the lower runtime API
+must carry authority somewhere appropriate. Alternatively specify a proven
+control/effect linearization permit with a worker-owned lifetime. A mere
+decorator or cancellation token checked only before enqueue is insufficient.
+State the admitted in-flight effect ordering: an effect authorized at the last
+fence may complete as Stop races afterward, and cleanup settles it. Do not
+promise impossibly atomic SQLite validation plus arbitrary provider write.
+
+OF-DIAG-OWN-02: MCP before_child validation followed by McpWriterObserver::
+before_child's awaited append_event is another validation-to-spawn scheduling
+gap. Invoke the final effect check after durable writer intent recording and
+immediately before spawn; the orphan intent on refusal is harmless authority
+and must not be mislabeled as an established child. child_started likewise
+awaits observation persistence after its validation: recheck before rmcp serve
+initialization writes. Health monitoring directly calls rs.list_tools(None)
+and bypasses public list_tools/call_tool, so it too needs before_effect. All
+restart and catalog paths use the same check. If child_started refuses after
+spawn, ensure actual owned child cleanup is awaited/settled; transport Drop
+alone is not the host containment confirmation.
+
+OF-DIAG-OWN-03: State a coherent store read/validation contract for the final
+fence. Draft validate_owned_flow_effect currently obtains attempt via
+validate_claim on one connection, then reads intent/control on another and
+returns using the earlier attempt. Do not read unrelated snapshots and call
+that a current predicate. Validate claim/token/association, exact active attempt
+state, latest control and cleanup fence together in a short consistent SQL
+snapshot, with the real held lock verified; no await/provider work in it.
+ContinueReserved requires the real current generation, retained nonterminal
+journal, exact confirmed fence and no Attention/Terminal substitute. The
+initial Pending permission and acknowledged Started effect permission remain
+distinct. Startup ACK must follow actual unique journal+private-manifest
+validation; public manifest equality by itself is not that proof. Cold recovery
+rechecks actual journal before minting its run effect guard. Existing engine
+prepare_initial_run calls validate_resume before ACK, so reuse that real checker
+rather than manufacture an empty-row/signature stand-in.
+
+Additional fidelity refinement: current ACP reply_to_tool is internal bookkeeping
+(acp_bridge.rs documents ACP v1 has no wire tool-result RPC). Do not claim it
+is a current physical provider effect. Permission approval advances the actual
+parked callback; denial/cancel or internal bookkeeping needed to settle an
+already stopped operation should remain possible as cleanup. Classify which
+responses truly grant execution rather than mechanically fencing every reply.
+The decorator delegates legacy_stage_event_adapter, subscribe and state without
+inventing a new truth value; real sessions still cannot enable the legacy seam.
+
+Required amended acceptance adds barriers inside the actual ACP worker after
+enqueue/open-slot waits and inside MCP after awaited observation intent but
+before physical spawn/init/call/health probe. Stop/archive changes through real
+SQL then release and demonstrate zero new raw effects. Cancel the awaiter with
+queued worker work and prove the real retained guard lasts until that work is
+refused or settled. Test exact latest control snapshot and missing/duplicate/
+foreign startup journal separately. No public bool or stale stage check may
+substitute for these oracles.
+
+Disposition: diagnostic behavior can be authorized independently once the
+security reviewer agrees. The combined effects design needs the three concrete
+refinements above before an ACCEPTABLE overall verdict. This is a pre-code
+design correction, not a T25 repair dispatch or unit completion claim.

@@ -160,3 +160,35 @@ preserving exact physical transport and functional non-error tool results.
 No diagnostic behavior writes preceded review or are authorized by the incomplete
 proposal; the author is reshaping the plan while independent owner/endpoint
 tests continue. This is initial-author design work; formal repair count is 0/3.
+
+Expanded locator outer oracle: session 46453 terminated exit 0, six tests
+passed in owned-flow-outer-fourth.log. Root read the test and terminal log: the
+real daemon reaches terminal history, then source deletion and invalid current
+configuration still replay the exact original receipt; changed prompt under the
+same operation conflicts, exactly one startup manifest and one retained attempt
+are asserted. This is same-process replay, not cold recovery/provider restoration.
+The third log retains two test API compiler errors, not behavior RED.
+Coordinator session 94326 ended exit 0, ten tests passed (seven foundations plus
+three preparation/claim/queued-stop laws); two unused test imports were present
+and subsequently removed, so strict/current affected reruns remain required.
+CLI/workspace dev check session 20208 ended exit 0; root read the clean log.
+Actual separate-process ownership/cancel-retention test session 9557 was live at
+this checkpoint and is not counted as terminal/passed here.
+
+Revised diagnostics/effects plan and both focused reports are now retained as
+surge-owned-flow-diagnostics-effects-*.txt in this evidence directory. Both
+lenses ACCEPT the diagnostic component: automatic all-connection opaque text,
+constant-memory bounded stderr drain, safe error/cleanup/is_error fields and
+mandatory application-global rmcp/process_wrap metadata veto across all sinks.
+Owning reviewer explicitly allows its independent authorization after security
+acceptance; root authorizes that scoped initial-build component. Actual spawn
+and functional successful tool data remain exact. This does not accept the
+combined unit or retire any requirement.
+
+Combined effect shape remains RESHAPE NEEDED: facade validation precedes ACP
+open-slot/command queue waits; queued workers must retain and recheck the real
+host guard at actual effects. MCP needs final checks after awaited writer intent
+and before spawn/init plus direct health/reconnect RPCs. Store token/association/
+control rules need a single coherent SQL snapshot. Cleanup and denial/internal
+bookkeeping stay available after Stop. Author is amending those changed sections
+for the same independent reviewers before behavior writes there; T25 stays 0/3.

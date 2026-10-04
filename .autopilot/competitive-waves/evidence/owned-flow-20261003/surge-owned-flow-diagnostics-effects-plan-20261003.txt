@@ -1,0 +1,150 @@
+T25 bounded amendment: opaque MCP diagnostics and exact host effect fences
+Author proposal for owning + independent security pre-code review, 2026-10-03.
+No MCP behavior edits are authorized by this proposal until both accept it.
+
+Decision: use opaque external diagnostic payloads, automatically for ALL Surge
+MCP connections, plus a mandatory application-global dependency logging veto.
+Do not preserve arbitrary child stderr/service/cleanup error prose. Do not add
+a caller private/redact bool, inspect inherited auth, modify spawn transport,
+re-encode functional successful tool output, or certify literal masking as an
+information-flow boundary. Existing credential heuristics remain a separate
+legacy public helper; the protected transport no longer depends on them.
+
+1. Mandatory logging containment
+
+Pinned rmcp1.6.0 has no logging-disable feature. Its ServiceExt spawns service
+tasks internally; an outer future dispatcher scope cannot prove descendant
+containment. Choose the reviewed global-invariant alternative, not scope tricks
+or a source/vendor patch. Add a small surge-mcp diagnostics metadata predicate
+which rejects the entire target namespaces rmcp and process_wrap (exact root
+or root followed by ::). It rejects spans as well as events, before subscriber
+fields are visited. process_wrap instrumentation can format subprocess wrappers;
+its SDK numeric records are also suppressed to prevent a platform-specific gap.
+
+CLI, daemon and UI main install a Registry with this predicate as a GLOBAL
+filter layer, before every formatting/output layer, plus the ordinary EnvFilter.
+The EnvFilter remains useful for Surge levels, but RUST_LOG=trace or
+rmcp=trace cannot bypass this AND-composed mandatory veto. All production
+entrypoints were inventoried: these three initialize tracing; the CLI MCP
+server subcommand shares the CLI subscriber. No additional output layer may
+be installed outside this filtered Registry by these entrypoints. New logging
+outputs must reuse the same global predicate; document this structural rule.
+Safe Surge-owned replacement records preserve bounded public server identity,
+operation/category, retry count, timeout, child PID and exit code when known.
+No external payload fields accompany them.
+
+This is the Surge application's logging invariant, not a promise that a
+downstream consumer choosing an unrelated subscriber cannot expose its own
+dependency events. Library entrypoints document the required logging boundary;
+integration tests install the exact shared mandatory filter with a TRACE
+capture layer as a process-global subscriber BEFORE Tokio runtime/tasks. This
+explicit global placement covers rmcp descendant tasks regardless of dispatcher
+inheritance. A dedicated integration binary isolates the global subscriber
+from other tests; captures are bounded and returned as test-owned observations.
+Test confirms safe Surge records remain visible, actual peer/notification/codec
+payload records do not, with rmcp=trace explicitly enabled. A host-process
+smoke under verbose RUST_LOG proves entrypoint enforcement too.
+
+2. MCP diagnostic origin policy
+
+connection.rs stores only fixed bounded diagnostic categories in McpError and
+CleanupError textual fields BEFORE returning/logging/formatting them. Keep the
+existing typed variants/classifications/health/backoff and numerical facts.
+Observer errors, spawn error, handshake error, service/transport failure,
+shutdown join failure and registry worker join failure get separate static
+reason codes. Do not retain the raw error as a source chain or Debug field.
+Derived public Debug/Display then only see safe strings. Public server/tool
+identity remains public metadata, not copied from external diagnostic text.
+configuration()/configured_servers remain exact runtime transport APIs and
+are not formatted/journaled by the owned path.
+
+The connection recognizes successful RPC envelopes with is_error=true and
+replaces ALL diagnostic content and structured error metadata with one static
+text reason while preserving is_error=true. Registry also enforces this before
+forming its public McpToolResult, so direct connection callers and routing/
+agent hashes cannot accidentally retain diagnostic prose. Ordinary non-error
+tools/list metadata and tools/call functional content remain byte/field-faithful.
+They are product payloads, not opaque diagnostics. No universal promise is made
+that a malicious server cannot deliberately return private inputs as ordinary
+successful product data; tests distinguish successful functional outputs from
+error/diagnostic channels. Their dependency traces are still vetoed.
+
+3. Bounded stderr drain
+
+Replace lines().next_line with a byte drain using a fixed 4KiB input buffer.
+Retain no raw record text, only a saturating byte count, delimiter state and
+record classification. Newline, CRLF, final EOF, invalid UTF8, split multibyte
+values and accepted multiline arguments cannot expose any fragment because no
+raw byte is ever rendered. Emit an opaque category per completed record;
+records larger than 16KiB use a distinct overlong category and are drained to
+delimiter. Huge no-newline stderr remains constant memory and is drained until
+EOF/cancellation. A maximum 500 fixed-size safe records bounds the retained
+public log and tracing rate; further records are drained without publication,
+with one bounded suppression-total record at EOF if useful. No raw prefix,
+lossy decoding, truncation fragment or invalid UTF8 error appears publicly.
+File capture stores these safe records, never raw private diagnostics. Existing
+owner-only file handling is retained; no private redaction literal snapshot is
+persisted, nor any inherited provider environment copied. Reconnect owns the
+same automatic policy. Actual Command::new, ordered args, env_clear + essential
+environment + declared env, cwd, timeout, whitelist and sandbox remain exact.
+
+4. Actual effect-time ownership (bounded companion seam)
+
+Public trait boundary: extend surge-mcp HostWriterObserver with async
+before_effect(server) default Ok for existing non-owned users. This conveys no
+new hydration authority; an owned Flow observer is constructed only by Engine
+with its existing WorkItemStore + retained real WorkItemLaunchClaim + existing
+McpWriterObserver. Its before_child and child_started recheck ownership before
+delegating durable writer records, and before_effect validates immediately
+before tools/list or tools/call RPC after lazy ensure_connected. Initialization
+is already fenced by child_started before rmcp serve. Cleanup remains allowed
+after Stop so provider/child reaping is never blocked by cancellation controls.
+No private snapshot serialized bool selects this observer; Engine chooses it
+only from the authenticated input capability AND actual same-run claim.
+
+Private per-run ACP BridgeFacade decorator retains that same claim Arc and
+store. Immediately before open_session and send_message, it calls
+validate_owned_flow_effect; permission refusals expose safe typed bridge reason
+codes. close_session and cleanup are always delegated. Tool/permission replies
+which can advance provider execution also recheck before forwarding. Session
+state/subscription are read-only and delegated. No public BridgeFacade trait
+change or recipe opening behavior change is required. The raw bridge remains
+inside the host decorator; run-task initial and cold paths use the decorator,
+and run-task stage checks also call this exact store effect validator.
+
+Store effect rules already drafted: real current claim/token/binding, unchanged
+typed accepted Flow graph/hash/workspace and immutable op/intent; started intent
+requires actual unique authenticated startup validation + pending ACK first.
+No control permits Reserved/Launched only. Executing permits Reserved/Launched
+only with exact latest run/item/attempt generation. ContinueReserved permits
+the retained nonterminal run only with the real exact latest generation and
+confirmed cleanup fence; prior Attention/Suspended alone never grants effects.
+SuspendRequested/Suspended/Attention/Terminal or canceled/missing intent refuse.
+Initial Pending remains a separate exact Reserved/no-control launch permission,
+never treated as Started continuation. A successful earlier stage check or
+receipt does not substitute for the last check before the physical write.
+
+5. Independent behavior oracles and platform limits
+
+Tests use a real child recording exact executable/args/env into a private
+test-owned file, then echoing distinct transport sentinels through stderr,
+handshake peer info/instructions, notifications, malformed protocol, JSON-RPC
+errors, is_error text/other/structured fields and cleanup. Include short,
+overlapping, quoted/backslash, Unicode, multiline/CRLF, fragmented writes,
+invalid UTF8, huge no-newline and final EOF records. Check actual public tee,
+TRACE capture, Display/Debug/reason/source, agent error hash inputs, public
+attempt/journal/receipt, and host process logs for raw and escaped sentinels.
+Non-error functional tool output remains exact. Original private capture and
+frozen cold/wake runtime use exact original transports after defaults change.
+
+Effect race oracle parks AFTER stage entry/before actual delegated provider
+open/send or MCP spawn/call. Change real SQL control via Stop/archive where
+legal, then release barrier and assert raw bridge/real child zero new effects.
+Hold same real claim through await cancellation; cleanup reaps actual owned
+processes. Test startup missing/duplicate/foreign manifest independently; Empty
+SQL equality cannot stand in for actual startup journal validation.
+
+MacOS runs these actual tests locally; Windows ordinary ownership tests are
+implemented but native runner acceptance remains OPEN. Sensitive populated MCP
+remains explicit unsupported on Windows, with zero private/spawn effects.
+No tests or implementation acceptance are claimed by this proposal.

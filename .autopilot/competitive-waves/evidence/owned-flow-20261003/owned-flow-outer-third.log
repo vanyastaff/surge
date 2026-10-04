@@ -1,0 +1,27 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error[E0599]: no method named `is_terminal` found for enum `RunState` in the current scope
+  --> crates/surge-daemon/tests/owned_flow_ipc.rs:95:38
+   |
+95 |                     if history.state.is_terminal() { startup=Some(history.startup);break; }
+   |                                      ^^^^^^^^^^^ method not found in `RunState`
+
+error[E0624]: method `history` is private
+   --> crates/surge-daemon/tests/owned_flow_ipc.rs:121:37
+    |
+121 |       assert_eq!(storage.work_items().history(receipt.item,None,10).unwrap().entries.len(),1);
+    |                                       ^^^^^^^ private method
+    |
+   ::: crates/surge-persistence/src/work_items.rs:989:5
+    |
+989 | /     fn history<T: serde::de::DeserializeOwned>(
+990 | |         &self,
+991 | |         conn: &Connection,
+992 | |         item: WorkItemId,
+...   |
+996 | |         limit: u32,
+997 | |     ) -> Result<Vec<T>> {
+    | |_______________________- private method defined here
+
+Some errors have detailed explanations: E0599, E0624.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `surge-daemon` (test "owned_flow_ipc") due to 2 previous errors

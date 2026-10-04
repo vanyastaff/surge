@@ -87,12 +87,15 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-orchestrator/src/engine/stage/verification.rs` | Host-owned verification input and inline report sealing. |
 | `crates/surge-persistence/src/runs/verification.rs` | Transactional normalized verification context and stored-proof inspection. |
 | `crates/surge-core/src/work_item.rs` | Persistent work-item identities, immutable accepted requirements, attempts and typed controls. |
+| `crates/surge-core/src/work_item/origin.rs` | Accepted requirement/Flow origins, exact graph and raw prompt contracts, and domain-separated hashes. |
+| `crates/surge-core/src/work_item/flow_inputs.rs` | Public frozen MCP manifests and opaque private-object references; structural validation does not grant runtime authority. |
 | `crates/surge-core/src/execution_recovery.rs` | Validated provider session identity, opening metadata and recoverable execution contracts. |
 | `crates/surge-core/src/execution_recovery/gate_commit.rs` | Validated human-decision occurrence, response/effect hashes and journal-derived gate commit records. |
 | `crates/surge-acp/src/process_evidence.rs` | Read-only host process identity and writer-liveness evidence, with Linux/macOS implementations. |
 | `crates/surge-acp/src/quota_observation.rs` | Typed subscription quota evidence; distinguishes unsupported probes, unknown availability and actual rate-limit observations. |
 | `crates/surge-persistence/src/work_items.rs` | Registry-owned task history, idempotent reservations, launch fencing and paged cumulative usage. |
 | `crates/surge-persistence/src/work_items/start_preparation.rs` | Exclusive host Start preparation lease, immutable snapshot fences and atomic reservation finalization; private `secure_lock.rs` owns descriptor-checked per-item OS locks. |
+| `crates/surge-persistence/src/work_items/owned_flow/` | Provisional operation and atomic acceptance (`preparation.rs`), stable launch/hydration (`launch.rs`), private objects/authentication (`private_files.rs`, `private_inputs.rs`) and source capture (`source_snapshot.rs`). |
 | `crates/surge-persistence/src/work_items/recipe_capacity.rs` | Registry opening epochs and current exact-recipe exhaustion inspection; newer comparable openings supersede prior evidence. |
 | `crates/surge-orchestrator/src/recipe_admission.rs` | Facade decorator that commits a unique registry opening barrier before provider RPC and checks its returned identity. |
 | `crates/surge-persistence/src/work_items/control.rs` | Generation-fenced task suspension/continuation intents and acknowledgments. |
@@ -101,6 +104,8 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-mcp/src/writer_observer.rs` | Injected host observation boundary for MCP child ownership without ACP/storage dependencies. |
 | `crates/surge-git/src/task_workspace.rs` | Retained task workspace planning and original-owner reconciliation. |
 | `crates/surge-daemon/src/work_items.rs` | Durable task controls, engine admission and restart reconciliation. |
+| `crates/surge-daemon/src/owned_flows.rs` | Ordinary Flow owner submission, preparation and retained-claim handoff to engine admission. |
+| `crates/surge-orchestrator/src/engine/owned_flow.rs` | Typed ordinary Flow request/receipt surface and canonical request normalization before source/configuration resolution. |
 | `crates/surge-cli/src/commands/task.rs` | `surge task` controls routed to the durable daemon owner. |
 | `crates/surge-git/src/checkpoint.rs` | Immutable Git snapshots of stage-boundary working files, preserving the user index and HEAD. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
