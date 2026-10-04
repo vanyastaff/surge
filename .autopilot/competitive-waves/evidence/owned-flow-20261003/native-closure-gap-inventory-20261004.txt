@@ -1,0 +1,295 @@
+T25 native writer-descendant closure: bounded dependency inventory — 2026-10-04
+
+Verdict: ACCEPTABLE as a read-only gap inventory and next dependency map.
+Inventory question ANSWERED; native implementation and runtime acceptance UNRESOLVED.
+No source approval, platform certification, installation or executed test is claimed.
+Full original native C / cold original-owner D requirements remain OPEN; formal T25
+0/3 is unchanged. Refusal/Unsupported negatives cannot replace native positives.
+
+1. Authoritative baseline and current implementation
+Repository: /Users/vanyastafford/Develop/surge. Research used exact local source,
+installed windows0.58 bindings and Apple macOS27 SDK, then official OS sources.
+Accepted authority tuple (all hashes rechecked during this inventory):
+- .autopilot/competitive-waves/evidence/owned-flow-20261003/
+  surge-owned-flow-domain-authority-revised-plan-20261004.txt
+  5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8
+- same directory/surge-owned-flow-domain-stage-a-root-reshape-20261004.txt
+  1944f0f784197d52e3a14759ff4b93864bba0a4112647ba7b443208570d61c54
+- /tmp/surge-owned-flow-no-dispatch-stop-proposal-20261004.txt
+  4c58467e25164064b6f57edf680f651aab50322cf1f5e321aade2234ddb90f33
+Accepted B tuple:
+- /tmp/surge-owned-flow-stage-b-revised-plan-20261004.txt
+  f289f1cb3a28bb2d3ce9785b1709c29db8459258ff22bb38eb28ee9158f87718
+- /tmp/surge-owned-flow-stage-b-routing-id-supplement-20261004.txt
+  3147543a262a688c47bbf8155bd8859e067e3e128bf3c3c4c632e7541960f632
+This report adds dependencies for C/D, not another A/B reshape or acceptance count.
+
+Actual source gaps:
+- crates/surge-acp/src/process_evidence.rs:16,34,61: Linux/macOS identity,
+  process-group liveness and old-boot checks. Windows identity is unavailable.
+  GroupOnly empty correctly remains Unknown. Public legacy CoveredDomain DATA
+  must not act as a backend-issued closure capability under accepted authority.
+- crates/surge-core/src/execution_recovery/process.rs: platform/identity/container/
+  coverage records are descriptors, not continuous membership monitors.
+- crates/surge-acp/src/bridge/worker.rs:341–345: Tokio spawn, kill_on_drop and Unix
+  process_group(0); :688 group/leader cleanup. Neither contains an atomic native
+  membership-at-birth backend. Accepted B sole waiter/profile changes are separate.
+- crates/surge-mcp/src/child_settlement/{mod.rs,worker.rs}: original std Child
+  parcel and retained observer own direct leader cleanup/reaping, not descendants.
+- crates/surge-process/{Cargo.toml,src/lib.rs,src/owner_panic.rs}: present minimal
+  std panic leaf, no native ownership factory. Preserve exact existing
+  install_owner_panic_protection / abort_on_owner_panic functions.
+- Search across crates/.github found no clone3/CLONE_INTO_CGROUP/pidfd-send-signal,
+  CreateJobObject/AssignProcessToJobObject/Job-list native implementation or
+  es_new_client/posix_spawn native implementation. A transport.rs CreateProcessW
+  comment is command-resolution documentation, not a Job backend.
+- Cargo.toml pins libc0.2, nix0.29(signal/fs/user/dir), windows0.58(Foundation only).
+  Installed Windows bindings expose required APIs but current feature closure is
+  insufficient. No dependency/MSRV change was made or compiled here.
+
+2. Small common seam, preserving owning boundaries
+Extend SAME surge-process leaf after bounded native API/soundness review. Process
+leaf may consume pure core DATA, thiserror/tracing and target OS bindings; no Tokio,
+SQLite, ACP, MCP or Git import. Move/reuse existing identity parsing and original
+waiter/retention machinery rather than a second process registry/wait loop.
+Transport adapters remain ACP/MCP; durable authority remains persistence.
+
+Proposed native state shape from accepted foundation:
+PreparedDomainWithoutChild -> HeldNativeChild -> RunningNativeDomain ->
+NativeDomainClosure; constructors private to backend. Each holds the SAME original
+launch registration/reservation identity and actual retained OS object. Native
+closure contains backend-issued observation, original incarnation/boot binding,
+closed admission frontier and terminal membership evidence. No public bool, JSON,
+user-supplied observer or fresh empty object can construct it. DATA deserialization
+cannot mint authority. Legacy ProcessObservation::DirectReaped remains weaker.
+
+Before Birth reserve responsibility capacity/register original launch slot. OS
+success immediately retains original child and domain handles before fallible pipe
+conversion or journal await. Commit binding then revalidate Release immediately
+before exec-release/ResumeThread. Stop before Birth has zero child; Stop after Birth
+but before Release terminates held child without target exec. Failure/cancel/runtime
+loss keeps actual owner plus Unknown debt, never NoEffect from missing receipt.
+One owner waits/reaps; no PID adoption, repeated stale group kill or detached task.
+Frozen admission and native closure are separate from external-effect settlement.
+Native empty may be true while remote service work still prevents Continue.
+
+3. Linux: concrete dependency and evidence
+Official kernel UAPI v6.12 declares CLONE_PIDFD, CLONE_INTO_CGROUP and versioned
+clone_args containing pidfd-output address and target cgroup FD [L1]. Kernel fork
+path pins cgroups and assigns scheduling membership before visibility [L2]. These
+are source contracts, not evidence that this host permits clone3/delegation.
+Cgroup-v2 documentation describes inherited membership, recursive populated status,
+delegation migration permissions and cgroup.kill handling concurrent forks [L3].
+
+Minimal selected backend remains clone3(INTO_CGROUP|PIDFD) into precreated anchored
+private cgroup2, with child syscall-only pre-exec release pipe. No spawn-then-move.
+Retain directory FD/fs+inode/machine/boot identity and root pidfd before publication;
+validate clone_args size/layout, errno ownership and preallocated argv/env lifetimes.
+No allocator, runtime lock or Rust panic/unwind in the post-clone child path.
+Use original pidfd/domain for signaling; actual root wait receipt plus original
+recursive populated=0 and frozen admission permit a private native proof.
+
+Consequential unresolved deployment requirement: delegation alone does not prevent
+an identically privileged target migrating out. Need an actual reviewed manager-
+controlled hierarchy/credentials/mount visibility profile preserving membership,
+without altering accepted target recipe/provider credentials. Hiding a pathname or
+setting GroupOnly is insufficient. Target gets no migration FD/rights to destination
+and common ancestor; no domain deletion/recreation while debt. Denied syscall,
+missing kernel support, lost boundary, replaced directory or unreadable membership
+returns Unsupported before effects or Unknown after effects, never fallback Closed.
+Cold reopen validates ORIGINAL anchored object and frozen authority. Reboot may
+establish original local extinction only with exact machine/boot evidence; it says
+nothing about external effects. Delegated real-Linux runner is required.
+
+4. Windows: smallest productive next native dependency
+Microsoft documents startup JOB_LIST assigning specified Job handles (Windows10 /
+Server2016+) and attribute value lifetime through attribute-list deletion [W1].
+CreateProcessW supports extended startup attributes and a suspended initial thread
+[W2]. Job inheritance covers CreateProcess descendants; breakaway flags and
+Win32_Process.Create are explicit exceptions; general Job completion messages are
+not guaranteed [W3]. Query ActiveProcesses concerns the original Job membership,
+not provider EOF; termination API requests termination and is not itself closure
+[W4,W5].
+
+Next concrete seam: reviewed Windows backend in surge-process, atomic
+CreateProcessW(STARTUPINFOEX/JOB_LIST, CREATE_SUSPENDED), secured original Job,
+no BREAKAWAY_OK/SILENT_BREAKAWAY_OK and no create-then-Assign gap. Own stable
+attribute buffers/Job-list/handle-list through cleanup, mutable UTF16 commandline,
+exact application/ordered args/env/cwd recipe, approved inheritable stdio only.
+Capture both returned process/thread handles immediately on success; never lose
+child on later pipe failure. Recheck Release immediately before ResumeThread.
+Use OwnedHandle RAII; no Job/broker/auth handles inherited by target. Existing
+cmd/bat resolution behavior needs an explicit exact-recipe oracle, not substitution.
+
+D needs retained native responsibility broker holding ORIGINAL Job across daemon
+host death, bound to boot/start identity and private connection incarnation.
+Reconnect capability must refer to that still-existing broker/object. Fresh named
+Job, matching display name or fresh ActiveProcesses=0 is not original closure.
+Broker loss Unknown until original authority independently resolves. Broker setup
+and authentication protocol remain an explicit implementation dependency; no
+service creation/installation occurs or is authorized by this report.
+
+Close admission; TerminateJobObject once as required; collect actual root terminal
+receipt, release retired root/thread resources in sole-owner order, query original
+Job membership to zero and retain Job through durable proof. W4 wording includes
+reference-release effects: test retained exited-process handles and exact disposal
+order rather than assuming zero appears while every handle stays retained.
+Query error/lost Job/failed identity remains Unknown. Completion-port events may
+wake observation; missing event cannot establish closure. Nested parent Jobs must
+be tested on actual runner; unsupported constraints refuse before target execution.
+WMI/service-created work is outside Job inheritance and must create separate
+external Unknown/certified adapter debt. Do not certify arbitrary providers from
+Job-empty alone.
+
+Installed primary bindings:
+/Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/
+ windows-0.58.0/src/Windows/Win32/System/Threading/mod.rs:
+ CreateProcessW442, ResumeThread1619, UpdateProcThreadAttribute2325,
+ PROC_THREAD_ATTRIBUTE_JOB_LIST2713, STARTUPINFOEXW4208.
+ .../System/JobObjects/mod.rs: CreateJobObjectW22, QueryInformationJobObject70,
+ breakaway/kill-on-close constants138–156, accounting structure572.
+Review root-managed Windows features Threading/Security/JobObjects/IO/FileSystem
+against these bindings before source freeze; retain MSRV1.96. No registry editing.
+
+Current-native testing need: .github/workflows/ci.yml DOES run ordinary nextest
+workspace tests on windows-latest (excluding UI), but actual mock/provider ignored
+integration lane is Linux-only and continue-on-error. Release windows-2022 builds
+and version-smokes CLI/daemon. Neither is a genuine Windows Job/held-child/cold-
+broker acceptance result. Add an explicit real native Windows acceptance lane when
+main implements this seam: actual executable subprocesses, nested Job environment,
+original handles, terminal observations and independently counted marker output.
+Cross compilation, ignored/skipped tests and Unsupported outputs are not positives.
+
+5. macOS: available SDK candidate, runtime unavailable/unproved
+Exact local Apple primary headers:
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/SDKSettings.json: macOS27.0 SDK;
+ usr/include/sys/spawn.h:60 START_SUSPENDED;
+ usr/include/EndpointSecurity/ESClient.h:701–827 queue marker/client requirements;
+ ESMessage.h:2695–2795 version, per-event/client sequence fields and callback life.
+These are SDK declarations; runtime OS/API/entitlement availability was NOT probed.
+
+Selected candidate: live ES observer subscribed to NOTIFY_FORK/EXEC/EXIT before
+Birth, posix_spawn START_SUSPENDED with unchanged recipe, audit-token root binding,
+identity-checked Release, continuous full lineage including reparent/setsid.
+Version-check message fields (global_seq_num requires version>=4); copy bounded
+approved identity data or correctly retain/release messages before callback returns.
+Any sequence gap, mute affecting scope, queue overflow, lost client or unavailable
+field invalidates coverage permanently for that occurrence. Bounded memory overflow
+is Unknown with retained responsibility, not dropping events to regain success.
+
+SDK es_sync_client is macOS27+, successful live-client queue marker. It documents
+synchronous syscall event enqueue and asynchronous delivery; client deletion also
+invokes pending sync callbacks. Therefore a deletion-triggered callback is not a
+terminal drain. Require normal marker completion while client live, all tracked
+members terminal, continuity and repeat drain after new forks until stable empty.
+Pre27 complete terminal-drain proof remains unresolved; polling/kqueue/root wait
+cannot silently replace it. ES lineage is observation, not a kill-all container:
+terminate only identity-validated retained members and handle concurrent forks via
+continued monitor/drain. No public numeric-PID authority. A separate macOS gap is
+the exact identity-safe descendant signaling mechanism: an audit-token lookup
+followed by kill(pid) alone has a reuse race and ES does not supply a pidfd. Pin
+the safe termination contract in the native review; natural all-descendant exit
+can prove a real positive, but does not by itself satisfy Stop cleanup behavior.
+
+Normal es_new_client requires ES entitlement and FDA/TCC plus privilege requirements
+(error enum includes not-privileged). SDK27 descendants client removes root/TCC
+requirements but still requires entitlement and only sees true calling-process
+subtree; broker must be ancestor before target creation. Entitlement distribution,
+signing and deployment/minimum OS choice remain open. Existing optional signed ES
+component preference is unanswered, not install/FDA/service permission. Current
+ordinary macOS CI is not an entitled broad-forking positive runner. Need a verified
+entitled native runner, or preserve unavailable truthfully while C/D stay open.
+
+6. Actual acceptance matrix (future tests; none run by this report)
+Each positive invokes actual outer owned launcher/provider/tool path and observes
+independent marker files/process-native objects; injected closure receipts alone
+cannot satisfy. Record OS/kernel/build, object incarnation, accepted recipe hash,
+Birth/Release/frozen frontier and terminal journal prefix. Failure remains debt.
+
+Common all-platform positives:
+P1 exact recipe emits root+child+grandchild markers, then all actually exit;
+   original native evidence closes, durable Continue succeeds once, no duplicate run.
+P2 root exits while descendant writes after root/stdio closure: Continue denied;
+   after real descendant terminal closure, Continue succeeds. No nofork replacement.
+P3 held child Stop before Release: zero target-exec marker, actual child reaped and
+   same domain settles. Pre-Birth Stop yields zero actual child independently.
+P4 post-create pipe/journal failure and runtime/caller drop: actual owner survives,
+   native closure settles original debt once; no capacity-slot disappearance.
+P5 daemon cold restart while descendant live: same original native owner/object is
+   reconnected/revalidated, no new opening/child until original domain terminal.
+
+Linux required independent negatives/positives:
+- fork/setsid/double-fork/reparent survivor remains in original recursive cgroup;
+  normal eventual exit and cgroup.kill terminal both yield genuine positives.
+- authorized migration denied by actual profile; deliberately broken writable
+  boundary invalidates coverage even if root/group/cgroup later appears empty.
+- absent delegation/clone3 denied -> zero exec; replaced directory, lost monitor,
+  boot/machine mismatch or read error -> Unknown. PID reuse cannot signal substitute.
+
+Windows required current-native positives/negatives:
+- Job-list-born suspended child is actually in ORIGINAL Job before ResumeThread;
+  root/grandchild execution and eventual Job-empty/root receipt close genuinely.
+- stop in post-create/pre-resume barrier -> zero execution; successful-create then
+  pipe-conversion failure still owns original process and thread handles.
+- root exit + grandchild surviving closed stdio remains blocked, then true terminal
+  Job membership closes. Independent Windows process/marker oracle checks survivor.
+- CREATE_BREAKAWAY_FROM_JOB attempt cannot create an untracked executing survivor
+  under supported sealed policy; nested parent Job failure remains pre-exec refusal.
+- Win32_Process.Create/service external job remains unresolved even when native Job
+  empty; completed remote operation needs its own exact terminal evidence.
+- kill daemon while same broker/Job survives -> real cold positive; kill broker or
+  substitute fresh same-name empty Job -> Unknown, never cold positive.
+- Query failure, completion message absence, handle leakage and ResumeThread failure
+  must not fabricate closure or release an unowned executing target.
+
+macOS required broad native positives/negatives:
+- actual fork/exec/double-fork/setsid/reparent observed across continuous ES stream;
+  root exits first, last descendant terminal + normal stable drain permits closure.
+- forced sequence gap/overflow/mute/client death invalidates coverage; client
+  deletion sync callback cannot close. Missing entitlement/API -> truthful unavailable.
+- cold owner/observer still original and live gives real positive; replacement
+  observer without pre-Birth coverage is Unknown. No polling snapshot upgrade.
+
+7. Next dependency order and unresolved decisions
+Keep accepted A/B intact. First bounded C review artifact should pin common sealed
+native ownership API plus Windows atomic birth/Release, handle/FFI lifetimes and
+broker incarnation/retention protocol, with exact Windows executable test fixtures
+and non-skipping native runner job. Windows is a useful next concrete positive
+because API/bindings/Windows CI already exist, while actual backend/tests do not.
+Then main can implement and run genuine RED-first outer Windows acceptance after
+its native source/soundness dependency review; this inventory itself grants none.
+In parallel design evidence (not runtime work here), freeze Linux preserved-migration
+profile and macOS entitled deployment/drain capability. Do not narrow full C/D to
+Windows only, group cleanup, terminal-negative coverage or benign nofork fixtures.
+
+Independent minimum review lenses: authority/frozen-original frontier and cold
+identity; unsafe/ABI/handle/FD ownership and syscall-only child path; native OS
+membership/escape scope; actual acceptance oracle/counterfactuals and CI capability.
+Genuine unresolved dependencies: Windows original broker lifecycle/authentication
+and actual nested-Job runner behavior; Linux enforced delegation profile; macOS
+entitled distribution/minimum runtime, identity-safe descendant signaling and
+verified observer ownership; external
+adapter coverage for unmediated remote/service work. No requirement is retired.
+
+Primary sources (accessed 2026-10-04; local source stronger for installed versions)
+[L1] Linux v6.12 UAPI sched.h:
+https://raw.githubusercontent.com/torvalds/linux/v6.12/include/uapi/linux/sched.h
+[L2] Linux v6.12 kernel/fork.c, cgroup_can_fork/sched_cgroup_fork/pidfd preparation:
+https://raw.githubusercontent.com/torvalds/linux/v6.12/kernel/fork.c
+[L3] Linux kernel cgroup-v2 official documentation:
+https://docs.kernel.org/admin-guide/cgroup-v2.html
+[W1] Microsoft startup attributes (official source retains JOB_LIST table):
+https://raw.githubusercontent.com/MicrosoftDocs/sdk-api/refs/heads/docs/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute.md
+[W2] Microsoft CreateProcessW:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw
+[W3] Microsoft Job Objects (official raw source includes inheritance exceptions):
+https://raw.githubusercontent.com/MicrosoftDocs/win32/refs/heads/docs/desktop-src/ProcThread/job-objects.md
+[W4] Microsoft JOBOBJECT_BASIC_ACCOUNTING_INFORMATION:
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information
+[W5] Microsoft TerminateJobObject:
+https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-terminatejobobject
+Apple official local SDK headers cited in section5; public framework entry:
+https://developer.apple.com/documentation/endpointsecurity
+
+Research outcome: ANSWERED for current gap and minimum dependency inventory;
+UNRESOLVED for all actual native closure and original-owner cold acceptance.

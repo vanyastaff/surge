@@ -1,3 +1,27 @@
+# Integrated compilation and native dependency inventory 2026-10-04
+
+Author4378 terminal0 cleancargo check daemon+CLI via newreceipt/schema/owner/
+delivery/typedentry/neutralleaf; rawfullreadroot and retained. Not strictfullworkspace
+orUI gate. Fmt3177 live atauthorreceipt, authoralone polls; coldassociationtest new
+log stillbuildoutput atrootread, noGREEN inferred from filename. Attentionguard now
+BEFOREsnapshot and ALLautomaticblindpark/worktree actions; rootactualsourceconfirmed.
+Originalstartup/workspace/artifact check added, workerreuses anchor; rootnoticed
+classify invokes wholejournal+artifactfilesystem within registryIMMEDIATETX and
+notifiedauthor: preflightunderoriginalguard BEFOREBEGIN, compare exactcaptured
+immutabletuple insideTX, no unboundedFS/journalIO in shortSQL. Actualblockedstartup
+preflight+secondconnectionStop integrationoracle remains required.
+
+Root FULLread nativeinventoryccb1ecc7 all295lines: currentC/D no nativebackend,
+Windows atomicJob-list/suspendedchild+retainedoriginalbroker concrete nextseam;
+Linux migration-proof profile and macOS entitlement/live27drain/safe descendant
+signal unresolved. Read-only inventory ANSWERED, nativeacceptance OPEN. Architect
+now investigates macOS identity-safeSignal feasible primaryAPIs; independentreviewer
+checks boundedWindows nativegap/oracles. No native source/unsafeAPI/install/runtime
+permission granted. All nativeplatformpositives remain required, no Unsupported
+substitute. Main sole source/build/processowner; initialformal0/3, fullcold/malformed/
+sourcefreeze5a→5b stillOPEN. Previous goalturn progressed sourceconfirmation and
+Readyprimitivegate; currentturn adds integratedcompile and new source/TXcorrection.
+
 # Authoritative Ready primitive GREEN and current source checkpoint 2026-10-04
 
 Author44885 terminal101:firstReadylog fixture compile E0609/E0061. Author8403

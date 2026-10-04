@@ -1,0 +1,13 @@
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Finished `dev` profile [unoptimized] target(s) in 34.47s
