@@ -1,0 +1,122 @@
+MCP runtime-independent settlement: owning systems research (2026-10-03)
+
+Scope: read-only feasibility/source review; no implementation, Cargo, formatting,
+process mutation, or acceptance pass. T25 postbuild remains 0/3. Exact plan at
+/tmp/surge-owned-flow-runtime-settlement-plan-20261003.txt was absent at each
+inspection. Accordingly this is RESEARCH ONLY, not ACCEPTABLE/RESHAPE/BLOCKED
+against an exact plan. Preliminary design was supplied in task message.
+
+Source findings (Cargo.lock pins Tokio 1.50.0, rmcp 1.6.0, process-wrap 9.1.0):
+1. surge-mcp connection.rs 751-868 ObservedTransport takes actual child through
+   TokioChildProcess::into_inner, clones observer, then tokio::spawn owns both.
+   Drop outside runtime panics at spawn; runtime shutdown cancels task and drops
+   child/observer without settlement. Ignoring JoinError does not fix ownership.
+2. rmcp src/transport/child_process.rs ChildWithCleanup::drop also tokio::spawns.
+   TokioChildProcess::into_inner removes inner child before transport drops,
+   therefore avoids SDK cleanup spawn and closes stdin/stdout synchronously.
+   Builder child_process error drops plain wrapper, not ChildWithCleanup. A
+   marker covering actual spawn must consider that pre-transport failure gap.
+3. process-wrap src/tokio/core.rs ChildWrapper: Any+Debug+Send+Sync, synchronous
+   start_kill/try_wait. Raw Child impl calls Tokio equivalents. Tokio 1.50.0
+   process/mod.rs 1247/1413: start_kill delegates kill if child not Done; try_wait
+   delegates platform child, fuses successful exit, disables kill_on_drop.
+   Unix mod.rs 164/170 delegates std Child try_wait/kill. Windows.rs 89/95 does
+   same. These methods require no Tokio context and fit a std worker.
+4. CURRENT Surge launch uses tokio Command.process_group(0) on Unix but passes
+   raw Command to rmcp. It DOES NOT wrap ProcessGroup or JobObject. The result is
+   direct-leader start_kill/try_wait only. Setting PGID does not broadcast kill.
+5. process-wrap ProcessGroupChild start_kill broadcasts SIGKILL by numeric PGID.
+   try_wait invokes waitpid(-pgid,WNOHANG) and caches leader exit; can return
+   inner leader exit while descendants remain. Worse: wait_imp can reap leader,
+   then return Continue on a live same-group child, discarding local leader
+   status before inner.try_wait; subsequent calls can become ECHILD/None forever.
+   wait_imp sees waitable children only; ECHILD does not prove orphan descendants
+   gone. Cached exit does not synchronize inner Tokio Child's fused state.
+6. JobObjectChild try_wait ignores wait_on_job completion result and returns
+   inner.try_wait (leader). Async wait caches leader status BEFORE its job wait;
+   canceling wait then retrying sees cached status and skips job containment.
+   Keep wrapper handle is not by itself a stronger settlement oracle.
+7. MCP observer retains effect_fence Arc; OwnedFlowEffectFence contains
+   WorkItemLaunchClaim; that claim contains Arc secure PreparationLock. Thus
+   retaining actual observer retains actual launch lease, not just an event
+   recorder (RunEventRecorder explicitly does NOT transfer run ownership).
+
+Smallest safe direct-child design:
+- Extract rmcp transport once, close pipes, retain one packet containing boxed
+  child, observer and registration. Runtime-free worker uses std Instant/sleep,
+  child.try_wait and start_kill only. Keep graceful three-second budget optional;
+  drop path kills immediately. Never classify a deadline/error as settled.
+- Spawn std thread BEFORE moving packet, using std channel handoff. Capture only
+  receiver in thread-spawn closure: std Builder::spawn error drops closure, so a
+  closure capturing child would lose it. On spawn failure packet is still caller
+  owned; synchronous cleanup fallback is correct but may block executor/Drop.
+  On channel SendError recover packet; do not drop it. Prefer unbounded channel
+  (send does not block waiting for scheduling); receive failure before packet
+  exists is harmless. Thread must not panic after receipt and release packet.
+- Use catch_unwind around cleanup borrowing an OUTER packet by mutable reference
+  if panic containment required; catching a closure that owns packet is too late,
+  it already unwinds/drops packet. Retry with packet retained or retain it in
+  durable in-process quarantine. Never decrement registration on panic/error.
+  Custom tracing subscribers can panic; avoid panic paths while owner is local.
+- Tokio oneshot sender can notify from std thread; receiver cancellation cannot
+  cancel worker. Explicit close must treat lost ack as failure, never success.
+  Ack must follow successful observed exit and disposal of child+observer lease;
+  otherwise a waiter may report settled while the physical lease is still held.
+- Tracker membership should cover launch interval through settlement, including
+  observation/handshake failure and diagnostic/unowned children. Removing marker
+  automatically during unwind would falsify zero. Keep marker alive on uncertain
+  cleanup. Count zero is meaningful only after admission/spawning quiescence.
+- Do not add ProcessGroup wrapper merely to broaden kill: its try_wait semantics
+  above need a dedicated containment design. No repeated numeric group/PID kills
+  after reaping/identity uncertainty; numeric IDs can be reused. Raw Tokio fused
+  try_wait prevents normal repeated direct-leader kill after observed exit, but
+  external reap/ECHILD must retain uncertainty and never blindly signal forever.
+- Distinguish direct child exit, launch lease release, and writer containment.
+  A surviving descendant must leave durable writer coverage unresolved so cold
+  adoption/new launch refuses; do not write containment proof from leader ack.
+
+Host shutdown ordering and traps:
+- CLI main.rs343 uses #[tokio::main]; needs sync outer main + explicit async
+  runner to drop runtime BEFORE waiting tracker. Waiting inside async tail can
+  deadlock on transports in canceled/not-yet-dropped tasks. Signal branch calls
+  process::exit(130), bypassing every destructor/barrier. Ping exit2 also exists.
+- CLI InternalStageMcp main.rs423 intentionally process::exit because Tokio
+  stdin uses uncancellable blocking read. Replacing with ordinary drop(runtime)
+  can hang before barrier. Special runtime.shutdown_timeout/background policy
+  may be needed; prove task/transport destruction and no new spawn can race zero
+  before relying on tracker in that policy. Blocking tasks may outlive runtime.
+- Daemon block_on returns at451 but rt currently drops only at function end;
+  explicit drop(rt), then barrier, THEN pidfile::release_lock/socket removal.
+  Releasing daemon identity before children/lease settle permits replacement
+  host concurrently. Profile-load process::exit2 is before runtime MCP launch.
+- UI _guard=tokio_rt.enter borrows runtime. Drop guard before explicit runtime
+  drop, then barrier. gpui app.run may have platform process-exit behavior; needs
+  native confirmation normal quit actually reaches post-run barrier. Window-open
+  exit1 currently bypasses drops (likely before MCP launch).
+- std worker-per-child uses O(children) OS threads; graceful teardown concurrent
+  costs roughly max grace, fallback may serialize 3 seconds each under resource
+  exhaustion. Indefinite retention on try_wait failure is honest but host hang
+  needs visible diagnostics. No tracker mutex held while child/observer Drop or
+  worker join; use condvar loop and released mutex during wait. Avoid deadlock
+  from owner destructor needing tracker/global locks. Registered live transport
+  retained outside runtime can keep barrier pending forever unless explicitly
+  shut down/dropped first. Self-wait from cleanup worker is forbidden.
+
+Required independent oracles (not performed here):
+- REAL runtime destroyed with child alive, cleanup begins during destruction;
+  second OS process attempts actual preparation/launch lock, is excluded while
+  child remains, then succeeds after observed settlement/lease drop.
+- REAL outside-runtime ObservedTransport drop, no Tokio handle and no future
+  polling, plus actual child disappearance/reaping and lock exclusion.
+- Dropped/never-polled close receiver cannot cancel worker; source-free failure
+  injection for std spawn/send/panic retains actual lease until exit. Do not
+  accept only an Arc counter/observer-drop callback as lock evidence.
+- Abrupt/cold survivor case with child fork leaving descendant after leader
+  death: host restart must refuse adoption/new launch based on unresolved writer
+  coverage, not global marker zero or cached wrapper status. Confirm stop/resume
+  and teardown separation. Native Windows leader/job semantics require separate
+  executable evidence; reading sources does not provide native acceptance.
+
+Open exact-plan questions: tracker registration moment, fail-safe panic policy,
+helper stdin runtime drop escape, identity-safe kill retry policy, observer drop
+versus ack ordering, real process lease oracle, and descendant refusal evidence.

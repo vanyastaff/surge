@@ -1,0 +1,189 @@
+T25 runtime-independent MCP child settlement amendment, initial build 0/3
+
+Disposition: proposed for owning and independent security review BEFORE behavior
+implementation. Previous diagnostics/effect authorization remains unchanged. This
+does not claim descendant containment or Windows execution evidence.
+
+1. Actual problem and pinned source boundary
+
+connection.rs ObservedTransport currently extracts rmcp TokioChildProcess's child
+and starts a detached Tokio cleanup task. Drop outside an entered runtime can
+panic, and dropping the daemon runtime cancels this task before child exit and
+releases its observer/original launch claim. Daemon drain counts admission and
+broadcast work, not this task. CLI has an implicit #[tokio::main] runtime; UI has
+an explicit background runtime and potentially retained app state.
+
+Pinned rmcp 1.6.0 child_process.rs has no usable public split (deprecated split is
+unimplemented). Its builder uses process_wrap::tokio::CommandWrap::spawn, takes
+the child stdin/stdout/stderr and creates AsyncRwTransport. We will perform those
+same operations locally using pinned process-wrap 9.1.0, a workspace-managed
+direct dependency, and public rmcp AsyncRwTransport. This removes rmcp's
+ChildWithCleanup owner; it does not change command, ordered args, declared/minimal
+environment, cwd, stdio or Unix tokio_cmd.process_group(0). The current command
+has NO ProcessGroup/JobObject wrapper added by Surge. Do not introduce one here.
+
+ProcessGroupChild.try_wait has distinct reaping/cache semantics and can leave a
+stale inner child after group waitpid. It is NOT used by this profile. Do not
+flatten, adopt or later substitute a wrapped group/job child into this worker
+without a separate design. No cached leader result is descendant proof.
+
+2. Exact private owner and public shutdown API
+
+New private surge-mcp child_settlement module owns one standard OS worker thread
+per admitted live MCP child. Thread owns the actual ChildWrapper, cloned
+HostWriterObserver Arc (therefore the exact original WorkItemLaunchClaim Arc),
+and only safe diagnostic server metadata. Observer clone occurs before spawn.
+No serialized capability, reconstructed receipt, token replacement or lease
+release substitutes for this owner.
+
+Reservation::reserve() synchronously reserves a bounded global slot and creates
+a named thread with 512 KiB stack BEFORE physical child spawn. The global limit
+is 128 concurrent reserved/live children across all runs, not 128 per run.
+Exhaustion/thread creation failure returns an opaque typed StartFailed category
+without spawning. Completed thread handles are joined/reaped on subsequent
+reservation and shutdown, outside the global mutex. Slots cannot grow with
+reconnect history. This bound may refuse admission; it cannot evict a live owner.
+
+The thread initially waits on std::sync::mpsc for an explicit Start(ChildParcel)
+or NoChild. ChildParcel contains actual child plus observer. Reservation is
+registered in the global tracker before physical spawn and before the first
+post-spawn await (child_started). Registering NoChild is not writer exit proof:
+that path is permitted only if spawn returned an error/no process existed.
+
+Physical spawn and extraction of piped handles occur synchronously after the
+existing final before_effect callback, with no await between callback and spawn.
+Immediately send the parcel to the already running thread. send failure returns
+the parcel: the calling thread must synchronously settle that exact child and
+retain its observer; it cannot return an error while dropping a live owner.
+Missing stdio after successful spawn uses the same synchronous fallback rather
+than returning/dropping the child. Reservation Drop before spawn sends NoChild;
+after successful spawn it cannot run without the parcel transferred or settled.
+
+ObservedTransport owns AsyncRwTransport plus SettlementTicket/control sender,
+not the child. send/receive keep SDK wire behavior. close synchronously requests
+Graceful (three-second grace) before returning its lazy future, closes the pipes,
+then awaits an async completion notification. Drop requests Immediate. A dropped
+close future cannot cancel ownership. A request only upgrades Graceful to
+Immediate; duplicate requests never create duplicate threads or kill attempts.
+The ticket includes process ID captured before transfer for child_started only.
+
+Public surge_mcp::shutdown_children_and_join() is a blocking terminal-host
+barrier, with documented process-wide admission closure. It closes admission
+under the tracker mutex, requests Immediate on EVERY registered worker, including
+workers whose transports survive in app caches, then joins all worker threads.
+It runs after the runtime is dropped and never requires a current Tokio Handle.
+Concurrent barrier calls serialize; no mutex is held while joining. No success
+is reported until all actual children have observed exit and workers are joined.
+No timeout converts an unknown writer into a settled child.
+
+3. Worker algorithm, errors, panic and numeric identity
+
+The worker uses synchronous ChildWrapper::try_wait and start_kill, never async
+wait/kill, Tokio sleeps or Tokio task spawning. The pinned plain Tokio child
+try_wait fuses/reaps its own child; an actual Ok(Some(status)) is the only exit
+acknowledgment. Polling uses std channel recv_timeout at bounded intervals.
+Normal active polling detects natural exit. Graceful cleanup permits at most
+three seconds from the first request; Immediate skips grace.
+
+Kill is attempted AT MOST ONCE and only while the exact plain child has never
+produced a wait error and has not produced an exit result. Set kill_attempted
+before calling start_kill so errors/panics cannot cause a second numeric signal.
+After a kill attempt, continue try_wait until actual exit; never repeat group
+kill or signal a remembered PID. A wait error marks Ambiguous permanently:
+retain actual child and observer, emit a fixed reason at bounded rate, and retry
+try_wait without further kill. It may block terminal shutdown indefinitely;
+this is honest unknown ownership, not successful cleanup. No raw io error,
+command, args/env, peer payload or Display/Debug chain is logged.
+
+Use catch_unwind around each worker operation with the ChildParcel held OUTSIDE
+the unwinding closure. Unexpected panic is a fixed fatal containment category:
+abort immediately while parcel/observer remain owned, without unwinding or
+dropping a potentially stale child. An observed panic is not synthetic exit and
+does not acknowledge suspension. This deliberately does not attempt to repair
+an arbitrary panicking child wrapper. Channel disconnect with a live parcel is
+Immediate cleanup; before parcel transfer it is NoChild only when no spawn took
+place. Receiver disconnect on transfer invokes the synchronous fallback above.
+
+Tracker live registration is removed only after actual Ok(Some(status)). Worker
+drops observer only after that result; thread handles remain joinable until
+reaped. Cold recovery still uses journaled original process identity and writer
+history, not the global tracker, not the exit code alone. Direct leader exit does
+not certify Unix process-group or descendant disappearance. Escaped/GroupOnly
+writer evidence remains unsafe and cannot mint suspension/continuation authority.
+The existing host containment proof must reconcile descendants independently.
+
+4. Host shutdown order and failure paths
+
+Daemon: retain existing drain/abort/await behavior, obtain block_on exit value,
+explicitly drop rt, call shutdown_children_and_join, THEN release PID lock and
+return ExitCode. Wrap runtime ownership in a terminal shutdown guard so unwinding
+after runtime creation follows runtime-drop then barrier as well. Early failures
+before runtime/no child need no barrier. Shutdown barrier cannot be inside the
+runtime whose outstanding tasks are being canceled.
+
+CLI: replace implicit #[tokio::main] with small plain main creating explicit
+runtime and async_main for current body. A private binary-owned ExitRequested
+error carries only the numeric process status through anyhow; the outer main
+recognizes it and preserves 130 (signal), 2 (failed ping) and InternalStageMcp's
+0/1. Replace the actual process::exit calls at these three sites with this
+terminal outcome so they cannot bypass settlement. Other errors keep normal
+CLI error reporting/status. No library behavior depends on panic-hook text.
+
+InternalStageMcp intentionally exits today because Tokio stdin can leave an
+uncancellable blocking read while the provider keeps stdin open. Do NOT replace
+that branch with ordinary blocking Runtime Drop. Record this command mode before
+runtime creation (parse once); consume its runtime with shutdown_background()
+after serve_stdio returns, then run the synchronous settlement barrier, then
+return its original status. This cancels async tasks without waiting on that
+unrelated stdin blocking task; actual MCP children/claims are independently owned
+by the standard threads. Normal CLI commands use explicit runtime Drop before
+the barrier. The terminal guard preserves this same mode-specific order during
+unwind. Required real helper oracle leaves stdin open and still observes child
+settlement/barrier completion and correct status without hanging.
+
+UI: after app.run returns, drop enter guard, drop background runtime, then invoke
+barrier. Retained AppState/registry transports cannot prevent cleanup because
+the global worker control requests termination independently. Guard ordering
+covers unwind: runtime dropped before settlement barrier. UI process exit and
+window-close path both use this terminal barrier. Its existing pre-MCP window
+creation process::exit(1) is outside child admission, but will be converted to an
+outer recorded exit status/cx.quit path so future initialization cannot bypass
+the barrier. Daemon's pre-engine profile-registry load failure similarly returns
+2 from block_on rather than process::exit, preserving PID-lock cleanup and the
+same terminal boundary. Actual UI build/check remains
+a separate platform gate; no runtime UI proof is claimed from source alone.
+
+run_task shutdown diagnostic will describe outstanding ownership settlement,
+not 'abandoning remaining children to RAII'. Its timeout still cannot acknowledge
+suspension or release original host authority before actual owner settlement.
+
+5. Required independent oracles before integrated freeze
+
+a. Actual child blocks indefinitely; start/init, retain real original claim,
+drop Tokio runtime while transport is live or cached, call barrier outside any
+entered runtime, observe actual process exit and join. A second process cannot
+acquire the exact launch lock before settlement; can reacquire only afterward.
+b. Drop during post-spawn/pre-initialize observation, caller cancellation, never
+polled close future, normal graceful close and forced close all settle actual
+child and preserve exact observer until exit. Reuse existing sentinels/argv/env
+and dependency tracing tests, without weakened transport assertions.
+c. Inject reserve/thread creation/transfer disconnect and missing-stdio failures
+through private test factory. No child on pre-spawn failure; post-spawn failures
+must retain/settle the actual PID. Inject unexpected wait error and verify no
+synthetic completion, no subsequent kill, no lock reacquisition. Controlled
+panic child operation runs in subprocess and yields intentional abort with no
+success/continuation receipt. Bounded limit and finished-handle reaping tested.
+d. Real daemon shutdown plus descendant survivor oracle: leader exit alone does
+not acknowledge suspension; after restart exact journaled unquiesced writer
+blocks provider/MCP effects and continuation until actual containment is proved.
+No fabricated GroupOnly liveness or PID-only containment claim.
+e. Platform: plain child try_wait outside dropped runtime on macOS/Linux and
+Windows native runner required. Windows currently OPEN; compiler success cannot
+prove job/handle/native behavior. Strict fmt/clippy/tests and final 5a/5b still
+apply to the complete unit, not just this amendment.
+
+Write zone: surge-mcp private child_settlement.rs + connection.rs and lifecycle
+tests; workspace/member process-wrap dependency declarations; terminal main
+boundaries CLI/daemon/UI; run_task fixed shutdown diagnostic. No persistence
+dependency enters MCP. Existing global diagnostic veto and exact effect gates
+remain in force. Parent owns durable plan/review evidence and stage commits.

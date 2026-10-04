@@ -309,3 +309,17 @@ actual ChildWrapper+observer, acknowledged channel/host shutdown barrier and
 tracker until observed exit. Proposal is not approved behavior yet: exact written
 plan and independent owning/security reviews requested, particularly transfer/
 spawn failure, dropped runtime, original launch lease and cold descendant proof.
+
+Framing retry actual99726 terminal101 now reaches the privacy assertion in
+`malformed_owned_private_input_never_survives_framing_error`; log
+framing-private-second-red.log. One actualbehaviorFAIL,427filtered; earlier3822
+remains linker-only failure. Previously accepted safe numeric/category payload
+implementation is now authorized by RED-first evidence.
+
+Runtime-independent settlement exact draft and owning source research retained
+as surge-owned-flow-runtime-settlement-{draft-plan,owning-research}-20261003.txt.
+Research qualifies process-wrap group findings: current rawCommand.process_group(0)
+does NOT install group/job wrappers; rawTokio try_wait fuses direct child, kills
+leader only. Exact revised draft now maps CLI helper shutdown_background and
+status-return paths. Independent owning/security plan verdicts remain pending;
+no runtime amendment behavior is authorized until both ACCEPTABLE. Initial0/3.
