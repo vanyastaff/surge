@@ -34,3 +34,16 @@ read r2d2 default three-worker scheduler and scheduled-thread-pool delayed shutd
 
 These source findings change required worker/resource design, not native closure
 proof, source acceptance, 5a/5b or the initial formal repair count0/3.
+
+6. Critic finding independently verified in run_writer.rs close/Drop: wrapper only
+try_sends Shutdown, then _token/_file_lock drop while detached writer task may still
+process queued SQL. Shared map+file admission is insufficient unless the ACTOR also
+holds the SAME owning WriterLease until actual exit/runtime cancellation. Proposed
+private Arc<WriterLease> producer+actor retention needs review and a real barrier
+oracle. Cancelled close and full queue must not enable concurrent refusal writer.
+
+7. Root tactical owner placement: persistence-owned closed refusal supervisor/API
+with exact original Arc slots, no consumer MCP dependency/general executor. Avoid
+Storage-supervisor-ArcStorage cycle: shared exact ArcActiveWriters and cloned pool/
+path/clock context or external supervisor owner. Panic primitive sharing remains
+concrete prerequisite, not approval to invent duplicate panic hooks.

@@ -1,3 +1,25 @@
+# Authoritative foundation GREEN checkpoint 2026-10-04
+
+81728 terminal0 actual four-crate foundation nextest:1819PASS8existingSKIP,104.026s.
+Root checked runID332c332b/62binaries/summary and exact previous4failure names now
+PASS. Scoped strict57263 terminal0 separate; no fullworkspace/sourcefreeze. Main
+next authorized actual catalog None/Some[] and override-wins BOTHlegacy start/resume
+pairedReadOnlyB oracle, then fullworkspace strict lowmem. No source acceptance.
+
+Wake worker appendix929c7d FULLread proposed: ordered authority/permission/manifest
+classifier; invalidparse OPEN; validquota transfer preserved; bounded sameArc
+precommit worker/commitabort/coldno-token/threehostjoin. Root tactical smallest
+persistence-owned supervisor (no MCP dep/no general executor/newcrate), avoid
+Storage Arc cycle. New actual RunWriter Drop hazard: token/FileLock wrappers release
+before detached SQL actor exits. SAME private WriterLease must survive in actor;
+genuine cancellation/fullqueue exclusion oracle needed before sync refusal writer.
+FileLock existing-only owningFile reshaping and shared silent panic API remain
+review prerequisites; all wake/A+B behavior held. B architect pending_init observed,
+not assumed actual progress. Critic current source analysis active at receipt.
+
+All original requirements/nativeclosure/fullproject5a→5b/U01 remain open, formal
+initial0/3, fullgoalactive. Earlier checkpoint entries below are superseded history.
+
 # Authoritative executable and focused review checkpoint 2026-10-04
 
 Root FULLread strict failed2–8 logs and ninth. Author57263 terminal0 scoped
