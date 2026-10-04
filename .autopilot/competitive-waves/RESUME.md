@@ -1,3 +1,24 @@
+# Actual event-before-ACK crash recovery GREEN 2026-10-04
+
+Author98175 terminal0: cold-refusal-event-before-ack-first.log exact actual
+cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect
+1PASS1.22s. Root FULLread raw, producer/reclaim phase, whole test and actual
+ColdHost stop_and_wait kill/wait helper. Real accepted populated fixture and normal
+writer block precede durable refusal. Parent registry BEGIN IMMEDIATE prevents ACK;
+releasing actual writer yields independently observed committed journal event while
+ACK remains NULL. Original child killed/reaped, transaction rolled back, new process
+calls production resume_pending_owned_flow_refusals before bridge creation. Actual
+ACK reuses original event sequence/payload, event/receipt count1; source/config/receipt,
+claim token and physical provider/MCP traces unchanged; joined owner releases lock.
+
+This proves scoped production recovery API and existing-event dedup, not full daemon
+startup/admission, runtime consumption or native descendant closure. Author87691
+live at receipt reruns explicit live-host assertion before kill and second resume=0;
+these additions are not included in first-run PASS until terminal receipt. Independent
+cold reviewer fullread same actual test and finds correct scoped shape, no confirmed
+duplicate-delivery defect; final report/missingjournal/runtime gaps remain pending.
+All original requirements/final strict gates/freeze5a→5b remain open, formalinitial0/3.
+
 # Actual immutable history counterfactuals GREEN 2026-10-04
 
 Author78969 terminal0: cold-permanent-association-history-green.log exact real-host
