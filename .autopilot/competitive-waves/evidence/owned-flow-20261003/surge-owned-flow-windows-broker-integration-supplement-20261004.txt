@@ -1,0 +1,439 @@
+Windows broker integration supplement — source-backed PRECODE draft, 2026-10-04
+Author /root/owned_flow_cold_oracle_builder. One author, not independent acceptance.
+Base FULL-read final Windows draft1a96148d2cc97d49ffbeaea3f1be204384c3f92d971bed1a500a854dc73ecf11.
+Accepted Bf289+314 and foundation5bdd+1944+4c preserved. Existing trusted-binaries
+boundary is the original scope: U1 ordinary lineage+tracked external Unknown needs
+no user narrowing; U2 hostile same-user isolation is additional optional design.
+No source/test/Cargo/build/process/Git/install action or native acceptance. Formal0/3.
+This supplement makes concrete integration choices below; all NEW APIs are PROPOSED.
+
+1. Selected placement: preserve actual local ownership, avoid remote SDK invention
+Windows native owned run is hosted by an Engine/TrackingContext INSIDE the original
+broker process, reusing existing owned_flows acceptance, work_items host, engine,
+ACP/rmcp SDK and accepted B coordinator. Main daemon forwards typed original user
+requests and reads journal/query DATA. It does not host a second engine, SDK,
+RunWriter or frame parser for that run. Broker is sole birth/wait owner and owned
+run host. This replaces base sections2/6's unresolved remote journal sink placement
+with a local sink; no remote RunWriter trait, raw stdio relay or SDKresult RPC.
+
+Why selected: actual RunTaskParams.writer is concrete RunWriter (run_task.rs52);
+engine start_run_writer509 creates/opens actual writer; many helpers accept that
+concrete type. Remote RunWriter/SDK outcomes would add copy-budget and authority
+surfaces. Moving existing owning host composition leaves those APIs and local
+non-Send SDK retention intact. This is an explicit affected dependency closure,
+not an assertion current constructors support broker mode or already work.
+
+The broker accepts owned request BEFORE OwnedFlowPreparation.finalize returns its
+actual initial WorkItemLaunchClaim. The initial guard is therefore minted in broker,
+retained SAME Arc by supervisor/engine/B coordinator/native registration, never
+created in daemon and serialized/transferred. Configured WorkItem Start likewise
+executes preparation/finalization/claim in broker. Actual journal actor+wrapper
+share SAME Arc<WriterLease> inside broker. Daemon receipt has DATA IDs only.
+Broker never reacquires initial claim to simulate handoff. Native original objects
+and local B SDK/journal responsibilities now survive daemon death together.
+
+Daemon disconnect cancels only its authenticated frontend session; native broker
+closes future dispatch, freezes/drains/stops original responsibilities, and parks
+under accepted authority; it retains runtime/SDK until exact safe drop/cleanup.
+It does not keep dispatching silently under old frontend authority. Controlled
+broker runtime teardown uses accepted std coordinator/sole owners and journal
+terminal protocol(b); process death is Unknown. A new daemon reconnects SAME broker
+and original journal/claim, not open_run_writer/claim. If actual broker died, no
+fresh owner cold-positive. Broker idle exit only after all old slots/records ACKed,
+physical+wire+external obligations settled, and no accepted pending task authority.
+
+2. Actual source map: task mutators, internal SQL and call sites
+Anchors are current source line locations, not frozen code or exhaustive file hashes.
+Map is complete for current production task authority mutation families found via
+public-method and UPDATE/INSERT/DELETE search; test SQL is not production API.
+No public WorkItem workspace replacement, unarchive or physical task deletion
+command exists in WorkItemCommand331. Workspace first supplied by Create and
+owned acceptance; mark_workspace_prepared changes only marker. Future workspace
+replacement must use item-scoped native fence, not invent present API.
+
+A. Generic task command transaction:
+WorkItemStore::mutate(work_items.rs419) -> replay/reclaim_start_preparation ->
+IMMEDIATE -> replay_conn/check_start_preparation -> create/reserve/request_control/
+change -> operation receipt -> commit.
+- Suspend/Continue -> control.rs44 request_control -> new generation126;
+  Suspend invalidates recovery wakes. Broker lane required BEFORE transaction.
+- Edit/AcceptProposal -> work_items.rs616 change/accept -> accepted revision/version;
+  current check(inactive=true) already rejects active attempt. Keep this restriction,
+  additionally reject unsettled native historical debt even if active_run cleared.
+- Archive -> same change/save_record224; same historical-debt check, no folder delete.
+- Start -> reserve/reserve_with_host_run561 -> new attempt/generation/active_run.
+  Require all prior native debt sealed before new assignment; initial binder below.
+- Create -> create -> initial project/workspace/revision. Native host route selects
+  broker before acceptance, no target effects merely from workspace DATA.
+- Discuss/AttachPr -> change, version update only, no effect permission. They may
+  remain local typed metadata transactions if they never change accepted origin/
+  workspace/control; immutable expected-version semantics preserved. They cannot
+  be treated as authority invalidation just because version increments.
+Actual frontend paths: cli commands/task.rs144 command() -> daemon work_item IPC;
+UI screens/task_detail.rs301/308/325/382/892/905 -> UI task mutation IPC;
+server.rs511 -> work_items::execute25 -> execute_owned92 -> mutate_owned134;
+Start guard.finalize168 or store.mutate170. Owned_flow Continue251/Suspend289 ->
+same execute. Broker forwarding must occur before mutate_owned, not after commit.
+
+B. Preparation and acceptance:
+begin_start_preparation(start_preparation.rs139), StartPreparation::finalize31,
+reclaim_start_preparation196/check214; finalize calls private reserve. Drop abandons
+only own preparing token, never existing native assignment. All execute in broker
+for native starts; final TX checks native item debt and binder selection.
+begin_owned_flow(preparation.rs110), preparation capture_source257/freeze_source268/
+freeze_startup306/retain_launch_ownership371/finalize402, replay_owned_flow88.
+finalize writes accepted attempt claim_token492 and pending intent495. Native
+binding installed in SAME acceptance TX before return, only after broker home
+owner/channel/capacity exists; actual claim guard already retained there.
+Callers owned_flows.rs46 begin and108 finalize; route whole submit worker to broker,
+not just its final spawn. Freeze/config/source remain real original snapshot.
+Abandon Drop512 only own preparing operation; receipt-bearing old native binding
+cannot be deleted/replaced by preparation retry or operation replay.
+
+C. Claim, startup and workspace marker:
+claim(work_items.rs740) -> claim_owned_flow(owned_flow/launch.rs177) rotates token214;
+validate_claim801 read only; validate_owned_flow_pending256/effect268 read gates.
+acknowledge_owned_flow_startup361 writes intent started375; cancel_pending_owned_flow381
+can abort/remove active_run397–398 and clear claim_token. mark_workspace_prepared1226
+updates workspace_prepared via exact claim association. Claim replacement/startup
+ACK/cancel require typed broker owner lane. After native registration no claim()
+token replacement permitted, even from same daemon; reconnect obtains locator/
+local handle to existing broker claim. Cancellation with actual Birth must use
+Stop debt, never abort pending as NoChild. Genuine pre-Birth pending cancellation
+uses exact accepted no-dispatch evidence and ledger-unconsumed slot.
+Callers work_items.rs397 launch_attempt claim;410 recovery refusal;432 startupACK;
+462 workspace marker; owned_flows.rs285 cancel; engine/engine.rs656 startupACK.
+Gate_answers.rs23 claim + later open_run_writer/commit_gate_answer: native owned
+branch executes in broker with SAME retained claim/writer, not that reacquire path.
+
+D. Settlement/current acknowledgement:
+settle(work_items.rs829) updates attempt state, write_control853+, can clear
+active_run868; mark_control_recovery_required323 Attention/control352+; diagnostic301
+exact historical annotation; control.rs confirm_suspension134 and confirm_continued223.
+All authority-changing settlement requires typed lane and actual independent domain
+seal/native/wire/external+historical receipt predicates; not just state/generation.
+Attention may be recorded without declaring native closed. Terminal clearing/claim
+release forbidden while outstanding native/B debt. Historical receipt may settle
+its original occurrence under newer Stop, never overwrite that newer control.
+Diagnostic-only mutation preserves existing generation checks; no closure grant.
+Callers work_items.rs122/420/438/464/476/639/671/728/745/790/804/812/870/882;
+confirm_continued719 and confirm_suspension807; classify failure63 diagnostic.
+These supervisor/reconcile paths execute in broker for native runs, not mirrored
+by daemon reconcile_page. Daemon scans native-bound attempts read-only and delegates.
+
+E. Automatic quota/capacity mutations (not just user control):
+recovery_cycles.rs begin_recovery_cycle501, reserve_recovery_candidate532,
+reserve_next_candidate_after_exhaustion547, record_recovery_observation656,
+arm_recovery_wake691, consume_recovery_wake714, finish_recovery_cycle757,
+rebind_recovery_control770. Internal current() validates claim/control. All selection/
+wake consumption/rebind authority mutations use same native lane; observations
+append immutable typed evidence without admitting new effects.
+handoffs.rs request_capacity_suspend450/461 -> reserve_provider_capacity_stop471;
+insert control583, with_skips capacity_intent.rs insert_capacity_intent94/control151.
+bind_quota_stage603; predispatch.rs bind_planned_quota_stage60,
+select_planned_capacity177, revalidate_capacity_skips259(readcheck),
+suspend_planned_capacity333 -> control intent/wake435+, and inspect resume540(read).
+rate_limit.rs record_selected_rate_limit371(typed evidence), request_quota_cleanup_stop630.
+handoffs/opening.rs reserve_automatic_wake563 writes new ContinueReserved756;
+reserve_quota_open791; invalidate_unexecuted_quota_open909;
+admit_provider_open958; confirm_provider_open990;
+authorize_fallback_prompt374/authorize_automatic_wake_prompt458. These provider/
+prompt admission methods are effect gates and require exact broker current dispatch
+authority, not a reusable pre-read snapshot. Opening confirmation is historical
+observation of actual SDK occurrence; keep exact source control and correlation.
+recipe_capacity.rs admit_recipe_opening10/attach_pin33/invalidate_pin48 affect current
+recipe selection: host lane, exact accepted receipt/epoch, no proactive reconnect.
+
+Actual callers: work_items.rs resume_parked519 claim_owned_flow_quota_wake (or claim),
+572 rebind,605 automatic wake; owned_flow/refusal.rs claim_owned_flow_quota_wake190/
+claim_quota_wake_inner198 rotates token253, commit_refusal147 alters Attention165,
+control/wake; resume_pending_refusals285/337. Route native wake/refusal owner through
+original broker claim; DO NOT suppress supported permanent refusal or newer Stop.
+Refusal worker retains original native broker guard and journal writer lease, exact
+73+e97 Ready-before-TX/commitabort unchanged. Native token rotation refused after
+binding; non-native existing refusal behavior remains separate.
+run_task.rs1848 bind planned/1851 begin/1862 select/1893 reserve/1896 admit/
+1923 suspend;1772 automatic wake admit; stage/agent.rs178 bind/184 begin/
+261 record rate/970 invalidate/1169 confirm/1240 wakeprompt/1274 fallbackprompt/
+2240 select/2286 reserve/2291 admit/2367 and2374 suspend;
+recipe_admission.rs56 admit_recipe_opening. These engine paths now broker-local.
+No separate daemon wake timer may silently launch native task; it forwards due ID,
+broker revalidates actual cycle/control/due authority in its own transaction.
+
+F. Run registry/writer and deletion bypasses:
+Storage::create_run216/open_run_writer287, delete_run481, set_run_status514,
+set_run_parked534/clear_parked604. get_run447/list_runs369 can internally repair
+status via registry::update_status462/381, so READ-looking API is not blindly exempt.
+runs/registry.rs public open_registry_pool55/delete_run202/update_status212/
+set_run_parked235/clear_parked265 are lower-level routes. Native run lifecycle/status
+changes must route broker gate; deletion remains refused while any native/B/
+external/record debt, with accepted helper snapshot/delete barrier after closure.
+Status projection is not native proof. Existing engine finish2026/resume1047,
+run_task3339 park, daemon recovery.rs665/757 and cli commands/daemon.rs198 reconcile
+must not mark surviving-broker runs crashed/terminal solely from main-daemon death.
+bootstrap cancellation affects bootstrap runs, not assigned native owned attempt;
+if future bridging introduces shared run identity it requires same guarded gate.
+
+Storage::acquire_registry_conn168 exposes writable Connection; public
+runs::registry::open_registry_pool also bypasses ANY Rust mutator check. Required
+closure: make raw registry connections/pool and low-level mutating registry funcs
+pub(crate), retaining external read/query through typed APIs. Existing daemon main
+708/841/951/1107/1149 and inbox {consumer,ticket_run_launcher,state_sync,desktop_listener,
+snooze_scheduler,tg_bot,mod}, Telegram cockpit/{production,production_actions}, CLI
+commands/telegram.rs175 need typed persistence-owned inbox/notification/registry
+facades for their existing non-task SQL. Facades expose named existing operations,
+not closure(&Connection), Deref<Connection>, prepare/execute strings or raw pool.
+Move existing SQL helpers, not clone query logic. Public raw conn test fixtures
+move to explicit test support that is absent from production builds. Trusted
+external filesystem/SQLite tampering stays corruption/Unknown; this API closure
+prevents ordinary library bypass, not malicious same-user security certification.
+No production public workspace replacement/delete-worktree API was found in this
+map; direct user Git/filesystem edits remain separately validated source identity,
+not a claimed broker-serialized syscall outside Surge.
+
+3. Concrete private authority and transaction API
+New persistence module proposed work_items/native_authority.rs owns native binding
+and NativeMutationAuthority. No daemon/MCP/ACP import. Storage facade factory uses
+actual protected broker-home OS owner lock plus backend-issued verified current
+broker process/pipe identity; bool/string descriptor cannot mint it. Process leaf
+issues that live identity only after actual native channel creation/peer validation.
+Native owner registration is inserted atomically at initial accepted attempt TX:
+(run,item,attempt_generation,opening_control,operation,recipe_hash,original
+claim_token,broker_incarnation,domain_nonce,accepted_startup_identity). Original
+association immutable; replacement prohibited until authentic final debt seal.
+Current control/phase is separate typed mutable state, not rewritten origin.
+
+Proposed public opaque NativeRunRegistry handle is broker-local, nonSerde,
+nonClone of owner resources; it owns original claim Arc, home owner capability,
+actual B coordinator and per-run serial native lane. It exposes bounded typed
+request submission only; callers never receive private NativeMutationAuthority.
+Internal NativeMutationAuthority<'lane> borrows a live lane guard, captures exact
+owner/phase/current generation and mutation kind; !Send across actor turns,
+no Deserialize, no arbitrary callback granting closure. Private check_native_in
+inside SAME SQL transaction validates immutable native binding/current rows,
+actual owner capability/held lane guard and typed allowed transition. No
+separate pre-read satisfies it. Holding a lane does not itself prove physical
+closure. All original receipt/claim/source/current generation validation retained.
+
+Proposed typed facade signatures, DATA arguments existing type names:
+NativeRunRegistry::request_task(command: WorkItemCommand, actor, now)
+ -> PendingOperationLocator / CommittedWorkItemResult;
+::request_start(request: OwnedFlowRequest) -> OwnedFlowReceipt;
+::request_due_wake(run: RunId, due_identity) -> WakeDisposition;
+::request_gate_answer(run,node,request,response) -> CommittedGateAnswerLocator;
+::query_original(run,original_descriptor) -> OriginalOwnerInspection(DATA);
+::request_shutdown(run,expected_generation) -> PendingSettlementLocator.
+These are host IPC requests, NOT authority or permission to spawn.
+
+For each familyA–F add private transaction helper taking
+(&Connection, &NativeMutationAuthority, existing typed arguments, &GateDeadline).
+Existing public methods retain non-native behavior but INSIDE THEIR ACTUAL TX call
+require_non_native_in before any protected write; bound native run/item => explicit
+NativeOwnerRequired, no fallback. New native facade calls SAME original helpers
+with private authority, avoiding duplicate SQL. read/replay of committed immutable
+operations may remain public. Protect preparing/finalize/reserve paths before they
+can create a native binding outside original broker. Raw-pool restrictions above
+are part of closure; generic mutation wrappers alone are insufficient.
+
+Two mutation classes: authority/current control/new effect, and historical settlement.
+First requires exact current lane state; second binds original occurrence and may
+preserve newer control. Metadata-only discussion/PR and usage SQL touch only their
+columns and cannot invalidate current physical gate. Item debt index covers prior
+native attempts even if active_run is NULL. Admission must check that index in TX.
+
+Broker lane has one proven order for native authority transaction commit and
+physical dispatch. Final physical write/Resume occurs after all waits, exact current
+B gate, then immediate syscall without await. All native authority mutators commit
+ONLY that lane; no SQLite writer can commit newer Stop/edit/archive/claim in between.
+No registry TX survives pipe readiness/journal wait/Resume/termination. Gate deadline
+TOTAL20ms includes pool checkout+busy+SQL+revalidation (at most10ms checkout and
+remaining deadline busy/SQL), never additive repeated20ms per helper. Finite failure
+retains BornHeld/debt/Attention and no stale dispatch. A blocking syscall may delay
+commit of later lane requests; they are reported pending, not already committed.
+Read/control/Stop latches still serviced by B separate fairness/owner machinery.
+
+Exact lane mechanism: one private std Mutex per original NativeRunOwner guards
+current authority admission phase, not raw SDK handles or global storage state.
+NativeLaneGuard is nonSend; it is acquired on whichever actual broker-local SDK
+or native dispatcher thread performs this synchronous boundary. Fixed actor thread
+identity is NOT required and nonSend SDK handles are never moved to another thread.
+Actor receives typed mutation requests; its actual protected TX acquires this SAME
+guard. ACP synchronous enqueue and rmcp OwnedPermit::send execute in the local SDK
+thread through sealed owned adapter while holding SAME guard after current DB gate.
+Native WriteFile/Resume executes with fresh SAME guard after every readiness wait.
+No await/queue wait after grant and before enqueue/syscall; no stale reusable grant.
+Try-lock contention defers and rearms rather than blocking IO progress; the gate
+attempt's total20ms includes any admitted lane acquisition and storage work. SDK
+prepare/channel-capacity/result waits occur BEFORE guard acquisition. Generated
+reply serialization/outer-slot retention also precede guard. This is the existing
+B last-boundary discipline extended to the shared native mutation lane, not a new
+public Fn->proof API. Descriptor checks and registry predicates run each time.
+No global slot mutex or live registry TX held during native syscall. Per-run guard
+survives that immediate nonblocking write submission/Resume; unrelated run/control
+and all read completion processing use separate progress machinery. Already-issued
+overlapped IO is historical debt even if newer Stop acquires guard afterward.
+This mechanism must be tested with actual SDK enqueue pause and actual SQL commit,
+not only request queue ordering. Original policy read checks outside this protected
+boundary are hints, never dispatch authority.
+
+4. B physical frame placement and ownership, no IPC raw stdio
+Broker process composition:
+ existing Engine run_task + concrete RunWriter + concrete BridgeFacade/McpRegistry
+ -> accepted B local prepared enqueue/SDK handles
+ -> SAME run std coordinator / original registered slots
+ -> Windows original native pipe dispatcher
+ -> actual Job-owned process stdin/stdout.
+Daemon's frontend IPC has no ACP/MCP frame decoder, SDK handle, child waiter or
+frame permission. It queries existing persisted events/artifacts via read-only
+inspection; results needing authority are typed broker responses only.
+
+Source seams: ACP sdk_v1.rs effect_connection/send_request/read id; sdk_v1/
+transport.rs read_frames48 and current unbounded channel; transport.rs AgentIo/
+StdioTransport; bridge/worker lifecycle. MCP connection.rs/registry.rs and current
+child_settlement ObservedTransport. Accepted B rmcp vendor prepare/enqueue/bootstrap/
+internal replies and leased outcomes are NOT implemented here. Their exact accepted
+API/codec algorithm is reused inside broker; Windows IO adapter is new native
+backend, not a parallel JSON parser. Existing Unix poll path stays separate unchanged.
+
+Proposed neutral WindowsPipeDispatcher owns original overlapped stdio handles and
+native transfer slots. Read completion populates B ingress ring; exact captured
+complete frame/preflight/typed classification is retained BEFORE SDK queue wait.
+Bounded reason-only malformed refusal and compatibility ignored objects follow
+f289+314 order exactly. ACP SDK remains unpatched, enqueue retained synchronously
+then ID bind while physical latch closed. MCP owned vendor adapters unchanged.
+Incoming callback delivered only after original registered slot/callback lease;
+generated response serialized into original ReplySlot BEFORE sink.capacity wait.
+SDK local non-Send handles stay broker runtime; no blanket unsafe Send or IPC cast.
+
+Physical outgoing slot holds immutable exact frame bytes+cursor+owner/occurrence/
+correlation; Windows dispatcher waits actual readiness/completion, then invokes
+current gate AFTER that wait immediately before actual write submission. Partial
+positive bytes retained, Stop cancels/closes remainder+laterframes, never NoEffect.
+Outstanding overlapped write completion after Stop is historical actual bytes/
+Unknown and retained operation, not inferred canceled0. Exact Win32 overlapped
+buffer/CancelIoEx lifetime/result semantics need separate unsafe review, but ownership
+slot/capture/gate/ACK place is fixed here. CancelIoEx does not mint termination.
+Native sole waiter stays process leaf; dispatcher never waits root a second time.
+
+IPC frontend connection carries no raw provider stdout/stderr nor private frozen
+recipe/result. A bounded event hint is (run,committed_seq,event_kind), not full
+SDK outcome; daemon reads committed journal pages with existing redaction. Lost
+hints are repaired by sequence query, not treated as protocol settlement. User
+commands/gate responses follow existing accepted size caps; max64 envelopes/global,
+max64KiB control envelope and queued recipe pool16MiB/256KiB per request preserved.
+Oversized human input is a separately bounded control request (existing discussion
+131072 bytes): keep its existing limit, max8 such queued payloads/global1MiB before
+acceptance, not silent truncation into64KiB or copying into wire lease. No engine
+frame/result transfer creates uncharged IPC decoded copies.
+
+5. Byte/count ownership and journal ACK/replay
+All B exact normal/cleanup pools and limits stay unchanged, charged ONCE in broker:
+normal RAW global1GiB/run96MiB; DELIVERY global8GiB/run1GiB; cleanup RAW32MiB/1MiB,
+DELIVERY64MiB/4MiB; global1024 normal768+cleanup256, run128 normal112+cleanup16;
+protocol connections64 global/4 run; shared child workers128.
+Each connection backs4cleanup64KiBraw/256KiBdelivery lanes; two real MCP retains
+80MiB+delimiter normalraw/768MiBdelivery plus cleanup512KiBraw/2MiBdelivery.
+No new broker mirror lease pool. Exact result/cache/oneshot/unpolled-outcome/callback
+charge stays held until same runtime graph drop/durable approved transfer. Coordinator
+holds raw/actual result receipt and selected accounting spans independently. Existing
+196608byte cleanup peak and ID4096/depth64/nodes caps are unchanged.
+Readiness channel/Taken ACK references opaque process-local slot; not serialized
+RetentionToken. SDK/decode/copy audit counts actual broker allocations including
+native overlapped buffers; buffers ARE existing raw rings/slots, not extra8MiB
+unaccounted staging. Additional OS overlapped control structs and pipe resources
+bounded per connection/domain in native resource pool, no unknown unbounded queue.
+
+Journal sink is LOCAL typed actor behind actual RunWriter/RunEventRecorder. B
+reserved observation delivery uses nonblocking submission retaining original slot;
+actor commits typed accepted native/dispatch/protocol event using exact source
+association and returns DurableRecordAck {run,original occurrence,record hash,
+event_seq,prefix hash}. ACK type private local capability, not user DATA bool.
+Raw delivery token is released only after exact accepted durable projection or
+protocol(b) and required actual-result transfer; native/external closure separate.
+Birth ACK to frontend is DATA only after actual original Birth record receipt or
+explicit pending delivery response; timeout never authorizes another CreateProcess.
+
+Persist idempotence key=(original opening epoch,writer ordinal,connection incarnation,
+direction,typed occurrence/frame ordinal,record kind) with canonical payload hash
+using accepted A typed receipt/event tables, not an unbounded new audit DB. SAMEkey+
+SAMEhash returns original seq/receipt; SAMEkey+differenthash rejects conflict. Native
+terminal observation includes frozen original object/physical evidence, not zero-
+bytes label. Exact typed actor allowlists must cover these new variants; generic
+append_event cannot fabricate private native seal authority.
+
+ACK lost after commit: retained broker slot rereads exact key/hash/origin before
+resubmit/mark durable; no second event/opening/wait owner. Slow journal holds SAME
+claim/writer lease and B slots while native read/control fair progress continues.
+No coordinator registry transaction awaits journal ACK. Actual writer actor ended
+=> accepted protocol(b) durable registry typed pending projection+Attention,
+immutable payload/key and original receipt association, preserves newer control;
+only after durable commit and no remaining live native/external responsibility may
+eligible original launch Arc release. Diskfull retains original Arc+charge.
+Original live broker can deliver pending event after actor recovery under SAME
+run/claim/token/origin, authentic lock and exact journal startup/prefix. It cannot
+replace missing journal with fresh DB and call it original. Runtime drop barrier:
+first close normal registration/enqueue; finish registered cleanup then FinalFrozen;
+local SDK graph destroyed/retention confirmed; join native/IO/result owners;
+commit pending projection or retain Unknown before actual ownership release.
+FinalFrozen/Sealed zero new enqueue/frame writes, even bootstrap/cancel/reply/drain.
+
+Cold frontend reconnect: reads original broker ledger+journal, ACKed request replay
+returns original immutable operation result. No second launch claimant/writer; same
+original opening-control vs current newer Stop preserved. Frontend lost replies
+are distinct from local journal ACKs. Daemon restarts resubscribe durable sequences.
+Actual BROKER runtime destruction still has std retained owner responsibility;
+actual broker process death leaves durable debt; fresh broker cannot claim pending
+original closure or reconstruct native Job from stored descriptors. Those are
+negative boundaries, not replacement for required live-original cold positives.
+
+6. Exact affected file/dependency closure and required oracles
+Proposed daemon new native_broker/{host,client,protocol,dispatch}.rs and main/internal
+mode composition reuse owned_flows/work_items/tracked_run, server routes before
+mutation, wake_scheduler/recovery and frontend event/query forwarding. One main-owned
+source lane; module placement names may be reviewed, no new platform crate.
+Persistence work_items/native_authority.rs + migrations immutable native binding/
+item debt index; generic and everyA–F private actual TX check; raw connection/pool
+visibility+narrow inbox facades; actor typed receipts/gates/inspection/protocol(b).
+Process leaf Windows native owner/stdio/FFI and existing shared tracker/waiter;
+ACP transport/sdk_v1/bridge adapter; MCP accepted vendor/connection/registry;
+orchestrator owned engine gate/control/recipe/wake/shell/hook paths broker-local.
+CLI daemon reconciliation, UI native frontend host, Telegram/inbox methods must
+not retain direct native registry mutation/raw pool. Root Cargo feature closure,
+all API callsite compile/tests, stage documentation and AGENTS structural changes
+belong to main after independent precode permission; none changed here.
+
+Required bypass-negative actual oracles before acceptance:
+- Separately opened ordinary Storage calls EVERY protected publicA–F family on
+  native-bound run/item while original broker paused before physical gate: explicit
+  NativeOwnerRequired/Busy, unchanged SQL generations/token/assignment and0exec.
+- Direct raw SQL APIs unavailable in production interface; compile API misuse
+  counterfactuals and test-only corruption SQL cannot mint authority. Typed inbox
+  facade cannot update task/native/run-authority tables. External DB corruption
+  detected against original accepted/journal/native authority, retains Attention.
+- Stop/edit/archive/newStart/tokenreplacement/gateanswer/automaticwake/quotaSuspend/
+  providerprompt admission and settle compete against actual final Release/write:
+  both commit orders tested, marker/frame counters independent, no mixed authority.
+- Metadata discussion/AttachPr and usage update succeed without granting/losing
+  dispatch due solely to version update; historical receipt does not erase Stop.
+- Existing hidden status repair get_run/list_runs and CLI daemon reconcile do not
+  declare surviving original broker run dead or clear parked into new dispatch.
+- Initial submitted request loses daemon reply before/after native acceptance/Birth:
+  cold same broker SAME claim/token/journal/run/attempt, replay once, real descendant
+  survived until original Stop/terminal; eventual genuine full seal permitsContinue.
+- Real TWO MCP+ACP outgoing full sink/partial write, incoming reverse replies and
+  generated replies; drop daemon/runtime at each Taken/capture/SDK/result/journal
+  ACK cut. Broker-local sameArc/byte pools and exact admitted outputs retained;
+  no duplicate parser, new waiter, discarded payload or extra raw buffer.
+- Journal commit then lost ACK replays original seq; payload-conflict refused;
+  live slow append and actor termination/diskfull obey exact B protocol(b) and
+  second process cannot obtain journal/launch lock while actual owner still held.
+- B20ms TOTAL actual Windows physical gate under real DB contention while other
+  connections read/Stop progress; no stale stored capability after readiness wait.
+All original Windows W1–W10/native actual Job descendant+heldBirth+cold positive
+runner and Linux/macOS/common P1–P5 remain required. No tests executed here.
+
+Remaining review obligations are explicit implementation/soundness review of THIS
+concrete integration, not deferred selection of where responsibilities reside.
+Native leaf Win32 overlapped wait/cancel/attribute layout/exact recipe capsule still
+requires its own pinned API review; this supplement does not certify it. Existing
+trusted binary boundary respected, no universal remote/hostile sameUID claim.

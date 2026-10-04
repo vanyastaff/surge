@@ -1,3 +1,22 @@
+# Concrete native broker integration draft independently dispatched 2026-10-04
+
+Root FULLread integration supplement e4d64ebbf8f85ba9df3dfbec9ba473ba4a4ddaf8a0bf492b15f0d275101b689b,
+verified hash and retained exact artifact. Proposed existing Engine/TrackingContext/
+SDK/RunWriter hosted in original broker; actual initial claim and writer Arc minted
+there before effects, frontend DATA only. A–F source-backed mutation map includes
+claim/token/startup/gate-answer/settlement/quota/providerprompt/status repair/rawpool
+bypasses. Same per-run nonSend physical/enqueue+actualTX lane, TOTAL20ms, exact B
+byte/slot capture and localjournalACK/pendingprojection retained. This is proposed
+integration, NOT existing APIs or proof of Win32 unsafe/native runner compatibility.
+Root dispatched independent combined critic/security precode review to architect;
+only /tmp report allowed, no source/Cargo/build/process/installation. No native
+sourceauthorization, formal5a/5b or requirementretirement. Linux/macOS allscope open.
+
+Author42885 current foundation nextest on committed b622bd4: build finished2m58s,
+1830 tests/64binaries/8inheritedskips,2threads,no-failfast running at receipt.
+Rootreadprogress1064/1830; no final PASS claimed and live log notstaged. Source
+unchanged; author alone polls handle and owns next exactwakefaults.
+
 # LOCAL WIP SOURCE checkpoint b622bd4 — 2026-10-04
 
 User-authorized recoverable SOURCE snapshot committed by sole source owner:
