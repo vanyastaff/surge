@@ -480,6 +480,26 @@ fn definitive_version_conflict_keeps_task_draft_until_explicit_dismissal(cx: &mu
                     input.set_value("Unsaved requirements", window, cx)
                 });
         });
+        window.render_frame(cx);
+        assert!(
+            window.try_find("durable-task-recorded-cost").is_none(),
+            "technical details start collapsed"
+        );
+        window.click("task-toggle-workspace", cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find("durable-task-recorded-cost").is_some(),
+            "expansion exposes the real recorded usage surface"
+        );
+        window.click("task-toggle-workspace", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("durable-task-recorded-cost").is_none());
+        view.update(cx, |view, cx| {
+            assert_eq!(
+                view.task_drafts[&item].comment.read(cx).value().as_ref(),
+                "Unsaved discussion draft"
+            );
+        });
     })
     .unwrap();
     view.update(cx, |view, cx| {

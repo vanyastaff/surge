@@ -96,7 +96,7 @@ fn main() {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(100.0), px(100.0)),
-                    size(px(1280.0), px(800.0)),
+                    size(px(1440.0), px(1024.0)),
                 ))),
                 // Client-side decorations: we draw our own TitleBar (drag +
                 // min/max/close) and gpui-component's Root renders the resize

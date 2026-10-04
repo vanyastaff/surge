@@ -144,6 +144,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Factory Product Model | `docs/factory-product-model.md` | Detailed Factory documentation evidence and testable implications for Surge. |
 | SuperPlane Improvements | `docs/superplane-improvements.md` | Accepted improvement sequence, completion reliability and revision-bound verification. |
 | Native UI Automation | `docs/ui-automation-evaluation.md` | GPUI/egui native interaction evidence and migration criteria. |
+| Desktop Design QA | `design-qa.md` | Selected conversation design, native visual comparisons and interaction evidence. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
 

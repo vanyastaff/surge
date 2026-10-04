@@ -124,6 +124,37 @@ impl SurgeApp {
 
         cx.subscribe(
             &sidebar,
+            |this: &mut Self, _sidebar, _event: &crate::sidebar::CreateTask, cx| {
+                this.open_new_task(cx);
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &sidebar,
+            |this: &mut Self, _, event: &crate::sidebar::OpenRecentTask, cx| {
+                this.navigate(Screen::Fleet, cx);
+                let fleet = this.ensure_fleet(cx);
+                fleet.update(cx, |fleet, cx| match event {
+                    crate::sidebar::OpenRecentTask::Saved(item) => fleet.open_saved_task(*item, cx),
+                    crate::sidebar::OpenRecentTask::Run(run) => fleet.open_run_task(*run, cx),
+                });
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &sidebar,
+            |this: &mut Self, _, _: &crate::sidebar::ShowTasks, cx| {
+                this.navigate(Screen::Fleet, cx);
+                this.ensure_fleet(cx)
+                    .update(cx, |fleet, cx| fleet.show_task_list(cx));
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &sidebar,
             |this: &mut Self, _sidebar, _event: &ToggleSidebar, cx| {
                 this.toggle_sidebar(cx);
             },
@@ -1345,42 +1376,52 @@ impl SurgeApp {
         ]);
     }
 
+    /// Open the durable task form from any project screen.
+    fn open_new_task(&mut self, cx: &mut Context<Self>) {
+        self.navigate(Screen::Fleet, cx);
+        self.ensure_fleet(cx)
+            .update(cx, |fleet, cx| fleet.start_new_task(cx));
+    }
+
+    fn ensure_fleet(&mut self, cx: &mut Context<Self>) -> Entity<FleetScreen> {
+        let state = self.state.clone();
+        self.fleet
+            .get_or_insert_with(|| {
+                let f = cx.new(|cx| FleetScreen::new(state, cx));
+                cx.subscribe(&f, |this: &mut Self, _f, event: &FleetAction, cx| {
+                    match event {
+                        FleetAction::OpenGate(_id) => {
+                            // Decisions live in the Inbox — the queue picks
+                            // the most urgent item automatically.
+                            this.navigate(Screen::Inbox, cx);
+                        },
+                        FleetAction::OpenRun(run_id) => {
+                            this.open_run_cockpit(*run_id, cx);
+                        },
+                        FleetAction::OpenResult(run, tab) => {
+                            this.open_run_cockpit(Some(*run), cx);
+                            this.pending_run_tab = Some(*tab);
+                        },
+                        FleetAction::NewTask => this.navigate(Screen::SpecWizard, cx),
+                        FleetAction::Dispatch(operation_id, prompt) => {
+                            this.dispatch_bootstrap(
+                                prompt.clone(),
+                                *operation_id,
+                                DispatchOrigin::Fleet(_f.clone()),
+                                cx,
+                            );
+                        },
+                    }
+                })
+                .detach();
+                f
+            })
+            .clone()
+    }
+
     fn render_screen_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         match self.active_screen {
-            Screen::Fleet => {
-                let state = self.state.clone();
-                let fleet = self.fleet.get_or_insert_with(|| {
-                    let f = cx.new(|cx| FleetScreen::new(state, cx));
-                    cx.subscribe(&f, |this: &mut Self, _f, event: &FleetAction, cx| {
-                        match event {
-                            FleetAction::OpenGate(_id) => {
-                                // Decisions live in the Inbox — the queue picks
-                                // the most urgent item automatically.
-                                this.navigate(Screen::Inbox, cx);
-                            },
-                            FleetAction::OpenRun(run_id) => {
-                                this.open_run_cockpit(*run_id, cx);
-                            },
-                            FleetAction::OpenResult(run, tab) => {
-                                this.open_run_cockpit(Some(*run), cx);
-                                this.pending_run_tab = Some(*tab);
-                            },
-                            FleetAction::NewTask => this.navigate(Screen::SpecWizard, cx),
-                            FleetAction::Dispatch(operation_id, prompt) => {
-                                this.dispatch_bootstrap(
-                                    prompt.clone(),
-                                    *operation_id,
-                                    DispatchOrigin::Fleet(_f.clone()),
-                                    cx,
-                                );
-                            },
-                        }
-                    })
-                    .detach();
-                    f
-                });
-                fleet.clone().into_any_element()
-            },
+            Screen::Fleet => self.ensure_fleet(cx).into_any_element(),
             Screen::Flow => {
                 let state = self.state.clone();
                 let s = self
@@ -1711,9 +1752,7 @@ impl Render for SurgeApp {
                                 top_bar.update(cx, |tb, cx| tb.toggle_switcher(cx));
                             }
                         }))
-                        .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
-                            this.navigate(Screen::SpecWizard, cx)
-                        }))
+                        .on_action(cx.listener(|this, _: &NewTask, _w, cx| this.open_new_task(cx)))
                         .on_action(cx.listener(|this, _: &OpenProjectDialog, _w, cx| {
                             this.handle_welcome_event(WelcomeEvent::BrowseProject, cx)
                         }))

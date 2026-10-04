@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui_kit::component::Icon;
 use gpui_kit::component::StyledExt;
@@ -17,6 +17,83 @@ use crate::ui;
 pub struct NavigateTo(pub Screen);
 
 impl EventEmitter<NavigateTo> for AppSidebar {}
+
+/// Open the task creation form in the current project.
+#[derive(Clone, PartialEq)]
+pub struct CreateTask;
+
+impl EventEmitter<CreateTask> for AppSidebar {}
+
+/// A real task selected from the retained project history.
+#[derive(Clone, Copy, PartialEq)]
+pub enum OpenRecentTask {
+    Saved(surge_core::id::WorkItemId),
+    Run(surge_core::RunId),
+}
+
+impl EventEmitter<OpenRecentTask> for AppSidebar {}
+
+/// Return to the complete project task list.
+#[derive(Clone, PartialEq)]
+pub struct ShowTasks;
+
+impl EventEmitter<ShowTasks> for AppSidebar {}
+
+fn recent_tasks(state: &AppState) -> Vec<(OpenRecentTask, String)> {
+    let records: Vec<_> = state
+        .tasks
+        .records
+        .iter()
+        .filter(|record| {
+            state
+                .tasks
+                .scope
+                .as_ref()
+                .is_some_and(|scope| record.workspace.repository == scope.repository)
+        })
+        .collect();
+    let mut task_runs: HashSet<_> = records
+        .iter()
+        .filter_map(|record| record.active_run)
+        .collect();
+    for record in &records {
+        if let Some(history) = state.tasks.histories.get(&record.id) {
+            task_runs.extend(history.attempts.entries.iter().map(|attempt| attempt.run));
+        }
+    }
+    task_runs.extend(state.run_streams.iter().filter_map(|(run, stream)| {
+        let item = stream.trusted_work_item()?;
+        records
+            .iter()
+            .any(|record| {
+                record.id == item
+                    && state.run_in_project(run)
+                    && stream
+                        .git_common_dir
+                        .as_ref()
+                        .is_none_or(|repository| repository == &record.workspace.repository)
+            })
+            .then_some(*run)
+    }));
+    records
+        .into_iter()
+        .map(|record| (OpenRecentTask::Saved(record.id), record.title.clone()))
+        .chain(
+            state
+                .project_runs()
+                .into_iter()
+                .filter(|run| !task_runs.contains(&run.run_id))
+                .map(|run| {
+                    (
+                        OpenRecentTask::Run(run.run_id),
+                        state
+                            .run_prompt(&run.run_id)
+                            .map_or_else(|| format!("Run {}", run.run_id), str::to_owned),
+                    )
+                }),
+        )
+        .collect()
+}
 
 /// Action to toggle sidebar collapsed state.
 #[derive(Clone, PartialEq)]
@@ -37,6 +114,9 @@ pub struct AppSidebar {
     collapsed: bool,
     customize_expanded: bool,
     customize_focus: FocusHandle,
+    create_task_focus: FocusHandle,
+    recent_focus: [FocusHandle; 6],
+    all_tasks_focus: FocusHandle,
     navigation_focus: HashMap<Screen, FocusHandle>,
     /// Read-only handle to app state for the live daemon footer. The
     /// rail observes it so the footer re-renders when the daemon link
@@ -59,6 +139,9 @@ impl AppSidebar {
             collapsed,
             customize_expanded: Screen::customize_items().contains(&active),
             customize_focus: cx.focus_handle(),
+            create_task_focus: cx.focus_handle(),
+            recent_focus: std::array::from_fn(|_| cx.focus_handle()),
+            all_tasks_focus: cx.focus_handle(),
             navigation_focus: Screen::sidebar_items()
                 .iter()
                 .chain(Screen::customize_items())
@@ -155,13 +238,13 @@ impl AppSidebar {
         };
 
         let icon_color = if is_active {
-            theme::accent()
+            theme::text_primary()
         } else {
             theme::text_muted()
         };
         let mut row = base.child(
             Icon::new(screen.icon())
-                .size(px(15.0))
+                .size(px(17.0))
                 .text_color(icon_color),
         );
 
@@ -169,7 +252,7 @@ impl AppSidebar {
             row = row.child(
                 div()
                     .flex_1()
-                    .text_size(px(14.0))
+                    .text_size(px(15.0))
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.to_string()),
             );
@@ -190,6 +273,146 @@ impl AppSidebar {
 
         row.test_support()
             .debug_selector(move || format!("nav-{label}"))
+    }
+
+    fn render_create_task(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("sidebar-create-task")
+            .accessibility_id("sidebar-create-task")
+            .role(Role::Button)
+            .aria_label("New task")
+            .h_flex()
+            .items_center()
+            .gap(px(9.0))
+            .min_h(px(40.0))
+            .px(px(10.0))
+            .mx(px(6.0))
+            .mb(px(12.0))
+            .rounded(px(ui::R_CONTROL))
+            .border_1()
+            .border_color(transparent_black())
+            .text_size(px(15.0))
+            .text_color(theme::text_primary())
+            .cursor_pointer()
+            .when(self.collapsed, |el| el.justify_center())
+            .hover(|style: StyleRefinement| style.bg(theme::surface()))
+            .track_focus(&self.create_task_focus)
+            .focus_visible(|style| style.border_color(theme::accent()))
+            .tab_index(0)
+            .tab_stop(true)
+            .tooltip(|window, cx| Tooltip::new("New task").build(window, cx))
+            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    cx.emit(CreateTask);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(CreateTask)))
+            .child(Icon::new(gpui_kit::component::IconName::Plus).size(px(17.0)))
+            .when(!self.collapsed, |el| el.child("New task"))
+            .test_support()
+            .debug_selector(|| "sidebar-create-task".into())
+    }
+
+    fn render_recent_tasks(&self, cx: &mut Context<Self>) -> Div {
+        let tasks = recent_tasks(self.state.read(cx));
+        let more = tasks.len() > 6 || self.state.read(cx).tasks.next_cursor.is_some();
+        div()
+            .v_flex()
+            .mt(px(18.0))
+            .gap(px(2.0))
+            .when(!tasks.is_empty(), |list| {
+                list.child(
+                    div()
+                        .mx(px(12.0))
+                        .pt(px(12.0))
+                        .pb(px(6.0))
+                        .border_t_1()
+                        .border_color(theme::hairline())
+                        .text_size(px(14.0))
+                        .text_color(theme::text_dim())
+                        .child("Project tasks"),
+                )
+            })
+            .children(
+                tasks
+                    .into_iter()
+                    .take(6)
+                    .enumerate()
+                    .map(|(index, (target, title))| {
+                        let label = ui::headline(&title, 34);
+                        div()
+                            .id(SharedString::from(format!("recent-task-{index}")))
+                            .role(Role::Button)
+                            .aria_label(format!("Open task {title}"))
+                            .h_flex()
+                            .gap(px(9.0))
+                            .items_center()
+                            .min_h(px(38.0))
+                            .mx(px(6.0))
+                            .px(px(10.0))
+                            .py(px(6.0))
+                            .rounded(px(ui::R_CONTROL))
+                            .border_1()
+                            .border_color(transparent_black())
+                            .text_color(theme::text_muted())
+                            .text_size(px(14.0))
+                            .cursor_pointer()
+                            .hover(|style: StyleRefinement| {
+                                style.bg(theme::surface()).text_color(theme::text_primary())
+                            })
+                            .track_focus(&self.recent_focus[index])
+                            .focus_visible(|style| style.border_color(theme::accent()))
+                            .tab_index(0)
+                            .tab_stop(true)
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(title.clone()).build(window, cx)
+                            })
+                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(target)))
+                            .on_key_down(cx.listener(move |_, event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    cx.emit(target);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .child(
+                                Icon::new(gpui_kit::assets::IconName::MessageCircle).size(px(17.0)),
+                            )
+                            .child(div().min_w_0().flex_1().truncate().child(label))
+                            .test_support()
+                            .debug_selector(move || format!("recent-task-{index}"))
+                    }),
+            )
+            .when(more, |list| {
+                list.child(
+                    div()
+                        .id("recent-tasks-all")
+                        .role(Role::Button)
+                        .aria_label("Show all tasks")
+                        .track_focus(&self.all_tasks_focus)
+                        .border_1()
+                        .border_color(transparent_black())
+                        .focus_visible(|style| style.border_color(theme::accent()))
+                        .tab_index(0)
+                        .tab_stop(true)
+                        .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.emit(ShowTasks);
+                                cx.stop_propagation();
+                            }
+                        }))
+                        .mx(px(6.0))
+                        .px(px(10.0))
+                        .py(px(8.0))
+                        .rounded(px(ui::R_CONTROL))
+                        .text_size(px(14.0))
+                        .text_color(theme::text_muted())
+                        .cursor_pointer()
+                        .hover(|style: StyleRefinement| style.bg(theme::surface()))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ShowTasks)))
+                        .child("All tasks"),
+                )
+            })
     }
 
     fn render_customize_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -217,7 +440,7 @@ impl AppSidebar {
             .rounded(px(ui::R_CONTROL))
             .border_1()
             .border_color(transparent_black())
-            .text_size(px(14.0))
+            .text_size(px(15.0))
             .text_color(theme::text_muted())
             .cursor_pointer()
             .when(self.collapsed, |el| el.justify_center())
@@ -348,10 +571,11 @@ impl AppSidebar {
 
 impl Render for AppSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = if self.collapsed { px(60.0) } else { px(208.0) };
+        let width = if self.collapsed { px(60.0) } else { px(270.0) };
 
         let items: Vec<_> = Screen::sidebar_items()
             .iter()
+            .filter(|&&screen| screen != Screen::Settings)
             .map(|&screen| self.render_nav_item(screen, cx))
             .collect();
 
@@ -361,19 +585,22 @@ impl Render for AppSidebar {
             .h_full()
             .font_family(ui::BODY)
             .flex_shrink_0()
-            .bg(theme::panel())
+            .bg(theme::sidebar_bg())
             .border_r_1()
             .border_color(theme::hairline())
             // Nav items
             .child(
                 div().id("sidebar-navigation").v_flex().flex_1().min_h_0().overflow_y_scroll().gap(px(4.0)).pt(px(16.0))
+                    .child(self.render_create_task(cx))
                     .children(items)
                     .child(self.render_customize_toggle(cx))
                     .when(self.customize_expanded, |el| {
                         el.children(Screen::customize_items().iter().map(|&screen| self.render_nav_item(screen, cx)))
                     })
+                    .when(!self.collapsed, |el| el.child(self.render_recent_tasks(cx)))
             )
-            // Engine status + collapse toggle
+            // Settings stays within reach below the scrollable navigation.
+            .child(self.render_nav_item(Screen::Settings, cx))
             .child(self.render_footer(cx))
     }
 }
@@ -384,8 +611,53 @@ mod tests {
 
     use gpui_kit::{AppContext as _, Modifiers, TestAppContext};
 
-    use super::{AppSidebar, NavigateTo};
+    use super::{AppSidebar, CreateTask, NavigateTo};
     use crate::{app_state::AppState, router::Screen};
+
+    #[test]
+    fn recent_history_is_scoped_and_does_not_duplicate_durable_active_runs() {
+        use std::path::PathBuf;
+        use surge_core::work_item::{WorkItemRecord, WorkItemWorkspace};
+        let repository = PathBuf::from("/project/a/.git");
+        let mut state = AppState::new();
+        state.tasks.begin(repository.clone());
+        let run = surge_core::RunId::new();
+        let item = surge_core::id::WorkItemId::new();
+        let record = WorkItemRecord {
+            id: item,
+            project: surge_core::id::WorkItemProjectId::new(),
+            title: "Real retained task".into(),
+            accepted_revision: 1,
+            version: 1,
+            archived_at_ms: None,
+            active_run: Some(run),
+            generation: 1,
+            workspace: WorkItemWorkspace {
+                repository,
+                checkout: PathBuf::from("/project/a"),
+                path: PathBuf::from("/project/a/task"),
+                ownership: "fixture".into(),
+                branch: "task/fixture".into(),
+                base_commit: "a".repeat(40),
+            },
+        };
+        let mut foreign = record.clone();
+        foreign.id = surge_core::id::WorkItemId::new();
+        foreign.workspace.repository = PathBuf::from("/project/b/.git");
+        foreign.title = "Foreign task".into();
+        state.tasks.records = vec![record, foreign];
+        state.runs.push(crate::app_state::UiRun {
+            run_id: run,
+            status: surge_orchestrator::engine::handle::RunStatus::Completed,
+            started_at: chrono::Utc::now(),
+            last_event_seq: None,
+            ended_at: None,
+        });
+        let rows = super::recent_tasks(&state);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0].0, super::OpenRecentTask::Saved(id) if id == item));
+        assert_eq!(rows[0].1, "Real retained task");
+    }
 
     #[test]
     fn sidebar_main_routes_and_advanced_navigation() {
@@ -405,7 +677,13 @@ mod tests {
         let sidebar = cx.new(|cx| AppSidebar::new(Screen::Fleet, false, state, cx));
         let navigated = Rc::new(RefCell::new(None));
         let emitted = navigated.clone();
+        let created = Rc::new(RefCell::new(0));
+        let created_event = created.clone();
         cx.update(|cx| {
+            cx.subscribe(&sidebar, move |_, _: &CreateTask, _| {
+                *created_event.borrow_mut() += 1;
+            })
+            .detach();
             cx.subscribe(&sidebar, move |_, event: &NavigateTo, _| {
                 emitted.replace(Some(event.0));
             })
@@ -414,6 +692,15 @@ mod tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             gpui_kit::component::Root::new(sidebar.clone(), window, cx)
         });
+        let new_task = window.debug_bounds("sidebar-create-task").unwrap();
+        window.simulate_click(new_task.center(), Modifiers::default());
+        assert_eq!(*created.borrow(), 1);
+        window.update(|window, cx| {
+            let focus = sidebar.read(cx).create_task_focus.clone();
+            focus.focus(window, cx);
+        });
+        window.simulate_keystrokes("enter");
+        assert_eq!(*created.borrow(), 2);
         for id in [
             "nav-Tasks",
             "nav-Plan",

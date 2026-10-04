@@ -29,6 +29,7 @@ icon_assets!(
         GitMerge,
         Hourglass,
         Kanban,
+        MessageCircle,
         Pin,
         PinOff,
         Repeat,
@@ -76,6 +77,7 @@ mod tests {
             IconName::ShieldCheck,
             IconName::FolderPlus,
             IconName::Workflow,
+            IconName::MessageCircle,
         ] {
             let path = icon.path();
             assert!(AppAssets.load(&path).unwrap().is_some(), "{path} missing");

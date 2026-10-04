@@ -171,6 +171,8 @@ pub struct FleetScreen {
     creation_busy: bool,
     creation_error: Option<String>,
     task_last_render: Option<std::time::Instant>,
+    expanded_task_editors: std::collections::HashSet<surge_core::id::WorkItemId>,
+    expanded_task_metadata: std::collections::HashSet<surge_core::id::WorkItemId>,
 }
 
 impl FleetScreen {
@@ -229,7 +231,46 @@ impl FleetScreen {
             creation_busy: false,
             creation_error: None,
             task_last_render: None,
+            expanded_task_editors: std::collections::HashSet::new(),
+            expanded_task_metadata: std::collections::HashSet::new(),
         }
+    }
+
+    /// Open a new durable task while retaining any existing input drafts.
+    pub fn start_new_task(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.selected_item = None;
+        self.creating_task = true;
+        cx.notify();
+    }
+
+    /// Open a saved task from the project sidebar.
+    pub fn open_saved_task(&mut self, item: surge_core::id::WorkItemId, cx: &mut Context<Self>) {
+        self.filter = TaskFilter::All;
+        self.selected = None;
+        self.creating_task = false;
+        self.select_item(item, cx);
+    }
+
+    /// Open recorded run history from the project sidebar.
+    pub fn open_run_task(&mut self, run: surge_core::RunId, cx: &mut Context<Self>) {
+        self.filter = TaskFilter::All;
+        self.select_run(run, cx);
+    }
+
+    fn select_run(&mut self, run: surge_core::RunId, cx: &mut Context<Self>) {
+        self.selected = Some(run);
+        self.selected_item = None;
+        self.creating_task = false;
+        cx.notify();
+    }
+
+    /// Return to the project list while retaining all unsent drafts.
+    pub fn show_task_list(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.selected_item = None;
+        self.creating_task = false;
+        cx.notify();
     }
 
     /// Preserve the exact draft until its operation is acknowledged.
@@ -424,9 +465,7 @@ impl FleetScreen {
             .id(SharedString::from(format!("task-row-{run_id}")))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.selected = Some(run_id);
-                this.selected_item = None;
-                cx.notify();
+                this.select_run(run_id, cx);
             }))
             .v_flex()
             .gap(px(8.0))
@@ -462,9 +501,7 @@ impl FleetScreen {
                         .debug_selector(|| "fleet-task-row".into())
                         .text_size(px(15.0))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.selected = Some(run_id);
-                            this.selected_item = None;
-                            cx.notify();
+                            this.select_run(run_id, cx);
                         })),
                     ),
             )
@@ -472,7 +509,11 @@ impl FleetScreen {
                 div()
                     .h_flex()
                     .gap(px(12.0))
-                    .child(ui::pill(task.status(), task.color(), theme::panel()))
+                    .child(div().h_flex().items_start().child(ui::pill(
+                        task.status(),
+                        task.color(),
+                        theme::panel(),
+                    )))
                     .when(self.run_ownership_unconfirmed(run_id, cx), |row| {
                         row.child(
                             ui::meta("Task ownership unconfirmed")
@@ -499,15 +540,19 @@ impl FleetScreen {
             )
     }
 
-    fn render_detail(&self, task: &WorkTask, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_detail(
+        &self,
+        task: &WorkTask,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let run_id = task.run.run_id;
         div()
             .id("task-detail")
-            .test_support()
-            .debug_selector(|| "task-detail".into())
             .v_flex()
             .gap(px(20.0))
-            .w(px(340.0))
+            .w(width)
+            .h_full()
             .min_h(px(0.0))
             .flex_shrink_0()
             .p(px(24.0))
@@ -521,6 +566,7 @@ impl FleetScreen {
                     .flex_shrink_0()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::text_primary())
+                    .line_clamp(3)
                     .child(task.title()),
             )
             .child(ui::pill(task.status(), task.color(), theme::panel_raised()))
@@ -576,28 +622,6 @@ impl FleetScreen {
                     ),
                 )
             })
-            .child(
-                div()
-                    .v_flex()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(px(14.0))
-                            .font_weight(FontWeight::BOLD)
-                            .child("Original request"),
-                    )
-                    .child(
-                        div()
-                            .p(px(14.0))
-                            .rounded(px(8.0))
-                            .bg(theme::panel())
-                            .text_size(px(15.0))
-                            .text_color(theme::text_primary())
-                            .child(task.request.clone().unwrap_or_else(|| {
-                                "The original request has not arrived from the daemon yet.".into()
-                            })),
-                    ),
-            )
             .child(ui::meta(format!(
                 "Started {}",
                 task.run
@@ -646,6 +670,9 @@ impl FleetScreen {
         }
         div()
             .v_flex()
+            .items_center()
+            .px(px(28.0))
+            .pb(px(24.0))
             .when_some(self.submission_error.clone(), |el, error| {
                 el.child(
                     div()
@@ -660,28 +687,26 @@ impl FleetScreen {
             })
             .child(
                 div()
-                    .min_h(px(60.0))
+                    .w_full()
+                    .max_w(px(800.0))
+                    .min_h(px(72.0))
                     .flex_shrink_0()
                     .h_flex()
                     .gap(px(12.0))
                     .items_center()
-                    .px(px(16.0))
+                    .px(px(14.0))
                     .bg(theme::panel())
-                    .border_t_1()
-                    .border_color(theme::hairline())
+                    .rounded(px(24.0))
+                    .border_1()
+                    .border_color(theme::hairline_strong())
                     .child(
                         div()
                             .flex_1()
                             .h_flex()
                             .gap(px(10.0))
                             .items_center()
-                            .h(px(38.0))
+                            .h(px(48.0))
                             .px(px(12.0))
-                            .rounded(px(ui::R_CONTROL + 2.0))
-                            .bg(theme::panel_deep())
-                            .border_1()
-                            .border_color(theme::hairline_strong())
-                            .child(ui::role_badge("new task", theme::Semantic::Agent))
                             .child(
                                 div()
                                     .id("fleet-prompt-region")
@@ -694,8 +719,7 @@ impl FleetScreen {
                                             .aria_label("Describe a task")
                                             .appearance(false)
                                     })),
-                            )
-                            .child(ui::kbd("↵")),
+                            ),
                     )
                     .child(
                         gpui_kit::component::button::Button::new("fleet-start")
@@ -721,100 +745,321 @@ impl FleetScreen {
     }
 }
 
+impl FleetScreen {
+    fn render_task_list(
+        &self,
+        tasks: &[WorkTask],
+        visible: &[&WorkTask],
+        durable: &[surge_core::work_item::WorkItemRecord],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .v_flex()
+            .flex_1()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .child(
+                div()
+                    .px(px(28.0))
+                    .pb(px(16.0))
+                    .child(self.render_filters(tasks, cx)),
+            )
+            .when(self.state.read(cx).tasks.next_cursor.is_some(), |list| {
+                list.child(div().px(px(28.0)).pb(px(8.0)).child(ui::meta(
+                    "Counts cover loaded items. Load more to include older tasks.",
+                )))
+            })
+            .child(
+                div()
+                    .id("task-list")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .v_flex()
+                            .w_full()
+                            .max_w(px(960.0))
+                            .px(px(28.0))
+                            .children(durable.iter().map(|item| self.render_durable_row(item, cx)))
+                            .when(self.state.read(cx).tasks.next_cursor.is_some(), |list| {
+                                list.child(
+                                    gpui_kit::component::button::Button::new("more-durable-tasks")
+                                        .label("Load more tasks")
+                                        .disabled(self.state.read(cx).tasks.loading)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.load_durable_tasks(true, cx)
+                                        })),
+                                )
+                            })
+                            .when(!tasks.is_empty() && !durable.is_empty(), |list| {
+                                list.child(ui::meta("Additional run history"))
+                            })
+                            .when(visible.is_empty() && durable.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .id("fleet-empty")
+                                        .test_support()
+                                        .aria_label("Create your first application")
+                                        .v_flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .min_h(px(300.0))
+                                        .gap(px(12.0))
+                                        .p(px(32.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(28.0))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(if tasks.is_empty() {
+                                                    "What would you like to build?"
+                                                } else {
+                                                    "No tasks in this view"
+                                                }),
+                                        )
+                                        .child(ui::meta(if tasks.is_empty() {
+                                            "Describe your application below to get started."
+                                        } else {
+                                            "Choose another filter to see more tasks."
+                                        })),
+                                )
+                            })
+                            .children(visible.iter().map(|task| self.render_task_row(task, cx))),
+                    ),
+            )
+    }
+
+    fn render_legacy_workspace(
+        &self,
+        task: &WorkTask,
+        compact: bool,
+        inspector_width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let thread = div()
+            .id("task-conversation")
+            .flex_shrink_0()
+            .v_flex()
+            .gap(px(24.0))
+            .w_full()
+            .max_w(px(720.0))
+            .p(px(32.0))
+            .child(
+                div()
+                    .id("task-conversation-title")
+                    .test_support()
+                    .debug_selector(|| "task-conversation-title".into())
+                    .text_size(px(28.0))
+                    .line_height(px(36.0))
+                    .flex_shrink_0()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .line_clamp(2)
+                    .child(task.title()),
+            )
+            .child(div().h_flex().items_start().child(ui::pill(
+                task.status(),
+                task.color(),
+                theme::panel(),
+            )))
+            .child(durable_tasks::thread_message(
+                "Original request".into(),
+                task.request.clone().unwrap_or_else(|| {
+                    "The original request has not arrived from the daemon yet.".into()
+                }),
+            ));
+        let thread = self.render_task_progress(thread, Some(task.run.run_id), cx);
+        div()
+            .h_flex()
+            .items_stretch()
+            .flex_1()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .when(compact, |layout| layout.v_flex())
+            .child(
+                div()
+                    .id("legacy-task-thread-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .overflow_y_scroll()
+                    .h_flex()
+                    .items_start()
+                    .justify_center()
+                    .child(
+                        thread
+                            .test_support()
+                            .debug_selector(|| "task-conversation".into()),
+                    ),
+            )
+            .child(
+                div()
+                    .id("legacy-task-inspector-scroll")
+                    .flex_shrink_0()
+                    .when(compact, |pane| {
+                        pane.w_full().max_h(px(260.0)).overflow_y_scroll()
+                    })
+                    .child(
+                        self.render_detail(task, inspector_width, cx)
+                            .when(compact, |pane| pane.w_full().border_l_0().border_t_1())
+                            .test_support()
+                            .debug_selector(|| "task-detail".into()),
+                    ),
+            )
+    }
+
+    fn render_task_notices(&self, cx: &mut Context<Self>) -> Div {
+        let state = self.state.read(cx);
+        let live = state.daemon_state.facade().is_some();
+        let stale = !state.tasks.fresh && !state.tasks.records.is_empty();
+        let cache_error = state.tasks.error.clone();
+        let project_error = state.project_load_error.clone();
+        div().v_flex().gap(px(6.0)).px(px(28.0)).flex_shrink_0()
+            .when(!live, |notices| notices.child(ui::meta("Daemon offline · showing last known tasks. Start the daemon from the sidebar to begin work.")))
+            .when(stale, |notices| notices.child(ui::meta("Task information may be out of date.")))
+            .when_some(project_error, |notices, error| notices.child(div().text_color(theme::error()).child(error)))
+            .when_some(cache_error, |notices, error| notices.child(ui::meta(error)))
+            .when_some(self.task_error.clone(), |notices, error| notices.child(ui::meta(error)))
+            .when(self.task_busy, |notices| notices.child(ui::meta("Task operation pending…")))
+            .when(self.selected_item.is_some_and(|item| self.task_rejections.contains(&item)) && !self.task_busy, |notices| notices.child(
+                gpui_kit::component::button::Button::new("discard-rejected-task-operation")
+                    .label("Dismiss rejected operation; keep draft")
+                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_rejected_task_operation(cx)))))
+            .when(self.selected_item.is_some_and(|item| self.task_submissions.contains_key(&item)) && !self.task_busy, |notices| notices.child(
+                gpui_kit::component::button::Button::new("retry-task-operation").label("Retry task operation")
+                    .on_click(cx.listener(|this, _, _, cx| this.retry_task(cx)))))
+    }
+}
+
 impl Render for FleetScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.task_last_render = Some(std::time::Instant::now());
         self.refresh_tasks_if_changed(cx);
-        let durable_all = self.state.read(cx).tasks.records.clone();
-        let durable: Vec<_> = durable_all
+        let durable: Vec<_> = self
+            .state
+            .read(cx)
+            .tasks
+            .records
+            .clone()
             .into_iter()
             .filter(|item| self.includes_durable(self.filter, item, cx))
             .collect();
-        if self.selected_item.is_some_and(|item| {
-            self.state
-                .read(cx)
-                .tasks
-                .records
-                .iter()
-                .any(|record| record.id == item)
-                && !durable.iter().any(|record| record.id == item)
-        }) {
-            self.selected_item = None;
-        }
-        let task_cache_error = self.state.read(cx).tasks.error.clone();
-        let task_cache_stale = !self.state.read(cx).tasks.fresh && !durable.is_empty();
         let tasks = self.tasks(cx);
         let visible: Vec<_> = tasks
             .iter()
             .filter(|task| self.filter.includes(task))
             .collect();
-        if !visible
-            .iter()
-            .any(|task| Some(task.run.run_id) == self.selected)
+        if self
+            .selected
+            .is_some_and(|run| !visible.iter().any(|task| task.run.run_id == run))
         {
-            self.selected = visible.first().map(|task| task.run.run_id);
+            self.selected = None;
         }
         let selected = visible
             .iter()
             .find(|task| Some(task.run.run_id) == self.selected)
             .copied();
-        let live = self.state.read(cx).daemon_state.facade().is_some();
-        let project_error = self.state.read(cx).project_load_error.clone();
-        let durable_detail = self
-            .selected_item
-            .map(|item| self.render_durable_detail(item, window, cx));
+        let has_selection = self.selected_item.is_some() || selected.is_some();
+        let compact = window.viewport_size().width < px(1000.0);
+        let workspace = if let Some(item) = self.selected_item {
+            self.render_durable_workspace(item, compact, window, cx)
+        } else if let Some(task) = selected {
+            self.render_legacy_workspace(
+                task,
+                compact,
+                if window.viewport_size().width >= px(1280.0) {
+                    px(400.0)
+                } else {
+                    px(320.0)
+                },
+                cx,
+            )
+        } else {
+            self.render_task_list(&tasks, &visible, &durable, cx)
+        };
         let creation_form = if self.creating_task {
-            Some(self.render_task_creation(window, cx))
+            Some(
+                div()
+                    .id("task-create-form")
+                    .test_support()
+                    .debug_selector(|| "task-create-form".into())
+                    .max_w(px(780.0))
+                    .w_full()
+                    .child(self.render_task_creation(window, cx)),
+            )
         } else {
             None
         };
-        div().v_flex().size_full().bg(theme::surface()).text_color(theme::text_primary())
-            .child(div().h_flex().items_center().flex_shrink_0().gap(px(16.0)).p(px(24.0))
-                .child(div().v_flex().gap(px(6.0)).flex_1()
-                    .child(div().text_size(px(26.0)).font_weight(FontWeight::BOLD).child("Your work"))
-                    .child(ui::meta("Follow task progress, review results, and make decisions.")))
-                .child(gpui_kit::component::button::Button::new("new-durable-task").primary().label("New task")
-                    .on_click(cx.listener(|this, _, _, cx| { this.creating_task = !this.creating_task; cx.notify(); })))
-                .child(gpui_kit::component::button::Button::new("fleet-new-task").label("Plan application")
-                    .accessibility_id("fleet-new-task").on_click(cx.listener(|_, _, _, cx| cx.emit(FleetAction::NewTask)))))
-            .when(!live, |screen| screen.child(div().px(px(24.0)).py(px(8.0)).text_size(px(13.0)).text_color(theme::text_muted())
-                .child("Daemon offline · showing last known tasks. Start the daemon from the sidebar to begin work.")))
-            .when_some(project_error, |screen, error| screen.child(div().px(px(24.0)).py(px(8.0)).text_color(theme::error()).child(error)))
+        div()
+            .v_flex()
+            .size_full()
+            .min_w(px(0.0))
+            .bg(theme::background())
+            .text_color(theme::text_primary())
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .flex_shrink_0()
+                    .gap(px(12.0))
+                    .px(px(28.0))
+                    .py(px(18.0))
+                    .when(has_selection, |header| {
+                        header.child(
+                            gpui_kit::component::button::Button::new("fleet-back-to-list")
+                                .ghost()
+                                .label("‹  Tasks")
+                                .accessibility_id("fleet-back-to-list")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_task_list(cx);
+                                })),
+                        )
+                    })
+                    .when(!has_selection, |header| {
+                        header.child(
+                            div()
+                                .text_size(px(24.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Tasks"),
+                        )
+                    })
+                    .child(div().flex_1())
+                    .child(
+                        gpui_kit::component::button::Button::new("refresh-durable-tasks")
+                            .ghost()
+                            .label("Refresh")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_durable_tasks(cx);
+                                if let Some(item) = this.selected_item {
+                                    this.reload_item(item, cx);
+                                }
+                            })),
+                    )
+                    .when(!has_selection, |header| {
+                        header
+                            .child(
+                                gpui_kit::component::button::Button::new("new-durable-task")
+                                    .label("New task")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.start_new_task(cx)),
+                                    ),
+                            )
+                            .child(
+                                gpui_kit::component::button::Button::new("fleet-new-task")
+                                    .ghost()
+                                    .label("Plan application")
+                                    .accessibility_id("fleet-new-task")
+                                    .on_click(
+                                        cx.listener(|_, _, _, cx| cx.emit(FleetAction::NewTask)),
+                                    ),
+                            )
+                    }),
+            )
+            .child(self.render_task_notices(cx))
             .children(creation_form)
-            .child(gpui_kit::component::button::Button::new("refresh-durable-tasks").label("Refresh tasks")
-                .on_click(cx.listener(|this, _, _, cx| { this.refresh_durable_tasks(cx); if let Some(item) = this.selected_item { this.select_item(item, cx); } })))
-            .when(task_cache_stale, |screen| screen.child(ui::meta("Task information may be out of date.")))
-            .when_some(task_cache_error, |screen, error| screen.child(ui::meta(error)))
-            .when_some(self.task_error.clone(), |screen, error| screen.child(ui::meta(error)))
-            .when(self.task_busy, |screen| screen.child(ui::meta("Task operation pending…")))
-            .when(self.selected_item.is_some_and(|item| self.task_rejections.contains(&item)) && !self.task_busy, |screen| screen.child(
-                gpui_kit::component::button::Button::new("discard-rejected-task-operation")
-                    .label("Dismiss rejected operation; keep draft")
-                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_rejected_task_operation(cx))),
-            ))
-            .when(self.selected_item.is_some_and(|item| self.task_submissions.contains_key(&item)) && !self.task_busy, |screen| screen.child(
-                gpui_kit::component::button::Button::new("retry-task-operation").label("Retry task operation")
-                    .on_click(cx.listener(|this, _, _, cx| this.retry_task(cx)))))
-            .child(div().h_flex().items_stretch().flex_1().min_h(px(0.0))
-                .child(div().v_flex().flex_1().min_h(px(0.0)).min_w(px(0.0))
-                    .child(div().px(px(20.0)).pb(px(16.0)).child(self.render_filters(&tasks, cx)))
-                    .when(self.state.read(cx).tasks.next_cursor.is_some(), |list| list.child(
-                        div().px(px(20.0)).pb(px(8.0)).child(ui::meta("Counts cover loaded items. Load more to include older tasks."))))
-                    .child(div().id("task-list").flex_1().min_h(px(0.0)).overflow_y_scroll()
-                        .children(durable.iter().map(|item| self.render_durable_row(item, cx)))
-                        .when(self.state.read(cx).tasks.next_cursor.is_some(), |list| list.child(
-                            gpui_kit::component::button::Button::new("more-durable-tasks").label("Load more tasks")
-                                .disabled(self.state.read(cx).tasks.loading)
-                                .on_click(cx.listener(|this, _, _, cx| this.load_durable_tasks(true, cx)))))
-                        .when(!tasks.is_empty() && !durable.is_empty(), |list| list.child(ui::meta("Additional run history")))
-                        .when(visible.is_empty() && durable.is_empty(), |list| list.child(div().id("fleet-empty").test_support().aria_label("Create your first application")
-                            .v_flex().p(px(32.0)).gap(px(12.0))
-                            .child(div().text_size(px(20.0)).font_weight(FontWeight::BOLD).child(if tasks.is_empty() { "Create your first application" } else { "No tasks in this view" }))
-                            .child(ui::meta(if tasks.is_empty() { "Describe what you want to build below, then select Start." } else { "Choose another filter to see more tasks." }))))
-                        .children(visible.iter().map(|task| self.render_task_row(task, cx)))))
-                .children(durable_detail)
-                .when(self.selected_item.is_none(), |screen| screen.children(selected.map(|task| self.render_detail(task, cx)))))
-            .child(self.render_command_bar(window, cx))
+            .child(workspace)
+            .when(!has_selection && !self.creating_task, |screen| {
+                screen.child(self.render_command_bar(window, cx))
+            })
     }
 }
 
@@ -1124,6 +1369,89 @@ mod accessibility_tests {
     }
 
     #[gpui_kit::test]
+    fn task_list_navigation_preserves_new_task_draft(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let state = cx.new(|_| AppState::new());
+        let view = cx.new(|cx| FleetScreen::new(state, cx));
+        let (_, window) = cx
+            .add_window_view(|window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+        window.update(|window, cx| {
+            view.update(cx, |fleet, cx| {
+                fleet.start_new_task(cx);
+                let _ = fleet.render_task_creation(window, cx);
+                let title = fleet.new_task_draft.as_ref().unwrap().title.clone();
+                title.update(cx, |input, cx| {
+                    input.set_value("Retained task draft", window, cx)
+                });
+                fleet.selected = Some(surge_core::RunId::new());
+                fleet.selected_item = Some(surge_core::id::WorkItemId::new());
+                fleet.show_task_list(cx);
+                assert!(!fleet.creating_task);
+                assert!(fleet.selected.is_none());
+                assert!(fleet.selected_item.is_none());
+                fleet.start_new_task(cx);
+                let _ = fleet.render_task_creation(window, cx);
+                let retained = &fleet.new_task_draft.as_ref().unwrap().title;
+                assert_eq!(retained.entity_id(), title.entity_id());
+                assert_eq!(retained.read(cx).value().as_ref(), "Retained task draft");
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn selected_task_opens_conversation_and_back_restores_list(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let run_id = surge_core::RunId::new();
+        let request = "Build a small browser pomodoro timer: plain HTML/CSS/JS, no dependencies, start/pause/reset, 25/5 minute cycles, keyboard shortcuts, accessible status text, and a Node test for the timer logic.";
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.runs.push(crate::app_state::UiRun {
+                run_id,
+                status: RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+                ended_at: None,
+            });
+            state.run_streams.entry(run_id).or_default().prompt = Some(request.into());
+            state
+        });
+        let view = cx.new(|cx| FleetScreen::new(state, cx));
+        let (_, window) = cx
+            .add_window_view(|window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+        window.update(|window, cx| {
+            view.update(cx, |fleet, cx| fleet.start_new_task(cx));
+            window.render_frame(cx);
+            window.click(SharedString::from(format!("task-{run_id}")), cx);
+            window.render_frame(cx);
+            assert_eq!(view.read(cx).tasks(cx)[0].request.as_deref(), Some(request));
+            assert!(
+                !view.read(cx).creating_task,
+                "opening a real row exits creation"
+            );
+        });
+        assert!(window.debug_bounds("task-conversation").is_some());
+        let title = window.debug_bounds("task-conversation-title").unwrap();
+        assert!(title.size.height > gpui_kit::px(0.0));
+        assert!(
+            title.size.height <= gpui_kit::px(90.0),
+            "a long request leaves room for the conversation below its title"
+        );
+        assert!(
+            title.origin.y >= gpui_kit::px(0.0),
+            "the task title remains visible at the top of the thread"
+        );
+        assert!(window.debug_bounds("task-create-form").is_none());
+        assert!(window.debug_bounds("fleet-prompt-region").is_none());
+        window.update(|window, cx| {
+            window.click("fleet-back-to-list", cx);
+            window.render_frame(cx);
+            assert!(view.read(cx).selected.is_none());
+        });
+        assert!(window.debug_bounds("task-conversation").is_none());
+        assert!(window.debug_bounds("fleet-prompt-region").is_some());
+    }
+
+    #[gpui_kit::test]
     fn full_task_list_filters_and_selection_include_older_decisions(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let stopped_id = surge_core::RunId::new();
@@ -1159,13 +1487,29 @@ mod accessibility_tests {
             window.click(SharedString::from(format!("task-{second_active_id}")), cx);
             assert_eq!(view.read(cx).selected, Some(second_active_id));
         });
+        window.update(|window, cx| {
+            window.click("fleet-back-to-list", cx);
+            window.render_frame(cx);
+        });
         let decisions = window.debug_bounds("filter-decisions").unwrap();
         window.simulate_click(decisions.center(), gpui_kit::Modifiers::default());
         window.update(|_, cx| {
             assert_eq!(view.read(cx).filter, super::TaskFilter::NeedsDecision);
-            assert_eq!(view.read(cx).selected, Some(stopped_id));
+            assert!(view.read(cx).selected.is_none());
         });
         assert!(window.debug_bounds("fleet-task-row").is_some());
+        window.update(|window, cx| {
+            window.click(SharedString::from(format!("task-{stopped_id}")), cx);
+            assert_eq!(view.read(cx).selected, Some(stopped_id));
+            window.render_frame(cx);
+            window.click("fleet-back-to-list", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                view.read(cx).filter,
+                super::TaskFilter::NeedsDecision,
+                "returning from a filtered row retains the chosen filter"
+            );
+        });
         let finished = window.debug_bounds("filter-finished").unwrap();
         window.simulate_click(finished.center(), gpui_kit::Modifiers::default());
         let completed = window.debug_bounds("fleet-task-row").unwrap();
@@ -1184,6 +1528,11 @@ mod accessibility_tests {
             );
         });
         assert!(window.debug_bounds("task-detail").is_some());
+        window.update(|window, cx| {
+            window.click("fleet-back-to-list", cx);
+            window.render_frame(cx);
+            assert_eq!(view.read(cx).filter, super::TaskFilter::Finished);
+        });
         for (selector, filter, expected) in [
             ("filter-running", super::TaskFilter::Running, 7),
             ("filter-stopped", super::TaskFilter::Stopped, 1),
@@ -1262,16 +1611,21 @@ mod accessibility_tests {
             })
             .unwrap()
         });
+        let expected_run = cx.update(|cx| view.read(cx).tasks(cx)[0].run.run_id);
         let inbox_actions = Rc::new(Cell::new(0));
         let captured = inbox_actions.clone();
         cx.update(|cx| {
             cx.subscribe(&view, move |_, event: &FleetAction, _| {
-                assert!(matches!(event, FleetAction::OpenGate(_)));
+                assert!(
+                    matches!(event, FleetAction::OpenGate(id) if id == &expected_run.to_string())
+                );
                 captured.set(captured.get() + 1);
             })
             .detach();
         });
         cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(SharedString::from(format!("task-{expected_run}")), cx);
             window.render_frame(cx);
             assert_eq!(
                 window.find("fleet-inspector-primary").label(),

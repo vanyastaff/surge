@@ -107,9 +107,8 @@ impl TopBar {
             )
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text_primary())
+                    .text_size(px(14.0))
+                    .text_color(theme::text_muted())
                     .child(self.active_screen.label()),
             )
     }
@@ -284,11 +283,11 @@ impl Render for TopBar {
             .relative()
             .h_flex()
             .w_full()
-            .h(px(46.0))
+            .h(px(52.0))
             .gap(px(10.0))
-            .px(px(12.0))
+            .px(px(16.0))
             .items_center()
-            .bg(theme::panel())
+            .bg(theme::background())
             .border_b_1()
             .border_color(theme::hairline())
             // Left: project switcher
@@ -325,14 +324,14 @@ impl Render for TopBar {
                                 div()
                                     .size(px(18.0))
                                     .rounded(px(ui::R_PRECISE + 1.0))
-                                    .bg(theme::tint(theme::accent()))
+                                    .bg(theme::text_primary())
                                     .border_1()
-                                    .border_color(theme::stroke(theme::accent()))
+                                    .border_color(transparent_black())
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .text_size(px(10.0))
-                                    .text_color(theme::accent())
+                                    .text_color(theme::background())
                                     .child(
                                         self.project_name
                                             .chars()

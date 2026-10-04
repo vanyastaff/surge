@@ -44,6 +44,42 @@ fn project_switcher_opens_native_picker_and_preserves_project_on_cancel() {
     });
 }
 
+#[test]
+fn sidebar_new_task_opens_durable_form_from_another_screen() {
+    let (mut cx, app, _, _) = fixture();
+    app.update(&mut cx, |app, cx| app.navigate(Screen::Settings, cx));
+    let sidebar = cx.update(|cx| app.read(cx).sidebar.clone());
+    sidebar.update(&mut cx, |_, cx| cx.emit(crate::sidebar::CreateTask));
+    let fleet = cx.update(|cx| {
+        let app = app.read(cx);
+        assert_eq!(app.active_screen, Screen::Fleet);
+        app.fleet.clone().unwrap()
+    });
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(fleet.clone(), window, cx));
+    assert!(window.debug_bounds("task-create-form").is_some());
+}
+
+#[test]
+fn sidebar_all_tasks_returns_from_creation_without_replacing_fleet() {
+    let (mut cx, app, _, _) = fixture();
+    app.update(&mut cx, |app, cx| app.open_new_task(cx));
+    let (sidebar, fleet) = cx.update(|cx| {
+        let app = app.read(cx);
+        (app.sidebar.clone(), app.fleet.clone().unwrap())
+    });
+    let (_, window) =
+        cx.add_window_view(|window, cx| gpui_kit::component::Root::new(fleet.clone(), window, cx));
+    assert!(window.debug_bounds("task-create-form").is_some());
+    window.update(|_, cx| {
+        sidebar.update(cx, |_, cx| cx.emit(crate::sidebar::ShowTasks));
+    });
+    assert!(window.debug_bounds("task-create-form").is_none());
+    window.update(|_, cx| assert_eq!(app.read(cx).fleet.as_ref(), Some(&fleet)));
+    window.update(|_, cx| app.update(cx, |app, cx| app.open_new_task(cx)));
+    assert!(window.debug_bounds("task-create-form").is_some());
+}
+
 fn fixture() -> (
     TestAppContext,
     Entity<SurgeApp>,

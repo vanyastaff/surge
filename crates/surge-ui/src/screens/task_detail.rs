@@ -70,40 +70,151 @@ impl FleetScreen {
             )))
     }
 
+    pub(super) fn render_durable_workspace(
+        &mut self,
+        item: surge_core::id::WorkItemId,
+        compact: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let detail = self.state.read(cx).tasks.details.get(&item).cloned();
+        let history = self.state.read(cx).tasks.histories.get(&item).cloned();
+        let mut thread = div()
+            .id("task-conversation")
+            .flex_shrink_0()
+            .v_flex()
+            .gap(px(24.0))
+            .w_full()
+            .max_w(px(720.0))
+            .p(px(32.0));
+        let mut composer = None;
+        if let Some(detail) = &detail {
+            thread = thread
+                .child(
+                    div()
+                        .id("task-conversation-title")
+                        .test_support()
+                        .debug_selector(|| "task-conversation-title".into())
+                        .text_size(px(28.0))
+                        .flex_shrink_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(detail.item.title.clone()),
+                )
+                .child(div().h_flex().items_start().child(ui::pill(
+                    self.durable_status(&detail.item, cx),
+                    theme::accent(),
+                    theme::panel(),
+                )))
+                .child(thread_message(
+                    format!("Accepted request · revision {}", detail.revision.revision),
+                    accepted_origin_text(&detail.revision.origin).to_owned(),
+                ));
+            let recorded_run = detail.item.active_run.or_else(|| {
+                history.as_ref().and_then(|history| {
+                    history
+                        .attempts
+                        .entries
+                        .iter()
+                        .max_by_key(|attempt| attempt.ordinal)
+                        .map(|attempt| attempt.run)
+                })
+            });
+            thread = self.render_task_progress(thread, recorded_run, cx);
+            thread = self.render_task_history(thread, detail, history, cx);
+            if detail.item.archived_at_ms.is_none() {
+                composer = Some(self.render_task_comment(detail, window, cx));
+            }
+        } else {
+            thread = thread.child(ui::meta(
+                "Loading task details. Refresh if they remain unavailable.",
+            ));
+        }
+        let inspector = self.render_durable_detail(item, window, cx);
+        div()
+            .h_flex()
+            .items_stretch()
+            .flex_1()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .when(compact, |layout| layout.v_flex())
+            .child(
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .child(
+                        div()
+                            .id("task-thread-scroll")
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .h_flex()
+                            .items_start()
+                            .justify_center()
+                            .child(
+                                thread
+                                    .test_support()
+                                    .debug_selector(|| "task-conversation".into()),
+                            ),
+                    )
+                    .children(composer.map(|composer| {
+                        div()
+                            .flex_shrink_0()
+                            .h_flex()
+                            .justify_center()
+                            .px(px(24.0))
+                            .pb(px(20.0))
+                            .child(div().w_full().max_w(px(720.0)).child(composer))
+                    })),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .h_full()
+                    .when(compact, |pane| pane.w_full().h(px(240.0)))
+                    .child(
+                        inspector
+                            .when(compact, |pane| pane.w_full().border_l_0().border_t_1())
+                            .test_support()
+                            .debug_selector(|| "durable-task-detail".into()),
+                    ),
+            )
+    }
+
     pub(super) fn render_durable_detail(
         &mut self,
         item: surge_core::id::WorkItemId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let state = self.state.read(cx);
-        let detail = state.tasks.details.get(&item).cloned();
-        let history = state.tasks.histories.get(&item).cloned();
+        let detail = self.state.read(cx).tasks.details.get(&item).cloned();
         let mut panel = div()
             .id("durable-task-detail")
             .v_flex()
-            .gap(px(12.0))
-            .w(px(380.0))
-            .p(px(20.0))
+            .gap(px(16.0))
+            .w(if window.viewport_size().width >= px(1280.0) {
+                px(400.0)
+            } else {
+                px(320.0)
+            })
+            .h_full()
+            .min_h(px(0.0))
+            .p(px(24.0))
             .overflow_y_scroll()
             .border_l_1()
-            .border_color(theme::hairline());
+            .border_color(theme::hairline())
+            .bg(theme::panel());
         let Some(detail) = detail else {
-            return panel.child(ui::meta("Select Refresh if task details are unavailable."));
+            return panel.child(ui::meta("Refresh to load task details."));
         };
+        panel = panel.child(
+            div()
+                .text_size(px(20.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Task details"),
+        );
         panel = self.render_task_summary(panel, &detail, cx);
-        let recorded_run = detail.item.active_run.or_else(|| {
-            history.as_ref().and_then(|history| {
-                history
-                    .attempts
-                    .entries
-                    .iter()
-                    .max_by_key(|attempt| attempt.ordinal)
-                    .map(|attempt| attempt.run)
-            })
-        });
-        panel = self.render_task_progress(panel, recorded_run, cx);
-        panel = self.render_task_history(panel, &detail, history, cx);
         self.render_task_controls(panel, &detail, window, cx)
     }
 
@@ -114,25 +225,91 @@ impl FleetScreen {
         cx: &Context<Self>,
     ) -> Stateful<Div> {
         let record = &detail.item;
-        let control_label = self.durable_status(record, cx);
+        let item = record.id;
+        let expanded = self.expanded_task_metadata.contains(&item);
         panel = panel
             .child(
                 div()
-                    .text_size(px(22.0))
-                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
                     .child(record.title.clone()),
             )
-            .child(ui::meta(control_label))
+            .child(ui::meta(self.durable_status(record, cx)))
             .child(ui::meta(format!(
                 "Accepted revision {}",
                 detail.revision.revision
             )))
-            .child(div().child(accepted_origin_text(&detail.revision.origin).to_owned()))
             .children(
                 accepted_origin_criteria(&detail.revision.origin)
                     .iter()
-                    .map(|criterion| div().child(format!("• {criterion}"))),
+                    .enumerate()
+                    .map(|(index, criterion)| {
+                        div()
+                            .h_flex()
+                            .items_start()
+                            .gap(px(14.0))
+                            .py(px(12.0))
+                            .border_b_1()
+                            .border_color(theme::hairline())
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .flex_shrink_0()
+                                    .size(px(28.0))
+                                    .rounded_full()
+                                    .bg(theme::panel_raised())
+                                    .text_color(theme::text_muted())
+                                    .child((index + 1).to_string()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_size(px(15.0))
+                                    .line_height(px(24.0))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .child(criterion.clone()),
+                            )
+                    }),
             )
+            .when_some(detail.pr.clone(), |panel, pr| {
+                panel.child(ui::meta(format!("PR {}", pr.url))).child(
+                    gpui_kit::component::button::Button::new("durable-task-open-pr")
+                        .label("Open pull request")
+                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&pr.url))),
+                )
+            })
+            .child(
+                gpui_kit::component::button::Button::new("task-toggle-workspace")
+                    .ghost()
+                    .label(if expanded {
+                        "Hide workspace details"
+                    } else {
+                        "Workspace details"
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.expanded_task_metadata.remove(&item) {
+                            this.expanded_task_metadata.insert(item);
+                        }
+                        cx.notify();
+                    })),
+            );
+        if expanded {
+            panel = self.render_workspace_summary(panel, detail, cx);
+        }
+        panel
+    }
+
+    fn render_workspace_summary(
+        &self,
+        panel: Stateful<Div>,
+        detail: &surge_core::work_item::WorkItemDetail,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let record = &detail.item;
+        panel
             .child(ui::meta(format!("Branch {}", record.workspace.branch)))
             .child(ui::meta(record.workspace.path.display().to_string()))
             .child(
@@ -143,13 +320,6 @@ impl FleetScreen {
                         move |_, _, _, cx| cx.reveal_path(&path)
                     })),
             )
-            .when_some(detail.pr.clone(), |panel, pr| {
-                panel.child(ui::meta(format!("PR {}", pr.url))).child(
-                    gpui_kit::component::button::Button::new("durable-task-open-pr")
-                        .label("Open pull request")
-                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&pr.url))),
-                )
-            })
             .child(ui::meta(format!(
                 "{} attempts · {} input / {} output tokens · {} runs with unknown usage",
                 detail.usage.runs,
@@ -177,11 +347,10 @@ impl FleetScreen {
                     "Known recorded cost: ${:.4}; {} runs with unknown usage",
                     detail.usage.known_cost_usd, detail.usage.unknown_runs
                 )),
-            );
-        panel
+            )
     }
 
-    fn render_task_progress(
+    pub(super) fn render_task_progress(
         &self,
         mut panel: Stateful<Div>,
         run: Option<surge_core::RunId>,
@@ -333,7 +502,25 @@ impl FleetScreen {
             );
         }
         if record.archived_at_ms.is_none() {
-            panel = panel.child(self.render_task_draft(detail, window, cx));
+            let expanded = self.expanded_task_editors.contains(&item);
+            panel = panel.child(
+                gpui_kit::component::button::Button::new("task-toggle-editors")
+                    .ghost()
+                    .label(if expanded {
+                        "Hide requirements & workflow"
+                    } else {
+                        "Edit requirements & workflow"
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.expanded_task_editors.remove(&item) {
+                            this.expanded_task_editors.insert(item);
+                        }
+                        cx.notify();
+                    })),
+            );
+            if expanded {
+                panel = panel.child(self.render_task_draft(detail, window, cx));
+            }
         }
         panel
     }
@@ -356,7 +543,7 @@ impl FleetScreen {
             for message in history.discussion.entries {
                 let proposal_id = message.sequence;
                 panel = panel
-                    .child(div().child(format!("{}: {}", message.actor, message.body)))
+                    .child(thread_message(message.actor.to_string(), message.body))
                     .when_some(message.proposal, |panel, proposal| {
                         let mut panel = panel
                             .child(
@@ -444,6 +631,9 @@ impl FleetScreen {
         attempts: &[surge_core::work_item::WorkItemAttempt],
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        if attempts.is_empty() {
+            return panel;
+        }
         panel = panel.child(div().font_weight(FontWeight::BOLD).child("Attempts"));
         for attempt in attempts {
             let run = attempt.run;
@@ -624,7 +814,7 @@ impl FleetScreen {
         self.task_drafts.entry(item).or_insert_with(|| {
             let comment = cx.new(|cx| {
                 TextareaState::new(window, cx)
-                    .rows(3)
+                    .rows(2)
                     .placeholder("Discuss this task…")
             });
             let requirements = cx.new(|cx| TextareaState::new(window, cx).rows(5));
@@ -660,7 +850,7 @@ impl FleetScreen {
         });
     }
 
-    pub(super) fn render_task_draft(
+    fn render_task_comment(
         &mut self,
         detail: &surge_core::work_item::WorkItemDetail,
         window: &mut Window,
@@ -676,8 +866,55 @@ impl FleetScreen {
         }
         let item = detail.item.id;
         self.ensure_task_draft(detail, window, cx);
+        let comment = self.task_drafts[&item].comment.clone();
+        div()
+            .v_flex()
+            .gap(px(8.0))
+            .when_some(self.task_feedback.get(&item).cloned(), |panel, feedback| {
+                panel.child(ui::meta(feedback).id("task-accepted-feedback"))
+            })
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .p(px(12.0))
+                    .rounded(px(24.0))
+                    .border_1()
+                    .border_color(theme::hairline_strong())
+                    .bg(theme::panel())
+                    .child(
+                        Textarea::new(&comment)
+                            .appearance(false)
+                            .bordered(false)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .h(px(48.0))
+                            .accessibility_id("task-discussion-draft")
+                            .aria_label("Discuss this task"),
+                    )
+                    .child(
+                        gpui_kit::component::button::Button::new("task-post-discussion")
+                            .primary()
+                            .label("Send")
+                            .flex_shrink_0()
+                            .disabled(self.task_busy)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.submit_task_draft(item, false, false, cx)
+                            })),
+                    ),
+            )
+    }
+
+    pub(super) fn render_task_draft(
+        &mut self,
+        detail: &surge_core::work_item::WorkItemDetail,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let item = detail.item.id;
+        self.ensure_task_draft(detail, window, cx);
         let draft = &self.task_drafts[&item];
-        let comment = draft.comment.clone();
         let requirements = draft.requirements.clone();
         let criteria = draft.criteria.clone();
         let version = draft.version;
@@ -687,20 +924,6 @@ impl FleetScreen {
         div()
             .v_flex()
             .gap(px(8.0))
-            .child(
-                div()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Discuss or propose changes"),
-            )
-            .when_some(self.task_feedback.get(&item).cloned(), |panel, feedback| {
-                panel.child(ui::meta(feedback).id("task-accepted-feedback"))
-            })
-            .child(ui::meta("Discussion"))
-            .child(
-                Textarea::new(&comment)
-                    .h(px(90.0))
-                    .accessibility_id("task-discussion-draft"),
-            )
             .child(ui::meta("Requirements draft"))
             .child(
                 Textarea::new(&requirements)
@@ -727,14 +950,6 @@ impl FleetScreen {
                     .label("Use current task version for this draft")
                     .disabled(self.task_busy || self.task_submissions.contains_key(&item))
                     .on_click(cx.listener(move |this, _, _, cx| this.rebase_task_draft(item, cx))),
-            )
-            .child(
-                gpui_kit::component::button::Button::new("task-post-discussion")
-                    .label("Post discussion")
-                    .disabled(self.task_busy)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.submit_task_draft(item, false, false, cx)
-                    })),
             )
             .child(
                 gpui_kit::component::button::Button::new("task-propose-edit")
@@ -1008,6 +1223,8 @@ impl FleetScreen {
     }
 
     pub(super) fn select_item(&mut self, item: surge_core::id::WorkItemId, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.creating_task = false;
         self.selected_item = Some(item);
         self.task_error = None;
         self.reload_item(item, cx);
@@ -1243,4 +1460,44 @@ fn accepted_origin_criteria(origin: &surge_core::work_item::AcceptedWorkItemOrig
         },
         surge_core::work_item::AcceptedWorkItemOrigin::Flow(_) => &[],
     }
+}
+
+/// A recorded message with an actual actor label; this never synthesizes agent replies.
+pub(super) fn thread_message(actor: String, body: String) -> Div {
+    div()
+        .h_flex()
+        .items_start()
+        .gap(px(18.0))
+        .py(px(8.0))
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .flex_shrink_0()
+                .size(px(38.0))
+                .rounded_full()
+                .bg(theme::panel_raised())
+                .child(
+                    gpui_kit::component::Icon::new(gpui_kit::assets::IconName::MessageCircle)
+                        .size(px(18.0))
+                        .text_color(theme::text_primary()),
+                ),
+        )
+        .child(
+            div()
+                .v_flex()
+                .flex_1()
+                .min_w(px(0.0))
+                .gap(px(10.0))
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(actor))
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .line_height(px(26.0))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(theme::text_muted())
+                        .child(body),
+                ),
+        )
 }

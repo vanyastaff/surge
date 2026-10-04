@@ -42,26 +42,26 @@ impl SurgeThemeColors {
     fn dark(primary: Hsla) -> Self {
         Self {
             primary,
-            background: rgb(0x181A1E),
-            panel_deep: rgb(0x151619),
-            panel: rgb(0x202227),
-            sidebar_bg: rgb(0x202227),
-            surface: rgb(0x2C2F35),
-            panel_raised: rgb(0x25282E),
-            hairline: rgb(0x383C43),
-            hairline_strong: rgb(0x4A505A),
-            graph_line: rgb(0x747D8A),
+            background: rgb(0x212121),
+            panel_deep: rgb(0x171717),
+            panel: rgb(0x242424),
+            sidebar_bg: rgb(0x171717),
+            surface: rgb(0x303030),
+            panel_raised: rgb(0x292929),
+            hairline: rgb(0x383838),
+            hairline_strong: rgb(0x505050),
+            graph_line: rgb(0x7D7D7D),
             grid: rgba(0x94A3B8, 0.055),
-            text_primary: rgb(0xF0F1F3),
-            text_muted: rgb(0xB8BEC8),
-            text_dim: rgb(0xA3A9B3),
+            text_primary: rgb(0xF2F2F2),
+            text_muted: rgb(0xBDBDBD),
+            text_dim: rgb(0xAAAAAA),
             success: rgb(0x34D399),
             warning: rgb(0xFBBF24),
             error: rgb(0xFB7185),
             violet: rgb(0xA78BFA),
             orange: rgb(0xFB923C),
             slate: rgb(0x94A3B8),
-            on_accent: rgb(0x151619),
+            on_accent: rgb(0x171717),
             dark: true,
         }
     }
@@ -69,16 +69,16 @@ impl SurgeThemeColors {
     fn light(primary: Hsla) -> Self {
         Self {
             primary,
-            background: rgb(0xFAF9F7),
-            panel_deep: rgb(0xF4F2EE),
-            panel: rgb(0xF3F2EF),
-            sidebar_bg: rgb(0xF3F2EF),
-            surface: rgb(0xEEEDE9),
+            background: rgb(0xFFFFFF),
+            panel_deep: rgb(0xF7F7F7),
+            panel: rgb(0xF5F5F5),
+            sidebar_bg: rgb(0xF5F5F5),
+            surface: rgb(0xEBEBEB),
             panel_raised: rgb(0xFFFFFF),
-            hairline: rgb(0xDEDDD7),
+            hairline: rgb(0xE2E2E2),
             hairline_strong: rgb(0xC5C6C8),
             graph_line: rgb(0x8A929D),
-            grid: rgba(0x0F172A, 0.05),
+            grid: rgba(0x242424, 0.05),
             text_primary: rgb(0x20252D),
             text_muted: rgb(0x515B68),
             text_dim: rgb(0x626A77),
@@ -141,8 +141,8 @@ impl ThemeName {
             (Self::Amber, false) => rgb(0xD97706),
             (Self::Ocean, true) => rgb(0x60A5FA),
             (Self::Ocean, false) => rgb(0x2563EB),
-            (Self::Monochrome, true) => rgb(0xE2E8F0),
-            (Self::Monochrome, false) => rgb(0x0F172A),
+            (Self::Monochrome, true) => rgb(0xEEEEEE),
+            (Self::Monochrome, false) => rgb(0x242424),
         }
     }
 
@@ -239,10 +239,10 @@ impl Semantic {
 
 thread_local! {
     static COLORS: RefCell<SurgeThemeColors> = RefCell::new(
-        SurgeThemeColors::light(ThemeName::Ocean.accent_for(false))
+        SurgeThemeColors::dark(ThemeName::Monochrome.accent_for(true))
     );
     static CURRENT: RefCell<(ThemeName, ThemeMode)> =
-        const { RefCell::new((ThemeName::Ocean, ThemeMode::Light)) };
+        const { RefCell::new((ThemeName::Monochrome, ThemeMode::Dark)) };
 }
 
 /// Persisted appearance choice (`$SURGE_HOME/ui/appearance.json`).
@@ -255,8 +255,8 @@ struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            theme: ThemeName::Ocean,
-            mode: ThemeMode::Light,
+            theme: ThemeName::Monochrome,
+            mode: ThemeMode::Dark,
         }
     }
 }
@@ -286,7 +286,7 @@ fn save_appearance(appearance: Appearance) {
     }
 }
 
-/// Load the persisted appearance (or the Ocean/Light default) into the
+/// Load the persisted appearance (or the Monochrome/Dark default) into the
 /// token store. Call once at startup, before the first window renders.
 pub fn init() {
     let Appearance { theme, mode } = load_appearance().unwrap_or_default();
@@ -593,7 +593,7 @@ mod tests {
         let defaults = Appearance::default();
         assert_eq!(
             (defaults.theme, defaults.mode),
-            (ThemeName::Ocean, ThemeMode::Light)
+            (ThemeName::Monochrome, ThemeMode::Dark)
         );
         let saved: Appearance =
             serde_json::from_str(r#"{"theme":"Signal","mode":"Dark"}"#).unwrap();
@@ -617,12 +617,13 @@ mod tests {
             0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
         }
         for colors in [
-            SurgeThemeColors::light(ThemeName::Ocean.accent_for(false)),
-            SurgeThemeColors::dark(ThemeName::Ocean.accent_for(true)),
+            SurgeThemeColors::light(ThemeName::Monochrome.accent_for(false)),
+            SurgeThemeColors::dark(ThemeName::Monochrome.accent_for(true)),
         ] {
             for text in [colors.text_primary, colors.text_muted, colors.text_dim] {
                 for background in [
                     colors.background,
+                    colors.sidebar_bg,
                     colors.panel,
                     colors.surface,
                     colors.panel_raised,
