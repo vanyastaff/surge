@@ -1,0 +1,24 @@
+   Compiling surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+warning: associated function `try_acquire_existing` is never used
+  --> crates/surge-persistence/src/runs/file_lock.rs:28:19
+   |
+21 | impl FileLock {
+   | ------------- associated function in this implementation
+...
+28 |     pub(crate) fn try_acquire_existing(lock_path: &Path, run_id: surge_core::RunId) -> Result<Self, OpenError> {
+   |                   ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `surge-persistence` (lib) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 10.88s
+     Running tests/writer_actor_lease.rs (target/debug/deps/writer_actor_lease-f177faf386bd3a90)
+
+running 3 tests
+test cancelled_close_retains_exclusion_until_actual_actor_exit ... ok
+test cancelled_full_queue_close_retains_exclusion_until_actual_actor_exit ... ok
+test dropped_writer_retains_exclusion_until_actual_actor_exit ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+

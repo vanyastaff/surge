@@ -5,8 +5,9 @@ RunWriter, cancelled close and cancelled full-queue close release exclusion
 before the actual journal actor exits. Raw log retained, fully read by root;
 fixtures drain old actors before assertion. Main implements authorized shared
 actor/wrapper lease and owning FileLock alongside neutral panic extraction.
-A first-green raw log exists but awaits author terminal receipt; it is not a
-fresh full-workspace gate or source acceptance. New surge-process crate exists
+Author94000 terminal0: all three actor lease cases now pass; root read the
+complete first-green log. Existing-only FileLock has an honest unused warning
+until worker wiring. This is not a fresh full-workspace gate or source acceptance. New surge-process crate exists
 in the working tree; root structural docs are updated and held for its source
 checkpoint. Source/Cargo/format/build/process remain exclusively main-owned.
 
