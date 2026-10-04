@@ -112,3 +112,26 @@ RED remains open; provisional SQL and host coordinator implementation continues.
 Root also independently read `core-origin-second.log`: ten selected origin
 tests passed, including nonfinite graph and exact raw/empty prompt invariants.
 These are foundation evidence only, not full unit acceptance.
+
+Coordinator build checkpoint: session 6158 terminated exit 0, and root read
+`owned-flow-coordinator-check.log` (two integration-unused hydration warnings,
+not final strict acceptance). Immutable provisional SQL and atomic acceptance
+are written; subsequent launch-claim routing still needs fresh compilation.
+The daemon endpoint and outer proof remain open.
+
+During initial-author boundary inspection, root observed that the draft
+`finalize(self)` returned only a receipt and dropped the retained launch Arc
+before supervisor handoff. The author agreed and is changing the host-only
+acceptance result to carry the same retained WorkItemLaunchClaim and receipt,
+with its token assigned inside atomic acceptance. Replay remains identity only;
+recovery acquires and verifies the original stable object before token mutation.
+An actual second-process exclusion oracle across finalization/handoff and the
+existing cancellation retention checks remain required. This is initial-build
+resolution within the approved ownership design, not an independent post-build
+review or completed behavior proof; repair count stays 0/3.
+
+The Windows helper has handed its narrowed source/tests to the sole builder.
+Root inspected the actual native operation/test inventory, but no Windows
+compile or runtime proof exists at this checkpoint. Native UNC testing requires
+SURGE_WINDOWS_TEST_UNC_ROOT; reparse/privilege limitations must be explicit and
+may not stand in for the mandatory ordinary ownership/lifecycle scenarios.
