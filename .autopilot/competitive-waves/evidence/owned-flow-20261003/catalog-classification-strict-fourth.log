@@ -1,0 +1,11 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error[E0609]: no field `requirements` on type `surge_core::work_item::WorkItemRevision`
+   --> crates/surge-daemon/tests/work_item_route_test.rs:654:10
+    |
+654 |         .requirements;
+    |          ^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `revision`, `origin`, `hash`, `actor`, `accepted_proposal`, `accepted_at_ms`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `surge-daemon` (test "work_item_route_test") due to 1 previous error

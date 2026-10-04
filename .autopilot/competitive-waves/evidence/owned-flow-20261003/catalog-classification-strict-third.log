@@ -1,0 +1,64 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:531:21
+    |
+531 | /                     {
+532 | |                         break;
+533 | |                     }
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+    = note: `-D clippy::excessive-nesting` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::excessive_nesting)]`
+
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:586:54
+    |
+586 |                           && events.iter().any(|event| {
+    |  ______________________________________________________^
+587 | |                             matches!(event.payload.payload, EventPayload::RunCompleted { .. })
+588 | |                         })
+    | |_________________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:589:21
+    |
+589 | /                     {
+590 | |                         break;
+591 | |                     }
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:605:21
+    |
+605 | /                     {
+606 | |                         break;
+607 | |                     }
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: field assignment outside of initializer for an instance created with Default::default()
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:801:5
+    |
+801 |     config.mcp_servers = vec![server(root, "oracle", "changed-default.jsonl")];
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `surge_core::SurgeConfig { mcp_servers: vec![server(root, "oracle", "changed-default.jsonl")], ..Default::default() }` and removing relevant reassignments
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:800:5
+    |
+800 |     let mut config = surge_core::SurgeConfig::default();
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+    = note: `-D clippy::field-reassign-with-default` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::field_reassign_with_default)]`
+
+error: could not compile `surge-daemon` (test "owned_flow_mcp_recovery") due to 5 previous errors

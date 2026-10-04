@@ -1,0 +1,20 @@
+Native CUA smoke, 2026-10-04, read-only existing demo data.
+Tool: unified-computer-use cua_repl, native Surge AX and screenshots.
+Running process4132 executable observed with ps:
+/Users/vanyastafford/.codex/worktrees/product-readiness/surge/.codex/builds/Surge.app/Contents/MacOS/surge-ui
+This is a separate checkout/binary: NOT current-source or T25 acceptance. No restart,
+install, permissions, task start, provider dispatch, task edit/delete or source write.
+
+Start screen displayed Open project/New app and four recent projects. Opened existing
+surge-vibe-demo-0928 by AX. Tasks screen showed All3, Finished1, Stopped2, EngineLive.
+Selected existing failed task01M3MRAKCHFNBN97CN3WPMEK2S; selected-row preview changed
+Open result to Open task. Open task navigated Results with failed mission selected.
+Actual visual result displayed The coding agent did not start and description_author
+ACP new_session handshake exceeded30s; stage endpoint cleanup Ok(0). Overview, Preview,
+Changes, Checks, Log navigation present. Existing completed/failed results visible.
+
+AX contains action buttons but omits much visible text; all tab booleans report off
+while screenshot shows Overview selected. This is a historical-binary observation
+requiring a current-source native recheck before filing/closing implementation defect.
+No claim about task discussions, ownedFlow recovery, complete closure or current
+new UI work; current build needs its own isolated launch and actual CUA acceptance.

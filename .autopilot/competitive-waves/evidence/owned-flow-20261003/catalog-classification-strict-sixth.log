@@ -1,0 +1,16 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_ipc.rs:97:17
+    |
+ 97 | /                 {
+ 98 | |                     startup = Some(history.startup);
+ 99 | |                     break;
+100 | |                 }
+    | |_________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+    = note: `-D clippy::excessive-nesting` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::excessive_nesting)]`
+
+error: could not compile `surge-daemon` (test "owned_flow_ipc") due to 1 previous error

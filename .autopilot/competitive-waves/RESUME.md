@@ -1,3 +1,23 @@
+# Authoritative executable and focused review checkpoint 2026-10-04
+
+Root FULLread strict failed2–8 logs and ninth. Author57263 terminal0 scoped
+MCP/orchestrator/daemon allfeatures/alltargets-Dwarnings; incremental3.17s, not
+wholeworkspace. Foundation four-crate nextest81728 live author-owned with lowmem
+env/twothreads/no-fail-fast; root must not consume handle or stage live log.
+Wake d90b34 critic RESHAPE fully read: worker/cold/terminal concrete API, ordered
+independentcoherence/currentpermission/manifest-only classification+parse scope,
+existing valid quota-rebind preserved. Main preparing concrete appendix, no
+production wakebehavior approval. B owning coherent reshape pending.
+
+Native CUA existing demo task/result navigation works; PID4132 is separate
+product-readiness checkout binary, not current-source acceptance. Never restart/
+replace that app during tests. Historical AX tab/text limitations recorded for
+current-source recheck. Primary writer-slot/FileLock/append/hostbarrier/readerflags
+findings retained. Fullgoalactive/formal0/3/sourcefreeze5a→5b/nativeclosure/product
+requirements remain open; no requirements retired.
+
+Earlier checkpoints below are history and superseded where contradictory.
+
 # Authoritative focused review checkpoint 2026-10-04
 
 Root FULLread B critic2fe0fd RESHAPE, complete report retained. Owning architect

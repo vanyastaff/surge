@@ -1,0 +1,36 @@
+Root read-only primary-source findings, 2026-10-04
+No behavior/source authorization; full T25 requirements remain open.
+
+1. Writer exclusion is two-layer. storage.rs open_run_writer acquires ActiveWriters
+WriterToken before FileLock. A std refusal writer must share both exclusions, not
+just use a second SQLite connection. writer_slot.rs currently has Tokio Mutex;
+critical body only reads/inserts Weak tokens, so a reviewed synchronous adapter is
+feasible without holding a lock across database I/O. Poison must remain an error.
+
+2. FileLock::try_acquire creates parent/file, Box::leak RwLock<File>, then try_write.
+Failure also leaves leaked RwLock and opened File, not merely success guard metadata.
+A retrying worker cannot assume arbitrary busy retries are resource-neutral. Pin
+bounded ownership/retry semantics or review cleanup of the lock opening separately.
+Do not delete/replace/adopt somebody else's writer lock or mint closure proof.
+
+3. writer.rs AppendEvent transaction serializes, inserts event, views::maintain,
+commits then replies. Factor this production transaction for any reviewed sync
+writer; no test SQL inserter/parallel unofficial journal path. Existing-only refusal
+journal opening must refuse missing actual startup/database rather than creating
+an empty journal. Validate independent original startup/accepted receipt, not the
+corrupted manifest being reported.
+
+4. daemon HostRuntime currently drops Tokio then invokes MCP child join barrier.
+A new std receipt owner requires explicit host barrier participation; no detached
+thread or daemon-only ordering claimed to cover CLI/UI. Bounded precommit reservation
+and acknowledged same-Arc handoff must exist before any receipt transaction commits.
+
+5. Storage.open_run_reader uses SqliteConnectionManager::file with default flags
+and PER_RUN_PRAGMAS, no READ_ONLY flag. Locked r2d2_sqlite file() sets OpenFlags::default.
+The RunReader API is read-oriented; actual SQLite read-only capability is not proved.
+The separate scheduler-resource proposal should preserve existing flags/pragmas,
+not describe them as readonly or silently alter compatibility. Root separately
+read r2d2 default three-worker scheduler and scheduled-thread-pool delayed shutdown.
+
+These source findings change required worker/resource design, not native closure
+proof, source acceptance, 5a/5b or the initial formal repair count0/3.

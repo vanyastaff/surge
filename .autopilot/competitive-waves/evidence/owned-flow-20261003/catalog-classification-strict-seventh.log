@@ -1,0 +1,51 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+error: `format!(..)` appended to existing `String`
+    --> crates/surge-orchestrator/src/engine/ipc.rs:1021:13
+     |
+1021 |             public.push_str(&format!(" {error} {error:?}"));
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: you may need to import the `std::fmt::Write` trait
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+     = note: `-D clippy::format-push-string` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::format_push_string)]`
+help: consider using `write!` to avoid the extra allocation
+     |
+1021 -             public.push_str(&format!(" {error} {error:?}"));
+1021 +             let _ = write!(public, " {error} {error:?}");
+     |
+
+error: `format!(..)` appended to existing `String`
+    --> crates/surge-orchestrator/src/engine/ipc.rs:1073:17
+     |
+1073 |                 diagnostics.push_str(&format!(" {next} {next:?}"));
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: you may need to import the `std::fmt::Write` trait
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+help: consider using `write!` to avoid the extra allocation
+     |
+1073 -                 diagnostics.push_str(&format!(" {next} {next:?}"));
+1073 +                 let _ = write!(diagnostics, " {next} {next:?}");
+     |
+
+error: this creates an owned instance just for comparison
+   --> crates/surge-orchestrator/src/engine/owned_flow.rs:398:89
+    |
+398 |             matches!(normalized.input, FlowInput::ProjectFile { locator } if locator == PathBuf::from("flow.toml"))
+    |                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `*"flow.toml"`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cmp_owned
+    = note: `-D clippy::cmp-owned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::cmp_owned)]`
+
+error: this creates an owned instance just for comparison
+   --> crates/surge-orchestrator/src/engine/owned_flow.rs:404:89
+    |
+404 |             matches!(normalized.input, FlowInput::ProjectFile { locator } if locator == PathBuf::from("nested/flow.toml"))
+    |                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `*"nested/flow.toml"`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cmp_owned
+
+error: could not compile `surge-orchestrator` (lib test) due to 4 previous errors
