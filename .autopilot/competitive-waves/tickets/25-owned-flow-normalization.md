@@ -686,3 +686,24 @@ review. Per-reader r2d2 thread-resource finding remains a separate proposal.
 
 Scoped strict failures remain evidence, not accepted gates. Initial formal repair
 count0/3 unchanged; full source freeze,5a then5b and full product goal remain open.
+
+## Actor exclusion and Stage B capacity clarification — 2026-10-04
+
+Actual public Storage/RunEventRecorder blocking-clock oracle49412 failed all three
+caller-loss cases (Drop, polled close cancellation, full queue close cancellation).
+The second writer acquired exclusion before the original actor committed. After
+shared actor/wrapper WriterLease and owning FileLock, author94000 terminal0:3PASS.
+Root read full test, source diff and logs; this proves same-process actor exclusion
+through these cases, not native cross-process closure or whole T25 acceptance.
+Both raw logs retained. Existing-only FileLock is not wired yet; its unused warning
+is recorded, not suppressed. Actual neutral panic-only runtime crate now exists;
+root updates structural maps alongside the author's exclusive source lane.
+
+Independent Stage B736fb656 requested two corrections: full escaped-ID cleanup
+backing and ordered exact rmcp compatibility fallback. Owning revised planf289f1cb
+retained as stage-b-final-plan-20261004.txt. Root read whole artifact; it preserves
+4096 decoded UTF8 ID bytes, backs four64KiB raw/four256KiB delivery cleanup lanes
+per connection, recalculates global/run pools, and declares state-aware collision
+checks as an owned compatibility tightening. Exact-hash independent re-review
+is running; B source remains held. Formal initial0/3; native C/D, full productive
+cold, malformed manifest, source freeze and5a then5b remain required/open.

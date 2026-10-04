@@ -1,3 +1,23 @@
+# Authoritative Stage B correction dispatched for review 2026-10-04
+
+Root FULL read revised planf289f1cb (all sections1-9) and verified hash.
+Accepted4096 decodedUTF8 range retained; worst encodedID24578bytes plus4096
+envelope andCRLF2 below64KiB backed raw; fourrepresentation/node allowance
+196608 below256KiB delivery, subject actual implementation allocation audit.
+Four cleanup lanes perconnection/global64/run4 pools recalculated. Exact upstream
+typed-failure ignorednotification predicate ordered before genericunknown;
+state-aware response/collision guard explicitly owned tightening, not falselegacy.
+Exacthash independent combinedcritic/security rereview dispatched to existing
+reviewer. B source HELD until actualverdict+maintainer authorization. Main wake
+source continues exclusivelyauthor-owned; no new fullgate/freeze claimed.
+
+Previous goal turn progressed: genuine3-case actor RED→GREEN evidence retained,
+review blockers recorded, structural maps updated. Current turn adds primary
+source/test inspection and pins revisedB with independentre-review. Fullgoalactive,
+no requirements retired; nativeC/D/fullcold/malformed/5a→5b remainopen.
+
+Earlier entries below are superseded history where contradictory.
+
 # Authoritative actor exclusion RED and Stage B review checkpoint 2026-10-04
 
 Actual actor lease baseline49412 terminal101: three cases fail because dropped

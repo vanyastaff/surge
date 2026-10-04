@@ -1,0 +1,442 @@
+T25 Stage B revised bounded implementation contract — 2026-10-04
+Owning architect verdict: ACCEPTABLE for independent precode re-review, not code
+authorization or acceptance. Consolidates ALL critic R1–R3 and security must-fix1/2;
+supersedes the capacity, cleanup, raw-release and process API sections of2fe0fd3.
+Full concrete critic/security reports read. Report only: no source/test/Cargo/git/
+build/OS/process mutation. Main owns production. Formal T25 0/3; no5a/5b.
+Native/external C and actual arbitrary-provider cold D positives remain OPEN.
+Wake-refusal SQL is a separate persistence slice; this B plan does not own/expand it.
+Full independent re-review736fb656d9eaae08da456a1b01f0af51f482cf39ace1a83e5cbbfca9eb19ce5b
+also read; this revision fixes its escaped-ID backing and ignore-order blockers.
+
+Basis: original domain5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8,
+root1944f0f784197d52e3a14759ff4b93864bba0a4112647ba7b443208570d61c54,
+no-dispatch Stop4c58467e25164064b6f57edf680f651aab50322cf1f5e321aade2234ddb90f33.
+Sources under /Users/vanyastafford/Develop/surge and installed cargo registry
+/Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/.
+Primary ACP2.2 jsonrpc enqueue/ID/Responder, current sdk_v1/transport; rmcp1.6
+service Peer/internal responder/driver/bootstrap/async_rw; MCP child_settlement;
+nix0.29 safe fcntl/read/write/poll and original process profiles underpin this plan.
+Protocol result/EOF/leader exit/group empty is NEVER native/external closed proof.
+Root selected productive A+B dependency closure, not refusal-only integration.
+
+1. Closed authority phases, including cleanup debt
+Add private authority phases Running -> QuiescingDrain -> FinalFrozen -> Sealed;
+Attention is orthogonal debt state. Stop first disables ordinary reserve/enqueue/
+frame grants. QuiescingDrain is a bounded pre-seal cleanup-registration subphase,
+NOT an immutable closure proof. Distinct typed APIs, no cleanup=true escape hatch:
+reserve_cleanup(parent_original, permitted_origin, current_owner, drain_generation);
+admit_cleanup_enqueue(reservation, current_drain)->CleanupEnqueueAdmission;
+admit_cleanup_frame(reservation, current_drain)->CleanupFrameAdmission.
+Permitted origins only explicit original session/cancel/MCP cancellation, denial or
+error for an already registered incoming operation, and approved finite transport
+close cleanup. No new prompt/tool/catalog/ping/health/initialized/reconnect or
+permission approval. Cleanup IDs/direction/parent exact; one-use permits, current
+descriptor-checked original ownership, checked ordinal and typed journal origin.
+Newer Stop preserves historical cleanup but never overwrites newer control.
+
+All ordinary incoming request/reply origins are registered before SDK delivery.
+During QuiescingDrain a previously registered callback can obtain its separate
+cleanup reply occurrence. Each occurrence enters registry+journal authority BEFORE
+its enqueue; it becomes part of final debt even if never enqueued. An unregistered
+late incoming callback is NOT answered: close/Attention, retain old debt. Close may
+be used to bound drain; cancellation/close itself does not prove remote termination.
+Capacity reserved at connection opening is not a cleanup obligation/closure proof.
+
+finish_quiescing_drain atomically closes cleanup registration/admission and installs
+FinalFrozen reservation-generation barrier after every actual cleanup row is included.
+Whole-journal inspection then constructs immutable closure set covering normal,
+cleanup, orphan, native/external/host debt and exact unconsumed states. Seal requires
+each cleanup occurrence terminal or genuine surviving-owner no-enqueue/no-wire
+evidence, together with ALL other original terminal requirements. Capacity alone,
+timeout, missing ID or absent child is insufficient. No mutation of immutable sets.
+FinalFrozen/Sealed/Suspended grant ZERO new normal OR cleanup enqueue/frame writes;
+already queued frames fail final-byte gate, including drain/error/automatic cancel.
+Historical settlement/projection/reap continues without new wire action. Root's
+no-dispatch Stop algorithms inspect this same complete set and cannot reuse closure
+while any cleanup obligation is unsettled. Update typed producer/actor/inspector
+allowlists together; generic append cannot emit cleanup authority.
+
+2. Concrete lease graph and two-server progress
+Limits are explicit NEW owned resource policy, not alleged existing SDK caps.
+No truncation, no eviction of live responsibility. MCP JSON max8 MiB +newline;
+ACP input existing1 MiB, owned outgoing1 MiB +newline. Routing string IDs max4096
+UTF8 bytes; JSON depth max64; total JSON nodes max32768(MCP)/4096(ACP). Duplicate
+routing keys/malformed IDs refuse. Node/depth/ID limits are additional documented
+owned compatibility deltas; legacy transport untouched. Counter arithmetic checked.
+Opaque lease identities never serialized or authority-bearing; capacity refusal
+before original reservation has zero effects. After effect, failure retains debt.
+
+Global responsibility count1024 partition NORMAL768/CLEANUP256. Per-run128 partition
+NORMAL112/CLEANUP16. Max64 protocol connections globally/max4 per run; direct-child
+workers remain shared max128 globally. A connection opening consumes FOUR actual
+cleanup count permits from both partitions plus cleanup byte bundle; if unavailable
+refuse BEFORE registry/native reservation. Normal traffic cannot borrow them.
+Each normal connection reserves native/connection ownership +two request/delivery
+lanes +one callback/generated-reply lane from NORMAL. Borrowable count slots cover
+finite host/projection work only; no fabricated ownership token from free capacity.
+
+Byte pools: RAW global1 GiB/per-run96 MiB; DELIVERY global8 GiB/per-run1 GiB;
+cleanup RAW global32 MiB/per-run1 MiB and DELIVERY global64 MiB/per-run4 MiB are
+RESERVED disjoint partitions. Every connection opening backs FOUR64 KiB raw frame
+leases inclusive delimiter and FOUR256 KiB delivery peak leases (=256 KiB raw/
+1 MiB delivery per connection). Normal/host traffic cannot consume them. Two MCP
+connections use8 cleanup count permits,512 KiB raw/2 MiB delivery; four connections
+use16 permits,1 MiB raw/4 MiB delivery (run maxima).64 global connections use256
+permits,16 MiB raw/64 MiB delivery, within32/64 MiB partitions. Raw global slack
+does not grant extra count/delivery lanes. No truncation or string-ID reclassification.
+
+Keep admitted ID range4096 DECODED UTF8 bytes. Worst JSON echo is4096 one-byte
+control characters encoded as six-byte \\u0000 escapes:24576 bytes+two quotes.
+Other valid UTF8 characters, quotes and backslashes cannot exceed six encoded
+bytes per decoded UTF8 byte. Cleanup builders allow ONE echoed original ID/session
+identity per frame, no arbitrary _meta/extensions/provider error bodies. Complete
+non-ID envelope has an ENCODED limit4096 bytes (including fixed method/requestId/
+error fields), max64 JSON nodes; fixed denial/error text is host-defined, not an
+unbounded copied provider reason. Thus serialized frame including LF is at most
+24578+4096+1=28675 bytes (CRLF variant at most28676), below65536 backing. Explicit
+cancel and denial/error builders must prove their exact typed shape fits this
+bound before current admission; unsupported multi-ID cleanup format requires a
+separate reviewed bound, not quiet reuse of this lane. Correlation ID bytes unchanged.
+
+Cleanup256 KiB delivery proof conservatively charges maxFOUR representation
+allocation capacities of32768 bytes each (not merely their28676-byte lengths),
+plus maxFOUR AST/container overhead allowances64 nodes*256 bytes:
+4*32768+4*64*256=196608 bytes<262144. Bounded builders cap Vec/String/scratch
+capacity at32768 per representation, including allocator growth; no reserve65536
+merely because the raw credit is64 KiB. Peak graph includes immutable serialized
+frame, serializer/parser scratch, decoded AST strings and typed result strings;
+node/container allowance is additional. Each representation allowance covers all
+its scalar storage, not just the original ID; no free scratch or extra result copy.
+The initial incoming request/ID remains on its normal delivery lease while copied;
+cleanup copies occupy these four backed representations. Counting serialization
+checks envelope bytes/node count BEFORE allocating each representation; authored
+allocation/copy audit verifies256-byte node allowance and maxfour overlap before
+source freeze. Unexpected fifth copy/extra node fails preparation or obtains a
+separate backed lease BEFORE allocation. These static limits support the full
+4096-byte range, including control-character/multibyte IDs, not ASCII-only tests.
+
+MCP opening reserves one ingress ring of TWO(max8 MiB+1) raw buffers and TWO
+128 MiB expected-result DeliveryByteLeases plus ONE128 MiB callback/reply lease.
+ACP analogous ingress2*(1 MiB+1) and delivery3*32 MiB. Buffers allocated only to
+actual size; leases reserve conservative peak capacity. Two MCP servers reserve
+32 MiB raw/768 MiB delivery; four active requests (two per server) can reply and
+each server can service a callback. Both fit run pools. Two outgoing request frames
+per server add32 MiB raw total; two generated callback replies add16 MiB: aggregate
+80 MiB plus delimiters fits96 MiB. Max-size repeated outcomes retained beyond these
+lanes correctly backpressure; do not advertise32 productive lanes. Effective MCP
+default: two maximum-sized connections/run, two outstanding requests each and one
+callback each. Count caps permit smaller ACP/mixed setups only if bytes fit; third
+maximum MCP bundle may refuse. This tactical resource choice needs independent
+critique, not extra human permission; docs/immutable owned host side policy state it.
+
+Ingress graph: available ring buffer -> receiving complete frame -> bounded
+preflight/typed classification/compatibility decision -> retained IncomingSlot
+for admitted observation -> raw compact observation/receipt transfer -> available ring.
+EXPECTED RESPONSE never allocates a second max raw reservation: it claims an
+existing ring buffer and transfers it. Decoder delivery claims the prebacked request
+lane by exact ID. Incoming callbacks use distinct prebacked callback lane. Apply
+the exact MCP compatibility fallback in section7 BEFORE unknown/no-lane policy;
+compatibility-ignored objects return ring storage with no manufactured receipt,
+reply, Attention or delivery lane. Actual unknown input consumes capped ring only:
+classify synchronously, retain bounded reason/ID
+digest, record Attention and close reads/transport if no exact admitted lane, rather
+than stopping forever ahead of a legitimate result. No unknown arbitrary body is
+stored/logged or promoted to settlement. Unknown traffic cannot consume cleanup lane.
+Ingress ring occupied by genuinely pending receipts applies finite backpressure;
+resource inability to make progress closes transport/Attention without erasing them.
+
+Outgoing graph: registered occurrence -> bounded counting serialization -> RAW
+frame lease -> immutable bytes+cursor outer slot -> prepared queue permit -> current
+enqueue -> correlation latch -> poll/current frame gate/write -> delivery/drop raw.
+Generated reply uses callback/reply lane already backed BEFORE handler invocation;
+raw output lease and full typed output overlap are charged, not free caller memory.
+No target payload/new command/env/response in logs or authority ledger.
+
+3. DeliveryByteLease is a complete payload-lifetime charge
+Protocol projection does NOT release payload memory still owned downstream.
+Transfer a private DeliveryByteLease identity BEFORE decode/SDK insertion. It remains
+in registered bridge delivery slot through raw/parsed overlap, SDK Channel/actor,
+local SentRequest/RequestHandle receiver, callback task, cache and unpolled outcome.
+Count limits alone are insufficient. Separate caller outcome is COMPACT; full result
+is owned by one bounded host delivery slot and obtained via take_result/ack API.
+Taking full result transfers its lease to LeasedResult<T>; drop/consume returns
+capacity once. Public owned wrapper never hands out bare RequestHandle.rx or
+unleased full result, and never exports ownership capability in JSON.
+
+Peak backing includes serialized raw, serde AST capacities, typed result and all
+simultaneous copies. Pin max FOUR full payload representations per delivery lane;
+bounded node/string counts plus checked allocator-capacity accounting must establish
+128 MiB MCP/32 MiB ACP peak bound against authored SDK paths. Any extra clone/cache
+must reserve another delivery lease BEFORE allocating/copying or be eliminated.
+Document actual to_value/from_value/clone locations in authored API review; never
+assume raw-size equality proves decoded-size bound. Bounded parser preflights depth/
+node/string totals before SDK AST allocation, and postdecode capacity checks fail
+closed with existing capture retained. Vendor owned path moves results rather than
+copying them; arbitrary handler-produced host data must serialize through bounded
+counting writer and own reply lane before first await. Unbounded host handler data
+outside this path is an unsupported owner, not covered by byte promises.
+
+ACP SDK is unchanged: retained local slot holds the lease until block_task/SDK
+response delivery and all admitted downstream host ownership are finished/dropped.
+Incoming callbacks/notifications acquire their lane before SDK delivery; pending
+callback carries lease through complete handler/responder lifetime. SDK channel
+copy/decode overlap is charged by SAME prebacked peak lease, not released on compact
+projection. Private existing local handles stay local/non-Send; coordinator owns
+neutral shared correlation/capture responsibility. On runtime destruction confirm
+local SDK graph is destroyed before releasing delivery-only charge; retained raw/
+selected-receipt/accounting graph separately remains until safe transfer/durability.
+If that destruction cannot be confirmed, retain charge with Attention, not assume.
+
+rmcp owned patch adds owned leased handle/result adapters; legacy public APIs retain
+their signatures. SDK oneshot has full result plus association to its retained
+delivery slot; bridge outcome cannot let bytes outlive its charge. Bootstrap
+initialize info cached in Peer/session retains compact selected data or transferred
+lease; tools/catalog caches likewise retain charge until cache eviction/drop.
+Notifications/incoming handler tasks and generated replies obey the same rule.
+Duplicate/conflicting response may use available ingress lookahead but cannot create
+an uncharged second typed result; record conflict, close/Attention if no lane.
+
+Raw buffer may return to ingress after exact durable protocol observation/projection
+or durable protocol(b), ONLY when any needed approved actual result receipt has
+been transferred/retained. Native/external debt can remain without raw8 MiB forever.
+Delivery lease remains while typed/full data remains. Required operation-terminal
+receipt has its own bounded/durable owner; digest alone cannot prove its content.
+Future quota/usage accounting independently retains approved raw field spans and
+its sink/lease BEFORE raw release; Stage B delivery never claims token measurement
+or billing completeness. Diskfull/failed handoff retains both evidence and charge.
+
+4. Generated local replies survive sink-capacity waits
+Reserve incoming request reply slot/count/raw+delivery capacity BEFORE SDK handler
+invocation. On handler success/error, bootstrap expect_response callback or internal
+drain generation: synchronously bounded-serialize actual produced result into that
+PREregistered outer immutable ReplySlot FIRST, acknowledge retained transfer, THEN
+await sink.reserve_owned. PreparedSinkReply carries exact slot association+permit,
+not sole response value. Local non-Send data serializes in protected local seam;
+do not pretend it became Send. Even if runtime dies before capacity is ready, actual
+reply bytes/result receipt and original claim stay retained; no unregistered fallback.
+After permit ready use current NORMAL or pre-seal CLEANUP admission then synchronous
+enqueue. ToSink/shutdown drain do not reconstruct a new unowned reply from data.
+If callback was not registered before final freeze, no late reply grant.
+
+5. rmcp patch and ACP existing enqueue seams
+Vendor third_party/rmcp-1.6.0-surge-stage-b1/; package1.6.0 Apache-2.0, original
+build/license/notices. Locked upstream crate checksum
+e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad.
+Root =1.6.0 and [patch.crates-io] path, existing no-default client/child-process/
+which-command features. Final authored tree SHA+baseline file hashes+patch manifest
+are POSTWRITE source-freeze requirements, not impossible prewrite blockers. Never
+edit registry sources. Lock/features/build/license/MSRV1.96 closure reviewed.
+
+prepare_request/prepare_notification reserve Tokio1.50 OwnedPermit asynchronously,
+allocate checked i64-compatible ID/progress ID with shared bootstrap provider, and
+retain responder/receiver in opaque Prepared value. enqueue(self) synchronously
+OwnedPermit::send; drop unconsumed emits no request/cancel. Existing APIs delegate
+preserving legacy behavior; owned constructor requires checked allocation/collision
+rejection. Host slot+registry origin precede prepare; exact ID bind, CURRENT grant
+then enqueue occur synchronously after all waits. Retain owned handle immediately.
+Refactor existing client bootstrap into prepare_initialize/id/enqueue,
+receive_initialize, prepare_initialized/enqueue, finish; SAME SDK algorithm/variant/
+version negotiation, not Surge reimplementation. Internal reply/ToSink/drain all
+use section4; no direct-send bypass. No arbitrary Fn->proof API or public boolean.
+
+ACP2.2 remains unpatched, locked checksum
+13f780597b2c88ab83d02509bcc3e86366751f86fa12114005e35c55ed691763.
+Current effect_connection checks AFTER readiness; keep it. New slot/origin/capacity
+waits precede final grant. Synchronous send_request enqueues before ID exposure:
+immediately retain SentRequest in pre-existing outer local slot, read id(), then
+bind incarnation/direction/typedID before caller delivery. No await between enqueue
+and handle retention; fallible durable bind AFTER retention, physical transport latch
+closed until bind success. Crash/panic there is EnqueuedUncorrelated/Unknown, never
+NoEffect. Responder::id supplies incoming reply namespace; no latest-method/session
+guess. Automatic-drop cancellation unmatched unless pre-registered cleanup; refuse
+otherwise, preserving debt. Cleanup phases in section1 apply to SDK internal frames.
+
+6. Neutral process leaf API, sole waiter and safe cleanup profiles
+Use root-selected FIRST slice names verbatim: surge-process/src/owner_panic.rs
+install_owner_panic_protection(); abort_on_owner_panic<T>(impl FnOnce()->T)->T.
+Extract EXACT existing OnceLock/TLS/chained-silent-hook/catch+forget-payload/abort;
+lib.rs exports those two only for initial panic slice. Persistence consumes only
+these primitives, never MCP. This first slice has no native/domain/process API and
+does not require whole B acceptance. B extends SAME leaf later, after its review.
+
+Later leaf types (std/core DATA/thiserror/tracing/nix only, NO Tokio/SQLite/ACP/MCP):
+RetentionToken::from_arc<T:?Sized+Send+Sync+'static>(Arc<T>) stores neutral HeldArc<T>
+behind private retention trait; no user callback/probe/wait/closed proof methods.
+This token retains but certifies NOTHING. MCP wraps SAME existing HostWriterObserver
+Arc; owned coordinator wraps SAME original RegisteredSlot/claim Arc. Persistence
+validates registered-slot association, not arbitrary token presence. No leaf consumer
+import or trait-object upcast to MCP. Token drops only after sole worker's actual
+direct observation and coordinator responsibilities retain their independent Arc.
+OriginalChildParcel private std Child + RetentionToken + sealed profile/identity.
+ChildTransferSlot = Arc<Mutex<private Option<OriginalChildParcel>>>; ProcessTicket
+opaque shared control+Completion. Neutral ProcessObservation enum includes
+SpawnedOriginalIdentity, DirectReaped(ExitStatus), WaitAmbiguous, SignalAttempt;
+no DomainClosed/ExternalTerminal. ObservationSink receives DATA only; its callback
+cannot create native authority. Errors store reason enum, not command/error payload.
+Completion owns Condvar+checked done state and bounded Waker registry(max32 waiters);
+consumer async Future registers/removes std Waker, polling checked completion before
+sleep, no hidden Tokio Notify. Excess waiter fails/refuses, no unbounded vector.
+No per-RPC spawn_blocking completion threads. Existing MCP API delegates.
+
+Sealed built-in spawn_direct(command,token,sink) for MCP and spawn_original_group
+for ACP/shell install exact original process_group(0) recipe on Unix before spawn;
+no custom public CleanupProfile implementation/raw PID adoption. Parcel retained
+before fallible original pipe extraction. Direct worker preserves existing policy:
+at most ONE child.kill attempt, never further signaling after ambiguous wait.
+Group profile records root identity+original group at spawn from leaf's shared
+process_evidence implementation. Before its ONE group-signal attempt require root
+still unreaped, exact original boot/start identity and group membership matches.
+On identity mismatch/query/wait ambiguity do NOT signal; retain Unknown. If valid,
+attempt original group SIGKILL once; no retry after error/EINTR/root exit. Optional
+direct-leader fallback is ONE std Child.kill attempt while original handle is still
+owned/unreaped and wait not ambiguous. Thereafter only sole owner try_wait/reap;
+no repeat numeric kill, no coordinator/ACP lifecycle second waiter. Group leader
+already exited means no safe new group signal: remaining descendants Unknown, not
+silently Closed. Existing launcher-descendant cleanup test remains a required real
+positive while original leader identity is live; root-exit/reuse case is negative.
+This explicitly supersedes ACP repeated group-kill-on-wait-error behavior.
+
+Move existing tracker/worker/panic and identity parser rather than copying. MCP
+observer types remain in MCP adapter mapped to neutral RetentionToken; ACP public
+process_evidence compatibility re-export delegates leaf. Shared child limit128 and
+512 KiB stacks, no per-consumer duplicate registry. Process panic/poison aborts with
+durable prior debt; cannot claim Attention committed or OS closure on caught panic.
+
+7. Original Unix IO, finite gates and protocol compatibility
+Owned std ChildStdin/Stdout retained exclusively in ONE multiplexing pipe worker,
+before Tokio wrapping; Child remains ONLY shared std waiter. Safe nix0.29
+fcntl(raw,F_GETFL/F_SETFL|O_NONBLOCK), PollFd(handle.as_fd()), poll(50u16),
+write(&stdin), read(stdout.as_raw_fd()); root adds poll feature. Handles alive and
+unreplaced throughout raw-FD safe calls; destroy borrowed PollFd before closure.
+No from_raw_fd/descriptor reopening/new unsafe conversion. Std stderr bounded
+redaction/drain preserved; rmcp dependency tracing veto remains across CLI/daemon/UI.
+
+Poll/read/control fair visit64 KiB; CURRENT authority after writable poll then
+immediate nonblocking write, no await/readiness wait in between. Original frame
+cursor/bytes immutable. EAGAIN0/EINTR0 requires fresh poll/current gate; positive
+cursor retained, Stop closes remainder/next frame ->PartialFrame/Unknown. No frame
+interleaving or newline duplication. Gate+syscall is declared admission linearization,
+not cross-WAL/OS atomicity. Registry gate dedicated connection: pool acquire max10ms,
+busy timeout max10ms, bounded indexed transaction/no unbounded retries on IO thread.
+At most ONE storage-gated write attempt per round; contention defers other outgoing
+gates while servicing ALL ready read/control peers before another storage wait.
+Timeout/storage error refuses write and reports retained Attention, never grant.
+No global slot/transfer lock held across SQLite/IO wait. Coordinator never waits
+synchronously for IO to free a resource needed by its own database transaction.
+No coordinator transaction waits on live journal: nonblocking submit+liveness.
+
+Capture complete bounded incoming into registered raw slot BEFORE SDK queue waits
+or typed decode; ACP current31-frame queue capacity wait moves AFTER retained
+capture/approved routing parse, without uncapped allocation. MCP single-message
+Request/Response/Notification/Error only; arrays/empty arrays reject whole, no Batch.
+Keep CRLF/valid final-no-newline decode_eof. Explicit ordered MCP decision:
+(1) bounded byte/depth/node/UTF8/routing-key preflight, arrays reject whole;
+(2) attempt exact rmcp1.6 typed classification;
+(3) on typed-decode failure ONLY, valid JSON object with string method applies
+upstream should_ignore_notification predicate verbatim:
+  (!object.contains_key("id") && !is_standard_method(method)) ||
+  (method.starts_with("notifications/") && !is_standard_notification(method)).
+The second branch applies EVEN WITH an id; null id is present, not absent. Pin
+is_standard_method/is_standard_notification finite lists to vendor1.6 source;
+do not substitute "any unknown method" or "notifications must lack ID".
+(4) recycle compatibility-ignored bounded object and resume reading; no body/method
+logging, Attention, result/cleanup/terminal receipt or correlation;
+(5) all remaining malformed/unmatched/unregistered envelopes use refusal/Attention.
+Typed-success messages never take fallback, including genuinely unsupported requests.
+Malformed standard-method shapes not meeting predicate are not silently ignored.
+
+Owned routing security guard protects an identifiable response/error envelope or
+already admitted/colliding request ID before fallback: it cannot be hidden behind
+an added unknown notifications/ method. Such a collision/response candidate refuses
+with original debt intact. This is an EXPLICIT owned state-aware tightening beyond
+the stateless upstream codec, not a claim upstream performs this guard. Noncolliding
+unknown notifications/custom with id still follows the exact legacy predicate.
+Valid no-ID custom non-MCP notifications follow fallback; arrays never qualify
+because they are not objects. Invalid partial EOF/id/unknown envelope never settles.
+Receive stream missing newline bounded by cap; full unknown input yields Attention/
+close, not starvation behind indefinite full lookahead. Delivery leases section3
+cover SDK queues/local non-Send callbacks/oneshots and full-result caches.
+Windows owned physical path Unsupported BEFORE effect; legacy untouched. Unix poll
+is not Windows overlapped/native evidence; real later Windows positives remain C/D.
+
+8. Runtime-independent retained coordinator, projection and shutdown
+One standard coordinator thread plus ONE Unix IO thread; native workers shared128.
+register SAME underlying WorkItemLaunchClaim lock Arc BEFORE registry reservation;
+slot/count/bytes table retains before channel/Taken, sender keeps SAME slot through
+ack. Receiver retains keyed slot before ack; lost/duplicate Taken is idempotent,
+no second wait owner. Failure uses shared fallback; poison never treated empty.
+Journal liveness Running/Terminated explicit, not timeout. Live slow projection holds
+original Arc/receipt. Terminal journal protocol(b) IMMEDIATE registry transaction
+stores original observation/settlement and exact pending typed projection identity
+plus Attention, preserving newer control. Only AFTER durable commit and no live
+native/external responsibility may eligible launch Arc release. Diskfull retains
+Arc, bounded reason-only retries; second process excluded. After real process death
+debt survives and next host is reconciliation-only, never new dispatch from label.
+
+Shutdown closes registration/normal dispatch, runs pre-seal cleanup drain/final
+barrier, retains pending generated/incoming deliveries, joins sole native owners,
+IO/result transfer and coordinator projection/Attention before eligible authority
+release; timeout is unconfirmed. NO success merely because SDK/task/caller dropped.
+Owned daemon unconditional drop(claim) transfers to coordinator; original startup/
+Continue/seal/no-dispatch Stop receipts use this handoff unchanged. Owned deletion
+held/fail-closed pending separate lifecycle review. No wake-refusal SQL redesign.
+
+9. Exact edit closure and independent actual RED oracles
+After independent precode acceptance only: root Cargo/lock/docs AGENTS(new13th
+crate), rmcp vendor/manifest/owned prepare-bootstrap-internalreply/leased adapters;
+surge-process reviewed neutral ownership extension; MCP child_settlement adapter/
+writer_observer/connection/registry; ACP sdk_v1/transport/worker/lifecycle/evidence
+re-export; existing shell/hook original process owners; orchestrator coordinator/
+writer_coverage/owned effects/run ownership; persistence A cleanup-drain/final barrier
+typed authority and liveness/projection; daemon same-claim handoff. One source lane.
+Preserve actual accepted cmd/args/env/cwd/auth/whitelist hashes/policy precedence,
+Empty/HostDefaultEmpty, no owned proactive monitor, legacy6a–6d and productive paths.
+
+Observable independent outer REDs BEFORE production edits, literal expected wire
+IDs/byte counts/rows/second-process lock behavior (not copied accumulation algorithm):
+- TWO actual allowed MCP tiny-catalog servers initialize/catalog/call concurrently;
+  each callback while request pending; two same-method replies reverse order settle
+  exact own ids; numeric1/string1/incarnation mismatch fail without guessed binding.
+- Normal GLOBAL/RUN count+raw+delivery saturation THEN Stop: backed cleanup permits
+  work; literal4096 U+0000 ID serializes to24576 escape bytes and is echoed EXACTLY
+  in denial/cancel within28675/28676 frame bound, with charged decode/copy peak;
+  pair4096 ASCII, quote/backslash and multibyte IDs, no truncation/reclassification.
+  Oversized decoded ID/actual unknown-before-valid-response closes
+  with Attention, no spin/starvation/truncation or unregistered cleanup reply.
+- Actual counterfactual peers send custom non-MCP no-ID object then valid pending
+  response; notifications/custom WITH and WITHOUT noncolliding id; all ignored
+  objects recycle and next real response settles. Standard malformed method,
+  unmatched response ID, array/empty array refuse whole and do NOT claim the later
+  response delivered. Known live/colliding id plus unknown notifications/ method
+  refuses by explicit owned guard. Distinguish typed-success unsupported request
+  from typed-failure compatibility fallback using literal frames/expected outcomes.
+- Generated handler success/error ready with full sink -> destroy runtime BEFORE
+  prepare completes: actual original result retained; bootstrap/ToSink/drain same
+  case; second host excluded until genuine protocol(b), no false terminal proof.
+- Max-size results/projected statuses with unpolled SDK/oneshot/outcome/cache/callback:
+  capacity remains charged; consume/drop returns once. Test decode/clone peak,
+  duplicates/conflicts, runtime loss and selected-result/accounting handoff failure.
+  Domain/external debt open while raw buffers recycle but delivery bytes stay backed.
+- Real full pipe ->Stop ->peer drain ZERO bytes; positive partial prefix ->Stop,
+  no remainder/next frame, PartialFrame never NoEffect; EACH bootstrap/request/
+  permission approval/internalreply/drain/cancel final gate actually exercised.
+- Stop/cleanup registration/finalfreeze/seal race: every admitted cleanup appears
+  in exact final set; AFTER FinalFrozen/Sealed cancel/deny/error/drain yield0 bytes
+  and preserve old raw proof/newer Stop. Unconsumed cleanup capacity is not proof.
+- Neutral SAME Arc, lost Taken/duplicate/panic/poison/waiter-limit, shell-first hook,
+  stdio failure, runtime destruction and diskfull Attention; no secret diagnostics.
+  ACP group one-shot live launcher descendants positive; reused/root-exited/ambiguous
+  wait negative no repeated group kill. MCP unowned direct6a–6d unchanged.
+- DB contention bounded10+10ms while OTHER connection has incoming reply/Stop;
+  no lock inversion, stale grant, IO-wide deadlock or uncharged buffered payload.
+- A+B productive initial Empty/HostDefaultEmpty/populated and legacy start/resume;
+  actual finite no-dispatch Stop/Continue chain with exact immutable historical
+  receipts/cleanup membership. Unknown orphan/native/external debt blocks false ACK.
+
+Final delivery: authored API/lifetimes/allocator-copy audit+vendor hash and complete
+feature/license/MSRV/build closure; actual scope/full checks under main lane, source
+freeze, independent5a THEN5b. No checks claimed here. No native CoveredDomain factory,
+external certification, broad native OS positive or arbitrary ACP/MCP cold closure
+is substituted by B. Root's tactical leaf/resource choice requires independent
+critique, no extra human approval. Final vendor checksum is postwrite delivery.
