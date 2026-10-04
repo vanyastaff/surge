@@ -340,3 +340,12 @@ production-hook policy includes worker and synchronous fallback or a justified
 closed-profile guarantee. Latest helper exit/status mapping was accepted at
 plan level. Full reports retained beside draft; author reshapes, behavior held.
 This is initial-build precode review, formal postbuild count remains0/3.
+
+Framing first fix actual65411 terminal101:10PASS and one fixture metadata assertion
+FAIL (required line/column>0 although buffered tagged serde failure has0). Exact
+original serde metadata comparison replaces that assumption, while no-secret
+Display/Debug/source assertion remains. `framing-private-second-green.log` now
+ends11PASS/0FAIL,419filtered; actual14883 terminal exit receipt being reaped by
+sole author. Includes custom decode/encode, unknown field/type, syntax, invalid
+UTF8, EOF and bounded/valid frame behavior. Actual host TRACE socket malformed
+request with zero accepted operations/external effects remains required.

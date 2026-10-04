@@ -1,0 +1,19 @@
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 23.52s
+     Running unittests src/lib.rs (target/debug/deps/surge_orchestrator-7338315a176e937c)
+
+running 11 tests
+test engine::ipc::tests::a_windows_home_folds_to_one_spelling ... ok
+test engine::ipc::tests::read_request_frame_returns_none_on_eof ... ok
+test engine::ipc::tests::json_encoding_custom_error_discards_private_source_text ... ok
+test engine::ipc::tests::ping_request_serde_roundtrips ... ok
+test engine::ipc::tests::json_framing_conversion_preserves_only_fixed_metadata ... ok
+test engine::ipc::tests::pipe_names_differ_per_home_and_ignore_case ... ok
+test engine::ipc::tests::shutting_down_event_serializes ... ok
+test engine::ipc::tests::error_response_carries_code ... ok
+test engine::ipc::tests::write_and_read_frame_roundtrip ... ok
+test engine::ipc::tests::malformed_owned_private_input_never_survives_framing_error ... ok
+test engine::ipc::tests::read_request_frame_rejects_oversized_input ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 419 filtered out; finished in 0.05s
+
