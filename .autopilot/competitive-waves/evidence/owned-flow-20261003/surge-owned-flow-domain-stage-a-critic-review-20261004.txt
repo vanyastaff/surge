@@ -1,0 +1,160 @@
+T25 revised authority — independent focused StageA PLAN critique
+2026-10-04
+
+VERDICT: RESHAPE NEEDED for StageA implementation authorization.
+The revised separation of Birth/Release, historical settlement/current dispatch,
+and runtime-destroyed pending projection is substantially clearer. StageC native/
+external design is not certified here. The remaining findings concern executable
+StageA dependencies and actual current storage/journal seams, not a demand to finish
+all native platforms before correcting false clean ACK.
+
+Read the COMPLETE revised plan; verified SHA256
+5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8.
+The initially truncated output was supplemented with the complete section7 and
+adjacent protocol text. Read the prior complete security report and retained my
+original critic findings. Inspected actual engine startup, RunWriter/WriterCommand,
+writer config, run_task continuation, registry control/claim/settle and owned-effect
+predicates. This /tmp report is the only write; no source/test/Cargo/Git/process
+action or handle polling. Not frozen5a/5b; formal initial0/3 unchanged.
+
+BLOCKERS
+
+B1. The asserted existing typed startup path does not exist in actual source.
+
+Revised section7 says startup remains its existing typed exact-one path, while
+generic append/batch denies WorkItemAttemptBound and OwnedFlowInputsBound. Actual
+engine/engine.rs:625–649 builds the startup batch, calls writer.append_events(events),
+validates the resulting journal and acknowledges startup. RunWriter:197ff sends
+the ordinary public WriterCommand::AppendBatch. WriterConfig:122ff has run/path/
+clock fields, no immutable owned-authority mode. Current exact startup validation
+and nonempty-journal refusal are not a typed authority-bearing writer command.
+
+Required reshape: add a concrete host-only StartupPermit and typed atomic startup
+command, issuance predicate for accepted pending original Flow/claim/private inputs,
+and a writer owned-mode initialization/reopen contract. Migrate the real engine
+startup producer in the StageA closure. State when initial epoch0 is installed
+relative to startup commit/intent ACK and how startup-without-epoch or startup-without-
+ACK repairs without duplicate startup or effects. Full startup batch and artifact
+association must be verified in the actual journal transaction; a caller-supplied
+first-event bool or generic Batch exception is not sufficient. Owned mode cannot
+be enabled merely by caller JSON, nor removed on reopen to bypass generic guards.
+Keep unowned/legacy startup compatibility explicit. Add engine/engine.rs to StageA
+file closure, not only validate_resume/fence references.
+
+B2. Continue/seal one-shot permit consumption and current-control replay are not
+specified far enough to implement the declared cross-WAL contract.
+
+The API list offers open_continuation -> HostContinuationPermit and open_epoch(...,
+optional HostContinuationPermit), while section7 requires typed Continue origin
+BEFORE epoch opening. It does not name the typed Continue command/returned receipt
+or an acknowledgement API accepting that ACTUAL receipt. A non-Clone one-shot
+permit cannot simply be consumed by journal commit and independently consumed again
+to open the registry epoch. Section4 describes the desired repair outcome, but
+does not resolve that authority handoff. Current commit_restored_continuation
+(run_task.rs:369ff) uses generic append_event(RunContinued); daemon confirmation
+observes the event later, so both producers/acknowledgers need concrete replacement.
+
+Required reshape: spell out issuance -> typed journal command consumption -> private
+ContinueOriginReceipt -> registry current-control/CAS acknowledgement -> RunningEpoch
+capability, including exact duplicate replay, raw bytes, lost reply, newer Stop,
+and the current run_task/daemon producer map. Either the returned receipt carries
+the remaining constrained authority or a retained permit state machine owns it;
+there must be no public reusable startup/continuation permission. open_epoch must
+not accept None to bypass a historical epoch/seal or open from a mere requested
+Continue. The seal path needs the same explicit typed receipt/consumption contract.
+
+Also specify epoch origin generation separately from frozen CURRENT control
+generation. Epoch0 may freeze for Stop1; Continue2 can have committed journal origin
+while Stop3 arrives before registry opening. Old proof must survive, no epoch2
+dispatch may occur, and later legitimate reconciliation must not overwrite newer
+Stop or erase the original seal. The two-table sketch has a single seal receipt/
+ACK state and no explicit frozen-control/continuation-origin association. Define
+where multiple historical control associations and the outstanding rejected/stale
+origin reside (existing control rows may be reused). Give exact state/receipt
+transitions rather than leaving the implementer to choose permanent Attention or
+overwrite an immutable seal. Historical settle_original remains legal; ACK/open
+remain strictly current. No cross-WAL atomicity is requested.
+
+B3. StageA's productive boundary and declared gates conflict with its StageB
+dependency; the test/commit contract must explicitly resolve that conflict.
+
+Section10 says every owned writer entry requires a coordinator slot; until StageB
+provides it, reservation refuses productive dispatch. This blocks ALL such provider
+work, including owned Empty/HostDefaultEmpty graphs that have no external MCP but
+use real ACP quota park/wake. Those are existing productive original requirements,
+not merely future populated native positives. It also prevents an actual admitted
+RPC from reaching the A5 wait race. A zero-frame test obtained because every request
+is refused before any queue is not evidence of the final frame boundary that StageB
+has not implemented yet.
+
+Choose and document a coherent bounded unit:
+(a) StageA storage/typed-journal/inspection foundation plus specifically safe recovery
+gates, with productive dispatch wiring deferred until reviewed StageB; or
+(b) explicitly authorized intermediate fail-closed runtime checkpoint with enumerated
+productive regressions/expected REDs, no green full-suite or merger-ready claim; or
+(c) A+B as one implementation dependency closure after the independent StageB seam/
+bounded-owner plan is accepted. Do not fabricate slots or weaken the authority rule
+to make A pass. Root must approve the selected intermediate behavior/scope.
+
+Specify which StageA tests can genuinely pass and which remain actual later RED:
+structural registry conflict/receipt tests, exact empty-obligation seal/Continue
+storage tests and real false-ACK/refusal routes belong in A. Physical NoChild issuance,
+productive coordinator handoff, Stop after queued RPC before actual frame, and
+unchanged productive ACP Empty cold/wake require their real owners/seams. Maintain
+the executable positive tests rather than deleting/ignoring/relabeling them. Rewrite
+the 'strict workspace gate' language to identify actual checks and expected known
+failures if option(b) is chosen; a checkpoint cannot claim all regression gates pass
+while its deliberately absent slot disables them. Full original scope stays open.
+
+NONBLOCKING STORAGE/DEPENDENCY GUARDS
+
+1. The two-table model and reuse of existing IDs/control/cycle associations are a
+   reasonable reduction. Pin actual migration columns/keys/foreign associations,
+   versioned closure encoding and one-shot point CAS constraints before schema
+   authoring. Bind External rows to their exact request or broad writer; uniqueness
+   must reject conflicting original receipts without rolling forward another row.
+   Explain what increments reservation_generation versus settlement revision.
+
+2. Separate historical settlement is now correctly explicit. Do NOT reuse current
+   validate_claim_in wholesale for it: that helper requires current active assignment,
+   generation, claim token, unarchived state and owned-flow association. Historical
+   evidence uses original obligation identity plus authenticated current cleanup/
+   reconciliation ownership, not an old dispatch-control predicate. Current APIs
+   settle() also overwrites latest control to Attention and may clear active_run;
+   the new debt gate/Attention helper must preserve newer decisions as promised.
+
+3. freeze/inspect/prepare_seal must bind actual full-journal head and ledger generation
+   and enforce exact writer barrier before any immutable closure set is accepted.
+   Allowlist audit append only as stated. Define transaction/CAS replay when a
+   genuine original settlement arrives during frozen inspection; a stale view must
+   retry/refuse without dropping original responsibility. Prefix digest must come
+   from stored raw bytes, not serialized caller evidence.
+
+4. StageA may define private issuer interfaces without native proof factories.
+   Structural tests can check stored equality/conflicts but cannot manufacture a
+   public NoChild/Closed capability and call it physical evidence. StageB's actual
+   SDK/rmcp frame boundary and bounded coordinator transfer plan remain prerequisites
+   to productive wiring; non-Clone permits alone do not provide runtime ownership.
+
+5. A's daemon no-gap release integration must identify its safe authority owner
+   even on task/runtime cancellation. Removing unconditional drop(claim) without a
+   surviving non-Tokio owner does not solve cancellation. If StageA lacks that owner,
+   do not claim its SameArc/second-host physical acceptance; keep StageB handoff and
+   protocol(b) Attention disk-full tests open. No native process crate needed in A.
+
+FULL REQUIREMENT PRESERVATION
+
+All original ordinary Flow replay/identity/prompt/hash/workspace/private transport/
+key-loss/transplant/manifest/diagnostic and frozen-default requirements remain.
+Productive real Empty/HostDefaultEmpty and populated initial->park->cold->wake on
+the same original attempt/workspace/journal/control need their actual positive
+oracles. No-MCP Empty means no private namespace/key, not no ACP process. Full
+native/external contract certification and platform execution, unsafe backend
+reviews and macOS setup decision are outside this StageA verdict and remain OPEN.
+No native installation/source approval, proof factory, Closed emitter, generic
+ToolObserved execution shim, formal review count or requirement retirement follows.
+
+StageA can be coherent and reviewed independently after B1/B2 concrete transitions
+and B3 explicit dependency/gate scope are fixed. It need not wait for ES entitlement
+or platform installation to reject false clean ACK, but refusal-only behavior must
+not silently stand in for original productive recovery requirements.

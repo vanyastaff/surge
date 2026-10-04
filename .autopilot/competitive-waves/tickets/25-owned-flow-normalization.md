@@ -631,3 +631,12 @@ StageA security preliminary findings (not final report): existing startup generi
 events and public writer constructors require explicit typed owned-startup mode
 loading; epoch opening generation and later Suspend freeze/ACK generation require
 distinct schema/predicates. Source approval held; full independent verdict pending.
+
+
+T25 initial0/3. Actual populated initial37185 terminal0: exact private transport/catalog/policy, ReadOnly zero birth/public opacity; full populated cold positive remains open. Main actual legacy globals Aallowed/BReadOnly start+fresh-host resume and paired ownedEmpty checks in progress, main sole source/build owner. Revised domainStageA both independent verdicts RESHAPE; root FULLread reports. Required typed startup/actor mode load, distinct opening vs freeze/control generation, typed seal/Continue receipt-to-CAS, all helper/snapshot/delete guards. Root read-only supplement chooses A+B dependency acceptance closure (no productive refusal-only checkpoint); focused critic re-review and concrete B actual rmcp/ACP frame/coordinator discovery pending. Domain source held, native/external C/D/full gates/freeze5a then5b remain open.
+Actual source: engine prepare_run_startup uses generic append_events; public actor
+config/queue lack owned mode. WriteSnapshot INSERT OR REPLACE and delete_run only
+checks writer activity today. Root supplement is proposed design, not acceptance;
+real source behavior remains unchanged until reviewed implementation. Legacy globals
+resume oracle uses first host stalled provider/nonterminal journal, actual host
+teardown and new-host ResumeRun, not fake Closed or owned domain shortcut.

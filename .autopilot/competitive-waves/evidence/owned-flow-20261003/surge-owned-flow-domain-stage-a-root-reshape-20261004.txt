@@ -1,0 +1,201 @@
+T25 StageA root reshape proposal 2026-10-04
+READ-ONLY plan supplement; implementation NOT authorized.
+Basis: revised5bdd4649, actual source inspected today, two independent preliminary
+reviews. Full verdicts still pending. No change to original productive requirements.
+
+1. Owned writer startup is a new typed path, not an existing one.
+Actual engine.rs prepare_run_startup calls append_events; run_writer.rs sends public
+AppendBatch; storage.rs create_run/open_run_writer create a generic WriterConfig;
+writer.rs spawn_writer and config are public, mod.rs reexports command/config.
+The revised plan's existing typed exact-one claim is incorrect and superseded.
+
+Make WriterConfig, WriterCommand and spawn_writer crate-private, remove public
+reexports; rg finds no external workspace consumers. Keep public RunWriter/Recorder
+as opaque command senders; they cannot choose an owned/unowned mode. Actor loads
+immutable registry association plus per-run authority metadata under original run
+identity BEFORE processing any command. No public cfg boolean switches enforcement.
+Public generic create_run/open_run_writer must derive that association themselves:
+known owned reservation cannot become legacy because events DB is empty or missing.
+Lookup failure or mismatched association denies opening; known legacy runs retain
+legacy semantics. Storage-selected registry location is private, cannot be supplied
+via caller WriterConfig/events path. Existing writer slot and real file lock remain.
+
+Add private-field non-Serde OwnedStartupPermit issued by validated original claim,
+accepted input/startup binding, exclusive original run identity and current control.
+Durably register owned-pending-startup registry metadata BEFORE creating/opening the
+owned journal, so crash/missing marker cannot downgrade to generic mode. Add typed
+Storage create/open-owned writer and RunWriter commit_owned_startup(permit, validated
+startup data) APIs. Cross-crate permit construction sealed to persistence host
+validation, not a core public constructor or boolean. Actor checks original claim
+and registry association after queue wait. Registry metadata survives failed DB
+creation: missing owned journal remains attention/reconciliation, not legacy.
+
+commit_owned_startup performs exactly one per-run transaction for ordered existing
+RunStarted/Graph/Config/artifact references plus original WorkItemAttemptBound and
+OwnedFlowInputsBound (when present), raw binding and immutable owned journal marker.
+Validate required count/order/identity through existing startup inspector contract;
+do not rewrite original event bytes/public config/HMAC/Empty semantics. Transaction
+all-or-nothing, expected empty original journal; exact committed startup replay
+returns original receipt, conflict rejects whole batch. Never a generic startup
+bypass at seq0. Actor's typed command consumes private permit only once; caller
+cancellation after commit leaves same original receipt for reconciliation.
+Registry acknowledgement remains second database step verified from actual startup
+raw bytes/seq, no cross-WAL atomic claim. Missing journal marker + registry says
+owned means pending startup/unknown, never generic; marker says owned + registry
+association missing/conflicting means refuse, never legacy. Legacy task-bound
+journals without new marker remain readable, owned mutations are conservative.
+
+Reopen/cold: private actor authority loader validates registry/run/accepted binding,
+original marker/startup raw receipt and full prefix. Typed startup replays only the
+same registered pending startup. Generic create/open cannot bypass it. Include
+engine producer plus storage/mod/writer/run_writer/config in concrete write map.
+Migration must explicitly cover old journals; never automatically certify closure.
+
+2. Epoch opening control and closing control are distinct immutable values.
+Epoch identity = (run,attempt_generation,opening_control_generation), initial0.
+Running epoch0 is frozen by latest Suspend control1; retain epoch0 identity and
+record closing_control_generation=1 separately in freeze/seal/ACK. All obligations
+keep original epoch0; no rekey to1. ACK checks current newest control still1,
+state SuspendRequested, immutable seal epoch0/closing1, actual original journal
+receipt and no unresolved debt. Newer Stop rejects stale ACK without erasing proof.
+ContinueReserved2 references prior exact epoch0 seal/closing1; typed Continue origin
+commits its receipt before opening at most one Running epoch2. Dispatch new
+obligations under epoch2; next Suspend3 freezes epoch2 with closing3. Historical
+settlement remains tied to its original epoch and never requires opening generation
+to equal newest control or overwrites newer operator decisions.
+
+Registry epoch row: opening_control_generation part of PK; nullable immutable
+closing_control_generation and exact associated control occurrence on freeze;
+prior-seal association for continued epoch. Work-item attempt generation is separate.
+Validate checked integers, active run/binding, transitions and exact operation IDs;
+no arithmetic assumption that Stop always opening+1 or Continue closing+1 because
+other controls/retries may intervene. Exact newest control lookup is authoritative.
+Repeated same control/permit returns immutable matching receipts; conflicting
+freeze/continue proof rejects all writes. initial0 -> suspend1 -> continue2 ->
+suspend3 is required real-route test, supplemented newer control race/disk loss/
+seal-noACK/Continue-noepoch and historical cleanup behind newer Stop.
+
+3. Acceptance and dependency closure remain honest.
+Add genuine REDs for actual owned startup through generic append; typed startup
+atomic positive/replay/cancellation; all public generic handles after cold reopen
+cannot emit protected authority events; missing/mismatched registry/journal metadata
+fails closed; legacy unowned actual positive remains. Include events beyond snapshots
+and alternate CommitStageRoute/CommitGateAnswer/snapshot/rebuild helper paths.
+Epoch scenarios must execute actual daemon/storage seal/Continue route, not local
+counter reimplementation. The new StageA gates do not make native/request owners
+complete; B must provide runtime-independent original lease ownership and concrete
+physical frame seam before productive completion. Any temporarily refused productive
+case stays visibly unmet; full tests/product requirements cannot be retired or
+silently rewritten as refusal-only acceptance. No native/backend/install permission.
+This proposal needs full independent review before source changes; formal0/3 remains.
+
+4. Freeze covers every writer helper, snapshot bytes and deletion.
+Security R3 actual source: WriteSnapshot uses INSERT OR REPLACE; public stage/gate
+commands and old SealSuspension accept data without new epoch permit. Actor checks
+private loaded mode/freeze on ALL commands, not only AppendEvent/AppendBatch.
+Owned CommitStageRoute/CommitGateAnswer require exact typed original association,
+current epoch and original host permit; queued prefreeze command revalidates in tx.
+Old bool SealSuspension is denied in owned mode, replaced by typed permit command.
+Owned snapshot API: write-once exact original epoch/prefix/schema/bytes/digest/
+pending phase, exact replay returns receipt; mismatch never overwrites. Seal stores
+exact snapshot receipt in immutable closure set and raw seal projection. Public
+snapshot data cannot update that sealed row even with equal prefix. View rebuild
+replays display tables only, preserving authority mode/epochs/receipts/snapshots;
+missing immutable data refuses, no reconstructing authority from display fold.
+Late audit allowlist remains only NotifyDelivered/RuntimeVersionWarning; full
+inspector checks all later kinds and immutable sealed prefix/snapshot association.
+
+Storage::delete_run currently checks only active writer, deletes registry then
+filesystem. Include registry::delete_run and every caller in owned debt gate.
+FK RESTRICT prevents cascading authority loss; unresolved obligation or pending
+projection refuses even when no writer exists/terminal label says completed.
+Successful owned deletion needs trusted original association and no live writer/
+workspace owner, no unresolved epoch/request/external/host obligation and no pending
+proof repair. Validate under original exclusive run/launch ownership and registry
+IMMEDIATE transaction; publish immutable deleting/tombstone state fencing ALL later
+reserve/open/start/wake before filesystem removal. File deletion failure retains
+tombstone and original identity, retries reconcile SAME object, never resurrects
+legacy authority or removes ledger first. Unknown/missing/corrupt journal/metadata
+never passes debt-free. Retain terminal settlement records/task history needed by
+accepted identities; exact retention/deletion contract must be reviewed before
+implementing cleanup, no new deletion operation is executed by this plan.
+Actor open and all admission inspect tombstone; owner lock prevents concurrent
+existing writers; reservation barrier prevents new owners after deleting decision.
+Actual crash after writer loss + unresolved debt → delete must refuse and original
+journal survive. Add paused/closed-but-unprojected/request-only/late-snapshot cases,
+new reservation racing delete, completed legacy ordinary delete positive, immutable
+snapshot replay/conflict and rebuild preservation. No full closure from active-run
+absence, missing db or terminal status. New deletion safety is inside R3 scope,
+not permission to delete user work or a claim StageC is complete.
+
+5. Concrete startup/Continue receipt and one-shot transition contract (critic B2).
+Epoch0 is registered PendingStartup under original launch claim BEFORE journal
+birth, opening_control_generation0 and exact immutable accepted startup digest.
+Typed owned-startup consumes StartupPermit once in actor transaction. Its private
+StartupOriginReceipt is DATA identifying actual stored event seq/schema/raw bytes,
+not reusable dispatch authority. Registry acknowledge_startup(receipt, original
+claim) re-reads exact journal bytes/marker/full startup, validates original pending
+intent and newest control, then CAS PendingStartup->Running0. Lost caller reply
+reconciles the same stored startup, never appends a new batch. Startup committed
+with epoch still PendingStartup or ACK lost is repaired from the same original
+receipt; new Stop prevents Running admission and leaves historical startup intact.
+No initial open_epoch(None) public bypass. Startup refusal before any native/RPC
+reservation cannot fabricate a physical closure proof. Epoch has no obligations
+only when registry and full journal prove that fact.
+
+Continue issuance verifies closed prior epoch, original immutable seal/snapshot
+receipt, current newest ContinueReserved control and original launch lock; stores
+exact Continue intent association on that EXISTING control occurrence before
+issuing private one-shot ContinueJournalPermit. It carries prior epoch key,
+closing control operation/generation, new control operation/generation and exact
+seal raw receipt. Typed commit_owned_continue consumes it once and rechecks current
+association in actor transaction. Commits exact RunContinued data with original
+origin association atomically; returns private ContinueOriginReceipt identifying
+ACTUAL stored seq/schema/raw bytes. Public data append cannot supply this event.
+
+Registry acknowledge_continue_origin(claim, receipt): read actual original journal
+origin and exact previous seal/snapshot; validate immutable reserved association;
+then registry IMMEDIATE CAS exact newest ContinueReserved->Executing and INSERT
+new Running epoch with opening generation equal that Continue control. Exact
+repeat returns original epoch receipt, no new event or RPC. Receipt alone grants
+no authority: resulting non-Serde epoch capability is issued only after original
+claim and current state check. Runtime-independent owner retains permit/receipt
+handoff in StageB before caller cancellation; A structural tests are not owner proof.
+
+Continue origin committed, reply lost -> inspect raw exact occurrence and repair
+same ACK/new epoch; no journal duplicate. Stop arrives after journal origin before
+registry ACK -> retain origin association in historical EXISTING Continue control
+row (new private typed columns for old epoch, seal raw receipt, continue origin raw
+receipt/status), record RefusedByNewerControl, do not open Running epoch, do not
+change Stop's latest state. Later legitimate control may reference the same prior
+closed epoch under a NEW independently validated intent; old origin never authorizes
+it. Old epoch seal immutable; multiple historical control origins retained per
+control row, not overwritten in epoch's single seal field. No permanent Attention
+chosen merely because current control changed. Contradictory raw receipt is debt/
+Attention; historical cleanup remains permitted behind newer Stop.
+
+Typed seal consumes HostSuspensionPermit in actor txn, commits immutable snapshot
+receipt and RunSuspended projection once, returns private SealJournalReceipt DATA.
+Registry acknowledge_seal separately verifies ACTUAL raw receipt + exact closure
+set/snapshot + current closing control CAS. Repeat exact receipt idempotent; changed
+bytes atomic refusal. Caller owns no second copy of one-shot permit. StageB owner
+retains remaining receipt/repair obligation before returning a waiter result.
+Map actual run_task commit_restored_continuation, all provider-resume continuation
+producers, daemon confirm_continued/tracked_run, recovery-cycle wake reservations
+and engine prepare/start/open/resume to these typed paths. Initial startup/Continue
+writer mode is reconstructed from durable registry+journal, never wire cfg.
+
+6. Root selects critic B3 option(c): A+B implementation acceptance closure.
+Do NOT integrate A's all-owned dispatch guards alone as a green runtime checkpoint.
+Storage foundation design may be reviewed separately, but productive integration
+and source implementation approval wait for a concrete independently accepted B
+bounded coordinator + ACP/rmcp ID/physical-frame contract. No intermediate flow
+regressions are relabeled expected success, ignored or hidden by feature flags.
+Preserve actual productive Empty/HostDefaultEmpty, populated initial and existing
+legacy start/resume tests. Structural A1/A2/A4/A6/A7 and false-ACK/debt routes become
+actual acceptance with B integration; physical A3 NoChild, A5 queued-frame race,
+SameArc/runtime destruction/caller handoffs and ACP cold/wake require real B owners.
+Staged commits are allowed only as coherent verified dependency units, with source
+freeze/spec/quality evidence for actual scope; whole T25 and C/D remain open.
+No request for native installation is introduced; foundation progress is not final
+product completion. Until concrete B plan, domain source approval remains held.

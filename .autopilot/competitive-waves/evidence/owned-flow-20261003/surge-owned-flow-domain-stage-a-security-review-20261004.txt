@@ -1,0 +1,177 @@
+Independent StageA whole-journal domain authority — security/storage PRECODE review
+2026-10-04
+VERDICT: RESHAPE NEEDED, limited to the concrete StageA API/schema gaps below.
+The revised authority direction is sound. Native/external StageC is explicitly unapproved and
+is NOT used to block a coherent conservative StageA dependency unit.
+
+Read FULL 569-line /tmp/surge-owned-flow-domain-authority-revised-plan-20261004.txt, including
+section7 separately to avoid output truncation. Verified SHA256
+5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8.
+Rechecked actual current source: public writer/storage helpers and real startup append, core
+claim/lock ownership, registry controls/capacity wake, daemon owned launch/resume/terminal/recovery,
+whole-prefix inspector and accepted ADR0014. No source/tests/Cargo/git/build/process writes,
+installation or handle polling. Only this /tmp review report written. Main owns all source/build.
+Initial T25 formal0/3 unchanged; this is neither frozen5a/5b nor full requirement acceptance.
+
+Resolved original security objections — preserve these decisions
+- Explicit trusted-configured-binary threat boundary now excludes malicious same-UID host/store
+  tamper and says plainly 0600/HMAC/Rust opacity do not prevent it. This matches accepted
+  docs/adr/0014-mcp-server-lifecycle.md decision4 (the plan's filename is shortened incorrectly).
+- Birth versus Release is explicit, including held-child existence before Release, original debt
+  before native create, no-child only from genuine unconsumed Birth/no-process backend contract,
+  and runtime6a combined BirthExecution for standard spawn. No silent raw-PID adoption/native switch.
+- Historical settlement is distinct from latest dispatch/current-control predicates. Newer operator
+  decisions are preserved; old closure cannot reopen the epoch. StageA must not reuse permissive
+  validate_claim as dispatch authorization or confuse current owner token with original proof ID.
+- Protocol(b) selects durable Attention+exact pending projection in the SAME registry transaction
+  before intentional last original-lease release after journal runtime loss. Failure retains owner.
+  Live child/external responsibility is separate and never abandoned by pending-projection cleanup.
+- Coordinator clones SAME underlying WorkItemLaunchClaim lock Arc before registry mutation; not a
+  reconstructed token or Arc around a fresh claim. Actual WorkItemLaunchClaim derives Clone and
+  shares Arc<PreparationLock>/Arc<File> at work_items.rs:85-105, so this contract is implementable.
+- StageB per-RPC enqueue-before-SDK-ID behavior is honest; correlation/frame/private result owner
+  remain separately required. There is no claim SDK enqueue equals physical wire or response equals
+  remote terminal. StageB exact rmcp/frame/worker artifact remains a required future precode gate.
+- StageC factory disabled and StageA reservation without a real registered responsibility slot
+  refuses productive dispatch. Genuine no-obligation epochs can be reviewed separately. Conservative
+  A/B cannot complete populated transport cold wake, provider/native or generic tools/call positives.
+
+R1 REQUIRED: explicitly design typed OWNED STARTUP and constructor/load authority.
+Section7 says 'Startup remains its existing typed exact-one path'. That path does NOT exist in
+actual source. Engine::startup_run_events builds plain VersionedEventPayloads; build_startup_events
+adds task binding; start then calls PUBLIC writer.append_events(events) (engine/engine.rs:625-648).
+WorkItemAttemptBound and OwnedFlowInputsBound currently use the same generic AppendBatch now proposed
+for denial. Only afterward startup is inspected/acknowledged. A source author cannot satisfy both
+'startup remains unchanged' and 'generic bound/startup variants denied' without inventing the missing
+issuance path during implementation.
+
+Add a concrete commit_owned_startup(ValidatedOwnedStartup, original claim/startup permit, exact
+ordered startup batch) command, or equivalently named typed API, to StageA closure. Bind accepted
+run/attempt/workspace/private manifest, actual current pending-start intent, original launch lock,
+startup digest/schema and empty journal BEFORE its one-shot atomic journal birth. Exact retry returns
+original receipt; changed bytes/association conflict; cold nonempty journal never re-enters startup.
+Freeze cancellation/startup-before-ACK windows as with the original owned-flow plan. No public bool
+or supplied context JSON grants this permit. Legacy startup remains explicitly separate/readable.
+
+Name every constructor/open surface and its persisted mode/epoch load contract. Actual public
+Storage::create_run/open_run_writer (storage.rs:215,286), public WriterConfig/spawn_writer
+(writer.rs:122,139), public WriterCommand and runs::writer module (runs/mod.rs:71,91), and the cloned
+RunEventRecorder::append_event (run_writer.rs:47-68) do not currently retain owned authority mode.
+An ordinary writer construction must not bypass restrictions by omitting a caller-owned flag or
+opening an owned DB in legacy mode. Resolve owned identity from trusted registry/accepted association
+and initialize a private writer authority marker; missing/corrupt owned epoch/table/marker refuses
+or reconciliation-only, never falls back to legacy. If low-level spawn_writer remains public, restrict
+it to legacy stores verified unowned or give it a non-forgeable validated owned birth/open input.
+All queue variants/helpers enforce the same decision INSIDE the actual writer transaction, including
+previously cloned recorders. Do not rely only on outer orchestration checks. API visibility changes
+and compatibility/documentation must be explicitly included in this stage's dependency closure.
+
+R2 REQUIRED: distinguish epoch OPENING generation from freeze/ACK CURRENT control generation.
+Epoch key=(run,attempt_generation,control_generation), initial0, is usable only when generation
+means the epoch's immutable OPENING control generation. Current controls increment on each Suspend
+AND Continue (control.rs:107-132). First Suspend is generation1 while the old Running epoch remains
+0; Continue is generation2 and opens epoch2. Latest dispatch control and historical epoch key cannot
+be compared as one number, and freeze cannot move original obligation keys from epoch0 to epoch1.
+
+Specify separate fields/predicates: immutable epoch_open_control_generation; current freeze_request
+control generation/operation; ACK generation/receipt; next ContinueReserved generation linked to
+prior epoch/seal. Table schema/permits must carry exact links (run/attempt/old_epoch/freeze_control/
+continue_control/new_epoch) and checked arithmetic; use existing IDs, no parallel ID framework is
+needed. Initial no-control0, Suspend1->old0, ACK1->old0, Continue2->new2 is the fixed protocol oracle.
+A newer Suspend3 must reject stale ACK1/Continue2 without mutating old proof. Repeated Suspend before
+ACK/capacity/manual transitions need their chosen current mapping, not generation renaming. Exact
+historical settlement uses original epoch key after all these controls. This is a concrete schema/
+state transition gap, not a native setup question.
+
+R3 REQUIRED within helper/deletion closure: freeze protects snapshots and alternate typed helpers.
+Section7 names append_event/append_batch, but public existing typed helpers also write stage/control
+rows without a new permit: commit_stage_route, commit_gate_answer, WriteSnapshot, old SealSuspension.
+WriteSnapshot currently INSERT OR REPLACE at any at_seq (writer.rs:344-358; public write_snapshot in
+run_writer.rs:295+). A frozen/sealed snapshot can therefore be changed without an appended journal
+event. Current old SealSuspension accepts caller SuspensionFence bool; new owned seal must replace
+or reject that helper in owned mode. Prefix equality alone does not bind mutable snapshot bytes.
+
+Enumerate these helpers explicitly in StageA: freeze/epoch mode guard them; stage/control/terminal
+writes require exact original typed association, not generic prefreeze permission. Seal receipt/set
+bind the exact snapshot schema/bytes/digest and pending phase to the original snapshot prefix; no
+public snapshot overwrite/rebuild may replace sealed authority state. Exact replay is idempotent;
+conflicting snapshot/route/gate mutation is atomic refusal. Rebuild only resets views and preserves
+immutable authority tables/markers/snapshots. NotifyDelivered/RuntimeVersionWarning may remain audit
+allowlist after seal as chosen; inspector recognizes them and validates the immutable seal prefix
+rather than assuming current head must never grow.
+
+Add explicit public Storage::delete_run and low-level registry::delete_run/deletion entry to the
+same debt gate (storage.rs:475-487; registry.rs:202). They currently check only active writer, then
+remove registry row and run directory. After crash/no RunWriter a retained unresolved workspace
+obligation must still prevent loss of original journal/projection proof. FK restrict policy plus
+transactional debt validation should preserve unresolved authority; never cascade-delete the ledger
+or permit file removal before the registry gate. This belongs to existing delete/archive/workspace
+safety scope, not an authorization to design or execute new cleanup. New attempt/revision/archive
+inactivity checks alone are insufficient if terminal labels erroneously cleared active_run.
+
+Current entry coverage assessment
+The revised named dependency map otherwise covers the important current paths: launch_attempt and
+pending owned Start; owned Stop/Resume plus engine direct resume; supervise_completion and terminal
+settle; request_control/confirm_suspension/confirm_continued; recovery_cycles::capacity_fence and
+reserve_automatic_wake; tracked_run outcome validation; work_items parked resume; generic wake/recovery
+fallback; archive/new attempt/workspace reuse. Required exact seams rechecked:
+- daemon/work_items.rs:490+ resume_parked_work_item can early-return active run, then claims and
+  reserves wake; it must consult existing debt/state before consuming wake or issuing epoch admission.
+- wake_scheduler.rs:246-287 uses durable task resume then server::resume_run_tracked fallback; an
+  owned lookup failure/debt must not become 'unowned' and invoke generic facade resume.
+- server::resume_run_tracked:1392+ and tracked_run::resume are generic public paths; ownership lookup
+  routes them through validated authority, regardless mutable rotation/default settings.
+- work_items/recovery_cycles.rs:874+ capacity_fence trusts cleanup bool today; its planned-capacity
+  shortcut must require true obligation-free journal+registry evidence, not missing table/old label.
+- daemon/tracked_run.rs:348-382 trusts RunSuspended bool/terminal data; new projection must consume
+  real proof/set association before terminal acknowledgment. task work_items::settle:818-860 cannot
+  clear active_run/mark Terminal while unresolved responsibility/pending projection exists.
+- run_task.rs actual pending fence and writer cleanup currently use bool; StageA replaces acceptance
+  before registry ACK. Inspection must fold complete contiguous history beyond startup/saved snapshot,
+  including legacy writer/orphan/duplicate/conflict data; old closed bool remains display-only.
+
+A coherent StageA after these narrow amendments
+Two tables/private validated data plus typed owned-startup/open/freeze/seal/continuation/historical
+inspection helpers and ALL current owned entry/deletion gates can be one dependency-complete safety
+unit. Real responsibility-slot APIs remain private and unissued for productive native/request dispatch
+until StageB. StageA must not install a Tokio-only surrogate/fake NoChild issuer to regain positives.
+Host finite-operation positives are admissible only where their actual synchronous owner completes
+before cancellation/release; any blocking-worker-after-await positive needs the real owner contract
+and stays StageB otherwise. Genuine empty proof includes zero registry debt plus actual full trusted
+journal; registry-only NoChild has no physical positive issuer until StageB. Structural NoChild tests
+may validate private data/replay without minting public native authority.
+
+The schema intent is otherwise sufficiently concrete for bounded A: immutable reservation/origin/
+terminal fields, checked SQL-compatible ordinals, FK/unique receipts, all-state replay conflicts,
+canonical versioned fixed structured closure-set encoding and no identity rewrite. Include explicit
+opening/freeze control links (R2), writer marker and snapshot receipt binding (R1/R3) BEFORE migration
+number/schema authoring. Stored descriptors are DATA; native/domain/NoChild constructors remain
+sealed and do not appear in caller deserializers. Original same-underlying lease check should be
+proved by actual second-process exclusion, not only equal path/token strings in a unit test.
+
+Mandatory StageA RED/acceptance details (reviewer did not execute)
+1 Actual owned startup uses typed command once; forged generic bound/start/intent/closed/suspend/
+continue events fail via RunWriter, recorder, raw public queue and alternate helpers. Public open
+cannot choose legacy owned mode. Conflict leaves raw rows/epoch/set/marker/snapshot/view state intact.
+2 Initial epoch0/Suspend1/ACK1/Continue2/new2 literal oracle and newer Suspend3 stale rejection; old
+settlement is preserved without reopening. Registry reserve/freeze barrier races prove all-or-none.
+3 Registry-only reservation crash with no intent/PID and cold second host blocks every owned start/
+resume/wake/newattempt entry. No public NoChild, empty-table fallback or no-intent guess.
+4 Full-prefix late writer beyond snapshot, queued prefreeze origin, forged stage/gate/snapshot writes,
+seal/noACK and Continue/noepoch restart: exact original receipt replay, no duplicate event/effect.
+5 Pending journal/Attention disk failure never logs-and-drops original claim; StageA cannot enter
+productive dispatch without StageB registered owner. Actual lower-level Stop gate is unchanged
+where already fixed; do not report old sdk_v1 readiness bug as an outstanding source defect.
+6 Terminal/Archive/new revision/storage.delete_run after writer loss preserve debt and original
+journal; missing/corrupt mode/ledger refuses all effects. Existing unowned runtime6a–6d paths remain.
+7 Empty/HostDefaultEmpty namespace/ID/hash/private/global precedence regression plus honest separate
+open productive populated/native/external positives. Full strict workspace/independent frozen5a->5b
+still required; StageA green alone neither retires T25 nor proves platform/product completion.
+
+StageB/C approval remains held
+The revised same-Arc/coordinator-slot/Taken/runtime-loss/historical settlement handoff is a credible
+required contract; exact rmcp request-ID/frame and bounded coordinator worker implementation artifact
+still requires its own precode owning/security review before productive dispatch. Native/FFI/adapter
+certification/platform setup and real populated cold positives remain unapproved StageC/D. No install
+or source permission is inferred here. Amend R1–R3, then bounded StageA can be independently re-reviewed
+without pretending its conservative refusals satisfy full product scope.

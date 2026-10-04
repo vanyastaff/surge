@@ -1,3 +1,9 @@
+# Authoritative checkpoint: domain reshape 2026-10-04
+
+T25 initial0/3. Actual populated initial37185 terminal0: exact private transport/catalog/policy, ReadOnly zero birth/public opacity; full populated cold positive remains open. Main actual legacy globals Aallowed/BReadOnly start+fresh-host resume and paired ownedEmpty checks in progress, main sole source/build owner. Revised domainStageA both independent verdicts RESHAPE; root FULLread reports. Required typed startup/actor mode load, distinct opening vs freeze/control generation, typed seal/Continue receipt-to-CAS, all helper/snapshot/delete guards. Root read-only supplement chooses A+B dependency acceptance closure (no productive refusal-only checkpoint); focused critic re-review and concrete B actual rmcp/ACP frame/coordinator discovery pending. Domain source held, native/external C/D/full gates/freeze5a then5b remain open.
+
+Earlier checkpoints below are superseded history where contradictory.
+
 # Authoritative checkpoint 2026-10-04
 
 T25initial0/3: pinned catalog3ecd83 and classification23c61a passed independent precode critic/security; root authorized only those bounded amendments. Actual health/history RED39263 terminal101 -> actual GREEN85243 terminal0 and private GREEN20101 terminal0, eight callback refusals/no birth/exact state/privacy. Empty45824 and HostDefaultEmpty21533 terminal0 prove frozen selection only. Main catalog implementation/scoped regressions ongoing; no fullworkspace/freeze5a/5b. Domain revised5bdd46 fully read; StageA independent precode review pending, B frame/coordinator and C native/external/productive positives remain open; domain source held.
