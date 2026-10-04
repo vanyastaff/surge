@@ -470,6 +470,20 @@ and the final complete nextest run still require terminal evidence. This remains
 author WIP in the same consolidated repair 3/3, not a fourth review repair or a
 completed T12 slice. Independent 5a must precede 5b after final executable gates.
 
+Corrected release `75403`, doctests `86694` (5 passed, 7 existing ignored) and
+fixture binary refresh `95312` terminated successfully. Full run `29932` then
+terminated exit 100 in 274.271 seconds: 3451 ran, 3450 passed, 1 failed,
+36 skipped. Log: `/tmp/surge-predispatch-author-repair3-workspace-corrected-20261003.log`.
+The remaining cold Continue test observes `ContinueReserved` instead of
+`Executing` immediately after Engine-active readiness. Independent read-only
+inspection confirms that this predicate sees the historic question and active
+run before the daemon supervisor asynchronously acknowledges `RunContinued` in
+the registry. The bounded fixture correction waits within the same eight-second
+deadline for active readiness and the exact durable state, generation, operation
+and attempt binding; existing assertions and journal counts remain. It is still
+unfrozen author work in repair 3/3; final full gates and both review stages remain
+pending.
+
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
 The actual-cwd preparation dependency required a bounded amendment of this next
