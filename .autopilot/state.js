@@ -9,7 +9,7 @@ window.STATE =
   "briefFile": "2026-09-05-brief.md",
   "memoryFile": "AGENTS.md",
   "startedAt": "2026-09-05T16:19:05-05:00",
-  "updatedAt": "2026-10-04T01:36:55.522951+00:00",
+  "updatedAt": "2026-10-04T02:28:06.773889+00:00",
   "finishedAt": null,
   "previousCheckpoint": {
     "finishedAt": "2026-09-07T14:10:00-05:00",
@@ -63,7 +63,7 @@ window.STATE =
       "id": "build",
       "status": "active",
       "startedAt": "2026-09-05T16:34:13-05:00",
-      "note": "T12 remains active. Configured task-owned pre-dispatch and actual-worktree preparation accepted in 95c5295 after full3451PASS/36skip and independent5a/5b. Owned ordinary Flow normalization is now building from reviewed plan and ticket25. Actual ACP spending/window estimation, session restoration and full product requirements remain open. Historical46 requirements are not counted as currently verified.",
+      "note": "T12 remains active. Configured task-owned pre-dispatch accepted in 95c5295 after 3451 PASS / 36 skips and independent 5a/5b. T25 owned ordinary Flow initial build continues: accepted portability design, core origin 10 PASS, Unix ownership 72 PASS, private input foundations 7 PASS, first coordinator dev check passed. Host-only acceptance now carries the retained launch guard; actual daemon endpoint/outer replay-stop-cold proofs, final gates and native Windows proof remain open. Only owned_flow_builder owns Cargo and current source. Historical 46 requirements are not currently verified; full product scope remains open.",
       "finishedAt": null
     },
     {
@@ -100,7 +100,10 @@ window.STATE =
     "864dcc8 feat(engine): след срабатывания guard'а — запросом, а не разбором прозы (#17)",
     "95c5295 feat: accepted configured task starts and pre-dispatch capacity routes",
     "c6743fb docs: independent acceptance evidence and retained limits",
-    "6ef1810 docs: activate reviewed owned Flow normalization"
+    "6ef1810 docs: activate reviewed owned Flow normalization",
+    "782ec54 docs: retain accepted owned flow portability contract",
+    "a497e81 docs: preserve owned flow foundation results and current scope",
+    "5cf28bf docs: record coordinator check and launch guard handoff requirement"
   ],
   "branch": "main",
   "tickets": [
@@ -685,4 +688,4 @@ window.STATE =
     "deferred": 1
   },
   "blind": null
-}
+};

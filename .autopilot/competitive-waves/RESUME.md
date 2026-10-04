@@ -6,14 +6,25 @@ worktree приняты независимыми проверками и зак�
 manifest сохранены в `evidence/predispatch-20261003/`. Финальный прогон: 3451
 passed, 36 существующих skips. Полный T12 остаётся открытым.
 
-Следующий этап — `tickets/25-owned-flow-normalization.md`, принятый план —
-`owned-flow-normalization-plan.txt`. Core-helper и основной builder разделяют
-файлы; только основной builder `owned_flow_builder` владеет Cargo lane. Обычный
-Flow должен получать устойчивую операцию и владельца до чтения текущих файлов и
-конфигурации. Перед реализацией уточняется Windows backend подготовки: прежний
-claim игнорирует file identity на non-Unix, а защищённая подготовка поддерживает
-Linux/macOS. Это ещё не доказательство переносимой защиты. Файлы/процессы и логи
-текущего рабочего дерева являются источником фактического состояния.
+Текущий этап — `tickets/25-owned-flow-normalization.md`, основной принятый план —
+`owned-flow-normalization-plan.txt`, переносимость и Empty MCP уточнены в
+`evidence/owned-flow-20261003/surge-owned-flow-portable-prep-*.txt`.
+Core и Windows helpers завершили свои узкие части и передали файлы основному
+`owned_flow_builder`: он один владеет текущим source и Cargo lane. Windows
+код/тесты написаны, но native Windows proof отсутствует и остаётся обязательным;
+исследование API и cross-compilation не заменяют выполнение.
+
+Подтверждены foundation checks: core origin — 10 PASS, Unix work-items —
+72 PASS, private MCP inputs — 7 PASS. Первый coordinator dev check завершён;
+последующий log завершён без предупреждений, terminal handle пока уточняется.
+Это не финальные strict/outer gates. Обычный Flow должен получать устойчивую
+операцию и владельца до чтения текущих файлов и конфигурации. Принятие теперь
+передаёт host-only claim с той же удерживаемой Arc-блокировкой; внешняя receipt
+не даёт полномочия на запуск. Endpoint и outer replay/Stop/cold tests ещё открыты.
+Структурное Empty MCP должно проверять реальный startup journal, accepted binding
+и точный initial/continuation control перед эффектами; SQL equality недостаточно.
+Новая единица остаётся в initial build, formal post-build repair count 0/3.
+Все файлы/процессы и логи текущего дерева — источник фактического состояния.
 
 Исторические разделы ниже описывают Linux-среду 2026-09-05/06. Текущая сборка
 выполняется на macOS с `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1
