@@ -441,6 +441,15 @@ fixture source; source freeze and independent 5a/5b remain pending.
 
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
+The actual-cwd preparation dependency required a bounded amendment of this next
+unit. The complete revised pre-code plan is retained in
+`.autopilot/competitive-waves/owned-flow-normalization-plan.txt`. Owning maintainer,
+independent behavior and security reviewers accepted it after resolving stable
+CLI replay routing, typed accepted flow origin, immutable provisional ownership,
+owner-aware Stop/Resume and authenticated private MCP hydration on cold startup
+and wake, including frozen empty lists. This is design acceptance only. It creates
+no implementation evidence and does not close the current repair, T12 or the goal.
+
 Configured rotation on ordinary CLI/daemon flow launches must enter the same
 durable task owner, workspace, opening fences and automatic wake lifecycle as
 task launches. The current task-owned pre-dispatch implementation does not close
