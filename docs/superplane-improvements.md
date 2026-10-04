@@ -19,7 +19,7 @@ state. The active objective still includes every interview requirement.
 | Persistent task | 3A accepted: immutable requirements, task discussion/history, ordered attempts, PR association and retained workspace ownership | Full lifecycle integration with resumable execution and cleanup choices |
 | Stop, Continue and provider limits | ACP session recovery, durable controls/decisions, candidate cycles and A→B fallback implemented with focused actual mock-ACP wire and restart tests; configured task-owned pre-dispatch accepted in `95c5295` | Full phase acceptance; ordinary Flow ownership, complete child-process settlement, remaining quota/accounting and recovery cases |
 | Desktop task experience | Create/discuss/edit and acknowledgement/currentness fixes implemented; isolated native Computer Use checks recorded on 2026-10-01 | Current-build end-to-end Flow/worktree controls, resume/archive/cleanup and full UX verification |
-| Ordinary Flow recovery — current worktree | Wake refusal enters lasting Attention; original lease survives caller exit; actual event-before-ACK host crash reuses the existing event without duplicate work. Missing-journal recovery after actual test-host runtime consumption passes its paired fault test | Remaining fault/control cases, current full strict checks and independent final acceptance. These source changes are still uncommitted and are not a released increment |
+| Ordinary Flow recovery — current worktree | Wake refusal enters lasting Attention; original lease survives caller exit; actual event-before-ACK host crash reuses the existing event without duplicate work. Missing-journal recovery after actual test-host runtime consumption passes its paired fault test | Remaining fault/control cases, current full strict checks and independent final acceptance. Local WIP source checkpoint `b622bd4` preserves these changes; the increment is not released or fully accepted |
 | Orchestrator and PR review loop | Existing workflow and GitHub merge surfaces provide foundations | Full interview-defined stages/policies, multi-provider planning U01, durable human/bot inline repair and re-review, CI/spec/evidence-based merge decisions |
 | Result and notifications | Existing run reports, inbox and delivery mechanisms provide foundations | One task-level spec/evidence/readiness result; app and connected Telegram decisions throughout the full path |
 
@@ -28,8 +28,9 @@ providers. It is not native Linux/macOS/Windows child-domain acceptance, live
 provider interoperability or complete desktop-product acceptance. Native backend
 planning is underway; implementation and actual platform positives remain open.
 
-The next source milestone is the current Flow recovery/ownership increment with
-its own checked source commit. Then execution settlement and quota recovery must
+The current Flow recovery/ownership implementation is preserved in local WIP
+source commit `b622bd4`; current full-suite and remaining fault/review acceptance
+are the next milestone. Then execution settlement and quota recovery must
 reach full acceptance before the remaining orchestrator/PR loop and product flows
 can be called complete. Documentation and raw-test evidence commits are not
 substitutes for that source milestone.

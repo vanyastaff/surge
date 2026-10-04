@@ -1,0 +1,51 @@
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error: unused `async` for async trait impl function with no `.await` statements
+  --> crates/surge-persistence/src/runs/writer_slot.rs:37:5
+   |
+37 | /     pub async fn try_acquire(
+38 | |         &self,
+39 | |         run_id: RunId,
+40 | |     ) -> Result<Option<Arc<WriterToken>>, WriterSlotError> {
+41 | |         self.try_acquire_sync(run_id)
+42 | |     }
+   | |_____^
+   |
+   = note: `std::future::ready` creates a `Future` which returns the value immediately when `poll`ed
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unused_async_trait_impl
+   = note: `-D clippy::unused-async-trait-impl` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::unused_async_trait_impl)]`
+help: consider removing the `async` from this function and returning `impl Future<Output = Result<Option<Arc<WriterToken>>, WriterSlotError>>` instead
+   |
+37 ~     pub fn try_acquire(
+38 |         &self,
+39 |         run_id: RunId,
+40 ~     ) -> impl Future<Output = Result<Option<Arc<WriterToken>>, WriterSlotError>> {
+41 ~         std::future::ready(self.try_acquire_sync(run_id))
+   |
+
+error: unused `async` for async trait impl function with no `.await` statements
+  --> crates/surge-persistence/src/runs/writer_slot.rs:62:5
+   |
+62 | /     pub async fn is_held(&self, run_id: &RunId) -> Result<bool, WriterSlotError> {
+63 | |         let state = self.inner.lock().map_err(|_| WriterSlotError)?;
+64 | |         Ok(state
+65 | |             .get(run_id)
+66 | |             .is_some_and(|weak| weak.strong_count() > 0))
+67 | |     }
+   | |_____^
+   |
+   = note: `std::future::ready` creates a `Future` which returns the value immediately when `poll`ed
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unused_async_trait_impl
+help: consider removing the `async` from this function and returning `impl Future<Output = Result<bool, WriterSlotError>>` instead
+   |
+62 ~     pub fn is_held(&self, run_id: &RunId) -> impl Future<Output = Result<bool, WriterSlotError>> {
+63 ~         let state = std::future::ready(self.inner.lock().map_err(|_| WriterSlotError)?);
+64 ~         std::future::ready(Ok(state
+65 +             .get(run_id)
+66 +             .is_some_and(|weak| weak.strong_count() > 0)))
+   |
+
+error: could not compile `surge-persistence` (lib) due to 2 previous errors

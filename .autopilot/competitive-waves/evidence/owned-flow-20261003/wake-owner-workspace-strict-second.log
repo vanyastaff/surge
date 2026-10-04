@@ -1,0 +1,45 @@
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error: this function can be simplified using the `async fn` syntax
+  --> crates/surge-persistence/src/runs/writer_slot.rs:37:5
+   |
+37 | /     pub fn try_acquire(
+38 | |         &self,
+39 | |         run_id: RunId,
+40 | |     ) -> impl std::future::Future<Output = Result<Option<Arc<WriterToken>>, WriterSlotError>> {
+   | |_____________________________________________________________________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_async_fn
+   = note: `-D clippy::manual-async-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::manual_async_fn)]`
+help: make the function `async` and return the output of the future directly
+   |
+37 ~     pub async fn try_acquire(
+38 +         &self,
+39 +         run_id: RunId,
+40 ~     ) -> Result<Option<Arc<WriterToken>>, WriterSlotError> { self.try_acquire_sync(run_id) }
+   |
+
+error: this function can be simplified using the `async fn` syntax
+  --> crates/surge-persistence/src/runs/writer_slot.rs:62:5
+   |
+62 | /     pub fn is_held(
+63 | |         &self,
+64 | |         run_id: &RunId,
+65 | |     ) -> impl std::future::Future<Output = Result<bool, WriterSlotError>> {
+   | |_________________________________________________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_async_fn
+help: make the function `async` and return the output of the future directly
+   |
+62 ~     pub async fn is_held(
+63 +         &self,
+64 +         run_id: &RunId,
+65 ~     ) -> Result<bool, WriterSlotError> {
+66 +         let state = self.inner.lock().map_err(|_| WriterSlotError)?;
+67 +         Ok(state
+68 +             .get(run_id)
+69 +             .is_some_and(|weak| weak.strong_count() > 0))
+70 +     }
+   |
+
+error: could not compile `surge-persistence` (lib) due to 2 previous errors

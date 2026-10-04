@@ -1,0 +1,16 @@
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Checking surge-ui v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-ui)
+    Checking surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+    Finished `dev` profile [unoptimized] target(s) in 2m 14s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

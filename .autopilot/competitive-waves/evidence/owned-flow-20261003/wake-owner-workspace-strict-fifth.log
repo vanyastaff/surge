@@ -1,0 +1,34 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking surge-ui v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-ui)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:638:43
+    |
+638 |                       if sequence.is_some() {
+    |  ___________________________________________^
+639 | |                         break;
+640 | |                     }
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+    = note: `-D clippy::excessive-nesting` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::excessive_nesting)]`
+
+error: this block is too nested
+    --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:1806:61
+     |
+1806 |                       if let Some(row) = rows.next().unwrap() {
+     |  _____________________________________________________________^
+1807 | |                         let occurrence = (row.get(0).unwrap(), row.get(1).unwrap());
+1808 | |                         assert!(rows.next().unwrap().is_none());
+1809 | |                         break occurrence;
+1810 | |                     }
+     | |_____________________^
+     |
+     = help: try refactoring your code to minimize nesting
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: could not compile `surge-daemon` (test "owned_flow_mcp_recovery") due to 2 previous errors

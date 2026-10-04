@@ -1,0 +1,15 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+error: deref which would be done by auto-deref
+   --> crates/surge-persistence/src/work_items/owned_flow/refusal.rs:357:48
+    |
+357 |         let accepted = launch::accepted_launch(&*store.pool.get().unwrap(), receipt.run).unwrap();
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `&store.pool.get().unwrap()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#explicit_auto_deref
+    = note: `-D clippy::explicit-auto-deref` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::explicit_auto_deref)]`
+
+error: could not compile `surge-persistence` (lib test) due to 1 previous error

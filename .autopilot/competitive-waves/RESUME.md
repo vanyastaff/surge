@@ -1,3 +1,31 @@
+# LOCAL WIP SOURCE checkpoint b622bd4 — 2026-10-04
+
+User-authorized recoverable SOURCE snapshot committed by sole source owner:
+b622bd4195de25feac12b2ac43e5934cbd64f224,141files15087insertions/647deletions.
+Root independently inspected git show/body/stat/status: actual implementation,
+newtests/Cargo/neutralprocessleaf and four structuralmaps included; source/index
+clean at author receipt. Root progress/rawlogs excluded. No push/release/merge,
+T25 completion, requirement retirement or review-budget reset. Explicit commitbody
+retains productiveB/native/currentfullsuite/control/CommitUnknown/panic/capacity/
+fullstartup/final5a→5b open. This WIP snapshot is not refusal-only completion.
+Dev-task completion review gate does not prohibit user-authorized recoverable WIP
+commit; author ACK and inventory reviewed before staging. Main continues allsource.
+
+Author5167 terminal0 current fullworkspace allfeatures/alltargets clippy-Dwarnings
+PASS2m14s, rootFULLread seventh raw incl retained upstreamblock0.1.6 future advisory.
+Author56488 fmtcheckterminal0/stageddiffcheck0. All earlier six strict failures
+retained: 25449 unusedasync wrappers;12910 opposite manualasyncfn;91708 wake108/100;
+93408 wake102/100;2630 two actualtest excessive-nesting;91508 fixture explicit-autoderef.
+No suppression/eagerfuture/changed SQL/oracle timeout introduced. Rootsourceconfirmed
+lazy sharedslot firstpoll, first Attentionguard and refusedtask nolegacyfallthrough.
+Affected earlier suites were not claimed fully linted when first dependency failed.
+
+Author next runs foundation nextest on committed actor/panic/schema/wake changes;
+new live log not staged or claimed terminal. Root updates producttable from
+uncommitted to actual WIP checkpoint; all original product/native/PR/UI requirements
+remain. Windows integration supplement e4d64ebb completed in /tmp, NOT yet rootfully
+read/reviewed or sourceapproved; architect read-only artifact only.
+
 # Current product progress clarified and paired runtime fault GREEN 2026-10-04
 
 User points out remaining-plan summary looks as if nothing was implemented. Root
