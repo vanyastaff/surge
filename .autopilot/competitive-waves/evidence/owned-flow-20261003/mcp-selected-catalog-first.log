@@ -1,0 +1,21 @@
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 3.37s
+     Running tests/protected_diagnostics.rs (target/debug/deps/protected_diagnostics-e8779c11e3b714c4)
+
+running 13 tests
+test actual_catalog_deadline_spans_pages_and_call_timeout_remains_exact ... ok
+test actual_child_diagnostics_are_opaque_and_transport_is_exact ... ok
+test actual_invalid_utf8_overlong_and_flood_stderr_remains_bounded ... ok
+test canceled_postspawn_waiter_retains_observer_until_real_child_reaped ... ok
+test every_actual_catalog_page_rechecks_permission_and_keeps_tool_order ... ok
+test final_initialize_gate_follows_awaited_child_observation_and_reaps ... ok
+test final_spawn_gate_follows_awaited_writer_intent ... ok
+test legacy_all_catalog_still_performs_actual_proactive_health_probe ... ok
+test on_demand_call_and_later_denial_keep_owner_without_background_reconnect ... ok
+test real_health_tick_refuses_probe_and_reconnect_without_liveness_changes ... ok
+test registry_error_payload_is_opaque_and_success_remains_exact ... ok
+test selected_catalog_validates_all_and_starts_no_monitors_in_either_mode ... ok
+test tool_call_gate_checks_after_lazy_connection ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.51s
+

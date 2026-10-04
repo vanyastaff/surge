@@ -620,3 +620,14 @@ helper with exact newly resolved registry on BOTH start/resume, owned Empty firs
 Domain revised plan is read-only; StageA review cannot certify B/C productive
 closure or full T25. Native runners, external adapters, populated cold positives,
 full source freeze and sequential independent5a/5b remain required and open.
+
+Author receipt27144 terminal0: selected catalog actual13PASS, both monitor modes,
+all-name validation before effects, duplicate/empty selection, OnDemand actual
+call + real child death + later denied selection with no timer probe/reconnect,
+Legacy proactive positive and prior privacy/control/cancellation/deadline regressions.
+Root read entire completed rawlog. Actual daemon global A allowed/B ReadOnly start
+and nonterminal resume fixture work remains author-owned and pending.
+StageA security preliminary findings (not final report): existing startup generic
+events and public writer constructors require explicit typed owned-startup mode
+loading; epoch opening generation and later Suspend freeze/ACK generation require
+distinct schema/predicates. Source approval held; full independent verdict pending.
