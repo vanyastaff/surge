@@ -1,0 +1,38 @@
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking gpui-pre-collections v0.3.7
+    Checking gpui-pre-zlog v0.3.7
+    Checking gpui-pre-ztracing v0.3.7
+   Compiling gpui-pre-perf v0.3.7
+   Compiling gpui-pre-util-macros v0.3.7
+    Checking gpui-pre-sum-tree v0.3.7
+    Checking gpui-pre v0.3.7
+    Checking gpui-pre-apple v0.3.7
+    Checking gpui-base v0.7.0
+    Checking gpui-pre-macos v0.3.7
+    Checking gpui-kit-assets v0.7.0
+    Checking gpui-component v0.7.0
+    Checking gpui-pre-platform v0.3.7
+    Checking gpui-kit v0.7.0
+    Checking gpui-wry v0.7.0
+    Checking surge-ui v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-ui)
+error: use of `unwrap_or_else` to construct default value
+   --> crates/surge-cli/src/commands/engine.rs:196:36
+    |
+196 |         operation_id: operation_id.unwrap_or_else(surge_core::id::WorkItemOperationId::new),
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `unwrap_or_default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unwrap_or_default
+    = note: `-D clippy::unwrap-or-default` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unwrap_or_default)]`
+
+error: could not compile `surge-cli` (bin "surge" test) due to 1 previous error

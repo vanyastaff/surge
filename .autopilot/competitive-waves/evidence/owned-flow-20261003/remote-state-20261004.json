@@ -1,0 +1,21 @@
+{
+  "repository": "vanyastaff/surge",
+  "openPullRequests": [],
+  "ciRun": 36666316027,
+  "headSha": "1517b7d08e574d47abbea56cf00349f1e64693c2",
+  "conclusion": "failure",
+  "windows": {
+    "passed": 3091,
+    "failed": 22,
+    "skipped": 32
+  },
+  "otherJobs": "Linux/macOS tests, MSRV1.96, format, packaging and clippy succeeded on this old head; current source not verified",
+  "latestCanaryRun": 37122742288,
+  "latestCanaryConclusion": "failure",
+  "mutations": "none: no push/workflowdispatch/PR creation",
+  "localWindowsPathFixCommits": [
+    "bdeb51d",
+    "2e21c9e"
+  ],
+  "limitations": "Old remote failure is not current-source RED, and local path normalization is not current native Windows acceptance."
+}

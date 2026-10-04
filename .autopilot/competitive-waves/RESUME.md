@@ -1,3 +1,47 @@
+# Authoritative bounded wake implementation authorization 2026-10-04
+
+Root FULLread independent finalreportdaa266 (SINGLE combinedcritic/security reviewer),
+effective tuple73a102+e97a123 ACCEPTABLE. Maintainer ACCEPTABLE and authorizes main
+bounded dependencyclosure implementation: exact neutralpanic extraction, actual
+actorheldWriterLease/owningFileLock/sharedsyncslot/productionappend, permanent
+structurallyvalidmanifest mismatch Attention+immutableoutbox+stdworker+coldno-token
+reclaim/3hostbarriers. Genuine33168 baselineRED retained. FIRSTactual actorDrop/
+cancelledclose contentionRED and workerReady-beforeTX newerStop oracle, then behavior.
+Publicsurfacechoice spawn_writer crate-private mandatoryprivateWriterLease; repo
+callers exclusivelypersistence source. PublicWriterConfig/Command DATA can remain;
+fullA generic journal authority closure notclaimed. Document low-level API removal.
+
+Main finish livefullstrict39737 first, sole ALLsource/Cargo/build/processowner. Root
+AGENTS newcrate structuralupdate onlyafteractualcreation. FullB revised82b4e FULLread
+but independent re-reviewpending/sourceheld. Originalnative/fullproductivecold/
+malformedparse/fullproduct/freeze5a→5b remainOPEN, initialformal0/3unchanged.
+Fullgoalactive/no requirementretired. Earlier checkpoint entries are supersededhistory.
+
+# Authoritative scoped route GREEN and final precode checkpoint 2026-10-04
+
+Actual optional route38100 terminal0: None/Some[] forwarded catalogs and per-server
+WorkspaceWrite override on ReadOnly node, pairedReadOnlyB zero effects BOTHlegacy
+start+sameRunresume, every original startup row unchanged. First59228 terminal101
+ReadEventSerialize fixture compile; second69834 terminal101 resume markerpair
+fixture setup; thirdactualPASS1/1.09s. Fullworkspace strict56135 terminal101 one
+CLI unwrap_or_default; source default validatedcallsnew(), spellingfixed. Second
+39737 live authorowned; root must not poll/stage live log.
+
+Root FULLread wake consolidated73a102 and revisedB82b4e (372lines). B coherent
+lease/cleanup/retention/process API read-only pending independent review; no source
+permission. Wake sole bounded correction: workerReady/install BEFORE IMMEDIATETX,
+allauthority/currentcycle/manifest reread insideTX; unusedabort/join AFTERTXdrop.
+Root pinned supplemente97a123; independent finalreview now effective73a102+e97a123,
+awaiting verdict beforebehavior. Main exclusively owns source/process.
+
+Remote gh read-only: openPR=[]; oldCI36666316027 SHA1517b7d Sept30 Windows3091PASS
+22FAIL32SKIP; otherjobsLinux/mac/MSRV passed. LatestDSHcanaryfailure37122742288 same
+oldhead. ExactrawWindowslogretained. CurrentHEAD alreadypathnormalizationbdeb51d
++2e21c9e; oldfailure notcurrentRED/never nativeacceptance. No push,workflowdispatch
+orPR creation. Fullnative/product/5a→5b/openrequirements remain, initialformal0/3.
+
+Earlier checkpoint entries below are superseded history where contradictory.
+
 # Maintainer placement and live-review checkpoint 2026-10-04
 
 B owning architect /root/acp_accounting_plan actually resumed and acknowledged

@@ -1,0 +1,34 @@
+Maintainer amendment to frozen wake plan73a1025a287d30c38aa9b664f37a26a08c5fc0e1dbaf74e299b32e8554378e3b
+2026-10-04. Authoritative ONLY for precommit worker/TX ordering. No source approval by itself.
+
+Install the exact original guard and bounded Prepared worker, complete actual Ready
+handshake BEFORE BEGIN IMMEDIATE. Never spawn, wait for scheduling/Condvar Ready,
+or join a worker while holding a registry write transaction. Pretransaction reads
+select an untrusted observation hint only; Prepared slot contains original guard,
+resources and hint, not an independently validated receipt/dispatch authority.
+Prepared worker cannot read/write registry/journal or deliver until publication.
+
+Inside the IMMEDIATE transaction rerun ALL independent accepted-authority, original
+object identity, current item/control permission, exact observed cycle and approved
+capacity-transfer, structurally valid manifest-only mismatch predicates. Only this
+snapshot builds the validated receipt and commits exact immutable receipt/outbox
+and Attention state. Guard verification still occurs before writes and commit.
+Postcommit synchronous publication supplies exact validated key/hash to retained
+slot; caller cancellation cannot remove original outer ownership.
+
+For valid/Obsolete/transient-error/no-mismatch branches, explicitly rollback/drop
+transaction BEFORE signaling abort and joining the unused Prepared worker. Caller
+still owns original guard until actual worker join. Ambiguous commit: drop the TX
+handle, then publish CommitUnknown; same slot retains ownership until definitive
+receipt-row resolution under the plan, never treating IO uncertainty as absence.
+No worker waits on a mutex/transaction owned by its publisher; no permission state
+from the pretransaction hint survives as authority. Eight-slot Busy/refused creation
+precedes transaction and leaves registry/input/claim token unchanged.
+
+Required independent actual barrier oracle: block worker Ready before TX while a
+second database connection commits newer Stop/control. It must remain able to
+commit; once Ready is released the first TX sees newer state, returns Obsolete with
+zero refusal/claim mutation and aborts/joins prepared worker outside the TX. Also
+rollback/ambiguous-commit/caller cancellation and genuine second-process guard
+contention remain mandatory. All other73a102 contracts and full native/product
+requirements stay unchanged. Effective precode artifact is73a102 plus this amendment.
