@@ -920,3 +920,15 @@ Actual launched provider artifact evidence and SDK raw-capture prototype remain
 unproven. Independent protocol/storage/cancellation review and RED-first actual
 subprocess/daemon/provider acceptance must precede completion. No source/Cargo
 changes, no T25 ownership overlap, no budget reset or requirement retirement.
+
+Independent next-accounting protocol/storage plan reviews both RESHAPE NEEDED,
+full reports retained in evidence/surge-acp-accounting-{protocol,storage}-plan-review-20261003.txt.
+Protocol requires final admission after new storage/readiness await, reliable
+captured-receipt owner independent of wire cancellation/close, actual sdk_v1 raw
+capture/correlation and precise launched artifact/processing-window attribution.
+Storage requires accounting-only writer authority, immutable source ownership,
+accepted-but-unprojectable raw retention on overflow, exclusive ordered cumulative
+baselines and deterministic rebuild, plus exact query/UI values and prefix/lag.
+Planner revises read-only; no accounting source authorization, no requirement
+retirement or T25 postbuild count change. Current sdk_v1 readiness seam is also
+being fixed independently inside already accepted T25 actual-effect scope.

@@ -381,3 +381,19 @@ terminal0 one real store mutation testPASS (six cases); other binaries0filtered.
 Initial validStarted owner allows effects; Suspend/archive/generation/Attention/
 Suspended/canceled-intent changes deny while original lock remains Busy. This is
 SQL predicate evidence, not actual worker-boundary or cross-process/cold proof.
+
+Runtime outer77012 terminal101 was setup failure: independent child probe used
+single-thread runtime while Storage requires multithread (runtime-ownership-red.log).
+Corrected actual84128 terminal101 is genuine behaviorRED: actual MCP postspawn
+child/accepted original claim held, runtime destroyed, future Drop panics at
+connection.rs776 no reactor. Independent persisted-launch probe setup passed;
+controlled actual child killed/reaped before failure assertion. Author now
+implements accepted runtime plan after this RED. Full required matrix stays open.
+
+Root source inspection found accepted final-effect scope still incomplete at
+private sdk_v1.rs135–155: connection().await may wait on watch.ready before
+synchronous send_request. Outer admitted() first-poll check precedes that
+Surge-owned readiness wait. Author acknowledged actual readiness-barrier RED
+then final-check-after-readiness fix, preserving typed HostEffectRefused/owner.
+Previous fourACP tests cannot close this newly inspected physical boundary.
+This is initial build correctness, not postbuild5a repair or count reset (0/3).

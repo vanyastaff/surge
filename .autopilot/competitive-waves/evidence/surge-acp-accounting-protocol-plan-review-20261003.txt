@@ -1,0 +1,137 @@
+Independent preliminary ACP accounting protocol / cancellation review — 2026-10-03
+Verdict: RESHAPE NEEDED (localized design edits; no broad redesign required).
+
+This is a review of the NEXT dependency draft, not implementation acceptance,
+T25 repair, source authorization, or a counter reset. T25 owned_flow_builder
+retains all source/Cargo ownership. No Cargo/build/format/test/process/commit
+commands, source changes, or subagents were used. Only this /tmp report was
+written. AGENTS.md and both requested evidence documents were read. RTK.md is
+absent at the repository root; no substitute was inferred. No requirement is
+retired. No user permission/design fork is needed to make these corrections.
+
+Overall assessment
+The architecture is sound: unknown generic semantics, versioned contracts,
+physical-turn preparation, sink ownership, receipt uniqueness, independent u64
+buckets, eventual cross-DB projection, and a real provider acceptance gate are
+all appropriate. The following missing ordering/lifecycle details are material
+because a plausible implementation of the draft can still lose a received
+receipt or admit a prompt after Stop. Correct these in the draft before assigning
+source work. The actual-provider gate remains unpassed until demonstrated.
+
+1. P1 — Explicitly put the final host check AFTER the new storage await.
+Draft section 2 says the worker claims a turn "after existing effect admission"
+then awaits storage before prompt polling. That order is insufficient if the
+existing check becomes the last check: Stop or owner revocation can happen during
+BeginPhysicalTurn. Current worker.rs:951 wraps prompt with effect_fence::admitted;
+effect_fence.rs:27-37 explicitly checks lazily before the SDK future's first poll.
+owned_effects.rs also checks at the facade, but that precedes queues and cannot
+replace the actual session-retained fence.
+Smallest correction: prepare/claim.await -> final HostEffectFence.check -> actual
+request initiation, with no intervening Surge storage await. Preserve the same
+final check for every existing prompt/setup/tool/spawn boundary; do not turn it
+into a prepare-only check. Record a known not-dispatched outcome if final admission
+refuses a durably claimed turn; a crash between claim and wire remains unknown.
+Acceptance: hold the new storage await, revoke ownership/Stop, release it, and
+assert zero session/prompt frames on the real subprocess stdin.
+
+Additional exact seam: sdk_v1.rs:207-213 awaits connection() before synchronous
+ConnectionTo::send_request. The latter allocates and enqueues the request at call
+time (SDK jsonrpc.rs:3950-3969,4088 onward), rather than on block_task's first poll.
+Place any new connection-readiness or correlation/storage await before the final
+check. Do not assume constructing a SentRequest is a harmless future constructor.
+This is a dependency design constraint; it is not a judgment on active T25 work.
+
+2. P1 — Separate received-receipt settlement from cancellable RPC waiting.
+Current lifecycle.rs:165-171 uses biased select(cancel, send_message_impl). Even
+if send_message_impl adds usage commit before return, cancel can win while that
+commit is awaiting and drop it. close() allows 500 ms for prompt_done, then cancels
+the prompt task and stops IO (245-283). A slow receipt transaction therefore can
+lose already captured usage. A bounded pending receipt stored only in that dropped
+future is no protection. The SDK blocking consumer acks a response before typed
+conversion/return (jsonrpc.rs:5965-5999), so IO/dispatch completion is also not a
+Surge accounting acknowledgement.
+Smallest correction: define states at least begun / awaiting response / raw
+receipt captured / accounting settling / committed-or-explicit-pending. Transfer
+captured receipts into a session/bridge-owned bounded settlement owner before
+any cancellable await. Cancellation ends or bounds RPC waiting; it must not drop
+captured settlement. prompt_done must distinguish wire completion from accounting
+settlement. Close may stop provider IO after its wire budget, but must retain/drain
+accounting ownership independently and report unconfirmed/pending settlement
+honestly if its own budget expires. Pending persistence blocks further prompts;
+transport teardown must not destroy the only pending receipt. Host death can leave
+a durable begun-turn coverage gap as the draft already permits.
+Acceptance: real subprocess writes a valid cancelled response with usage; hold
+receipt storage beyond the close wire timeout; close/drop the public waiter; release
+storage; assert exactly one durable receipt and charge, or explicit retained pending
+failure with no subsequent prompt. Also test response available concurrently with
+cancel, error response, malformed typed stopReason plus valid raw usage, and EOF.
+
+3. P1 — Freeze request correlation and raw retention at the real adapter seam.
+The actual connection is crate::sdk_v1::ClientConnection, not an SDK legacy
+ClientConnection. sdk_v1/transport.rs connects Channel::duplex, writes SDK frames,
+and caps incoming single newline JSON-RPC messages at 1 MiB /31 queued frames.
+Its send_frame calls serde_json::from_slice BEFORE the SDK, so capture placed after
+that call is already parsed/normalized evidence. Generic SDK supports batches,
+but this current production adapter rejects them; do not silently broaden the
+protocol while adding accounting.
+Smallest correction: capture selected original field bytes before transport
+serde decode; bind (connection/opening occurrence, outbound request ID, exact
+session/prompt method, provider session, physical turn). SDK SentRequest::id is
+public and current IDs are string UUIDs (jsonrpc.rs:4089,5720); do not assume numeric
+IDs or correlate by latest session notification. Register the mapping before yielding
+after synchronous send_request, and confirm the outbound frame matches it. Replies
+usually carry id, not session ID. Never charge unknown IDs, callbacks in the other
+direction, duplicate late replies, or a reply from a prior opening. Keep bounded
+correlation tombstones long enough to detect duplicates without manufacturing turns.
+Raw parser must define duplicate-key rejection, integer syntax/range handling,
+null versus absent, malformed optional fields, oversized data and partial EOF. A
+serde_json::Value reserialization is normalized observation, not exact raw field
+bytes. Retain only approved accounting field spans and envelope validity/outcome;
+do not persist the arbitrary _meta inside a usage object, prompt/tool payloads,
+or arbitrary error messages. Oversize/rejected envelopes create explicit capture
+coverage errors rather than valid receipts. The prototype should exercise the
+actual sdk_v1 transport with split/coalesced lines, interleaved notifications and
+callbacks, string IDs, malformed usage, duplicate keys/IDs, and close races.
+
+4. P2 — Tighten artifact/attribution claims without removing the real gate.
+Installed schema 1.9.1 confirms per-turn PromptResponse documentation conflicts
+with across-session required bucket descriptions; DefaultOnError erases malformed
+usage and optional cache/thought fields. Unknown is necessary for an unproved
+artifact. Claude installed distributed 0.23.1 source confirms per-prompt reset,
+independent bucket accumulation, prior background results, cancellation omitting
+usage, and total=sum of input/output/cache-read/cache-write. Source files inspected:
+acp-agent.js:221-233,338-388,1110-1118. initialize agentInfo uses packageJson name
+and version (:136-139); it proves a self-report, not the launched artifact identity.
+The actual worker handshake (:450-451) currently discards this identity. A digest
+of npx/node alone or an installed package cache is not a supported provider contract.
+Smallest correction: supported artifact evidence must identify the executable /
+entrypoint AND relevant adapter dependency/runtime closure or pin/source evidence
+sufficient for the usage-producing code (here ACP JS SDK and Claude SDK versions).
+State what the digest covers; missing closure evidence falls back to Unknown.
+Do not infer original task attribution from a request-correlated response when the
+provider processes old background results. Normalize the reported processing-window
+observations if contracted, but label them separately from attributable task-only
+spend. Omitted cancellation/error usage means incomplete coverage even after a
+successful later window unless provider guarantees recovery. JS-reported numbers
+are source observations; do not assert independently verified underlying precision
+or complete vendor billing. No credentials/access excuse may substitute fake adapter
+injection for stage E. Mock validates host pipeline only.
+
+5. Accepted with an explicit scope clarification.
+Readonly auxiliary prompts still consume tokens; they must obtain their own durable
+physical-turn scope and all receipt lifecycle behavior. Triage/project-context
+migration is correct. Inventory all send_message and legacy pool/connection prompt
+entrypoints: either migrate production paths relevant to persistent tasks or explicitly
+mark them outside ledger coverage. Task UI cannot claim whole-project spend or complete
+task spend while attributable auxiliary operations are omitted. Raw Unknown sources
+may expose observations but must not populate normalized exact totals under a guessed
+contract. Occupancy and money remain independent; no quota claim follows from either.
+
+Smallest corrected dependency sequence
+Keep draft stages A-E. Before B, add an explicit ordering/state-machine paragraph
+covering post-claim final admission and independently owned settlement, and prove the
+current sdk_v1 transport capture/correlation prototype. Add the two storage-delay
+race oracles above to B. Add the artifact closure and processing-window versus task
+attribution qualifications to E and UI coverage criteria. Continue leaving provider
+acceptance explicitly unpassed until actual supported subprocess-through-daemon
+capture exists. No additional user fork is required for these corrections.

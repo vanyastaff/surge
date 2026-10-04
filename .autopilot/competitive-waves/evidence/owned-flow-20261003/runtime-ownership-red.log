@@ -1,0 +1,34 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 3.24s
+     Running tests/mcp_runtime_ownership.rs (target/debug/deps/mcp_runtime_ownership-297ab07ecef0fa57)
+
+running 1 test
+
+running 1 test
+
+thread 'independent_claim_probe' (31317687) panicked at crates/surge-daemon/tests/mcp_runtime_ownership.rs:28:56:
+called `Result::unwrap()` on an `Err` value: SingleThreadedRuntime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test independent_claim_probe ... FAILED
+
+failures:
+
+failures:
+    independent_claim_probe
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+
+thread 'runtime_drop_cannot_release_original_launch_lease_while_child_survives' (31317672) panicked at crates/surge-daemon/tests/mcp_runtime_ownership.rs:69:5:
+assertion failed: probe.success()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test runtime_drop_cannot_release_original_launch_lease_while_child_survives ... FAILED
+
+failures:
+
+failures:
+    runtime_drop_cannot_release_original_launch_lease_while_child_survives
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p surge-daemon --test mcp_runtime_ownership`

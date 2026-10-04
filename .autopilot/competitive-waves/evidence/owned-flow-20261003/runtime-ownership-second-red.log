@@ -1,0 +1,28 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 3.28s
+     Running tests/mcp_runtime_ownership.rs (target/debug/deps/mcp_runtime_ownership-297ab07ecef0fa57)
+
+running 1 test
+
+thread 'runtime_drop_cannot_release_original_launch_lease_while_child_survives' (31319863) panicked at crates/surge-mcp/src/connection.rs:776:14:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+running 1 test
+test independent_claim_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+
+
+thread 'runtime_drop_cannot_release_original_launch_lease_while_child_survives' (31319863) panicked at crates/surge-daemon/tests/mcp_runtime_ownership.rs:89:5:
+actual postspawn cleanup panicked outside a Tokio runtime
+test runtime_drop_cannot_release_original_launch_lease_while_child_survives ... FAILED
+
+failures:
+
+failures:
+    runtime_drop_cannot_release_original_launch_lease_while_child_survives
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p surge-daemon --test mcp_runtime_ownership`

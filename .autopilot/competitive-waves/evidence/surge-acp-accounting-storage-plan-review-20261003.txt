@@ -1,0 +1,128 @@
+Independent ACP accounting persistence / compatibility / outer acceptance pre-code review
+2026-10-03 — verdict: RESHAPE NEEDED (narrow contract amendments, not a new architecture)
+
+This reviews the NEXT dependency draft only. No implementation acceptance, requirement retirement,
+T25 count reset, source ownership transfer or code authorization follows. T25 remains sole source/
+Cargo owner. I read repository sources and the draft/inventory; ran no Cargo, build, format,
+tests, process management or git mutations. Only this /tmp review artifact was written.
+Requested RTK.md is absent at repository root; inventory also reports it absent from searched trees.
+
+What is already sound
+The run DB transaction is the correct authority; registry sync is eventual, with explicit prefix/lag.
+Physical-turn begin-before-wire, raw evidence, independent buckets, explicit contract semantics,
+legacy-event immutability, unsigned blob storage, checked arithmetic and separate currency/pricing/
+quota coverage are necessary and correctly chosen. Both fixed 450 oracles are meaningful only with
+explicit per-turn versus cumulative contracts. Source schema confirms the contradictory turn/session
+wording and DefaultOnError loss. New loaded cumulative sessions must never charge history as task
+spend; the proposed unknown baseline is appropriate. True provider acceptance remains unpassed
+until a launched, identified adapter supplies observed responses through the production pipeline.
+
+Required amendments before implementation commitment
+
+1. Close every generic event append bypass and define immutable observation ownership.
+writer.rs:190-233 currently accepts arbitrary EventPayloads in AppendEvent/AppendBatch. A new
+UsageAccountedV1 variant must only be emitted by its receipt transaction; generic append commands
+must reject accounting-authority variants (including prepared/begun/gap authority where applicable).
+Otherwise an ordinary engine caller can bypass receipt dedup, source binding and baseline checks.
+The prepared turn must freeze the expected source occurrence/contract; incoming receipts cannot
+select a fresh source occurrence to evade UNIQUE(turn,source). For token response accounting,
+allow at most one authoritative completion per physical RPC. If multiple observations are valid
+(e.g. separately sequenced monetary notifications), give them explicit observation kinds and a
+single declared projection owner so two sources cannot both charge the same measurement.
+An exact replay must return its original receipt regardless of later baseline advancement;
+conflict comparison excludes delivery-time timestamps but includes frozen semantic/wire evidence.
+Add tests for forged generic events, fresh-source replay and duplicate after later turns.
+Primary: crates/surge-persistence/src/runs/writer.rs:190,211;
+crates/surge-persistence/src/runs/run_writer.rs (public append surfaces).
+
+2. Separate evidence retention from an unrepresentable aggregate without losing the fence.
+Draft says receipt/raw/baseline/event/views are one transaction, then aggregate overflow rejects
+that projection transaction. If that means rollback of raw evidence, a valid received receipt
+is discarded when the total exceeds u64; bounded in-memory pending receipt then disappears on
+host death. Define an accepted-but-unprojectable receipt state: commit immutable raw evidence,
+its hash, explicit overflow/normalization-error status and coverage event atomically, with exact
+previous totals/baseline preserved and further spending blocked as appropriate. Exact replay is
+idempotent; a conflicting raw replay still rolls back ALL state. This keeps the valuable invariant
+that no partial numeric charge occurs, while retaining the provider observation. Expose totals as
+known prefix plus surfaced unprojected evidence, never exact complete total. If fixed u64 is
+insufficient for the desired exact task lifetime total, use a wider lossless total; either policy
+must be explicit before code. Test both single-wide receipt and aggregate-only overflow across
+attempts and cache/thought fields; registry query must surface overflow rather than truncate.
+Primary: work_items.rs:182 uses SQL SUM; :1066 SQL additions; :1149 unchecked Rust additions;
+runs/views.rs:160 INTEGER stage totals and :163 f64 metrics. All NEW authoritative projections,
+including query DTOs/JSON/UI, must avoid these existing lossy paths. Keep old metrics historical.
+
+3. Freeze baseline ordering/ownership and deterministic rebuild policy.
+The run-writer serializes commands but command arrival order is not proof of provider sample order.
+Persist the exact ordered physical sequence and reject or retain out-of-order observations as
+unprojected evidence; never compare a late cumulative sample to a newer baseline. Cross-run/session
+continuity must import an explicit predecessor receipt/baseline proof and fence exclusive ownership;
+provider session ID or recipe equality alone cannot establish continuity. Without that proof use
+an unattributed first baseline, as draft already proposes. Explicitly test the same provider session
+ID reused by two tasks, a contract/source change, missing intermediate sample followed by a larger
+sample, and a trusted reopening with receipts delivered out of order. Distinguish measured interval
+usage from per-turn attribution; recovering a numeric cumulative interval need not repair its turn
+gaps. Define whether auxiliary work for a particular task is task-charged or separately excluded
+with visible task coverage; auxiliary tagging must not hide task-triggered spend.
+Receipt/begin/baseline tables are durable authority, not resettable views. Rebuild must reproduce
+accounting projections from immutable normalized events without recomputing provider deltas or
+moving baselines/creating charges. Events must contain enough normalized fields/status for this.
+Test rebuild twice, restart then exact replay, and compare rows/charges to fixed expectations.
+Primary: runs/writer.rs:364-387 rebuilds by replay; runs/views.rs:648-664 clears projections;
+work_items.rs:1089-1103 requires unique exact WorkItemAttemptBound; core/work_item.rs:180-208.
+
+Additional acceptance details to make the good draft executable
+
+- Registry cursor CAS must return conflict/retry on zero changed rows; do not report a requested
+  read-after-sync target as caught up merely because an UPDATE statement returned success. Read
+  all current buckets/coverage/cursor in one registry transaction; current read_usage separately
+  obtains usage_unpriced (:1123). Preserve monotonic durable gaps separately from transient lag.
+- Declare target-prefix semantics: capture a run prefix, sync until it, and report that prefix.
+  The live run may append afterward. A task aggregate across attempts needs either per-attempt
+  prefixes or a coherent registry snapshot; do not imply one universal live run cursor.
+- Sweep every attempt including completed, failed, superseded and archived-task attempts. Existing
+  reconcile_page calls sync_usage before skipping states, which is useful and must be preserved.
+  Terminal status does not imply usage flushed: response persistence precedes terminal fencing,
+  and terminal catch-up can require multiple 256-event pages.
+- Migration only adds side tables/DTOs and event versions. Do not populate NEW totals from old
+  attempt totals and then replay old TokensConsumed a second time. Define disjoint legacy/new
+  projections or a single migration cutoff with durable cursor. Old ledger numbers remain legacy
+  uncertain observations. Old schemas must still decode; golden hashes cover requirements/origins
+  and existing event bytes. Current schema14 already has T25 additions; number after its landing.
+- Exact u64 on disk is insufficient if JSON/UI parses through floating point; test a decimal value
+  greater than 2^53 through daemon serialization and actual display/readback, plus >i64::MAX in DB.
+- Monetary cumulative baselines use their own ordered source identity, currency and gaps. Never
+  mix currencies or treat finite nonnegative f64 input as exact fixed-point money; preserve raw
+  observation and declare numeric precision. Price-unknown must not force token-unknown.
+Primary: daemon/work_items.rs:803,825-838; persistence/work_items.rs:1044-1165,165-182;
+persistence/runs/migrations/registry/0022_work_items.sql; core/work_item.rs:296-314;
+core/work_item.rs:55; core/work_item/origin.rs:127,244; core/migrations/mod.rs:99.
+
+Outer acceptance must be RED before changing production sources
+Actual mock ACP subprocess must emit PromptResponse usage (not context occupancy). Run production
+daemon persistent-task Start with bound task context, initial plus feedback responses 100/300/50,
+and observe exact 450 after registry catch-up. A second contract scenario 100/400/450 must also
+produce exactly 450. Oracle is literal expected values/receipt IDs/rows supplied independently,
+not an accumulation helper copied from implementation. Existing bridge_token_tracking.rs:67-96
+only asserts monotonicity if an event happens and passes with no accounting at all.
+
+Required outer matrix: cold daemon and registry reopen; >256-event journal with charges exactly at
+page boundaries; two task attempts on superseded requirements; repeated catch-up; delayed registry
+page; dropped caller/lost broadcast; cancellation with valid usage and missing usage; unmatched
+begun turn at host restart; occupancy-only; unsupported/unknown actual source; forged duplicate
+source; conflict rollback; storage-before-wire refusal with subprocess prompt-count zero. Compare
+raw receipts, beginnings, coverage, baselines, event counts, views, attempt totals and task sum to
+fixed rows/values, including exact replay after later receipts/restart. Mock fixtures prove host
+plumbing, not vendor completeness. Launch/version/artifact proof with real supported provider
+response remains a separate explicit acceptance gate, even if access/credentials block it.
+
+Primary protocol evidence read locally:
+/Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/
+agent-client-protocol-schema-1.9.1/src/v1/agent.rs:3120-3247.
+Draft: .autopilot/competitive-waves/evidence/acp-accounting-draft-plan-20261003.txt.
+Inventory: .autopilot/competitive-waves/evidence/acp-usage-source-inventory-20261003.txt.
+
+Conclusion: amend the three authority/retention/baseline contracts above, then ACCEPTABLE as a
+next-dependency design. No consequential user fork appears necessary: these amendments preserve
+already-authorized full accounting and visible unknown coverage. This remains pre-code review;
+no implementation gates or independent 5a/5b acceptance were run.
