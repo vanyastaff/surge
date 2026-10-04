@@ -58,3 +58,42 @@ independent security review must accept the amendment before platform behavior
 code. Pure accepted-origin work is independent and continues within its approved
 contract. This is design amendment during initial build, not a post-build repair
 dispatch. Current post-build repair count remains 0/3.
+
+The amended pre-code plan is now accepted by the owning architect and both
+independent reviewers. Historical OF-P25-CRITIC-01 remains in their reports; its
+design resolution adds an immutable FlowLaunch object identity captured before
+acceptance, typed owned-flow claim routing, identity verification before SQL
+token changes and an Arc-held stable guard through initial/cold/wake effects.
+Legacy task claim behavior is outside this bounded change. Windows child opens
+use a held-parent relative NtCreateFile contract; the earlier absolute-path
+proposal was rejected. Empty MCP snapshots use validated host-store provenance,
+not a private object/key or a purported plain-hash signature. Populated snapshots
+retain the secure HMAC/key-loss contract and unsupported-platform refusal.
+
+Complete plan and initial/focused reviewer verdicts are retained in
+`../evidence/owned-flow-20261003/surge-owned-flow-portable-prep-*.txt`.
+Platform behavior implementation is authorized; actual Windows runtime proof
+remains required and unavailable on the current macOS host. The repository CI
+matrix includes Windows; no current Windows execution is claimed by source
+research, cross-compilation or these design verdicts.
+
+Root read `core-origin.log`: nine selected tests passed. Main subsequently
+reports ten selected tests passed in `core-origin-second.log`, adding nonfinite
+graph rejection. DTO nested-map canonicalization produced a genuine RED under
+workspace-unified serde_json preserve_order; recursive object sorting fixed it
+while list order remains exact. These scoped results do not close the outer
+owned-flow submission/replay, MCP fidelity or lifecycle acceptance.
+
+The focused independent Windows ABI review accepted immediate process abort only
+for an unexpected STATUS_PENDING under the approved synchronous NtCreateFile
+profile, before reading or transferring outputs or unwinding borrowed storage.
+This is off-contract fatal containment, not a normal input refusal or a pending
+completion protocol. The exact review is retained in
+`../evidence/owned-flow-20261003/surge-owned-flow-nt-pending-review-20261003.txt`.
+Whole Windows implementation, compilation and native runtime acceptance remain
+open. This initial-author clarification does not consume a post-build repair.
+
+Root independently read `portable-foundations-second.log`: session 79350 ended
+exit 0 with 72 work-item tests passing. The first log retains two stale test
+field-access compiler failures. These Unix foundation results do not establish
+outer durable owned-flow execution or Windows runtime behavior.

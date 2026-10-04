@@ -1,0 +1,32 @@
+Independent bounded Windows NtCreateFile Pending-status review — 2026-10-03
+
+VERDICT: ACCEPTABLE for immediate std::process::abort on unexpected STATUS_PENDING under the exact approved synchronous profile.
+
+Scope: draft native_open in crates/surge-persistence/src/work_items/start_preparation/secure_lock/windows.rs lines 37-64 as read during this review; approved portable preparation/owned-flow claim plan; installed windows 0.58 generated API. This is an initial-author ABI clarification, not whole-draft quality review, post-build repair, implementation acceptance, Windows compilation or runtime acceptance. Main retains sole Cargo lane. No source/docs edits or Cargo commands. New unit 0/3 and prior completed unit 3/3 unchanged.
+
+Contract evidence
+
+The retrieved current Microsoft NtCreateFile documentation identifies this as the user-mode equivalent of ZwCreateFile, describes IoStatusBlock as the final completion result on return, specifies success/error return, and documents synchronous non-alert operations requiring SYNCHRONIZE. The generated SDK binding uses ntdll.dll/system ABI and the matching HANDLE, OBJECT_ATTRIBUTES, IO_STATUS_BLOCK and typed masks; there is no hand-declared ABI in the draft.
+https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
+
+Independently extracted the existing downloaded Microsoft File System Behavior Overview PDF, physical page 12 of 59. Its oplock section explains that IRP_MJ_CREATE is synchronous and the I/O manager waits instead of returning a pending result. This is archival supporting evidence rather than a current Windows runtime observation; it agrees with the current function-specific contract. The web reader failed on its application/octet-stream content type, so the supplied local PDF was read with the bundled pypdf runtime.
+https://download.microsoft.com/download/4/3/8/43889780-8d45-4b2e-9d3a-c696a890309f/file%20system%20behavior%20overview.pdf
+Local source: /tmp/surge-windows-file-system-behavior-20261003.pdf
+
+Microsoft's generic IO_STATUS_BLOCK documentation advises waiting for completion when a support routine actually returns STATUS_PENDING. That is a rule for routines/profiles supporting pending completion, not proof that this function's off-contract pending output has a valid new handle, that a specific wait object is usable, or that arbitrary cancellation/close settles all retained pointers. No authoritative exact completion protocol for this unexpected NtCreateFile result was established. Do not invent one from initialized zero output storage or from a broad NT_SUCCESS test.
+https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_io_status_block
+
+Exact draft reasoning
+
+native_open always adds FILE_SYNCHRONOUS_IO_NONALERT. Directory access explicitly includes SYNCHRONIZE; lock and source access use FILE_GENERIC_READ/WRITE masks that include SYNCHRONIZE. There is no asynchronous option, no OBJ_INHERIT, and no added completion/oplock profile. Parent is borrowed, not transferred. The component buffer, UNICODE_STRING, OBJECT_ATTRIBUTES, HANDLE output and IO_STATUS_BLOCK storage are live and initialized throughout the SDK call. Immediately after return, STATUS_PENDING is tested before any output interpretation, OwnedHandle transfer, error return or IO_STATUS_BLOCK union read.
+
+The branch calls std::process::abort directly. Rust documents that it never returns, terminates the entire process and runs no stack destructors, including those on other threads; it is not panic/unwind and invokes no panic hook. Consequently this branch does not return into a caller that can drop/reuse the pending output/vector storage, does not drop the parent owner as a normal refusal, and cannot continue to claim/provider effects. There is no guessed handle wait, unsafe ownership adoption, retry, background completion, or normal resource leak. Fatal process termination is the endpoint. This is a justified containment response to a broken external completion invariant, with process-wide availability cost, not a normal invalid-input/unsupported-platform response.
+https://doc.rust-lang.org/std/process/fn.abort.html
+
+Only completed STATUS_SUCCESS plus a valid handle reaches exactly-once OwnedHandle -> File transfer. Other documented final errors return without adopting the borrowed parent or arbitrary output bits. The Pending branch must remain before that handling. Replacing it with return Err, panic/unwind, treating positive Pending as success, or waiting on an unproved output handle would invalidate this focused acceptance. Supporting an actual asynchronous profile would require a separately designed completion/lifetime protocol and review; it is not authorized by this verdict.
+
+Limits and follow-through
+
+No claim is made that Rust storage remains independently useful after process termination or that this recovers from a compromised kernel. The argument is noncontinuation without normal teardown under a documented synchronous FFI contract. A caller-controlled bad pathname/reparse/access conflict must remain a documented final error, never intentionally mapped to the fatal branch. A conforming kernel/filter stack should not produce this status for the approved create profile.
+
+The Windows draft as a whole remains unreviewed. Its sharing policies, all routing/type/identity checks, generic metadata helper soundness, acceptance/token transactions, launch Arc lifetime, and all real Windows adversarial/CLI/cold-wake oracles still need their required implementation/platform review. This report approves only the exact unexpected-Pending response and does not establish compilation or runtime behavior. No Windows runner was available, and no Pending/native tests were executed.
