@@ -1,0 +1,52 @@
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking agent-client-protocol-schema v1.9.1
+    Checking r2d2_sqlite v0.25.0
+    Checking agent-client-protocol v2.2.0
+    Checking octocrab v0.42.1
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking lineark-sdk v3.0.1
+    Checking rmcp v1.6.0
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking teloxide-core v0.10.1
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking teloxide v0.13.0
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+warning: missing documentation for a struct field
+  --> crates/surge-orchestrator/src/engine/owned_flow.rs:13:14
+   |
+13 |     Inline { graph: Box<Graph> },
+   |              ^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> crates/surge-orchestrator/src/engine/mod.rs:23:9
+   |
+23 | #![warn(missing_docs)]
+   |         ^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> crates/surge-orchestrator/src/engine/owned_flow.rs:15:19
+   |
+15 |     ProjectFile { locator: PathBuf },
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> crates/surge-orchestrator/src/engine/owned_flow.rs:17:16
+   |
+17 |     Template { key: String },
+   |                ^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> crates/surge-orchestrator/src/engine/owned_flow.rs:36:16
+   |
+36 |     Explicit { path: PathBuf },
+   |                ^^^^^^^^^^^^^
+
+warning: `surge-orchestrator` (lib) generated 4 warnings
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking which v6.0.3
+    Finished `dev` profile [unoptimized] target(s) in 1m 34s

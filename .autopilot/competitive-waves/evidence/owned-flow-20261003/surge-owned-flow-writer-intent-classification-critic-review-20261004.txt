@@ -1,0 +1,90 @@
+T25 ownership-prerequisite classification — independent critic PLAN review
+2026-10-04
+
+VERDICT: ACCEPTABLE for the bounded design, conditional on recording the genuine
+state/history baseline RED before behavior writes and required actual regressions.
+No implementation acceptance or broader T25 completion. Not frozen5a/5b;
+initial formal count0/3 unchanged.
+
+Read FULL final draft; verified SHA256
+23c61a999c235d10152f58eb6c5a50c527f08c69cafb17a307bd6a181e73da71.
+Read actual error.rs, connection state/retry/spawn/observation/handshake paths,
+writer_observer.rs, std child transport reservation/transfer/cleanup, stdio intent
+test, prior crashed-state refusal unit, and routing RestartExhausted handling.
+This /tmp report is the only write. No source/test/Cargo/format/Git/process action
+or handle polling; no behavior baseline was executed by this reviewer.
+
+WHY THE BOUNDED CHANGE IS SOUND
+
+1. Exact current defect: connection.rs:339–346 maps before_child failure into
+   StartFailed. ensure_connected:292–333 then consumes restart history and changes
+   ConnState even though Surge's physical spawn path has not been entered. Existing
+   EffectRefused has a separate no-state-mutation branch. The same preservation
+   branch for WriterOwnershipRefused is coherent and does not change restart
+   decisions for real spawn/handshake failures.
+
+2. Callback-boundary classification is appropriate. before_child is an untyped
+   WriterObservationError prerequisite; actual engine observer calls an early host
+   control check inside it before journaling. Therefore the new error MUST mean
+   that callback refused/failed, not proof of specifically SQLite failure. The
+   finalcallbackprecision paragraph correctly avoids parsing its private message.
+   The later physical before_effect remains EffectRefused. Preserve that distinction
+   even when the early callback and final callback reject for the same control.
+
+3. The public enum is already #[non_exhaustive]. An additive variant containing
+   only public configured server identity plus a fixed Display category is a
+   reasonable API addition. No observer signature, event serialization, caller
+   capability or persistence dependency is needed. The dynamic callback error
+   must be discarded, not retained as a source or reason. Derived Debug's fixed
+   variant name/server field is safe; source() should be None, rather than exposing
+   WriterObservationError. Do not rewrite Debug for the entire enum unnecessarily.
+
+4. before_child happens before command/transport construction and actual std
+   spawn. A refusal must return without reserving a child worker or touching
+   transport state. A canceled awaited callback leaves the existing state unchanged;
+   any journal side effect inside that callback is NOT undone or considered a
+   closed writer by this classification. NoChild/authority proof is separate.
+
+5. child_started is after actual birth and worker transfer (connection.rs:411ff).
+   Its failure currently requests actual settlement before StartFailed. Keep it
+   there. Likewise real preparation, stdio conversion, owner availability and
+   handshake/timeout retain existing categories/cleanup. No mapping based on text,
+   no new WriterOwnershipRefused after birth and no fake NoChild/Closed emitter.
+
+REQUIRED ORACLE PRECISION / NONBLOCKING GUARDS
+
+- Baseline the existing real stdio rejecting-intent test using public health and
+  zero process marker, without mentioning the not-yet-existing enum variant.
+  Its first Disconnected assertion must expose the wrong Crashed state. A failure
+  to compile a new variant or a mismatched EffectRefused expectation is not RED.
+- For prior Crashed history, use expired retry_at and restart_on_crash=true so the
+  callback is actually reached. Count callback invocations independently: eight
+  calls must reach before_child eight times after the fix, preserve last_exit=7,
+  attempts=3, identical next_retry_at and unhealthy=true. A future backoff or
+  restart_on_crash=false fast return would make that oracle vacuous.
+- After the fix demand the exact new variant on each rejection, plus safe Display,
+  Debug and None source. Put a sentinel in the callback error and verify its absence
+  from captured diagnostics; fixed-message failures must not print private payloads.
+  Keep configured server names public as in existing EffectRefused.
+- Keep the real zero-birth marker independent of enum/state assertions. The private
+  history test complements it; neither substitute can certify actual process
+  absence alone. Do not introduce platform-wide cfg-unix on portable state tests.
+- Existing RefuseSpawn unit reaches final before_effect by letting before_child
+  succeed. Keep it as a separate regression: EffectRefused and unchanged history.
+  A child_started rejection regression must observe actual born PID/marker and
+  eventual real cleanup/owner retention, while still reporting startup failure.
+- Once the rejecting callback is allowed, demonstrate normal connection success
+  clears unhealthy under the existing path, and genuine spawn/handshake failures
+  still consume the normal restart budget. No sleep/retry reset or exhausted-state
+  bypass is authorized. Running/Exhausted/nonexpired backoff early returns retain
+  their existing semantics and need not be forced through before_child.
+- Existing catalog monitors, per-server ordering/timeouts and shutdown/cancellation/
+  retained-send/transfer/Taken/panic/privacy contracts are untouched. This change
+  does not create health monitors, reset permanent terminal admission, release the
+  original observer, or grant durable suspension/Continue authority.
+
+No blocking plan finding remains for this classification draft. Main/root must
+record actual baseline health/history evidence separately, then run scoped strict
+all-target gates and eventual complete frozen reviews. Catalog metadata reshape,
+populated cold positive twin and full native/external authority remain separate
+open work; success here cannot retire them or count as formal acceptance.

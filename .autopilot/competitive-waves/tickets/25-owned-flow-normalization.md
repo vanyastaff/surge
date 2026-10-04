@@ -581,3 +581,42 @@ Architect reworks plan read-only; no domain source permission, no integrated app
 or5a/5b, initial formal0/3 unchanged. Same-UID direct store attack is not silently
 included/excluded; existing trusted configured-binary ADR scope must be explicit,
 without universal remote-quiescence promises or benign-fixture pseudo-proof.
+
+Actual cold setup fixes:45420 terminal101 retained child shows invalid default
+run_config:{} wire DTO;8789 terminal101 real DTO reached profile but lacked required
+user_prompt binding. Both are fixture setupFAIL, not behavioral RED. Main serializes
+actual EngineRunConfig::default plus public initial_prompt.45824 terminal0
+explicitEmpty1PASS and21533 terminal0 HostDefault(empty)1PASS: actual legacy exposure
+positive counterfactual, new host quota wake and changed project/global defaults,
+no private namespace/key, same original identities/unique startup. These prove
+frozen Empty selections, not complete descendant-domain suspension authority.
+
+61093 terminal100 repaired ACP oraclesPASS, MCP intent oracleFAIL. Root corrected
+its classification: before_child journal prerequisite failure is NOT the control
+before_effect refusal. Current path returns fixedopaque StartFailed; raw private
+observer text remains absent. Proposed distinct WriterOwnershipRefused preserves
+health/restarthistory before any child; postspawn child_startedfailure remains
+startupfailure+actualcleanup. Public variant/state change requires pinned short
+amendment + real state/history RED + independentreview beforebehavior. Wrong-type
+fixture assertion alone is not accepted specRED. Root's earlier conflation retained
+as history and explicitly corrected here, no raw reason restoration.
+
+Final catalog draft SHA4b6ab7da6b9b402b12cbee8c00fa38c7e11f05ef943a4b8c72ffad7b8b848c53
+retained. Host selection configured∩exposed∩existing override-wins policy; absent
+optionalgraph names do not invalidate Empty. Explicit libraryselection validates
+unknownALLbeforeeffects and starts no monitors in either mode. Engine immutable
+OnDemand never starts proactive work on any callpath; standalone legacy behavior
+preserved, prior actual connections/owners retained. Focused critic dispatched;
+security follows (one free slot under four active agents). Draft is not source
+approval and domain amendment stays separateheld; formal0/3 unchanged.
+
+
+Latest bounded implementation authorization / evidence 2026-10-04
+T25initial0/3: pinned catalog3ecd83 and classification23c61a passed independent precode critic/security; root authorized only those bounded amendments. Actual health/history RED39263 terminal101 -> actual GREEN85243 terminal0 and private GREEN20101 terminal0, eight callback refusals/no birth/exact state/privacy. Empty45824 and HostDefaultEmpty21533 terminal0 prove frozen selection only. Main catalog implementation/scoped regressions ongoing; no fullworkspace/freeze5a/5b. Domain revised5bdd46 fully read; StageA independent precode review pending, B frame/coordinator and C native/external/productive positives remain open; domain source held.
+DTO6551 terminal0: direct inline NaN/+Inf/-Inf rejection1PASS; accidentally built
+filtered integration binaries are not executed checks.61093 wrong-type oracle
+failure is not genuine RED. Catalog metadata reshape replaces divergent metadata
+helper with exact newly resolved registry on BOTH start/resume, owned Empty first.
+Domain revised plan is read-only; StageA review cannot certify B/C productive
+closure or full T25. Native runners, external adapters, populated cold positives,
+full source freeze and sequential independent5a/5b remain required and open.

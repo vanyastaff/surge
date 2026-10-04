@@ -1,0 +1,15 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 44.24s
+     Running unittests src/lib.rs (target/debug/deps/surge_orchestrator-7e119056e2b00013)
+
+running 4 tests
+test engine::owned_flow::tests::locator_scope_is_lexical_and_uses_explicit_base ... ok
+test engine::owned_flow::tests::host_fields_and_unknown_fields_are_refused ... ok
+test engine::owned_flow::tests::empty_mcp_and_unlimited_budget_remain_explicit ... ok
+test engine::owned_flow::tests::canonical_request_sorts_env_maps_and_keeps_ordered_arguments ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 422 filtered out; finished in 0.01s
+

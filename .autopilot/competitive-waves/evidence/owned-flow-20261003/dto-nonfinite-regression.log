@@ -1,0 +1,484 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 5m 18s
+     Running unittests src/lib.rs (target/debug/deps/surge_orchestrator-7338315a176e937c)
+
+running 1 test
+test engine::owned_flow::tests::direct_inline_dto_rejects_nonfinite_graph_before_canonical_encoding ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 429 filtered out; finished in 0.01s
+
+     Running tests/archetypes_mock_test.rs (target/debug/deps/archetypes_mock_test-3f8f97a15f0b5059)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/artifact_contract_golden_test.rs (target/debug/deps/artifact_contract_golden_test-cde6be01c637cccb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_archetypes_test.rs (target/debug/deps/bootstrap_archetypes_test-5849000b6ab9527b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_driver_e2e.rs (target/debug/deps/bootstrap_driver_e2e-634ea9b9770200a9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_edit_cap_test.rs (target/debug/deps/bootstrap_edit_cap_test-aaa7c90c7f87ba47)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_linear_3_test.rs (target/debug/deps/bootstrap_linear_3_test-dbc87dee46e89b51)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_multi_milestone_test.rs (target/debug/deps/bootstrap_multi_milestone_test-7f4a3229c35780fc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_validation_retry_test.rs (target/debug/deps/bootstrap_validation_retry_test-504968fd1853e716)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/bundled_bootstrap_flow.rs (target/debug/deps/bundled_bootstrap_flow-8774415253f38c7f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/elevation_audit.rs (target/debug/deps/elevation_audit-a93e2223a4bcadc9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/elevation_blocked.rs (target/debug/deps/elevation_blocked-a134f3b7785b76cb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/elevation_e2e.rs (target/debug/deps/elevation_e2e-cef5a7a8528ee4ac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/engine_acp_permission.rs (target/debug/deps/engine_acp_permission-eb3a59c7ddebcac9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+     Running tests/engine_agent_artifact_emission_test.rs (target/debug/deps/engine_agent_artifact_emission_test-4f7e437bfdf5eb29)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/engine_agent_stage_rate_limit_test.rs (target/debug/deps/engine_agent_stage_rate_limit_test-6ff420b1fdb6cba8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/engine_agent_stage_unit.rs (target/debug/deps/engine_agent_stage_unit-b7ebc96f50cbc4c9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_bootstrap_parent_artifacts_test.rs (target/debug/deps/engine_bootstrap_parent_artifacts_test-77b3838a48be88de)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_budget_test.rs (target/debug/deps/engine_budget_test-792274d5d74a519e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/engine_capacity_park_test.rs (target/debug/deps/engine_capacity_park_test-07218a27a3d6528e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running tests/engine_concurrent_runs.rs (target/debug/deps/engine_concurrent_runs-e3b9dfa0b57b783d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_concurrent_unit.rs (target/debug/deps/engine_concurrent_unit-79da6cfc68ba0493)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_e2e_linear_pipeline.rs (target/debug/deps/engine_e2e_linear_pipeline-9d244db0bb8189a1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_gate_cancellation.rs (target/debug/deps/engine_gate_cancellation-3f56903638178077)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_gate_identity.rs (target/debug/deps/engine_gate_identity-3ba0d883cc7bccd8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_guard_spill_harness_test.rs (target/debug/deps/engine_guard_spill_harness_test-ca7fea2309f211b4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/engine_human_input_resolved.rs (target/debug/deps/engine_human_input_resolved-b72729ce193fdeae)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_human_input_timeout.rs (target/debug/deps/engine_human_input_timeout-c0f566d87f7d75d2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_human_input_unit.rs (target/debug/deps/engine_human_input_unit-198de3d1d0d3ae17)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_initial_prompt_test.rs (target/debug/deps/engine_initial_prompt_test-7a4faaefa61a0f7e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_invalid_skills_declaration_rejected.rs (target/debug/deps/engine_invalid_skills_declaration_rejected-49a5f591ededdb74)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_iterable_loop.rs (target/debug/deps/engine_m6_iterable_loop-7b2a231a5477a62a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_loop_max_traversals.rs (target/debug/deps/engine_m6_loop_max_traversals-d864e825f11b5faf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_loop_retry.rs (target/debug/deps/engine_m6_loop_retry-80d1d081453278ce)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_loop_skip_failure.rs (target/debug/deps/engine_m6_loop_skip_failure-c16f5cc148d2f417)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_multi_edge_rejected.rs (target/debug/deps/engine_m6_multi_edge_rejected-7f1b9cd88fd302df)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_notify_webhook.rs (target/debug/deps/engine_m6_notify_webhook-0d63b6ccfe498e81)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_resume_with_loop_frame.rs (target/debug/deps/engine_m6_resume_with_loop_frame-2204b332de985a4c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_resume_with_subgraph_frame.rs (target/debug/deps/engine_m6_resume_with_subgraph_frame-9cb4cc19a04784e5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_static_loop.rs (target/debug/deps/engine_m6_static_loop-f80bf2be9d18f17a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_subgraph_simple.rs (target/debug/deps/engine_m6_subgraph_simple-8ff24d87513f8d0a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_m6_subgraph_with_branch.rs (target/debug/deps/engine_m6_subgraph_with_branch-71a8574eaa50951d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/engine_m7_routing_dispatcher.rs (target/debug/deps/engine_m7_routing_dispatcher-aefc4ab9c4aef0cc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/engine_mcp_terminal_shutdown.rs (target/debug/deps/engine_mcp_terminal_shutdown-33ba8aff2123e9b1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/engine_profile_catalog_seed_test.rs (target/debug/deps/engine_profile_catalog_seed_test-682744fa3a64c573)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_profile_not_found_rejected.rs (target/debug/deps/engine_profile_not_found_rejected-5e12ff61abf6bbb2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_project_context_seed_test.rs (target/debug/deps/engine_project_context_seed_test-c242255b0a5b941f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/engine_resume_after_crash.rs (target/debug/deps/engine_resume_after_crash-9171eae0f192853b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_skill_binding_test.rs (target/debug/deps/engine_skill_binding_test-1ffe645fc82f6dc0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/engine_snapshot_unit.rs (target/debug/deps/engine_snapshot_unit-1fe19f8bd648ed91)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/engine_stage_commit_test.rs (target/debug/deps/engine_stage_commit_test-3cc880320e8be564)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_stage_inputs_resolved.rs (target/debug/deps/engine_stage_inputs_resolved-7677bcdb66ff6d31)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/engine_start_run_smoke.rs (target/debug/deps/engine_start_run_smoke-5c0d7d30c3761953)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_stop_run_unit.rs (target/debug/deps/engine_stop_run_unit-0208cdcdc65216dc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/engine_task_ledger_test.rs (target/debug/deps/engine_task_ledger_test-98aa097bf4689f6a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+     Running tests/feature_planner_driver_test.rs (target/debug/deps/feature_planner_driver_test-881e9bfc5981996b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/flow_amendment_test.rs (target/debug/deps/flow_amendment_test-ef42950d688da407)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/hooks_pre_post_tool_test.rs (target/debug/deps/hooks_pre_post_tool_test-c7ea89c9e179ef03)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/integration.rs (target/debug/deps/integration-6d4a0ce9238e752f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running tests/memory_writeback_test.rs (target/debug/deps/memory_writeback_test-5ec5f60c94617fc7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/mock_bridge_tests.rs (target/debug/deps/mock_bridge_tests-755e67ba977dac9f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/on_error_suppress_test.rs (target/debug/deps/on_error_suppress_test-62883c00f329a738)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/on_outcome_retry_test.rs (target/debug/deps/on_outcome_retry_test-079d123d7587d215)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/profile_registry_e2e.rs (target/debug/deps/profile_registry_e2e-764562d8e5ca0c02)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/project_context_test.rs (target/debug/deps/project_context_test-b7aedb06ea663a04)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/rate_limit_e2e.rs (target/debug/deps/rate_limit_e2e-275b67a5967e8aa2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/real_acp_smoke.rs (target/debug/deps/real_acp_smoke-af14cc673932245b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/recipe_admission_test.rs (target/debug/deps/recipe_admission_test-32636e1bc62b7f28)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/roadmap_amendment_approval_test.rs (target/debug/deps/roadmap_amendment_approval_test-21da762bbb441d50)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/roadmap_amendment_artifacts_test.rs (target/debug/deps/roadmap_amendment_artifacts_test-d629641df1a4d4a8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/roadmap_amendment_e2e.rs (target/debug/deps/roadmap_amendment_e2e-33388fb6bf9a9e83)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/roadmap_amendment_follow_up_test.rs (target/debug/deps/roadmap_amendment_follow_up_test-8ba90695807232f1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/roadmap_target_resolver_test.rs (target/debug/deps/roadmap_target_resolver_test-284cac6b3364548d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/sandbox_unsupported_combo.rs (target/debug/deps/sandbox_unsupported_combo-f5d6fcbc0033e833)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/triage_dispatch.rs (target/debug/deps/triage_dispatch-e1ccfa5ae11669ad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/triage_llm.rs (target/debug/deps/triage_llm-87b2a38ea5ebb46d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/validate_with_resolver.rs (target/debug/deps/validate_with_resolver-e8bbef98adc14e48)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/verification_revision_test.rs (target/debug/deps/verification_revision_test-fe7f4383802f0696)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/work_item_ownership_test.rs (target/debug/deps/work_item_ownership_test-c3097846522eb47e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

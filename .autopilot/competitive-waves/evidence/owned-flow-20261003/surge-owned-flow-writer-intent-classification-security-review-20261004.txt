@@ -1,0 +1,60 @@
+Independent bounded MCP writer-prerequisite classification — security/API PLAN review
+2026-10-04
+VERDICT: ACCEPTABLE for narrow classification/state-preservation design.
+
+Read FULL 44-line /tmp/surge-owned-flow-writer-intent-classification-plan-20261004.txt; verified
+SHA256 23c61a999c235d10152f58eb6c5a50c527f08c69cafb17a307bd6a181e73da71.
+Re-read actual error.rs, connection.rs ensure_connected/spawn_and_serve, injected observer and
+orchestrator writer_coverage before_child; no source/Cargo/git/process writes or handle polls.
+Only this /tmp report written. T25 initial0/3 unchanged; not implementation/frozen5a/5b acceptance.
+
+The proposed public nonexhaustive McpError::WriterOwnershipRefused{server} correctly classifies
+failure of the ownership-prerequisite CALLBACK, not exclusively SQLite IO. Production before_child
+first calls before_effect (writer_coverage.rs:31-35), then awaits a journal writer intent (:36-45).
+WriterObservationError is an untyped string, so cause cannot safely be split by text. The draft's
+explicit callback precision avoids a false claim and preserves early control refusals as this
+callback category; final synchronous physical before_effect refusal remains EffectRefused.
+
+Actual connection.rs:339-346 maps before_child failure to fixed StartFailed; ensure_connected
+:301-329 consumes restart/backoff state for every error other than EffectRefused. Add the new
+variant to the exact no-state-mutation branch and map ONLY that prebirth callback error to it.
+Holding the state mutex already serializes those attempts; there is no temporary state write to
+roll back before the callback. Preserve exact ConnState/last_exit/attempts/retry deadline and
+unhealthy bit. Restart history here means connection restart state; a failed callback may still
+have a committed durable intent if reply delivery failed. Do not infer journal absence, no durable
+writer obligation, or clean NoChild evidence from this public error. The plan expressly does not
+change event/authority semantics; this observation is an implementation invariant, not a new blocker.
+
+Error Display/Debug/source must retain only configured public server identity plus the fixed
+mcp_writer_ownership_refused category. No wrapped WriterObservationError/raw journal cause, error
+chain or dynamic reason. Existing #[non_exhaustive] McpError accommodates an additive variant without
+requiring exhaustive external match compatibility. No observer trait expansion/string matching,
+persistence dependency, serialized capability or NoChild constructor follows.
+
+A successful physical spawn followed by child_started failure at :408-422 remains StartFailed with
+actual independently owned transport settlement; it is NOT WriterOwnershipRefused. Existing final
+host refusal at physical spawn and postbirth init/catalog/call gates retains its current typed
+EffectRefused behavior; this amendment must not relocate those checks or weaken child retention.
+Cancellation before the awaited prerequisite returns does not produce a child through this path;
+cancellation after birth retains the original worker/observer independent of the caller. Durable
+orphan intentions from interrupted before_child still belong to the separate open domain ledger
+work, not erased by a state-preserving connection error.
+
+Required acceptance (not executed)
+- Outer baseline uses actual production before_child rejection plus a real std-child spawn marker.
+  Assert repeated attempts cause zero birth and preserve Disconnected health; initial RED must be
+  wrong health/history, not compilation on a nonexistent new variant.
+- Private state test: expired-retry Crashed{last_exit7,attempts3} + unhealthy=true, repeated8 admitted
+  calls to rejecting prerequisite preserve ALL exact values and no birth. Pair independent actual
+  child marker test; copied state-machine code is not the oracle.
+- After implementation assert the precise new variant and fixed safe Display/Debug/source, including
+  a private sentinel in callback error proving it never leaks, rather than is_err alone.
+- Separate early before_child control rejection, durable prerequisite rejection and final physical
+  before_effect rejection without parsing strings; first two have callback category, final has
+  EffectRefused, all preserve prebirth restart state. Existing postbirth child_started failure still
+  settles actual original child and produces genuine startup failure, never no-child proof.
+- Existing physical control gates, canceled caller, runtime-drop, retained original observer/claim,
+  transfer slot/Taken/never-polled close and strict alltargets/frozen outer gates remain mandatory.
+
+No unresolved pre-code reshape found for this exact bounded design. Full domain/native/external
+requirements remain open; this classification is not accounting, suspension or completion authority.

@@ -1,0 +1,83 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Finished `test` profile [unoptimized] target(s) in 55.28s
+     Running unittests src/lib.rs (target/debug/deps/surge_core-b77fa62503119e4b)
+
+running 9 tests
+test work_item::tests::legacy_requirements_bytes_and_hash_remain_golden ... ok
+test migrations::work_item_golden::prior_event_and_bound_attempt_have_explicit_version_gate ... ok
+test work_item::tests::legacy_context_bytes_remain_golden ... ok
+test work_item::tests::legacy_revision_bytes_remain_golden_and_hash_is_validated ... ok
+test work_item::tests::flow_deserialization_rejects_forged_graph_hash_and_oversized_prompt ... ok
+test work_item::tests::flow_contract_hash_authenticates_domain_graph_and_exact_prompt ... ok
+test work_item::tests::flow_prompt_bound_measures_exact_utf8_bytes ... ok
+test work_item::tests::context_rejects_mixed_origin_forged_binding_and_invalid_graph ... ok
+test work_item::tests::flow_context_preserves_empty_whitespace_and_raw_prompt ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 806 filtered out; finished in 0.02s
+
+     Running tests/artifact_schema_snapshots.rs (target/debug/deps/artifact_schema_snapshots-c2435bb947434bdd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/bundled_profile_metadata.rs (target/debug/deps/bundled_profile_metadata-a3dd4d55dfba5378)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/fold_determinism_proptest.rs (target/debug/deps/fold_determinism_proptest-de862104be6456a4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/fold_hook_events.rs (target/debug/deps/fold_hook_events-6b949f3050151d57)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/graph_proptest.rs (target/debug/deps/graph_proptest-b4ae6c1a8d091916)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/migrations_v1_roundtrip.rs (target/debug/deps/migrations_v1_roundtrip-a4e97565a0ce51a6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/profile_registry_proptest.rs (target/debug/deps/profile_registry_proptest-5bea0d524519d9ee)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/roadmap_ledger_proptest.rs (target/debug/deps/roadmap_ledger_proptest-0de89102e7b6321c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/skill_catalog.rs (target/debug/deps/skill_catalog-dd73326314e3e8d3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/smoke_legacy_unchanged.rs (target/debug/deps/smoke_legacy_unchanged-3e9395054178769a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/snapshots.rs (target/debug/deps/snapshots-806c3a40fae2b35c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+

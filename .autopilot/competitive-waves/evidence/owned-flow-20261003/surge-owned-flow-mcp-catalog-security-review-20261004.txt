@@ -1,0 +1,82 @@
+Independent bounded MCP catalog admission — security/API PLAN review
+2026-10-04
+VERDICT: ACCEPTABLE for the narrow amended design, not implementation/full T25 acceptance.
+
+Read FULL 110-line /tmp/surge-owned-flow-mcp-catalog-policy-plan-20261004.txt and verified
+SHA256 3ecd83b2b6c4ff572053dce7367f09249b91133b04e92888521a6e62fbdc5255.
+Read actual MCP registry/connection/error APIs, engine resolver and both actual start/resume
+construction, stage catalog/policy/dispatcher path, and retained MCP native owner seam.
+No code/tests/Cargo/format/git/process writes or handle polling; only this /tmp review artifact.
+Main remains sole source/process owner. T25 initial0/3 unchanged; no frozen5a/5b or fullscope pass.
+
+1. Metadata blocker is closed by the concrete edit map.
+Current resolve_run_mcp_registry (engine/engine.rs:683-715) correctly prioritizes authenticated
+owned-flow refs, returns None for authenticated Empty, otherwise explicit run refs then copies
+configured global refs into independent per-run connections. Current effective_run_mcp_servers
+(:1652-1657) does NOT include global fallback. Both start (:409-415) and resume (:1233-1239) therefore
+can construct actual global-backed connections while stage policy/whitelist/timeouts see an empty
+list. Deriving BOTH p.mcp_servers lists from the SAME newly resolved registry.configured_servers()
+closes that mismatch. None->empty preserves owned Empty and no fallback. Getter clones immutable
+connection contracts, not health/current discovery; it includes exact command/ordered args/env,
+sandbox, whitelist and timeout. Existing getter sorts by server name; this runtime metadata ordering
+must not rewrite accepted ordered private manifest/HMAC inputs. The plan explicitly limits it to
+runtime memory and does not mutate accepted startup/config/manifest or reuse global connection Arcs.
+Actual resume (:1200+) already suppresses replayed public-list overwrite when authenticated inputs
+exist; preserve that branch and private association checks unchanged.
+
+2. Host admission now precedes executable catalog work.
+Actual stage/agent.rs:758 calls list_all_tools before sandbox policy at :784-798. The plan moves
+configured/exposed/policy-permitted selection before selected catalog effects, preserving exact
+server_override.unwrap_or(node_mode) override-wins semantics (:3695+) and existing optional-name
+behavior. Whitelist None vs Some([]) remains tool-route filtering after querying that admitted
+server; do not silently invent a stronger no-process rule for Some([]). RoutingToolDispatcher
+receives only admitted routes plus the original registry and effective timeout. Existing stage
+run-generation/control final connection gates remain in force; selection is not an OS sandbox or
+host authority capability. No new caller bypass flag or serialized authority is introduced.
+
+3. Monitoring scope is precise and sufficient for this bounded change.
+Private MonitorPolicy and a named from_config_owned_on_demand constructor isolate ALL engine-run
+registries from proactive monitors. ensure_monitors_started returns before atomic mutation or task
+spawn for OnDemand, even from list_all_tools or call_tool. A selected query and common query helper
+start no monitor in EITHER mode. Existing legacy constructors/list_all_tools/call_tool keep proactive
+behavior; standalone diagnostics are not silently changed. Unknown selected names must ALL validate
+before any query/monitor/effect; empty selected list performs no work. Sort/dedup selection only,
+then call the existing exact paginated connection list_tools path; do not reconstruct connections.
+Prior-stage actual child owners are retained, not replaced/dropped as fake revocation/closure.
+With no OnDemand health task there is no monitor RPC/reconnect behind a later denied stage.
+On-demand reconnect remains only a caller-admitted catalog/tool operation with existing history.
+Public constructor is scheduling metadata only, not a new authentication surface. Private enum
+has no wire/serde conversion. The existing public spawn_health_monitor method does not create an
+engine-run task spontaneously; all engine construction/automatic callers must use the specified
+OnDemand path. Direct standalone callers remain the explicitly retained legacy behavior.
+
+4. Hygiene/cancellation/final gates are preserved, not claimed complete by this plan.
+Connection construction must keep command, ordered args, minimal+declared env, cwd, sandbox and
+private hydration exact; selected refs/configured_servers are runtime data and must never be logged
+or added to public receipt/config projections. Configured names and bounded error categories remain
+safe existing identifiers. Same observer Arc still reaches child owner and actual final spawn/init/
+paginated-list/call checks. Existing canceled-await ownership and never-polled-close/Taken/terminal
+barrier tests must continue passing. No selected API return or monitor suppression is closure proof.
+Separate broad native/domain/external-effect shortcomings stay open and are NOT blockers newly
+invented for this bounded catalog placement fix.
+
+Mandatory executable acceptance (not run by reviewer)
+- Real A allowed/B denied process and wire recorders: selecting A queries only A, even after health
+  intervals; empty selection opens neither; unknown selection [A,unknown] causes zero partial effects.
+- Validate in BOTH LegacyProactive and OnDemand registries that selected catalog never starts a
+  monitor. Legacy list_all/call positive control still performs an actual proactive tick. OnDemand
+  list_all/call of A must not start any proactive task or contact B.
+- Stage1 actual admitted connection then Stage2 denied after actual death/timer advance: zero new
+  probe/catalog/reconnect/child, original pending child responsibility retained. No fake state reset.
+- Positive exact transport/catalog pages, successful tool content, original restart history and
+  timeout/whitelist fidelity; preserve override-wins and node fallback tests.
+- Actual engine global fallback start AND resume: config-empty legacy run, allowed A/ReadOnly B
+  globals, expose both, query only A. Compare stage runtime metadata to exact connection contracts.
+- Poison same globals for authenticated Explicit(empty)/HostDefault(empty): zero MCP effects on
+  actual initial/cold paths. Optional absent graph names do not trigger library unknown-name errors.
+- Private manifest/cold fidelity and final physical-control/canceled-owner strict regressions;
+  full native populated cold twin still open, not satisfied by these no-spawn negatives.
+
+No unresolved required design reshape found in this exact updated artifact. Implement only after
+root authorization of this bounded scope; stage checks/source freeze/independent5a then5b remain
+required. This ACCEPTABLE verdict does not authorize domain proof emitters or native spawn changes.

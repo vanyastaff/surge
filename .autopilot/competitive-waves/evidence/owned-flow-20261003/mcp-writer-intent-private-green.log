@@ -1,0 +1,9 @@
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 7.32s
+     Running unittests src/lib.rs (target/debug/deps/surge_mcp-b4d16c5cdf81c86d)
+
+running 1 test
+test connection::tests::ownership_refusal_preserves_exact_crash_history_and_safe_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.00s
+

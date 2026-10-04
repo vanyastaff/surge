@@ -1,0 +1,88 @@
+T25 bounded catalog admission amendment — initial build 0/3
+Author draft for owning and independent security review; no production behavior writes.
+
+Observed genuine outer RED: cold-mcp-baseline.log terminal9775, actual accepted
+ReadOnly server recorded a spawn before the test's denial assertion. Existing
+agent.rs queries registry.list_all_tools before applying mcp_spawn_policy. Registry
+list_all_tools starts all health monitors and connects every configured server.
+The immutable manifest still correctly records the original ReadOnly policy; this
+is execution placement, not permission to mutate accepted config or the resolver.
+
+Preserve existing mcp_spawn_policy(server_override.unwrap_or(node_mode)) exactly.
+It is override-wins, not minimum privileges. Apply its current decision together
+with graph/profile allowed_servers BEFORE any executable catalog operation.
+Keep full accepted MCP order, metadata, transport/private inputs and HMAC binding.
+A denied server remains in the authenticated manifest but must not start merely
+because another server is requested. No global/private config reconstruction.
+
+Proposed narrow API: additive public McpRegistry::list_tools_for_servers(&[String])
+returns the existing Result<Vec<McpToolEntry>,McpError>. It selects only configured
+names, sorts/deduplicates references for existing deterministic catalog behavior,
+then queries ONLY that selection and starts NO monitors in either mode. Unknown names return the
+existing typed ServerNotConfigured error before any partial query. Empty selection
+returns no tools/no connection/no monitor. list_all_tools retains documented legacy
+all-server behavior and legacy proactive monitor start before the common internal
+query helper; doctor/probe is
+not silently changed. No caller boolean or serialization of host capability.
+
+Revised concrete monitor lifetime: add named constructor
+McpRegistry::from_config_owned_on_demand(refs,cwd,observer), sharing immutable
+connection construction with existing from_config_owned. Private registry enum
+MonitorPolicy::{LegacyProactive, OnDemand} is not serialized, not a caller bool,
+and carries no authorization assertion. Existing from_config/from_config_owned
+retain their legacy behavior for independent diagnostics and direct library users.
+Engine::resolve_run_mcp_registry uses the named OnDemand constructor for ALL
+run-owned registries. No proactive health task exists for an OnDemand registry:
+ensure_monitors_started returns without mutation/task/spawn, whether reached from
+list_all_tools, selected catalog, or call_tool. Selected list does not enable a
+monitor later. A prior stage's connection remains owned and intact; it is not
+closed/dropped/relabelled to fake revocation, liveness or descendant closure.
+Later stages denying a server neither query it nor provide routes to its tools.
+There is no earlier stage background task capable of reconnecting on their behalf.
+Reconnect is synchronous on-demand only for an explicitly admitted later catalog
+or actual tool call, preserving existing restart budget and typed refusal state.
+This is an execution scheduling change, not new sandbox semantics or authority.
+
+Host stage builds permitted names from allowed_servers and exact immutable
+McpServerRef policies BEFORE new selected catalog method. Existing resolver stays
+server_override.unwrap_or(node_mode): override wins. Warn once per selected
+configured server, not per tool. The host selection is configured intersection exposed intersection policy-
+permitted. Absent optional profile mcp_add names are not forwarded: disabling all
+MCP intentionally, including authenticated Empty, is not an admission error.
+Library caller-supplied unknown selected names must validate ALL before any
+partial catalog effects. Neither selected API nor its common query helper starts
+monitors in either monitoring mode; only legacy list_all_tools/call_tool retain
+legacy proactive behavior, while OnDemand refuses all proactive starts. Keep whitelist filtering
+AFTER exact selected catalog; None vs Some([]) unchanged. Existing RoutingTool-
+Dispatcher includes only admitted server/tool routes; it retains the original
+run-owned registry/connection and exact effective timeout. No public bypass flag.
+Run generation/control remains checked by same retained HostWriterObserver fence
+at final connection spawn/init/page/tool dispatch after relevant waits; this does
+not replace per-stage route admission or broaden cleanup permissions. A live
+old connection is preserved during later denied stage, but gets no new background
+RPC, catalog or routes. Shutdown remains cleanup-available and owns its actual
+child through settlement. No new domain-closure/Closed claim is inferred.
+
+Required oracles: actual explicit denied server and actual allowed server baseline
+(positive existing transport/catalog); denied server remains absent on actual
+health tick/reconnect, even with other selected servers; empty selected list no
+spawn/timer; selecting one server never queries another; positive selected server
+keeps exact successful content/transport/ordered pages, fixed restart history;
+actual real owned Flow initial/cold Empty/HostDefault counterfactual unchanged;
+server override wins regression and node-mode fallback regression. Existing
+MCP final physical effect/canceled owner proofs and domain-closure gates remain
+mandatory, not retired by catalog selection. Scoped strict checks, whole workspace
+final gates and independent frozen5a→5b remain required.
+
+Write sites: surge-mcp registry.rs public API/internal monitor selection and actual
+process tests; surge-orchestrator engine/stage/agent.rs placement of existing
+policy; existing owning module unit policies unchanged. Root owns docs/AGENTS.
+No domain proof/Closed emitter/native spawn change authorized by this draft.
+
+Additional required regression: actual first admitted stage opens server, next
+denied stage plus actual timer advance/death produces zero probes/reconnect or
+new child while original owner is retained. OnDemand call_tool of one server
+must not start monitor/query another; legacy proactive constructor positive
+control must still execute actual monitor tick. Unknown selection must not even
+start legacy monitors before typed validation. Public added constructor follows
+existing typed error/observer model; no serialization/host-capability change.

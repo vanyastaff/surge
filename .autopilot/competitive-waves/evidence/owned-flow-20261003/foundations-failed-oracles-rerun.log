@@ -1,0 +1,37 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling agent-client-protocol v2.2.0
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling rmcp v1.6.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized] target(s) in 1m 42s
+────────────
+ Nextest run ID 72415cc5-9ee6-4af0-98de-ad08b34bd469 with nextest profile: default
+    Starting 5 tests across 2 binaries (3 tests and 37 binaries skipped)
+        PASS [   0.028s] (1/5) surge-acp::bridge_effect_fence cancelled_awaiter_does_not_drop_the_queued_worker_capability
+        PASS [   0.394s] (2/5) surge-acp::bridge_effect_fence queued_prompt_checks_stored_session_fence_and_close_remains_available
+        PASS [   0.474s] (3/5) surge-acp::bridge_effect_fence permission_grant_is_checked_after_approval_await_and_automatic_allow
+        FAIL [   0.016s] (4/5) surge-mcp::mcp_stdio_e2e rejected_ownership_intent_prevents_actual_mcp_child_spawn
+  stdout ───
+
+    running 1 test
+    test rejected_ownership_intent_prevents_actual_mcp_child_spawn ... FAILED
+
+    failures:
+
+    failures:
+        rejected_ownership_intent_prevents_actual_mcp_child_spawn
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'rejected_ownership_intent_prevents_actual_mcp_child_spawn' (31426549) panicked at crates/surge-mcp/tests/mcp_stdio_e2e.rs:189:5:
+    assertion failed: matches!(result, Err(surge_mcp::McpError::EffectRefused { .. }))
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.117s] (5/5) surge-acp::bridge_effect_fence worker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission
+────────────
+     Summary [   0.542s] 5 tests run: 4 passed, 1 failed, 3 skipped
+        FAIL [   0.016s] (4/5) surge-mcp::mcp_stdio_e2e rejected_ownership_intent_prevents_actual_mcp_child_spawn
+error: test run failed

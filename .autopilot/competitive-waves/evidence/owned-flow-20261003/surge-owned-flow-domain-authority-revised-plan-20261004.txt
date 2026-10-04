@@ -1,0 +1,569 @@
+T25 revised whole-journal authority plan — 2026-10-04
+Owning architect; READ-ONLY plan, not source authorization.
+
+MAINTAINER VERDICT
+Bounded StageA correctness design: READY FOR INDEPENDENT PRECODE REVIEW, conditional
+on the closure below, not author self-approval. StageB is a separately reviewable
+next unit; its handoff contracts below are required before implementation approval.
+Integrated/native/full T25: NEEDS WORK. Production external adapter certification,
+native unsafe backend review, real three-platform positive runs and macOS product
+setup remain open. Initial formal postbuild T25 repair count remains 0/3. No source,
+tests, Cargo, Git, build, native process creation or setup changes were performed.
+Original reports remain untouched. This document supersedes contradictory algorithm
+statements in the 20261003 authority amendment, not original acceptance requirements.
+
+Basis: complete original owned-flow-normalization-plan, accepted runtime amendment
+6a–6d, cold-oracle plan, capability report, authority amendment, complete independent
+critic and security reviews dated20261004. Current source seams were reread. In
+particular sdk_v1::effect_connection already checks AFTER readiness; do not report
+that fixed readiness race as still present. The missing obligation/domain authority
+and response responsibility are separate changes.
+
+1. Property and trust boundary
+
+Required property: before suspension/Continue/wake/new same-workspace dispatch, ALL
+registered writers and outstanding protocol-defined operations of the prior epoch
+must have original host-issued terminal evidence, including obligations reserved
+without journal intent. Completed effects are not undone. This is not universal
+provider/account quiescence and does not assert all causally related remote
+computation has stopped. A supported adapter must define the exact operation it
+settles; unmediated async work remains Unknown unless its real implementation or
+broker boundary supplies the required contract.
+
+ADR0014 explicitly delegates deeper sandbox enforcement, requires configured
+trusted binaries in unconstrained MCP modes, and is not a hostile-process syscall
+sandbox. Malicious configured same-UID processes modifying SQLite/private keys/
+locks, tracing/signaling the host or forging trusted storage are OUTSIDE this
+existing threat boundary. 0600, HMAC and opaque Rust types do not prevent that
+attack. Extending the threat model would require a separate credential/filesystem/
+broker product decision, not a hidden requirement in this amendment. Accidental
+cancellation, crash, descendant escape by setsid, lost observations, asynchronous
+operations, and untrusted protocol data ARE inside the correctness scope.
+
+No trust checkbox, protocol success, EOF, direct leader exit, empty process group,
+SessionClosed or cleanup_confirmed bool creates native/external authority. Existing
+GroupOnly empty remains Unknown. Native closure concerns actual local membership;
+external responsibility is distinct. Current local_effects:false MCP records cannot
+be retroactively relabeled local-only. Legacy journals remain readable but unknown
+owned closure does not permit continuation. Accepted IDs, raw prompts, graph,
+private inputs, frozen selection, workspace and original startup stay unchanged.
+
+2. Minimal model/storage instead of parallel frameworks
+
+Reuse WorkItemLaunchClaim and its underlying Arc<PreparationLock>/Arc<File>, existing
+run/attempt/workspace/accepted-binding identities, control generation and writer/
+invocation IDs, original recovery-cycle association and immutable launch identity.
+Epoch key = (run, attempt_generation, control_generation); initial generation0.
+Each writer gets a checked signed-SQL-compatible ordinal for request occurrences;
+occurrence key=(epoch, ExecutionWriterId, ordinal). Birth/Release use their own
+point within the writer obligation. No new parallel task/generation/receipt IDs.
+Two registry tables in ONE next available migration (number root assigns):
+
+work_item_execution_epochs: primary key epoch; FK existing run/attempt; immutable
+accepted/workspace/stable-launch binding; state Running/Quiescing/Attention/
+ClosedAwaitingJournal/Suspended; revision; reservation_generation; immutable closure
+set bytes/digest/schema; journal seal receipt; ACK state; pending projection identities.
+work_item_execution_obligations: primary key(epoch,writer,ordinal,kind); FK epoch;
+kind NativeWriter/Request/External/HostOperation; invocation; reservation nonce;
+point admissions; native descriptor; origin/establishment/projection receipts;
+terminal proof record; pending journal projection; revision. ordinal0 is native
+writer; request ordinal>0. External row references exact request or broad writer.
+
+UNIQUE(original journal run,seq,eventkind), UNIQUE(original native identity within
+its original reservation), foreign keys, nonnegative checked counters, write-once
+origin/descriptor/terminal fields, conditional state transitions. Conflict replay
+rolls back ALL rows; exact repeat returns existing receipt without dispatch. No
+UPDATE replacing old identity. Proof bytes are trusted-store records with private
+issuance APIs, not caller-supplied JSON authority. Serialized descriptors remain
+DATA and validated serde try_from. Closure-set schema1 is fixed-field encoding:
+UTF8 canonical structured record, explicit domain separator, integer counters,
+sorted composite occurrence keys, exact ordered immutable receipts, no floats or
+unordered JSON maps. Preserve exact bytes plus digest; never reserialize a journal
+receipt to claim equal raw bytes. Set includes settled registry-only NoChild debt.
+No extra key namespace, especially for Empty/HostDefaultEmpty.
+
+3. Concrete APIs and predicates
+
+Proposed APIs, not claims they exist today. In persistence work_items/execution_authority.rs
+plus execution_authority/{ledger,inspection}.rs, kept small by responsibility:
+open_epoch(claim, ValidatedOwnedStartup, optional HostContinuationPermit)->Epoch;
+reserve_writer(claim, epoch, invocation, kind, coordinator_slot)->WriterReservation;
+bind_origin(reservation, IntentJournalReceipt)->OriginBinding;
+bind_prepared_domain(reservation, PreparedDomainIdentity)->DomainBinding;
+admit_birth(reservation, current_epoch)->BirthAdmission;
+bind_held_child(reservation, HostHeldChildIdentity, EstablishedJournalReceipt);
+admit_release(reservation, current_epoch)->ReleaseAdmission;
+reserve_request(writer, method_class, ordinal, contract, coordinator_slot)->RequestReservation;
+bind_request_origin(request, RequestOriginReceipt);
+admit_enqueue(request,current_epoch)->EnqueueAdmission;
+bind_sdk_request(request, HostConnectionIncarnation, SDKRequestId);
+admit_frame(request,current_epoch)->FrameAdmission;
+settle_original(reservation, private HostTerminalEvidence)->StoredSettlement;
+project_original(StoredSettlement, typed JournalProjectionReceipt);
+freeze_epoch(claim,expected_control)->EpochFreeze;
+inspect_complete_epoch(freeze, actual whole journal)->ValidatedEpochEvidence;
+prepare_seal(freeze,evidence)->HostSuspensionPermit;
+ack_seal(claim,actual SealJournalReceipt)->ValidatedSuspension;
+open_continuation(claim,ValidatedSuspension,current ContinueReserved)->HostContinuationPermit;
+record_attention(original_reservation, current_owner, reason, pending_projection)->AttentionReceipt.
+
+Reservations/permits/evidence are private-field non-Clone one-shot authority where
+consumption matters, non-Serde; reservation shared ownership does NOT duplicate an
+admission. Core stores DATA only. Opaque native constructors are sealed host backend
+constructors, no public custom probe/wait/closed(bool). Registered coordinator owns
+admission slots through their consumption, not a canceled RPC caller.
+
+Dispatch predicate: original descriptor-checked live lock, current claim token,
+exact active attempt/accepted binding/workspace, unarchived, matching newest control,
+Running epoch, associated typed journal origin, matching frozen startup/private input
+validation, no unresolved earlier workspace owner, no outstanding freeze/Attention.
+All reserve/Birth/Release/enqueue/frame/permission-grant gates use this predicate.
+Final registry epoch/CAS is AFTER every await/readiness/reap/storage wait. A short
+SQLite snapshot alone is not atomic with writer DB. Synchronous gate+single syscall/
+enqueue is a declared linearization occurrence; later Stop may follow this occurrence.
+A second gate at physical frame write prevents earlier queued RPCs bypassing a Stop.
+No permission held across await authorizes later physical action.
+
+Historical settlement predicate: exact immutable original obligation/native/request
+identity + registered cleanup owner or reconciliation-only claim of original lease;
+accept genuine closure in Quiescing/Attention/Suspended and after a newer operator
+control. Does NOT require old dispatch generation to be current, does NOT issue a
+new admission, mutate original closed sets or overwrite newer operator decisions.
+Cold token reissuance changes current ownership authentication only. Replay of old
+proof is idempotent historical settlement, never permission to reopen old epoch.
+Attention records epoch debt transactionally under latest snapshot; stale control
+CAS retries, preserves newer Stop/Continue decision and adds recovery-required
+projection without changing it to Suspended. Seal/ACK/Continue require exact CURRENT
+freeze/control generation AND actual complete journal association. Newer Stop
+rejects ACK but preserves the immutable proof for historical repair.
+
+4. Native physical state machine — Birth is not Release
+
+Coordinator reservation holding SAME underlying launch-lock Arc is registered
+BEFORE registry reservation and before any cancellation point. Reserve capacity
+first; capacity failure yields zero effects and no unowned debt. Native factory
+retained in that slot can attest unconsumed Birth even with registry-only origin.
+
+PreparedDomainWithoutChild: actual empty cgroup/job or active observation client;
+prepare may have host management resources but ZERO target child. Record management
+responsibility if its disposal has effects. Reserve native debt registry FIRST;
+commit typed journal intent; bind origin. Cancellation/crash before intent leaves
+orphan debt, never inferred absent spawn. An unconsumed Birth admission can produce
+private NoChild proof while factory/slot survived; after host crash no such proof is
+reconstructed from absent PID/intent. Domain identity binds before Birth if possible.
+
+FINAL Birth admission immediately before create syscall. Consume exactly once in
+retained native owner, without await. OS success means HeldNativeChild with actual
+handles/root identity retained IMMEDIATELY before stdio extraction/Tokio wrapping.
+Record establishment using held root+domain; failure during record keeps real child
+owned, unreleased. FINAL Release admission AFTER all waits immediately before target
+resume/exec release. Stop BEFORE Birth: ZERO child. Stop BETWEEN Birth and Release:
+real held child and zero target instructions; settle/reap it, NEVER NoChild. Stop
+AFTER Release: executed original domain must close. Unconsumed Release proves only
+no release, not no child. No-process OS error may create NoChild only when backend
+error contract proves create returned no child. Created-but-unobserved is Unknown.
+
+Backend combining Birth+execute must declare that fact; one BirthExecution admission
+at its syscall and postcreate root capture. It cannot claim root identity existed
+before syscall. Current standard spawn combines birth+execution and preserves
+runtime6a direct final-spawn gate, ChildParcel before fallible pipes, no raw-PID
+adoption/custom pre_exec. Native held backends require explicit reviewed amendment,
+not a silent replacement. Existing unowned std-child regression mode remains.
+
+Cross-WAL replay matrix:
+reserve/no intent -> registry orphan blocks; surviving unconsumed Birth issuer may
+settle NoChild+project exact registry-only origin, no synthetic original intent;
+intent/no origin binding -> repair exact run/seq/kind/raw digest, otherwise Attention;
+Birth admit/no syscall observation -> crash Unknown, not NoChild;
+created/no establishment -> retained handles settle; host loss Unknown;
+established/no Release -> real held child still requires native closure;
+closure registry/no journal -> pending exact projection protocol in section6;
+set frozen/no seal -> replay exact immutable set; no new reservations;
+seal/no ACK -> verify real raw seal+full journal then current CAS, never bool ACK;
+Continue origin/no epoch -> one-shot origin replay opens at most one matching epoch;
+new control during any step -> reject dispatch, historical cleanup remains legal.
+
+5. Per-RPC occurrence and exact correlation
+
+Each initialize/new/load/resume/options/prompt/catalog/ping/health/reconnect attempt,
+MCP tools/call, incoming permission response and any host request has its OWN row.
+Reconnect gets new connection incarnation; server name/session ID alone insufficient.
+Reserve request under original writer/epoch BEFORE SDK enqueue; typed origin and
+optional external debt precede action. Distinguish enqueue occurrence from actual
+frame-write occurrence. Duplicate reserve reuses ordinal receipt, duplicate
+admission rejects dispatch. Concurrent requests settle independently.
+
+ACP2.2 primary installed source jsonrpc.rs:4077ff allocates a UUID, registers pending
+reply then enqueues inside synchronous send_request; SentRequest::id at5720 exposes
+ID only afterward. Thus do NOT claim pre-enqueue SDK ID registration. Surge owner's
+synchronous dispatch method consumes EnqueueAdmission, calls SDK, puts returned
+SentRequest into its pre-existing outer retained slot immediately, reads id(), then
+binds (connection incarnation,SDK id) before ANY await or caller delivery. Panic or
+crash between enqueue and correlation leaves reserved debt Unknown; never NoEffect.
+Correlation binding failure retains SentRequest/response ownership and blocks seal.
+Caller receives a separate outcome waiter, not sole SentRequest owner. SDK request
+payload remains memory only; ledger stores method class+IDs, no prompts/args/env.
+
+StageB must wrap outgoing transport's full JSONRPC frame boundary: retain request
+association, parse only approved routing fields in memory, after writable/readiness
+wait consume FrameAdmission immediately before first byte. If whole frame writing
+can span awaits, retain that same write owner; Stop after first byte cannot be called
+zero-wire, and partial write is Unknown until original domain/operation settlement.
+Notifications and incoming permission return use their own occurrences; unmatched
+owned frame is refused, not attached to last active request. If adapter can't expose
+an exact lower frame boundary, keep that route unsupported until its seam is
+reviewed; SDK enqueue gate alone is not claimed a physical-wire gate.
+
+Owner outcomes: NotEnqueued from private unconsumed enqueue/no-effect SDK failure;
+EnqueuedUncorrelated; PartialFrame; SentAwaitingResult; ProtocolSuccess/Error;
+CancelRequested; EOF/TransportLost; AdapterTerminal. Cancellation is a REQUEST, not
+terminal evidence. Success/error settles protocol response delivery only. Local
+native debt stays until domain closure. External debt stays until contract-defined
+terminal receipt, which can be failed/cancelled only if the adapter proves original
+operation actually stopped. HTTP200/taskcreation is never terminal by itself.
+Any response hook runs into retained private sink before caller is notified; lost
+runtime leaves pending response/debt, no invented receipt. No callback-only receipt
+whose owner was canceled may release responsibility. MCP rmcp routes need same
+actual request-ID/transport seam audit, not assumed identical to ACP.
+
+6. No-gap ownership, runtime loss, Attention, original lease
+
+StageB coordinator is ONE bounded runtime-independent responsibility owner, not a
+second process kill/wait owner. Reserve a slot before registry mutation; no eviction
+or unbounded per-result thread. It holds clone of original WorkItemLaunchClaim:
+underlying Arc<PreparationLock> identity equals the original; wrapping a new claim
+in Arc is insufficient. Original native worker exclusively holds Child/domain
+handles. Coordinator holds ledger/projection/launch authority. Existing transfer
+slot/Taken dispatcher is reused; no second panic hook/kill implementation.
+
+Outer Arc<Mutex<Option<parcel>>> holds proof/effect receipt before any channel send.
+Sender keeps outer slot clone through send and Taken acknowledgement. Receiver
+first retains cloned slot/responsibility in registered table then acknowledges.
+Sender/receiver overlap ownership deliberately; dropping a caller/waiter cannot
+remove table ownership. Send failure/panic or Taken failure dispatches existing
+fallback with same slot. Receiver taken but ACK lost is idempotent by slot key;
+no second wait/kill. Poison/panic paths close dispatch, retain responsibility and
+record Attention; no poisoned mutex treated as empty. Shared silent panic dispatcher
+must be installed before ANY ACP/shell/MCP native reservation, not MCP-first only.
+
+Owned runtime6b ordering amendment: coordinator ALREADY owns original lock Arc
+before native child->observer->completion drop order occurs. Native handles may be
+dropped after genuine durable native closure, but launch authority remains until
+journal ACK or protocol(b) durable Attention below. Unowned mode retains accepted
+child->observer->completion ordering, bounded tracker, Taken, cancellation, pipes,
+registry terminal-state and shared-hook regression requirements.
+
+Root selected protocol(b) when journal runtime is terminally destroyed:
+1 coordinator retains original Arc and exact StoredSettlement plus pending typed
+projection identity (original epoch/occurrence/proof schema+bytes/digest/required
+kind, intended origin association; not guessed future seq).
+2 registry IMMEDIATE stores Attention+pending identity atomically in SAME registry
+transaction, preserving newer operator decision and immutable proof.
+3 only AFTER that durable commit may launch authority Arc release. Second host can
+then acquire reconciliation-only original lock, inspect full original journal,
+repair exact typed projection, verify actual receipt and continue normal proof
+validation. It cannot launch while repair/unresolved debt exists.
+Live native domains/external operations retain their actual responsibility; this
+pending-journal protocol is NOT permission to abandon a live child/operation.
+If Attention fails/disk full, hold original Arc, retry with bounded diagnostics;
+shutdown stays unconfirmed. Thread failure leaves registered responsibility/fallback;
+process death loses lock but durable original debt blocks new host. Shutdown joins
+native owners THEN coordinator durable settlement/Attention, then authority release;
+never success on timeout. Existing daemon unconditional drop(claim) must be removed
+for owned authority, not merely wrapped in a logging callback.
+
+7. Whole journal, seal and all entry gates
+
+Typed RunWriter commands append writer/request origin, native establishment,
+settlement projections, seal, Continue origin with host permits; generic append
+and append_batch deny owned authority-bearing variants including legacy:
+ExecutionWriterIntent/Established/Closed, SessionEstablishmentRequested/Opened/Closed,
+RunSuspended/Continued/RecoveryRequired, WorkItemAttemptBound/OwnedFlowInputsBound,
+RunStarted after startup, and new request/domain/closure variants. Startup remains
+its existing typed exact-one path. Authority inspector rejects duplicates/conflicts
+and unregistered variants ANYWHERE, including beyond saved snapshot/startup prefix.
+Pure reducer may preserve legacy bools as display data but cannot mint permission.
+
+After freeze, journal writer barrier prohibits all effect/stage/control events via
+generic routes. Safe append allowlist only NotifyDelivered and RuntimeVersionWarning
+plus the typed authority commands; neither creates writers/effects/control. Tokens,
+tool receipts, stage outcomes, park/wake/terminal events require typed original
+association and may not be guessed harmless. Closed set commits snapshot generation
+including ALL registry reservations and external/orphan debt. Every writer/request
+reservation obeys that generation. Immutable set+actual journal raw-byte prefix
+receipt/no late-authority append barrier together bind registry to journal; no
+cross-WAL atomicity claim. Later audit-only bytes do not change closure set; full
+inspection still checks their allowed kinds.
+
+RunWriter::seal_suspension consumes HostSuspensionPermit and actual epoch/journal
+barrier, transactionally appends seal+snapshot. Registry ACK validates ACTUAL seq/
+kind/schema/rawbytes receipt+immutable set and latest control CAS. Continue/wake
+requires same verified seal, then typed Continue origin and new epoch opening.
+RunSuspended cleanup_confirmed=true is derived only from that host permit; cannot
+be a public input. Empty proof needs truly zero obligations OR exact positive
+NoChild set; no fallback on missing table/journal/key/capability.
+
+Wire the shared inspector/gate through run_task preparation+cleanup, engine
+validate_resume/all resume entry points, owned_flow effect fence, daemon launch/
+pending Start/Stop/Continue/restart reconciliation/supervise_completion/terminal
+settle, control confirmation, capacity_fence/due wake/handoffs/tracked_run, archive/
+new attempt/revision/workspace reuse. Indexed candidate discovery is not authority.
+Terminal RunCompleted/Failed/Aborted cannot clear active_run while unresolved
+workspace responsibility exists. Manual edits/Archive retain existing inactivity
+rule plus debt gate; historical labels don't erase original closure obligations.
+
+8. Concrete external responsibility and supported positive contract
+
+Operation | local responsibility | external responsibility / terminal source
+ACP init/session/options/prompt | native provider + exact RPC | provider-owned remote
+inference/tool work; versioned provider adapter required. EndTurn is protocol data
+unless adapter certifies bounded operation. Unsupported -> ExternalUnknown.
+MCP init/catalog/ping/health | child domain + exact RPC | protocol control response
+is not arbitrary server quiescence. Artifact-bound no-external implementation can
+classify these finite local; unknown binaries remain broad ExternalUnknown.
+MCP executable tools/call | child domain + exact RPC | operation-specific adapter;
+async task IDs reserved and later exact terminal result+adapter guarantees required.
+No generic production stage-MCP delegation currently: separate OPEN route task.
+Hooks/shell | child domain + invocation | arbitrary networking/broker work unknown;
+only certified exact artifact/operation or reviewed broker restriction closes it.
+Host Git/filesystem/checkpoint | retained host operation owner | finite mediated
+local operation, native/host completion after its actual blocking worker returns;
+no tokio waiter cancellation substituted for blocking-worker completion.
+Surge internal stage helper | native helper + exact authenticated request | host
+handler responsibility survives helper cancellation; report/gate/approval actions
+settle their exact durable host receipt, never unmediated external tool work.
+
+Concrete selected production adapter candidate: official modelcontextprotocol
+server-filesystem, ONLY full-file read_text_file WITHOUT head/tail/media streams,
+plus initialization/catalog/ping. Source index.ts:179–197 awaits readFileContent
+and returns its exact result; no remote async job API in that selected handler.
+Contract = completion of that finite filesystem read, not host/account quiescence.
+Terminal construction needs exact reviewed distribution artifact SHA, Node/runtime
+identity, transitive SDK/lib dependency closure, actual request correlation, actual
+validated terminal response AND native domain closure. Reject unsupported tools,
+roots callbacks outside approved finite contract, modified artifact/SDK, and unknown
+binary identity. Freeze cmd/orderedargs/env/cwd unaltered; do not substitute a wrapper
+command or trust annotation. Source hint openWorldHint/readOnlyHint is NOT evidence.
+
+Certification remains NEEDS WORK: this research read index handler, not a complete
+pinned production package/lib/SDK audit or installed artifact. Thus factory disabled
+until StageC adapter report supplies exact artifacts and checks no continuing
+background/unmediated remote work. Productive certified positive uses actual
+server handler response + independently observed local native closure. Independent
+negative uses a distinct async service adapter whose accepted-job HTTP200/task ID
+still leaves the original operation running; cancellation/EOF must block Continue
+until exact remote terminal receipt. This is not a benign fixture closing positive
+by assertion. MCP task spec terminal results settle protocol-defined tasks only;
+wider service effects require adapter contract. Existing startup/catalog populated
+twin can use certified finite adapter, but its actual generic tools/call positive
+still needs real production delegation, not ToolObserved execution shim.
+
+9. Full native paths and approval boundaries — no installation authorized
+
+Common future crate surge-process -> surge-core,thiserror,tracing,libc/nix/windows;
+ACP/MCP/persistence -> process, orchestrator -> existing consumers/process. No
+process->Tokio/SQLite/ACP/MCP/Git cycle. Move identity process_evidence implementation
+and re-export ACP compatibility; share existing 128-slot tracker/512KiB worker,
+transfer/panic dispatcher. Do not duplicate OS identity parser or kill owner. New
+crate requires architecture/AGENTS/Cargo closure in its own reviewed stage.
+Opaque PreparedDomain/HeldChild/RunningDomain/NativeDomainClosure constructors
+sealed to backend; generic data descriptors have no authority. Existing std
+leader-only owner stays supported and incapable of domain closure.
+
+Linux selected full backend: clone3(CLONE_INTO_CGROUP|CLONE_PIDFD) into precreated
+private cgroup2 domain, not spawn-then-move. Manager-owned anchored directory FD,
+validated machine/boot/fs+inode identity, no deletion/recreation/rename while debt.
+Dedicated delegated boundary; manager controls all writer admission and target gets
+no migration FD or writable cgroup hierarchy/common-ancestor migration permission.
+Concrete deployment profile is manager service controlling its hierarchy, child
+mount/cgroup visibility restricting hierarchy writes; credentials/delegation setup
+must be reviewed without changing target cmd/argv/env/cwd or inherited provider auth.
+Configured trusted binary threat boundary still applies; profile does not claim
+same-UID host DB tamper isolation. If deployment cannot enforce preserved membership,
+NOT CoveredDomain. No fake boolean chosen by target. Child native stub blocks on
+private release pipe after clone, before execve; only async-signal-safe syscalls and
+preallocated argv/env. Birth admission precedes clone, root pidfd+start identity
+retained before publication; bind establishment then Release admission writes token.
+Pre-exec error pipe distinguishes failed exec from no-child. Parent remains sole
+wait/kill owner. Signal via pidfd/domain not reused numeric PID. Close dispatch;
+cgroup.kill where supported; reap root and require original recursive populated0
+with preserved boundary+no admission, then private proof. Host death: anchored
+original directory can cold reopen/verify identity and frozen admissions; missing/
+replaced directory or lost migration boundary Unknown. Reboot alone proves native
+old-boot extinction with exact machine identity, NOT external closure. Runner real
+Linux cgroup2 delegated environment with clone3 support; denied/old kernel ->
+unsupported, never fallback Closed. Unsafe code approval required before source.
+
+Windows selected full backend: secured Job held by retained native responsibility
+broker. Atomic CreateProcessW+STARTUPINFOEX JOB_LIST+CREATE_SUSPENDED, no create-then-
+Assign gap. No breakaway flags; nested job limitations explicit fail before execute.
+Original broker boot/start+private connection incarnation/Job handle identity bind
+journal and registry; cold host reconnect obtains capability from STILL SAME broker,
+not a fresh named Job with same string. Broker retains original handles until
+closure/Attention ownership transfer. Broker loss without durable closure Unknown;
+newly opened zero-member Job cannot substitute original. WMI/broker-created work
+outside inheritance creates external Unknown unless certified adapter excludes it.
+Finalize pipelines and env block before Birth, exact accepted Windows argument
+encoding equivalent to existing Command semantics, explicit application path,
+UTF16 env sorted as required but same key/value set, cwd, STARTUPINFOEX handle-list
+restricted to approved stdio, child inherits no manager/job/auth connection handles.
+Use OwnedHandle RAII; child+thread handles retained immediately even if pipes fail;
+Release admission immediately before ResumeThread. Terminal Job active count0 plus
+frozen original admission and exact retained Job, actual root reaping, then private
+proof; query failure never Closed. broker persistence/setup is consequential host
+ownership design, not permission for persistent shared MCP servers (ADR0014).
+Stable Rust std spawn_with_attributes is unavailable/nightly in inspected docs;
+use reviewed native API, not MSRV change. Workspace windows0.58 needs explicit
+Win32_System_Threading, Win32_Security, Win32_System_JobObjects, Win32_System_IO,
+Win32_Storage_FileSystem dependencies/features confirmed against actual bindings
+before freeze. Real Windows Job descendants/escape/WMI and cold broker tests required.
+
+macOS full backend proposal: ES observer process subscribed BEFORE Birth; native
+posix_spawn START_SUSPENDED gives held actual child, exact accepted file-actions/
+argv/env/cwd/pipes, immutable audit-token process identity. Bind root then Release
+via identity-checked resume. EndpointSecurity NOTIFY_FORK/EXEC/EXIT tracks full
+lineage including setsid/reparent; gap/lost-client/muting/version mismatches Unknown.
+Do not infer child PID from kqueue NOTE_FORK. Primary XNU filt_procattach rejects
+NOTE_TRACK/TRACKERR/CHILD ENOTSUP; exit notification may be suppressed by debugger
+reparenting. kqueue terminal receipt identity/continuity required for limited profile;
+waitpid-only cannot upgrade missing terminal event. Full profile requires actual ES
+lineage proof, not a nofork special fixture.
+
+Terminal drain chosen only on verified macOS27+: es_sync_client queue marker while
+client remains live, nonnull and exclusively lifecycle-managed; require successful
+marker return, callback occurred normally before destruction, complete per-client
+global_seq_num/version continuity and lineage empty after all terminal receipts.
+SDK says syscall-related messages enqueued before syscall returns; combine all
+known lineage exits/reaps with drain, repeat drain after processing any newly
+received forks, never certify while any known live member remains. Client deletion
+also invokes marker callbacks, so destruction callback is Unknown, not terminal.
+Pre27 drain algorithm NOT established: full backend unsupported pending independent
+proof, not simulated marker. es_new_client needs entitlement+FDA/TCC, distribution
+signing/notarization and appropriate privilege. macOS27 descendants-client removes
+root/TCC need but STILL requires entitlement, and its observer must be true ancestor
+of all targets. It is a distinct consequential deployment option, not assumed
+available on host/minimum OS. Product choice unanswered; no install, FDA, entitlement,
+service or OS setting change authorized. Real broad-forking macOS positive required.
+
+FFI approval gate shared: libc0.2/nix0.29 current signal/fs/user/dir; precise clone3
+layout/version/error codes and syscall-safe child path; Windows handle inheritance/
+job-list attribute storage lifetimes; ES ObjectiveC block ABI/SDK availability,
+borrowed callback lifetime and serial delivery. Copy only approved identity fields
+or retain/release es_message correctly; pointers never outlive callback/client.
+es_delete_client exclusive against every ES call. Callback catches panic before
+FFI unwind; poison becomes Unknown with retained owner, not success. No new raw PID
+adoption/custom pre_exec. Native structs/FD/handle Send/Sync invariants reviewed,
+no borrowed argv/env buffers passed after lifetime ends. Stdio errors after successful
+create own real child. Dependency features/new crate authorized only after exact
+per-backend source/security plan review; compile/skipped tests do not satisfy run.
+
+10. Actual bounded implementation sequence and gates
+
+StageA: authority correctness without native proof factories. File closure:
+core execution_recovery/domain.rs DATA and run_event typed projections; persistence
+migration + work_items/execution_authority.rs and ledger/inspection, runs/writer.rs
+typed commands/append guards; existing control.rs, owned_flow/launch.rs, recovery_cycles
+capacity/handoffs and terminal work_items.rs gates; orchestrator writer_coverage,
+run_task, validate_resume, owned_flow fence; daemon work_items completion/reconciliation,
+tracked_run and all current manual/auto Continue/wake routes. No new crate/native
+backend needed in A. Strict freeze/reserve/request contracts from sections2–5 frozen
+before schema authoring. Reuse existing owned-input inspector/startup association.
+All actual owned writer entries require the shared authority gate BEFORE current
+spawn/RPC/worker start. Until StageB has a real pre-registered responsibility slot,
+the new reservation API refuses productive dispatch; StageA must not fabricate that
+slot or retain authority only in a Tokio future. Existing unresolved execution is
+classified Attention with preserved original debt, not migrated to a fake owner.
+StageB wires productive reserve/native/host/request/external dispatch through those
+already enforced gates. Legacy/no observed domain cannot clean-ACK. Do not
+add a public proof constructor to make tests pass. StageA genuine empty and host
+finite-operation units can pass; populated native positive remains visibly OPEN.
+
+A REDs in order, independently meaningful:
+A1 bool true/leader exit/SessionClosed/generic Closed cannot confirm suspension;
+A2 registry-only reservation crash before intent blocks startup/cold/wake/newattempt;
+A3 registry-only canceled reservation remains Unknown absent an actual surviving
+factory; exact NoChild API replay/conflict contract is tested structurally, while
+physical positive NoChild issuance remains StageB, not a public test factory;
+A4 generic append/batch/legacy alternate paths denied, late beyond-snapshot writer
+rejected by full inspector; all mutation rows rollback on conflict;
+A5 Stop during wait rejects final current spawn/enqueue gate with zero child/frame;
+A6 registry freeze races reservation; closed epoch gets no late obligation;
+A7 seal/noACK and Continue/noepoch recovery exact idempotence, conflicting rawbytes
+refused, newer Stop preserves closure but rejects old ACK;
+A8 all manual/automatic/capacity/restart/archive/terminal routes share debt gate;
+A9 Empty/HostDefaultEmpty creates no private-key namespace and unchanged IDs/hashes.
+A gate: actual production-route tests for above, targeted library test+clippy/fmt
+closure, then strict workspace gate using existing accepted5a schedule; record checks
+actually run. Independent bounded review needed before source and before commit.
+No integrated T25 acceptance claimed even if these are green.
+
+StageB: runtime-independent owner and request seam. File closure: persistence
+historical settlement/Attention+pendingprojection repair; daemon supervisor no-gap
+release; MCP existing child_settlement/{tracker,worker,transfer,panic_boundary},
+writer_observer callbacks; ACP sdk_v1/bridge/effect_fence and outgoing frame adapter;
+hooks/worktree blocking process owners; orchestrator writer_coverage sink; shared
+surge-process crate only if approved to move existing owner/identity without duplicate
+implementation. No native CoveredDomain factory in B. Exact rmcp ID/frame API audit
+and bounded coordinator worker design must pass its precode review first.
+B REDs: Same underlying Arc held before reservation; caller canceled at EACH handoff;
+sendpanic/Takenlost/receivertakenACKlost/poison/registrycommitfailure; runtime destroyed
+with closed registry and pending journal; Attention diskfull keeps lease and second
+host excluded; newer Stop allows genuine historical receipt without decision overwrite;
+concurrent RPC out-of-order responses settle own occurrence; enqueue-before-ID crash
+Unknown; Stop afterqueued readiness before frame causes zero bytes; partial frame
+never NoEffect; permission/reconnect/health unsolicited frame refused; hooks/shell-first
+panic registration precedes reservation. Preserve accepted unowned6a–6d/resource/
+shutdown/stdio/runtime regression suite. Test real runtime destruction and real
+second host lock acquisition, not SQL-only assertion. StageB commit includes full
+dependency closure and truthful unresolved capability list. Native/source approval
+still held; no unsafe installation inferred from this stage.
+
+StageC: independently reviewed native platform backend + exact production adapter
+certification + real external generic stage tools/call route where required. Separate
+small platform commits after each owning/security review and real runner. No freezing
+claimed before exact APIs/dependency/unsafe contracts. Mac product/setup must be
+answered before installation. Do NOT substitute conservative A/B for C positives.
+
+StageD: mandatory actual populated initial->quota park->native/external close->first
+host reaped->current defaults changed->cold sameattempt/workspace wake. Original
+launch/session/journal/control identity, private cmd/orderedargs/declaredenv/cwd,
+whitelist timeout/restarts/sandbox opacity and inherited-auth exclusion demonstrated.
+Then private-object/key/transplant/corruption negatives must precede child/provider
+physical effects, using same WORKING positive transport. Poisoned globals+mcp_add
+and independent legacy default fallback positive counterfactual required. Add escaped
+local survivor continuing writes, async remote survivor negative, missing native
+handle/monitor/boot identity Unknown, Windows and broad macOS genuine execution.
+Final source freeze, full strict workspace evidence, independent frozen5a THEN5b;
+no retired requirement, no fake Closed/ToolObserved or reviewer self-signoff.
+
+11. Source evidence and remaining decisions
+
+Local primary source: docs/adr/0014-mcp-lifecycle.md; current sdk_v1 effect_connection;
+installed agent-client-protocol2.2.0/src/jsonrpc.rs4077ff,5460ff,5720ff; current
+MCP child_settlement/mod.rs; stage/helper.rs (helper cancel does not settle host call);
+process_evidence, core run_event/run_state, all persistence/daemon readers above.
+Reviews: complete critic/security reports20261004, original authority/capability
+reports and runtime accepted plan. No sources copied into production.
+
+Linux https://docs.kernel.org/admin-guide/cgroup-v2.html
+https://man7.org/linux/man-pages/man2/clone3.2.html
+Windows https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute
+https://doc.rust-lang.org/std/os/windows/process/trait.CommandExt.html
+Apple installed /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/
+EndpointSecurity/ESClient.h701–827, ESMessage.h sequence version fields; sys/spawn.h.
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_event.c
+https://developer.apple.com/system-extensions/
+https://developer.apple.com/documentation/endpointsecurity/es_message_t/global_seq_num
+MCP finite adapter source candidate (read20261004, NOT pinned certification):
+https://raw.githubusercontent.com/modelcontextprotocol/servers/main/src/filesystem/index.ts
+MCP tasks protocol source (versioned, not arbitrary remote terminal guarantee):
+https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/utilities/tasks.mdx
+
+Consequential open decisions: macOS entitled observer distribution/root+FDA vs27+
+descendant client/minimum OS; Linux available delegation profile; Windows persistent
+responsibility broker setup; unsupported unrestricted external recovery product
+behavior. Existing trusted binaries boundary remains; no newly claimed universal
+remote or hostile same-UID security. These open C decisions do not prevent A stopping
+false clean ACK; they DO prevent integrated/full T25 approval. Independent reviewers
+must judge A bounded correctness separately and leave full positives explicitly OPEN.

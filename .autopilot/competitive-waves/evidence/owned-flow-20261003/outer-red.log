@@ -1,0 +1,35 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error[E0308]: mismatched types
+  --> crates/surge-daemon/tests/owned_flow_ipc.rs:41:51
+   |
+40 |     let engine = Arc::new(Engine::new(
+   |                           ----------- arguments to this function are incorrect
+41 |         Arc::new(mock_bridge::MockBridge::new()), storage.clone(),
+   |                                                   ^^^^^^^^^^^^^^^ expected `Arc<Storage>`, found `Arc<Arc<Storage>>`
+   |
+   = note: expected struct `Arc<surge_persistence::runs::Storage>`
+              found struct `Arc<Arc<surge_persistence::runs::Storage>>`
+note: associated function defined here
+  --> crates/surge-orchestrator/src/engine/engine.rs:94:12
+   |
+94 |     pub fn new(
+   |            ^^^
+
+error[E0308]: mismatched types
+  --> crates/surge-daemon/tests/owned_flow_ipc.rs:50:65
+   |
+50 |         surge_daemon::tracked_run::TrackingContext::new(engine, storage),
+   |         -----------------------------------------------         ^^^^^^^ expected `Arc<Storage>`, found `Arc<Arc<Storage>>`
+   |         |
+   |         arguments to this function are incorrect
+   |
+   = note: expected struct `Arc<surge_persistence::runs::Storage>`
+              found struct `Arc<Arc<surge_persistence::runs::Storage>>`
+note: associated function defined here
+  --> crates/surge-daemon/src/tracked_run.rs:29:12
+   |
+29 |     pub fn new(engine: Arc<Engine>, storage: Arc<Storage>) -> Self {
+   |            ^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `surge-daemon` (test "owned_flow_ipc") due to 2 previous errors

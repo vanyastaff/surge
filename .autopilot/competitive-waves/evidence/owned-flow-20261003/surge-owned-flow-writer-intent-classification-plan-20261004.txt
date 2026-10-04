@@ -1,0 +1,44 @@
+T25 bounded durable MCP ownership-prerequisite classification amendment
+Initial build 0/3; author plan for maintainer + independent critic/security review.
+
+Actual before_child is an awaited durable writer intent prerequisite, distinct
+from synchronous before_effect execution-control refusal. Its error currently
+maps to StartFailed and ensure_connected increments Crashed/backoff/restart budget
+although no child exists. Raw journal message must remain opaque. Earlier oracle
+expecting EffectRefused conflated distinct causes and is not a valid behavioral
+RED. NoChild remains solely actual no-birth completion, not public reason text.
+
+Add nonexhaustive public McpError::WriterOwnershipRefused { server:String }.
+Error/Debug/source exposes configured server and fixed mcp_writer_ownership_refused
+only; no retained WriterObservationError or dynamic reason. Map ONLY failed
+before_child to this variant. Preserve prior exact ConnState, unhealthy bit,
+last_exit, attempts and next_retry_at, as existing EffectRefused branch does.
+No retry-budget consumption/restart escalation because no physical child began.
+Differentiate before_effect control denial (EffectRefused), durable intent failure
+(WriterOwnershipRefused), physical spawn/handshake failure (StartFailed). A failed
+child_started after actual birth remains failed startup with actual owned child
+settlement and observer retention; this change cannot fabricate NoChild/closure.
+No observer trait/API/serialized event change. No persistence dependency in MCP.
+
+Before behavior: actual before_child rejecting test verifies repeated calls leave
+Disconnected health and zero marker. Baseline must fail actual health/history, not
+an unknown new Rust variant or raw reason assertion. Companion private unit case
+sets prior Crashed {last_exit:7,attempts:3,expired retry_at} and unhealthy=true;
+8 actual attempts preserve each value and produce zero process birth. It uses
+existing real std child marker integration separately. First record baseline
+wrong state; after accepted implementation demand exact new typed variant and
+safe fixed diagnostic in Display/Debug/source, not is_err alone. Existing physical
+control refusal oracles and post-birth failed observation cleanup stay positive
+regressions; strict alltargets and full frozen outer gates mandatory.
+
+Write sites MCP error.rs, connection.rs mapping/state branch + adjacent unit tests,
+actual mcp_stdio_e2e intent test. No catalog/domain/transport semantics changes.
+
+Actual callback precision: McpWriterObserver::before_child first invokes its
+before_effect host check. WriterObservationError has no typed cause today. The
+new variant identifies failure of the ownership-prerequisite callback, which
+may include that early control check, and does not assert exclusively DB IO.
+Final synchronous physical before_effect refusal remains EffectRefused. Do not
+parse callback text or fabricate cause distinctions. Both no-birth callback
+refusal and final physical refusal preserve original state and restart budget.
+A future typed observer cause expansion needs its own reviewed API boundary.

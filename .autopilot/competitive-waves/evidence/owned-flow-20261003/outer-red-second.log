@@ -1,0 +1,24 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 5.37s
+     Running tests/owned_flow_ipc.rs (target/debug/deps/owned_flow_ipc-48d2c96c93ed23e3)
+
+running 6 tests
+test mock_bridge::tests::last_prompt_reflects_last_send_message ... ok
+test mock_bridge::tests::records_reply_to_tool ... ok
+test mock_bridge::tests::records_open_session ... ok
+test mock_bridge::tests::pumps_scripted_event ... ok
+
+thread 'locator_replay_survives_missing_source_and_changed_configuration' (31184784) panicked at crates/surge-daemon/tests/owned_flow_ipc.rs:39:52:
+called `Result::unwrap()` on an `Err` value: SingleThreadedRuntime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test locator_replay_survives_missing_source_and_changed_configuration ... FAILED
+test mock_bridge::tests::admission_rejects_changed_descriptor_closes_and_never_prompts ... ok
+
+failures:
+
+failures:
+    locator_replay_survives_missing_source_and_changed_configuration
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p surge-daemon --test owned_flow_ipc`

@@ -1,3 +1,9 @@
+# Authoritative checkpoint 2026-10-04
+
+T25initial0/3: pinned catalog3ecd83 and classification23c61a passed independent precode critic/security; root authorized only those bounded amendments. Actual health/history RED39263 terminal101 -> actual GREEN85243 terminal0 and private GREEN20101 terminal0, eight callback refusals/no birth/exact state/privacy. Empty45824 and HostDefaultEmpty21533 terminal0 prove frozen selection only. Main catalog implementation/scoped regressions ongoing; no fullworkspace/freeze5a/5b. Domain revised5bdd46 fully read; StageA independent precode review pending, B frame/coordinator and C native/external/productive positives remain open; domain source held.
+
+Earlier checkpoint entries below are history and superseded where contradictory.
+
 # Latest precode boundary 2026-10-04
 
 Both domain authority plan reviewers returned RESHAPE NEEDED; root read full critic

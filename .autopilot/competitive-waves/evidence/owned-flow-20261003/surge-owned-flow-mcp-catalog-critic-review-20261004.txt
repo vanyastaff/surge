@@ -1,0 +1,145 @@
+T25 bounded MCP catalog admission — independent adversarial PLAN review
+2026-10-04
+
+VERDICT: RESHAPE NEEDED, one concrete runtime configuration blocker.
+The selection/immutable OnDemand scheduling design is otherwise acceptable for
+this bounded amendment after the exact metadata-source/edit-map fix below.
+This is not production acceptance or independent formal5a/5b; initial0/3 unchanged.
+
+Read the FULL final draft and verified SHA256
+4b6ab7da6b9b402b12cbee8c00fa38c7e11f05ef943a4b8c72ffad7b8b848c53.
+Read actual registry construction/catalog/call/monitor/shutdown, connection paging/
+call/health/restart, engine start/resume resolver, stage policy/whitelist/timeout
+and RoutingToolDispatcher construction. No source/tests/Cargo/Git/process mutations
+or execution; this /tmp report is the only write. Actual RED9775 comes from main,
+not a run by this reviewer.
+
+BLOCKING RESHAPE — exact runtime references must match the resolved registry
+
+The plan's host selection is configured intersection exposed intersection existing
+override-wins policy. It currently says to build this from immutable McpServerRef
+policies, but does not resolve an actual divergence in the existing engine:
+
+- engine/engine.rs:683–713 resolve_run_mcp_registry copies authenticated private
+  inputs when present, otherwise explicit run config, otherwise global registry's
+  configured_servers(). This last branch creates a nonempty independent registry
+  even when unowned run_config.mcp_servers is empty.
+- Start at409–415 and resume at1233–1239 separately call effective_run_mcp_servers.
+- effective_run_mcp_servers at1652–1656 returns owned authenticated servers or
+  config.mcp_servers; it DOES NOT copy that legacy global fallback. Thus p.mcp_servers
+  can be empty while p.mcp_registry contains real configured servers.
+- stage/agent.rs:741–825 currently lists the whole registry, then uses p.mcp_servers
+  for sandbox overrides, whitelist and timeout lookup. A new permitted selection
+  derived only from that same empty p.mcp_servers will omit every global server,
+  even when the graph explicitly exposes a legitimate allowed one. This breaks
+  the required legacy/global fallback positive counterfactual and suppresses
+  allowed behavior. It can also hide a denied override test by selecting nothing.
+
+Required explicit plan change: stage policy references must come from the SAME
+exact resolved per-run connection contract list used by the registry, for BOTH
+start and resume. Reuse configured_servers() on that newly resolved registry,
+or return the resolved list together with it from the private resolver. No new
+wire DTO, caller bypass flag or policy semantics is needed. Preserve authenticated
+owned inputs/Empty precedence: None or an authenticated empty list cannot acquire
+global refs. Keep this runtime list in stage params/runtime memory only; do not
+rewrite accepted config/startup journal/private manifests or rediscover defaults
+to fix the legacy case. Whitelist and actual per-server timeout must use that same
+list, not only the names used for catalog selection.
+
+Add a genuine unowned engine test with empty run_config.mcp_servers and nonempty
+engine-global refs: graph exposes allowed A and ReadOnly override B. A must really
+spawn/list and route with its configured timeout/whitelist; B must never spawn/list.
+Repeat through real resume construction. Pair with owned Explicit(empty) using
+those same poisoned globals, which must still do zero MCP work. This is not
+satisfied by a standalone McpRegistry selected-list test.
+
+EDIT-MAP CORRECTION (part of the above fix)
+
+The draft names the engine resolver and requires its OnDemand constructor on ALL
+run-owned registries, but the final write-sites paragraph names only registry.rs,
+agent.rs and tests. Add actual engine/engine.rs explicitly, including both resolved
+runtime metadata paths and the existing shared resolve_run_mcp_registry. Its single
+constructor switch covers private hydration, explicit legacy config and legacy
+engine-global copies on start/cold resume. Do not change daemon server.rs:1174
+doctor/probe construction to OnDemand. The stage's empty from_config(&[]) fallback
+has no connections or routes; it is harmless, but document its empty-only nature
+rather than treating a legacy nonempty constructor as run-owned.
+
+DESIGN AGREEMENTS / NONBLOCKING IMPLEMENTATION GUARDS
+
+1. Additive selected-list API and private immutable MonitorPolicy are narrow reuse.
+   list_tools_for_servers must perform complete configured-name validation and
+   sort/dedup BEFORE its first awaited query. In either monitor mode it must not
+   call ensure_monitors_started. Empty selection starts no tasks/child/RPC. Unknown
+   selection containing valid names must fail without partially querying them;
+   validate-all tests need valid name sorted BEFORE the unknown one. Preserve the
+   existing ServerNotConfigured type and opaque transport errors, not raw causes.
+
+2. OnDemand must be checked in the single ensure_monitors_started seam before
+   any atomic mutation/task creation. It applies even when list_all_tools or
+   call_tool reaches that helper: no background monitor can be enabled later.
+   Existing from_config/from_config_owned keep LegacyProactive. Only legacy
+   list_all_tools/call_tool start monitors; selected-list never does so itself.
+   Do not reuse an already monitored global connection Arc for a run. The actual
+   resolver currently copies refs into new connections; retain that behavior.
+
+3. Keep mcp_spawn_policy(server_override.unwrap_or(node_mode)) exactly. Existing
+   unit tests explicitly allow WorkspaceWrite override under a ReadOnly node and
+   deny ReadOnly override under FullAccess. This change is earlier application of
+   existing policy, not stricter privilege intersection. Build the configured
+   intersection before forwarding names so absent optional mcp_add names remain
+   legitimate when MCP is disabled. Library explicit unknown names remain errors.
+   Keep None versus Some([]) whitelist and deterministic tool/collision ordering.
+
+4. Cross-stage denial means no new catalog/routes/background work from the later
+   stage. It does not terminate the original child, revoke an already admitted
+   earlier operation, reset connection/restart state, or establish domain closure.
+   Preserve original registry/connection/observer/claim ownership; no per-stage
+   reconstruction/drop to make a no-probe assertion pass. Sequential stage tests
+   should observe the existing child's lifetime/identity and then independently
+   verify no probe/reconnect after death/timer ticks. Concurrent earlier admitted
+   operations retain their existing responsibility; do not invent global latest-
+   stage revocation semantics in this bounded fix.
+
+5. Removing monitors intentionally removes proactive reconnect for engine runs.
+   Keep existing synchronous ensure_connected/list/call behavior and restart
+   budgets. A dead service may produce the existing transport failure before a
+   later explicitly selected operation reconnects; do not add retries that hide
+   it or reset attempts. Test real selected reconnect failure/backoff/exhaustion,
+   then allowed success, and prove unselected servers remain untouched throughout.
+   Preserve single deadline across catalog pages and effective call timeout.
+
+6. Existing final HostWriterObserver checks must remain at physical spawn/init,
+   each page, and tool-send after waits. Selection is not durable run admission.
+   Keep caller cancellation ownership, neverpolled close, retained send, std child
+   transfer/Taken and terminal barrier invariants unchanged. Shutdown remains
+   cleanup-capable. No new Closed emitter, fake cleanup flag, NoChild inference or
+   native backend is authorized. A selected catalog canceled mid-initialize must
+   still retain/settle the original actual child through the existing owner.
+
+REQUIRED ACTUAL ORACLES BEFORE THIS SLICE CAN PASS
+
+- Allowed A + denied B + configured-unselected C: only A spawn/init/list; original
+  ordered transport/env/cwd and catalog pages/content retained. Manifest still
+  includes B/C and their exact policies; denial does not edit accepted inputs.
+- Unknown selection [valid-before-unknown] produces zero queries/spawns, even with
+  LegacyProactive construction; duplicates query selected A only once. Empty
+  selection no task/child/RPC, with poisoned configured servers present.
+- OnDemand catalog and call_tool(A) followed by real timer advance/death: no health
+  requests or C/B reconnect. Existing connections remain retained. Later denied
+  stage exposes no routes; later admitted selected A reconnect uses original state.
+- Legacy constructor all-tools/call positive control actually observes proactive
+  health tick/reconnect. A zero-recorder negative is insufficient without this.
+- Host override-wins and node fallback actual effects, exact whitelist/timeouts,
+  and the unowned global-fallback start/resume positive above.
+- Real owned Explicit(empty)/HostDefault(empty) initial and cold changed-default
+  counterfactuals remain unchanged, including no private namespace/key. Populated
+  initial transport denial regression runs via the real daemon owner.
+- Fixed-message assertions and captured public diagnostics must not print private
+  argv/env or raw recorder rows on failure; full privacy/owner/panic/shutdown gates
+  and independent frozen5a→5b stay open.
+
+Mandatory populated cold valid twin and full native/external authority are separate
+unresolved requirements. This scheduling slice can fix the genuine pre-catalog
+ReadOnly RED without claiming those are resolved. No tests were run here and no
+test result or conservative refusal is treated as completion of T25.

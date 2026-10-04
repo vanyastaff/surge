@@ -1,0 +1,49 @@
+T25 bounded catalog admission — focused independent critic re-review
+2026-10-04
+
+VERDICT: ACCEPTABLE for the revised bounded PLAN.
+The earlier metadata-source blocker and affected edit-map gap are resolved in
+the plan. No implementation or behavioral acceptance is inferred.
+
+Read FULL updated plan; verified SHA256
+3ecd83b2b6c4ff572053dce7367f09249b91133b04e92888521a6e62fbdc5255.
+Scope is ONLY the blocker/affected regressions from the preserved first report
+/tmp/surge-owned-flow-mcp-catalog-critic-review-20261004.txt. Actual source facts
+remain those recorded in that report; no mutable implementation diff was reviewed.
+This report is the only write; no source/tests/Cargo/Git/process action or polling.
+Not formal5a/5b; initial0/3 unchanged.
+
+The revised exact runtime source closes the identified gap:
+- BOTH start and resume derive p.mcp_servers from their newly resolved independent
+  per-run registry.configured_servers(), None->empty.
+- The divergent effective_run_mcp_servers(config) path is replaced, so a legacy
+  empty run config cannot leave a nonempty copied global registry without policy,
+  whitelist and timeout metadata.
+- Authenticated owned Empty is checked before global fallback; populated private
+  inputs remain authoritative. No default rediscovery, accepted startup/config/
+  manifest rewrite or shared global connection Arc is introduced.
+- engine/engine.rs shared resolver and BOTH parameter paths now appear explicitly
+  in the write map. Its shared OnDemand constructor covers private, explicit and
+  legacy global fallback paths; daemon doctor/probe retains legacy behavior.
+
+The added real unowned empty-config/global A+B counterfactual exercises the exact
+branch that could otherwise pass vacuously: graph exposes both, A actually queries
+and routes with configured whitelist/timeout, ReadOnly override B never executes.
+Start AND resume are required. Paired authenticated Empty/HostDefault(empty) with
+the same poisoned globals retains the important precedence negative. This is the
+correct regression shape; a standalone registry test or merely observing zero B
+without real A is insufficient.
+
+Implementation gates retained from the first report: selected-name ALL validation
+before any partial query or monitor start; selected catalog starts no monitors in
+either mode; immutable OnDemand across list_all_tools/call_tool/reconnect; no prior
+stage connection drop/reconstruction; actual unknown/empty/unselected/denied and
+allowed positives, real cross-stage death/timer and legacy proactive counterfactual;
+original restart budgets/page deadlines/call timeouts/final effect fences and
+canceled-child/transfer/privacy/shutdown regressions. Existing public authority
+interfaces and native/local/external settlement claims are unchanged.
+
+No additional blocker within this focused scope. Independent security lens and
+root authorization still apply before source writes. Actual corrected behavior,
+full populated cold valid twin, native/external authority and frozen final reviews
+remain open; this plan acceptance does not retire any of them.

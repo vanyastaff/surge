@@ -1,0 +1,20 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized] target(s) in 6.91s
+     Running tests/owned_flow_mcp_recovery.rs (target/debug/deps/owned_flow_mcp_recovery-694c79adf6187c78)
+
+running 1 test
+test explicit_empty_survives_real_cold_wake_and_changed_global_defaults ... 
+thread 'explicit_empty_survives_real_cold_wake_and_changed_global_defaults' (31412661) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:582:9:
+legacy child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpTkBo35/cold-host-stdout-LlJKxX; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpTkBo35/cold-host-stderr-q8wpfs
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpTkBo35
+FAILED
+
+failures:
+
+failures:
+    explicit_empty_survives_real_cold_wake_and_changed_global_defaults
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.13s
+
+error: test failed, to rerun pass `-p surge-daemon --test owned_flow_mcp_recovery`

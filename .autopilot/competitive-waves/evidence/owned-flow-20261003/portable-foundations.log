@@ -1,0 +1,20 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error[E0609]: no field `requirements` on type `surge_core::work_item::WorkItemRevision`
+    --> crates/surge-persistence/src/work_items.rs:1680:18
+     |
+1680 |                 .requirements
+     |                  ^^^^^^^^^^^^ unknown field
+     |
+     = note: available fields are: `revision`, `origin`, `hash`, `actor`, `accepted_proposal`, `accepted_at_ms`
+
+error[E0609]: no field `requirements` on type `surge_core::work_item::WorkItemRevision`
+    --> crates/surge-persistence/src/work_items.rs:1759:51
+     |
+1759 |             store.requirements(&attempt).unwrap().requirements.text(),
+     |                                                   ^^^^^^^^^^^^ unknown field
+     |
+     = note: available fields are: `revision`, `origin`, `hash`, `actor`, `accepted_proposal`, `accepted_at_ms`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `surge-persistence` (lib test) due to 2 previous errors

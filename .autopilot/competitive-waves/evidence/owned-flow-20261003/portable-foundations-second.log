@@ -1,0 +1,119 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+warning: associated items `acquire_private` and `require_private` are never used
+  --> crates/surge-persistence/src/work_items/start_preparation/secure_lock.rs:37:34
+   |
+30 | impl PreparationLock {
+   | -------------------- associated items in this implementation
+...
+37 |     pub(in crate::work_items) fn acquire_private(home: &Path, key: PreparationLockKey) -> Result<Self> {
+   |                                  ^^^^^^^^^^^^^^^
+...
+63 |     pub(in crate::work_items) fn require_private(&self) -> Result<()> {
+   |                                  ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `validate_private_acl` is never used
+  --> crates/surge-persistence/src/work_items/start_preparation/secure_lock.rs:90:30
+   |
+90 | pub(in crate::work_items) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
+   |                              ^^^^^^^^^^^^^^^^^^^^
+
+warning: field `base` is never read
+  --> crates/surge-persistence/src/work_items/owned_flow/source_snapshot.rs:12:5
+   |
+10 | pub(in crate::work_items) struct CapturedSource {
+   |                                  -------------- field in this struct
+11 |     graph: Graph,
+12 |     base: PathBuf,
+   |     ^^^^
+
+warning: method `base_path` is never used
+  --> crates/surge-persistence/src/work_items/owned_flow/source_snapshot.rs:20:34
+   |
+18 | impl CapturedSource {
+   | ------------------- method in this implementation
+19 |     pub(in crate::work_items) fn graph(&self) -> &Graph { &self.graph }
+20 |     pub(in crate::work_items) fn base_path(&self) -> &Path { &self.base }
+   |                                  ^^^^^^^^^
+
+warning: `surge-persistence` (lib test) generated 4 warnings
+    Finished `test` profile [unoptimized] target(s) in 13.99s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-6583b3b9d9509ce7)
+
+running 72 tests
+test work_items::owned_flow::source_snapshot::tests::captured_graph_is_original_and_replacement_invalidates_held_name ... ok
+test work_items::owned_flow::source_snapshot::tests::source_capture_rejects_escape_symlinks_fifo_and_oversize_without_following ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::automatic_wake_requires_current_confirmed_capacity_control_without_partial_writes ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::exact_resume_epoch_preserves_provider_and_confirms_fresh_internal_session_idempotently ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::authenticated_same_node_reentry_retains_a_newer_unadmitted_plan ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::fresh_skip_and_actual_exhaustion_park_with_the_real_provider_origin ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::automatic_wake_subscriber_ack_before_prompt_keeps_exact_authority ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::automatic_wake_atomically_reserves_continue_candidate_and_handoff ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_is_reservation_and_recipe_scoped_after_reopen ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::alternate_origin_replay_preserves_newer_available_without_open_authority ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::historical_exhaustion_without_admission_is_not_actionable ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::generic_false_probe_has_no_typed_origin_and_cannot_authorize_cleanup_stop ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::host_origin_reopens_and_replays_without_replacing_later_available_probe ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::newer_opening_without_quota_supersedes_exact_exhaustion ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_original_ttl_and_reset_each_bound_latest_probe ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::late_old_origin_is_audit_only_and_unrelated_recipes_do_not_supersede ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::next_frozen_candidate_requires_typed_origin_and_is_reserved_once_in_policy_order ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::one_opening_cannot_attach_a_conflicting_exhaustion_origin ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_unknown_probes_never_extend_typed_ttl_or_create_origin ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::planned_binding_retains_real_occurrence_and_first_open_is_one_shot ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::production_reservation_creates_one_opening_epoch_and_replay_cannot_spend_twice ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::resume_store_admission_is_spent_once_without_an_rpc ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::terminal_journal_cannot_spend_reserved_opening_admission ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::stopped_source_and_later_closed_cycle_cannot_create_a_typed_origin ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::two_store_restore_epochs_retain_provider_invocation_and_distinct_internal_sessions ... ok
+test work_items::recovery_cycles::handoffs::tests::deserialized_restore_cannot_infer_missing_saved_identity ... ok
+test work_items::recovery_cycles::policy::tests::frozen_candidates_reject_known_account_aliases_and_disabled_fallback ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_rejects_corrupted_original_or_latest_bounds ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::typed_origin_survives_unknown_probe_and_closed_source_for_nonwake_cleanup_stop ... ok
+test work_items::recovery_cycles::tests::bare_and_prefixed_invocation_share_one_cycle_namespace ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::unexecuted_cancellation_never_erases_historical_provider_uncertainty ... ok
+test work_items::recovery_cycles::tests::bounded_policy_checks_continue_after_sixteen_cycles ... ok
+test work_items::recovery_cycles::tests::deserialization_enforces_private_constructor_invariants ... ok
+test work_items::recovery_cycles::tests::cancelled_schedule_cannot_consume_retained_wake_audit ... ok
+test work_items::recovery_cycles::tests::concurrent_wake_consumption_creates_one_next_cycle ... ok
+test work_items::recovery_cycles::tests::placeholder_upgrade_preserves_nonactionable_audit_and_reapply ... ok
+test work_items::recovery_cycles::tests::known_accounts_deduplicate_and_unknown_accounts_do_not_guess_merges ... ok
+test work_items::recovery_cycles::tests::newer_available_and_unknown_preserve_observation_order ... ok
+test work_items::recovery_cycles::tests::reservation_and_unknown_evidence_survive_reopen_without_redispatch ... ok
+test work_items::recovery_cycles::tests::confirmed_capacity_rebind_preserves_receipts_but_manual_fence_rejects ... ok
+test work_items::start_preparation::secure_lock::tests::arc_retains_real_exclusion_until_last_effect_owner_exits ... ok
+test work_items::start_preparation::secure_lock::tests::preparation_lock_rejects_extended_acl_grants ... ok
+test work_items::start_preparation::secure_lock::tests::preparation_lock_rejects_foreign_or_writable_ancestry_and_unsafe_home_alias ... ok
+test work_items::start_preparation::secure_lock::tests::preparation_lock_rejects_symlink_fifo_links_permissions_and_parent_replacement ... ok
+test work_items::start_preparation::secure_lock::tests::typed_namespaces_hold_the_original_object_and_reject_replacement_after_death ... ok
+test work_items::recovery_cycles::tests::stale_revision_claim_and_manual_control_reject_mutations ... ok
+test work_items::recovery_cycles::tests::unknown_or_expired_evidence_cannot_arm_observed_reset ... ok
+test work_items::tests::cross_process_claim_probe ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::other_epoch_reused_internal_session_wrong_stage_and_stale_control_never_establish ... ok
+test work_items::recovery_cycles::tests::unknown_policy_wake_rolls_once_and_retains_history_across_reopen ... ok
+test work_items::tests::accepted_revision_is_immutable_and_replay_precedes_stale_cas ... ok
+test work_items::tests::active_attempt_blocks_acceptance_and_archive_but_allows_discussion ... ok
+test work_items::tests::interprocess_launch_lock_blocks_other_host_and_releases_on_exit ... ok
+test work_items::tests::preparation_owner_child ... ok
+test work_items::tests::live_start_preparation_refuses_generic_reservation ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_requires_original_and_latest_false_windows ... ok
+test work_items::tests::lock_fences_second_host_and_reacquire_invalidates_old_sql_claim ... ok
+test work_items::tests::old_terminal_settlement_cannot_release_new_attempt_and_workspace_is_retained ... ok
+test work_items::tests::shared_launch_owner_keeps_os_lock_until_last_clone_drops ... ok
+test work_items::tests::histories_have_stable_bounded_cursors_and_no_guess_backfill ... ok
+test work_items::tests::start_preparation_concurrent_exact_operation_has_one_attempt_and_receipt ... ok
+test work_items::tests::start_preparation_consumes_once_and_replay_does_no_filesystem_work ... ok
+test work_items::tests::start_preparation_dead_row_is_reclaimed_by_lifecycle_under_the_lock ... ok
+test work_items::tests::start_preparation_does_not_hold_registry_lock_while_external_work_is_blocked ... ok
+test work_items::tests::start_preparation_relocated_live_lock_never_proves_dead_ownership ... ok
+test work_items::tests::start_preparation_killed_owner_can_be_reclaimed_without_provider_authority ... ok
+test work_items::tests::start_preparation_lifecycle_busy_discussion_drift_and_drop_release ... ok
+test work_items::tests::suspension_intent_does_not_authorize_continue_without_confirmed_journal_fence ... ok
+test work_items::usage_tests::durable_usage_pages_are_charged_once_and_unknown_pricing_stays_unknown ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::malformed_or_advanced_plans_never_create_a_binding ... ok
+test work_items::recovery_cycles::handoffs::opening::tests::planned_park_rejects_advanced_journal_without_mutating_capacity_authority ... ok
+test work_items::tests::start_preparation_snapshot_drift_never_creates_an_attempt ... ok
+
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 394 filtered out; finished in 6.92s
+
