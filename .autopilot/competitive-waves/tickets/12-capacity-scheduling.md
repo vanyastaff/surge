@@ -405,6 +405,25 @@ hardening; it needs revalidation on the final source. Strict checks `47653` and
 remain author WIP until a new terminal gate confirms them. These targeted results
 do not retire the earlier full-workspace failure or constitute final 5a/5b review.
 
+The current author whole-workspace strict gate passed in `61236` (exit 0,
+all targets/all features, `-D warnings`), and current ACP/CLI fixture binaries
+rebuilt in `80731`. Canonical nextest `79688` then terminated exit 100:
+3451 tests ran, 3395 passed, 56 failed, 36 skipped, no timed-out tests, in
+147.481 seconds. Its log is
+`/tmp/surge-predispatch-author-repair3-workspace-20261003.log`.
+All 35 quota-route tests passed on this source, including the latest lock and
+actual pre-fingerprint boundaries. The global result remains RED.
+
+Of the 56 failures, 53 are copies of the new shared fixture's negative admission
+test: its storage setup rejects `SingleThreadedRuntime` before reaching the
+admission assertion. Two killed-Continue scenarios elapsed while waiting for
+`RunContinued` with a registry transaction held; cause and faithful repair remain
+under diagnosis. One skill-approval test failed to create a scheduled pool thread
+with OS error 35 (`WouldBlock`), rather than failing a skill assertion. Preserve
+these errors and verify resource-bounded full execution without skipping tests or
+weakening assertions. Source is still unfrozen author WIP within repair 3/3;
+neither final spec compliance nor independent code/security review has begun.
+
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
 Configured rotation on ordinary CLI/daemon flow launches must enter the same
