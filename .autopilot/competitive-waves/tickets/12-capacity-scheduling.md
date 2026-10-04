@@ -888,3 +888,19 @@ M3 выдумывать значение. Устаревание уже пред
 
 **Чем закрыть, если понадобится:** писать канонический рантайм в событие отказа так же,
 как это делает `RunParked`, — тогда атрибуция станет дешёвой и сужение можно снять.
+
+### Current ACP accounting discovery (2026-10-03)
+
+The read-only source inventory is retained in
+`../evidence/acp-usage-source-inventory-20261003.txt`. Root independently checked
+the production extraction/completion seams, installed schema and additive writer
+path. PromptResponse.usage is still discarded; occupancy is not spending.
+Schema 1.9.1 calls response usage per turn while its component docs say across
+session/all turns, so normalization needs an observed versioned adapter contract.
+The installed Claude cache is source evidence only, not actual launch identity.
+Typed SDK DefaultOnError also prevents missing/malformed optional usage from
+proving complete coverage. The inventory maps durable physical-turn receipts,
+unique receipt replay/conflicts and transactional deltas/coverage as the next
+required accounting dependency. It is discovery, not an accepted design, source
+implementation or execution proof. T25 remains the active build; no requirement
+or full T12 is closed.

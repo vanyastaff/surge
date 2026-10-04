@@ -1,0 +1,106 @@
+Read-only ACP accounting source inventory, 2026-10-03
+
+Source scout: acp_usage_scout. No code/tests/docs writes, Cargo commands, commits
+or process changes by the scout. Root independently read tokens.rs, prompt
+completion handling, additive engine event handling, installed schema Usage and
+UsageUpdate definitions, and run-writer transaction code. This is discovery for
+the next dependency, not a reviewed plan or implementation acceptance. T25 owned
+Flow remains the active initial build and sole Cargo owner is owned_flow_builder.
+
+Current production seams
+
+- crates/surge-acp/src/bridge/tokens.rs:22 always returns None. The comment
+  suggesting future spend deltas from context occupancy must not guide the fix.
+- crates/surge-acp/src/bridge/worker.rs:945 receives PromptResponse; :961 checks
+  stop_reason and discards usage. command.rs:33, facade.rs:44 and acp_bridge.rs:162
+  return Result<(), SendMessageError>, with no physical turn identity or receipt.
+- bridge/event.rs:55 and session_inner.rs:73 define cumulative u32 snapshots,
+  one cache bucket and a required model string.
+- crates/surge-orchestrator/src/engine/stage/agent.rs:2056 appends each snapshot
+  unchanged as TokensConsumed. No unique turn/source receipt or baseline exists.
+- surge-core run_event.rs:554 TokensConsumed is additive with u32 counters.
+  run_state.rs:701, run_report/mod.rs:502 and persistence runs/views.rs:151 add
+  each event. Repeated cumulative samples would be overcharged.
+- persistence work_items.rs:1044-1165 registry paging/CAS charges each journal
+  event once; it cannot deduplicate different events for the same provider receipt.
+- persistence runs/writer.rs:190-233 owns atomic event/view transactions, but
+  AppendBatch alone does not implement receipt uniqueness, conflicts or baselines.
+
+Installed primary schema
+
+Cargo.toml:37 enables unstable_end_turn_token_usage. Cargo.lock resolves ACP
+2.2.0 and schema 1.9.1. Local primary source is under
+/Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/agent-client-protocol-schema-1.9.1/.
+
+src/v1/agent.rs:3121,3155 describes PromptResponse usage as per turn, while
+:3207-3247 describes required u64 total/input/output fields as across session/all
+turns. Generic accumulation semantics therefore remain Unknown without a
+versioned provider contract. Optional thought/cache-read/cache-write buckets and
+the entire optional usage field use DefaultOnError; typed SDK data can collapse
+malformed input to None. Missing/malformed data cannot establish complete coverage.
+
+src/v1/client.rs:609-617 defines used as tokens currently in context, size as
+context-window capacity, cost as cumulative session cost. Neither occupancy nor
+window size is spending or account quota. Cost has f64 amount and explicit ISO
+currency (:669-673); do not infer USD, model pricing, or token coverage from it.
+
+Adapter evidence (scout inspected installed distributed implementation)
+
+Claude cache /Users/vanyastafford/.npm/_npx/1dc75ec3ac70fd95/node_modules/@zed-industries/claude-agent-acp/
+identifies 0.23.1, ACP JS SDK 0.17.0, Claude SDK 0.2.83. dist/acp-agent.js:221-233
+resets accumulatedUsage per prompt; :338-342 independently adds input/output and
+cache read/write; :366-373 may consume a preceding background result before this
+prompt result; :1110-1118 emits summed response usage. Cancellation :363-366 omits
+usage after prior accumulation, and :387-388 throws on errors. Occupancy/cost
+notifications :346-359 do not prove the same monetary processing window. Candidate
+contract is a versioned reported processing window, not complete request-only
+spending. Cache metadata does NOT prove the actually launched adapter identity.
+
+Codex cached package identifies 0.16.0 but is a native-binary launcher. Scout did
+not inspect its Rust prompt source, so no independent response-usage claim is
+made. Builtin launches remain unpinned (worker.rs:1485-1488, npx codex-acp);
+launch hash or npx cache presence alone does not establish a usage contract.
+
+Next design/build acceptance to preserve
+
+1. Host physical TurnId durably recorded and awaited BEFORE each actual RPC,
+   including initial and feedback dispatch (stage/agent.rs:1297,1333). Bind run,
+   node occurrence, host/provider session identity, opening occurrence and source
+   contract/version. Resume/wake creates new physical turns even for equal text.
+2. Carry turn identity through bridge commands and return typed completion
+   receipts. Broadcast delivery cannot be the only reliable path (worker.rs:87
+   ignores send failure); lifecycle.rs:168-170 may drop the completion future.
+3. A dedicated run-writer transaction inserts a receipt under unique(turn,source),
+   compares exact replay, rejects conflicting replay atomically, computes only
+   contracted deltas, updates baseline/coverage, and appends accounting event/view
+   changes together. Registry paging must conserve these normalized deltas.
+4. Keep independent u64 buckets and reported total, nullable model/currency.
+   SQLite INTEGER cannot losslessly store every u64: specify representation and
+   checked aggregate overflow. No guessed subset sum or price estimate.
+5. Loaded cumulative sessions require a trusted prior baseline. Missing usage,
+   failed/cancelled/unobserved turns, counter decline, contract/version changes
+   and unknown semantics preserve incomplete coverage. Token coverage and pricing
+   coverage must remain separate; usage_seq > 0 does not prove completeness.
+6. Keep legacy TokensConsumed decoding/meaning and existing hashed JSON bytes.
+   Add versioned accounting variants/receipt hashes; do not rewrite historical
+   append-only blobs. Current event schema version is 14. Requirements hash uses
+   serde_json::to_vec, so new defaults in old hashed structures require goldens.
+7. Triage/project-context prompt callers need an explicit accounting scope, not
+   silently complete task-ledger coverage.
+
+Executable oracles required before acceptance
+
+Per-turn 100/300/50 and cumulative 100/400/450 normalize to 450. Exact duplicate
+and restart replay add zero; conflicting receipt leaves the transaction unchanged.
+Cover new session, trusted/missing loaded baseline, wake/reconnect, decline,
+source change, missing/error/cancel race/lost completion, occupancy-only updates,
+non-USD cost separation, wide counters and independent cache/thought buckets.
+Actual mock subprocess response must yield required nonzero bridge accounting:
+bridge_token_tracking.rs:67-96 is currently vacuous if no usage event occurs.
+Existing synthetic TokensConsumed pages and injected scheduling budget fixtures
+do not prove production ACP spending. Actual adapter/version proof stays required.
+
+No gates were run by this scout. Next unit still needs observable outer RED,
+owning maintainer/pre-code adversarial review, authorization within goal scope,
+builder execution under the sole Cargo lane, project gates and independent 5a
+then 5b. Neither current unit nor full goal is completed by this inventory.
