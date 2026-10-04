@@ -1,0 +1,33 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized] target(s) in 17.49s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-c91195b7b9d1880a)
+
+running 1 test
+test work_items::owned_flow::refusal_owner::tests::actual_shutdown_and_creation_barriers_in_isolated_processes ... 
+running 1 test
+test work_items::owned_flow::refusal_owner::tests::lifecycle_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.09s
+
+
+running 1 test
+test work_items::owned_flow::refusal_owner::tests::lifecycle_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.27s
+
+
+running 1 test
+test work_items::owned_flow::refusal_owner::tests::lifecycle_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.59s
+
+
+running 1 test
+test work_items::owned_flow::refusal_owner::tests::lifecycle_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.10s
+
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 1.12s
+

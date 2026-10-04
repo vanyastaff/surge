@@ -345,7 +345,12 @@ mod tests {
     use crate::runs::Storage;
     use surge_core::{EventPayload as E, VersionedEventPayload as V};
 
-    async fn storage_wake_fixture() -> (tempfile::TempDir, Arc<Storage>, OwnedFlowReceipt) {
+    async fn storage_wake_fixture() -> (
+        tempfile::TempDir,
+        Arc<Storage>,
+        OwnedFlowReceipt,
+        std::path::PathBuf,
+    ) {
         let home = tempfile::tempdir().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
@@ -406,6 +411,7 @@ mod tests {
             )
             .await
             .unwrap();
+        let artifact_path = artifact.path.clone();
         writer
             .append_event(V::new(E::ArtifactProduced {
                 node: accepted.source.contract.graph().start.clone(),
@@ -468,11 +474,11 @@ mod tests {
             .unwrap();
         storage.set_run_parked(&receipt.run, 100).await.unwrap();
         drop(claim);
-        (home, storage, receipt)
+        (home, storage, receipt, artifact_path)
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn production_entry_waits_ready_before_transaction_then_observes_real_newer_stop() {
-        let (_home, storage, receipt) = storage_wake_fixture().await;
+        let (_home, storage, receipt, _artifact) = storage_wake_fixture().await;
         let store = storage.work_items();
         let allowed = store.claim_owned_flow_quota_wake(receipt.run, 100).unwrap();
         assert!(matches!(allowed, OwnedFlowWakeAdmission::Ready(_)));
@@ -525,5 +531,106 @@ mod tests {
         assert_eq!(token, before);
         assert_eq!(receipts, 0);
         assert_eq!(newest.state, ControlState::SuspendRequested);
+    }
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn production_startup_artifact_io_cannot_hold_registry_transaction_against_newer_stop() {
+        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        let (_home, storage, receipt, artifact) = storage_wake_fixture().await;
+        let store = storage.work_items();
+        let allowed = store.claim_owned_flow_quota_wake(receipt.run, 100).unwrap();
+        assert!(matches!(allowed, OwnedFlowWakeAdmission::Ready(_)));
+        drop(allowed);
+        let token: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                [receipt.run.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let bytes = std::fs::read(&artifact).unwrap();
+        let saved = artifact.with_extension("original-retained");
+        std::fs::rename(&artifact, &saved).unwrap();
+        nix::unistd::mkfifo(
+            &artifact,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let reading_store = store.clone();
+        let reading =
+            std::thread::spawn(move || reading_store.claim_owned_flow_quota_wake(receipt.run, 100));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        // A nonblocking writer can open only after the real filesystem reader arrived.
+        let mut writer = loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(nix::libc::O_NONBLOCK)
+                .open(&artifact)
+            {
+                Ok(writer) => break writer,
+                Err(error) if error.raw_os_error() == Some(nix::libc::ENXIO) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "production preflight never reached actual artifact IO"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                },
+                Err(error) => panic!("fixture artifact writer failed: {error}"),
+            }
+        };
+        let command = WorkItemCommand::Suspend {
+            operation_id: surge_core::id::WorkItemOperationId::new(),
+            item: receipt.item,
+            expected_version: store.show(receipt.item).unwrap().item.version,
+        };
+        let stopping_store = store.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let stopping = std::thread::spawn(move || {
+            let result =
+                stopping_store.mutate(&command, None, None, "stop-during-real-artifact-io", 200);
+            send.send(result).unwrap();
+        });
+        // Release IO even if the assertion would fail, then join both actual operations.
+        let committed_without_io = receive
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .ok();
+        writer.write_all(&bytes).unwrap();
+        drop(writer);
+        let admission = reading.join().unwrap().unwrap();
+        stopping.join().unwrap();
+        std::fs::remove_file(&artifact).unwrap();
+        std::fs::rename(saved, artifact).unwrap();
+        assert!(
+            committed_without_io.is_some_and(|result| result.is_ok()),
+            "original startup IO held a registry write transaction against operator Stop"
+        );
+        assert!(matches!(admission, OwnedFlowWakeAdmission::Obsolete));
+        let current: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                [receipt.run.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let rows: u64 = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(current, token);
+        assert_eq!(rows, 0);
+        assert_eq!(
+            store.execution_control(receipt.run).unwrap().unwrap().state,
+            ControlState::SuspendRequested
+        );
     }
 }

@@ -622,17 +622,214 @@ mod tests {
         )
         .unwrap();
     }
+    fn ambiguous_lookup_unavailable_retains_until_actual_absence() {
+        let (home, storage, _runtime) = owned_fixture();
+        let store = storage.work_items();
+        let (receipt, claim) =
+            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+        let token: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                [receipt.run.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let guard = original_guard(&claim);
+        drop(claim);
+        // Isolated damaged-storage model: querying the exact table really fails,
+        // rather than returning a made-up None or intercepting production reads.
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "ALTER TABLE owned_flow_wake_refusals RENAME TO unavailable_refusals",
+                [],
+            )
+            .unwrap();
+        let prepared = PreparedRefusal::reserve(guard, resources(&storage), receipt.run).unwrap();
+        let absent = surge_core::work_item::OwnedFlowWakeRefusalReceipt::new(
+            receipt.run,
+            receipt.operation_id,
+            receipt.binding.clone(),
+            surge_core::work_item::OwnedFlowWakeLineage {
+                invocation: surge_core::id::StageInvocationId::new(),
+                control_generation: 1,
+                cycle_generation: 1,
+                source_revision: 1,
+                wake_identity: "uncommitted-observed-wake".into(),
+            },
+            surge_core::work_item::OwnedFlowWakeRefusalReason::InputsAssociationMismatch,
+        )
+        .unwrap()
+        .hash()
+        .unwrap();
+        prepared.publish(absent, absent, true);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let actual_lookup_failed = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .is_err();
+        close_admission();
+        let (send, receive) = std::sync::mpsc::channel();
+        let joining = std::thread::spawn(move || {
+            join_all();
+            send.send(()).unwrap();
+        });
+        let entered = wait_for(|| *lock(&JOINING.0));
+        let premature = receive
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_ok();
+        let original_excluded =
+            matches!(PreparationLock::acquire_stable(home.path(),
+            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                operation: receipt.operation_id, run: receipt.run,
+            }), Err(WorkItemError::Busy));
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "ALTER TABLE unavailable_refusals RENAME TO owned_flow_wake_refusals",
+                [],
+            )
+            .unwrap();
+        assert!(
+            receive
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .is_ok()
+        );
+        joining.join().unwrap();
+        let current_token: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                [receipt.run.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(current_token, token);
+        assert!(actual_lookup_failed);
+        assert!(entered);
+        assert!(
+            !premature,
+            "unavailable receipt lookup was treated as confirmed absence"
+        );
+        assert!(original_excluded);
+        assert!(lock(registry()).entries.is_empty());
+        let _released = PreparationLock::acquire_stable(
+            home.path(),
+            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                operation: receipt.operation_id,
+                run: receipt.run,
+            },
+        )
+        .unwrap();
+    }
+
+    fn ninth_live_reservation_is_busy_without_refusal_mutation() {
+        let (home_a, storage_a, _runtime_a) = owned_fixture();
+        let (home, storage, _runtime) = owned_fixture();
+        let store = storage.work_items();
+        let mut reservations = Vec::new();
+        for index in 0..8 {
+            let (selected_home, selected_storage) = if index % 2 == 0 {
+                (&home_a, &storage_a)
+            } else {
+                (&home, &storage)
+            };
+            let (receipt, claim) = super::super::tests::accepted(
+                &selected_storage.work_items(),
+                selected_home.path(),
+                WorkItemOperationId::new(),
+            );
+            let prepared = PreparedRefusal::reserve(
+                original_guard(&claim),
+                resources(selected_storage),
+                receipt.run,
+            )
+            .unwrap();
+            drop(claim);
+            reservations.push(prepared);
+        }
+        let (receipt, claim) =
+            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+        let token: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                [receipt.run.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ninth_busy = matches!(
+            PreparedRefusal::reserve(original_guard(&claim), resources(&storage), receipt.run),
+            Err(WorkItemError::Busy)
+        );
+        let current: String = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                [receipt.run.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let rows: u64 = store
+            .pool
+            .get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let rows_a: u64 = storage_a
+            .work_items()
+            .pool
+            .get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let actual_live = lock(registry()).entries.len();
+        drop(claim);
+        drop(reservations); // Each unused reservation aborts and joins its actual worker.
+        close_admission();
+        join_all();
+        assert!(ninth_busy);
+        assert_eq!(actual_live, 8);
+        assert_eq!(current, token);
+        assert_eq!(rows, 0);
+        assert_eq!(rows_a, 0);
+        assert!(lock(registry()).entries.is_empty());
+    }
+
     #[test]
     fn lifecycle_probe() {
         match std::env::var("SURGE_REFUSAL_LIFECYCLE_PROBE").as_deref() {
             Ok("closed") => closed_admission_does_not_wait_behind_pending_join(),
             Ok("creation") => registered_creation_is_counted_until_actual_handle_and_resolution(),
+            Ok("unknown") => ambiguous_lookup_unavailable_retains_until_actual_absence(),
+            Ok("capacity") => ninth_live_reservation_is_busy_without_refusal_mutation(),
             _ => {},
         }
     }
     #[test]
     fn actual_shutdown_and_creation_barriers_in_isolated_processes() {
-        for case in ["closed", "creation"] {
+        for case in ["closed", "creation", "unknown", "capacity"] {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",

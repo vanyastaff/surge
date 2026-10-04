@@ -19,7 +19,7 @@ state. The active objective still includes every interview requirement.
 | Persistent task | 3A accepted: immutable requirements, task discussion/history, ordered attempts, PR association and retained workspace ownership | Full lifecycle integration with resumable execution and cleanup choices |
 | Stop, Continue and provider limits | ACP session recovery, durable controls/decisions, candidate cycles and A→B fallback implemented with focused actual mock-ACP wire and restart tests; configured task-owned pre-dispatch accepted in `95c5295` | Full phase acceptance; ordinary Flow ownership, complete child-process settlement, remaining quota/accounting and recovery cases |
 | Desktop task experience | Create/discuss/edit and acknowledgement/currentness fixes implemented; isolated native Computer Use checks recorded on 2026-10-01 | Current-build end-to-end Flow/worktree controls, resume/archive/cleanup and full UX verification |
-| Ordinary Flow recovery — current worktree | Wake refusal enters lasting Attention; original lease survives caller exit; actual event-before-ACK host crash reuses the existing event without duplicate work. Missing-journal recovery after actual test-host runtime consumption passes its paired fault test | Remaining fault/control cases, current full strict checks and independent final acceptance. Local WIP source checkpoint `b622bd4` preserves these changes; the increment is not released or fully accepted |
+| Ordinary Flow recovery — current worktree | Wake refusal enters lasting Attention; original lease survives caller exit; actual event-before-ACK host crash reuses the existing event without duplicate work. Missing-journal recovery after actual test-host runtime consumption passes its paired fault test. Checkpoint `b622bd4` passes workspace strict clippy and formatting; the five-crate foundation suite passes 1830 tests with 8 inherited skips | Remaining fault/control cases, full workspace tests and independent final acceptance. The source checkpoint is local WIP; the increment is not released or fully accepted |
 | Orchestrator and PR review loop | Existing workflow and GitHub merge surfaces provide foundations | Full interview-defined stages/policies, multi-provider planning U01, durable human/bot inline repair and re-review, CI/spec/evidence-based merge decisions |
 | Result and notifications | Existing run reports, inbox and delivery mechanisms provide foundations | One task-level spec/evidence/readiness result; app and connected Telegram decisions throughout the full path |
 
@@ -29,7 +29,7 @@ provider interoperability or complete desktop-product acceptance. Native backend
 planning is underway; implementation and actual platform positives remain open.
 
 The current Flow recovery/ownership implementation is preserved in local WIP
-source commit `b622bd4`; current full-suite and remaining fault/review acceptance
+source commit `b622bd4`; full workspace tests and remaining fault/review acceptance
 are the next milestone. Then execution settlement and quota recovery must
 reach full acceptance before the remaining orchestrator/PR loop and product flows
 can be called complete. Documentation and raw-test evidence commits are not
@@ -83,10 +83,11 @@ Implement phases 1 → 2 → 3 → 4 → 5; develop readiness after task and ver
 contracts settle. Establish baseline acceptance rate, human interventions,
 accepted-task cost, waiting time and false completions before setting targets.
 
-## Current acceptance checkpoint (2026-10-01)
+## Historical acceptance checkpoint (2026-10-01)
 
-This checkpoint summarizes the latest verified state; detailed notes below are
-chronological evidence, not additional completion claims.
+This checkpoint records the state on that date. The product progress table above
+supersedes its remaining-work descriptions, including the old quota fallback RED.
+Detailed notes below are chronological evidence, not additional completion claims.
 
 | Requirement | Current evidence | Remaining acceptance |
 |---|---|---|
