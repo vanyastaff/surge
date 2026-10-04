@@ -1,0 +1,153 @@
+T25 concrete StageB — independent harsh-critic PRECODE review
+2026-10-04
+
+VERDICT: RESHAPE NEEDED. Concrete seams are much stronger; three contracts below
+still need a bounded rewrite before A+B source authorization.
+
+Read COMPLETE 368-line plan; verified SHA256
+2fe0fd3fabff859c6aa12ff3c22a54a15cf388c9b4363c3051e589aa840f2179.
+Reviewed against accepted foundation/no-dispatch objects and actual pinned rmcp1.6
+service/bootstrap/handle/ID/internal-reply/drain paths, ACP2.2 synchronous enqueue/
+SentRequest cancellation, MCP tracker/worker/parcel and ACP wait/group cleanup.
+This report is the only write; no source/tests/Cargo/Git/build/process action or
+polling. Not implementation/native certification or frozen5a/5b; initial0/3 unchanged.
+
+AGREEMENTS
+
+Prepared rmcp queue permits consumed synchronously AFTER waits provide a real
+enqueue boundary; bootstrap/initialized/internal replies/drain must be in the same
+patch. ACP synchronous send_request followed by retained local SentRequest and ID
+latch does not require an unnecessary ACP dependency patch. Non-Send SDK handles
+stay local; original claim/correlation/raw captures survive in std ownership.
+Original-FD nonblocking write with a fresh current gate after poll, immutable frame
+cursor and immediate partial-Stop close is a valid scoped physical seam. Typed
+single-message/CRLF/EOF compatibility and arrays rejected reflect actual rmcp model;
+no Batch assumption remains. Protocol results remain delivery data, not domain or
+external terminal proof. Final modified vendor-tree hash is a postwrite freeze
+requirement, not a fabricated prewrite checksum or extra user-approval demand.
+
+BLOCKERS
+
+R1. Capacity/cleanup accounting is not yet a coherent backed progress contract.
+
+The declared MCP maximum is8MiB, incoming per-run budget16MiB, separately budgeted
+lookahead BEFORE read and maximum response reservation BEFORE enqueue. After A
+initializes, its retained lookahead reserves8MiB. B requires another8MiB lookahead
+and8MiB response reservation, totaling24MiB. A valid stage selecting two allowed
+MCP servers with tiny catalogs cannot initialize/use both under that literal lease
+model. Once two lookaheads occupy16MiB, no ordinary response reservation fits.
+This is not merely large actual outputs reducing concurrency: every reply reserves
+the maximum regardless of its eventual tiny size. Unless charges deliberately
+share/transfer, the common multi-server positive is unavailable by construction.
+
+Also32 normal+4 cleanup per-connection caps do not reserve global1024 slots or byte
+budget for cleanup. 'Reserve cleanup capacity before Stop' needs an actual earlier
+allocation rule: normal/host/projection entries can fill global/per-run budgets
+before Stop begins. Unknown full-capacity lookahead stopping reads can put legitimate
+cancel/result frames behind it; the cleanup count lane alone does not unblock input.
+
+Required reshape: provide exact lease ownership/acquisition/release/transfer graph
+for connection lookahead, expected reply, incoming callback, unknown input, outgoing
+frame, typed-result handoff and cleanup. Choose backed partitioned cleanup lanes
+reserved at connection registration, or another concrete bounded scheme that normal
+traffic cannot consume. Distinguish count versus byte capacity; account for maximum
+string IDs echoed in denial/error replies, not only small numeric IDs. Explain how
+unknown input at full capacity transitions to bounded Attention/close without
+waiting forever for a frame it prevents reading; closing is not fake settlement.
+Change budgets or avoid double charging through reviewed token transfer so at least
+two allowed MCP servers can perform real sequential/concurrent catalog/call positives.
+Document the actual effective concurrency, not only upper caps. Keep8MiB as explicit
+compatibility delta, zero truncation and no live-owner eviction.
+
+Required actual tests: two allowed tiny-catalog servers; callbacks while a request
+is pending; per-run/global slot and byte saturation THEN Stop/cancel; unknown frame
+before legitimate response; large string-ID denial; required-result retention under
+disk-full; repeated durable release while native/external debt stays open.
+
+R2. Internal reply/result capture must precede the capacity wait, not just enqueue.
+
+Actual rmcp service.rs:963–979 awaits handler result, builds response, then awaits
+sink.send. The patch proposes PreparedSinkReply holding an owned sink permit, and
+the adapter receives it AFTER capacity wait. That does not specify who retains the
+produced result while reserve_owned is pending. A Tokio handler task can be canceled
+or the runtime destroyed there. Pre-registering incoming request/reply origin keeps
+debt, but does not retain the actual generated reply/result. Existing incoming raw
+capture stores the peer request, not this newly generated local response.
+
+Required reshape: synchronously place/serialize produced reply into its previously
+reserved registered outer response slot BEFORE the first sink-capacity await. Then
+prepare capacity and gate enqueue against that retained slot; a local task is never
+the sole response owner during prepare. Pin bootstrap expect_response callbacks,
+handler success/error, ToSink and drain to the same ordering. If generic SDK result
+is non-Send, serialize into bounded immutable bytes in the protected local seam and
+acknowledge transfer before awaiting; no pretending the typed handle became Send.
+PreparedSinkReply should carry constrained slot association/permit, not the sole
+result value across a cancelable wait. Preserve the generated result or durable
+approved terminal receipt; digest-only delivery metadata cannot replace needed
+content. Capture/durable projection and caller notification remain separate.
+
+Test handler result ready -> full sink -> destroy runtime BEFORE preparation
+completes; original result slot/claim remains, second host excluded until protocol(b),
+no unregistered fallback reply and no false operation completion. Test bootstrap,
+ordinary errors and drain independently. No native/domain proof is issued here.
+
+R3. Minimal process-leaf move still lacks its concrete dependency-free retention
+    and closed cleanup-profile API.
+
+Current tracker/worker use super::ChildParcel/ChildSlot; ChildParcel owns
+Option<Arc<dyn surge_mcp::HostWriterObserver>>, and Completion owns Tokio Notify.
+Moving files cannot directly yield the proposed no-MCP/no-Tokio leaf. Waker/Condvar
+replacement is named, but the owner-retention token/sink and consumer-to-leaf type
+map are not. A leaf importing the existing MCP trait creates the prohibited cycle;
+a public arbitrary wait/kill implementation would violate the closed owner profile.
+
+Moreover MCP worker is at-most-one DIRECT leader kill, never further kill after
+wait ambiguity. ACP lifecycle.rs:215–231 retries group kill after wait errors, and
+worker.rs:688ff kills group then leader. 'Move shared worker' AND 'keep same group
+cleanup policy' cannot be implemented by copying either algorithm unchanged.
+
+Required reshape: define minimal concrete leaf API/types for opaque keepalive
+retention, original std Child/pipe parcel, result/status sink and completion waiters.
+Show legacy HostWriterObserver and owned coordinator registration each retain the
+SAME underlying claim through a neutral token without a consumer dependency or
+caller-created closure proof. Use sealed built-in cleanup profiles: direct MCP
+leader policy versus reviewed ACP/shell group policy, one sole std child waiter.
+Pin group identity validity, at-most-once signaling and wait ambiguity behavior;
+do not preserve repeated possibly stale numeric group kill merely as compatibility.
+No silent second kill owner in ACP lifecycle. Preserve real launcher-descendant
+cleanup regression and unowned MCP direct-child6a–6d tests separately. List public
+exports/compatibility delegates and exact moved tests; no duplicate parser/hook.
+
+ADVISORIES / DELIVERY GATES
+
+- One IO thread's poll50ms/chunk fairness is conditional on its blocking registry
+  gate. Pin finite pool/busy timeout/error policy, prohibit global slot/transfer
+  locks across SQLite waits, and test DB contention while another connection has
+  incoming results/control/Stop. No synchronous coordinator-to-IO wait may require
+  that blocked IO thread to free a resource needed by the current DB command.
+- Bound decoded/typed retained values as well as raw buffers where they survive
+  raw release. JSON AST/SDK queue ownership can consume substantially more than
+  raw byte caps. Identify each bridge-local handle/result table and its Drop/runtime-
+  loss handoff; response-byte release must not leave uncapped copied typed payloads.
+- Keep exact checked request/progress allocation, bootstrap provider continuity,
+  numeric/string namespaces and incarnation binding. Unknown/colliding frames never
+  attach to last active request. SDK automatic cancellation remains unmatched/refused
+  unless an explicit registered cleanup occurrence exists; its loss leaves debt.
+- Vendor patch default legacy APIs/features must keep their existing result types
+  and behavior; public new generic adapter lifetimes need actual compile/API review.
+  Preserve upstream notices/build files/lock closure, exact baseline hashes and
+  postwrite modified-tree manifest. No registry-source edits or unpinned updates.
+- Prepared/frame/slot Debug and failure assertions must remain opaque; do not expose
+  raw protocol/command/env through request values, SDK internal reply logging or
+  serde errors. Existing dependency-tracing veto and shared silent panic tests stay.
+- Windows owned physical path Unsupported-before-effects is an explicit incomplete
+  capability, not portable acceptance. Existing legacy path stays. Broad native/
+  external closure and productive arbitrary ACP/MCP cold restoration remain C/D;
+  no leader exit/EOF/delivery proof makes those positives green in A+B.
+
+These reshapes do not require OS installation or full native factory implementation.
+They require concrete owner/lease/API rules before the tactical vendor/new-crate
+source closure. Keep accepted foundation/no-dispatch algorithms and all original
+productive tests. After revised precode acceptance, main alone establishes genuine
+physical REDs, implements and runs scoped/full gates; frozen5a then5b follow actual
+source freeze. This review neither authorizes source nor consumes a formal repair.

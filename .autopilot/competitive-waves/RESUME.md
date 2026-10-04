@@ -1,3 +1,20 @@
+# Authoritative focused review checkpoint 2026-10-04
+
+Root FULLread B critic2fe0fd RESHAPE, complete report retained. Owning architect
+preparing coherent revised plan: two-server lease graph/backed cleanup/global byte
+capacity; generated internal replies retained BEFORE sink-capacity wait; neutral
+process leaf API and sealed direct/group cleanup without stale repeated kills.
+Security cleanup frozen membership and downstream SDK delivery leases also required.
+No A/B source permission. Wake proposal amended d90b34 FULLread: immutable receipt
+separate mutable ACK, precommit same-guard std owner handoff, independent journal
+authority validation. Concrete runtime-independent worker/append/terminaljoin API
+remains prerequisite; critic reviewing. Genuine once-tick33168 RED retained.
+Strict78458/64346 terminal101; no suppression, fixture-only refactors. Eighth34870
+live at author receipt; no root handle polling or staging live logs. All source
+ownership main. Fullgoal active, formal0/3, requirements/native/5a/5b remain open.
+
+Earlier checkpoints below are history and superseded where contradictory.
+
 # Authoritative checkpoint: concrete B review and lasting-state RED 2026-10-04
 
 T25 initial formal0/3; all source/process ownership remains owned_flow_builder.
