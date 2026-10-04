@@ -1,0 +1,18 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Finished `test` profile [unoptimized] target(s) in 30.31s
+     Running unittests src/lib.rs (target/debug/deps/surge_core-b77fa62503119e4b)
+
+running 10 tests
+test work_item::tests::flow_contract_rejects_nonfinite_graph_payload_before_acceptance ... ok
+test migrations::work_item_golden::prior_event_and_bound_attempt_have_explicit_version_gate ... ok
+test work_item::tests::legacy_requirements_bytes_and_hash_remain_golden ... ok
+test work_item::tests::legacy_context_bytes_remain_golden ... ok
+test work_item::tests::legacy_revision_bytes_remain_golden_and_hash_is_validated ... ok
+test work_item::tests::flow_deserialization_rejects_forged_graph_hash_and_oversized_prompt ... ok
+test work_item::tests::flow_prompt_bound_measures_exact_utf8_bytes ... ok
+test work_item::tests::flow_contract_hash_authenticates_domain_graph_and_exact_prompt ... ok
+test work_item::tests::context_rejects_mixed_origin_forged_binding_and_invalid_graph ... ok
+test work_item::tests::flow_context_preserves_empty_whitespace_and_raw_prompt ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 806 filtered out; finished in 0.02s
+

@@ -1,0 +1,49 @@
+   Compiling nix v0.29.0
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+warning: associated items `acquire_private` and `require_private` are never used
+  --> crates/surge-persistence/src/work_items/start_preparation/secure_lock.rs:37:34
+   |
+30 | impl PreparationLock {
+   | -------------------- associated items in this implementation
+...
+37 |     pub(in crate::work_items) fn acquire_private(home: &Path, key: PreparationLockKey) -> Result<Self> {
+   |                                  ^^^^^^^^^^^^^^^
+...
+63 |     pub(in crate::work_items) fn require_private(&self) -> Result<()> {
+   |                                  ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `base` is never read
+  --> crates/surge-persistence/src/work_items/owned_flow/source_snapshot.rs:12:5
+   |
+10 | pub(in crate::work_items) struct CapturedSource {
+   |                                  -------------- field in this struct
+11 |     graph: Graph,
+12 |     base: PathBuf,
+   |     ^^^^
+
+warning: method `base_path` is never used
+  --> crates/surge-persistence/src/work_items/owned_flow/source_snapshot.rs:20:34
+   |
+18 | impl CapturedSource {
+   | ------------------- method in this implementation
+19 |     pub(in crate::work_items) fn graph(&self) -> &Graph { &self.graph }
+20 |     pub(in crate::work_items) fn base_path(&self) -> &Path { &self.base }
+   |                                  ^^^^^^^^^
+
+warning: `surge-persistence` (lib test) generated 3 warnings
+    Finished `test` profile [unoptimized] target(s) in 16.66s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-398c17c63c22ea95)
+
+running 7 tests
+test work_items::owned_flow::private_inputs::tests::empty_snapshots_never_open_private_namespace_and_keep_selection ... ok
+test work_items::owned_flow::source_snapshot::tests::captured_graph_is_original_and_replacement_invalidates_held_name ... ok
+test work_items::owned_flow::source_snapshot::tests::source_capture_rejects_escape_symlinks_fifo_and_oversize_without_following ... ok
+test work_items::owned_flow::private_files::tests::private_namespace_and_objects_reject_symlinks_hardlinks_and_replacement ... ok
+test work_items::owned_flow::private_files::tests::repeated_empty_checks_and_immutable_publication_use_real_fixed_names ... ok
+test work_items::owned_flow::private_inputs::tests::partial_list_and_object_transplants_fail_whole_envelope_authentication ... ok
+test work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.17s
+

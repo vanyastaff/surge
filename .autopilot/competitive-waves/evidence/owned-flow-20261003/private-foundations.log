@@ -1,0 +1,26 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+error[E0433]: cannot find `dir` in `nix`
+   --> crates/surge-persistence/src/work_items/owned_flow/private_files.rs:131:38
+    |
+131 |             let mut directory = nix::dir::Dir::from_fd(duplicate).map_err(|_| unsafe_location())?;
+    |                                      ^^^ could not find `dir` in `nix`
+    |
+note: found an item that was configured out
+   --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.29.0/src/lib.rs:107:13
+    |
+106 |     #![feature = "dir"]
+    |        --------------- the item is gated behind the `dir` feature
+107 |     pub mod dir;
+    |             ^^^
+
+warning: use of deprecated associated constant `nix::unistd::<impl nix::fcntl::AtFlags>::NoSymlinkFollow`: The variant is deprecated, please use `AtFlags` instead
+   --> crates/surge-persistence/src/work_items/owned_flow/private_files.rs:114:157
+    |
+114 | ...arent.as_raw_fd()), final_name.as_c_str(), LinkatFlags::NoSymlinkFollow) {
+    |                                                            ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+For more information about this error, try `rustc --explain E0433`.
+warning: `surge-persistence` (lib test) generated 1 warning
+error: could not compile `surge-persistence` (lib test) due to 1 previous error; 1 warning emitted

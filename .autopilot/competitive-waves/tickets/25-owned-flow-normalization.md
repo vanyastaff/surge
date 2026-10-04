@@ -97,3 +97,18 @@ Root independently read `portable-foundations-second.log`: session 79350 ended
 exit 0 with 72 work-item tests passing. The first log retains two stale test
 field-access compiler failures. These Unix foundation results do not establish
 outer durable owned-flow execution or Windows runtime behavior.
+
+Private input foundations: session 45151 terminated exit 0 with seven selected
+tests passing in `private-foundations-second.log`; root read the result and
+preceding warnings. Coverage includes exact transport/public projection, empty
+no-private-namespace behavior, repeated fixed-name namespace checks, whole-list
+and foreign-object/run transplants, and key-loss refusal. The first log retains
+a missing nix dir feature compiler failure; workspace feature activation
+resolved it without suppression. Three unused-code warnings remain during
+integration, so this is not the final strict gate. No live Cargo process was
+reported at this checkpoint. The durable endpoint is still absent and its outer
+RED remains open; provisional SQL and host coordinator implementation continues.
+
+Root also independently read `core-origin-second.log`: ten selected origin
+tests passed, including nonfinite graph and exact raw/empty prompt invariants.
+These are foundation evidence only, not full unit acceptance.
