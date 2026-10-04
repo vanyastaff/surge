@@ -263,3 +263,21 @@ normalization. Safe numeric/category-only payload replaces raw message/source;
 Rust Json payload API changes, valid wire framing remains. Owning plan and
 independent security verdict retained as `surge-owned-flow-framing-*.txt`.
 Actual sentinel RED, fix and host TRACE proof still required; count0/3.
+
+### MCP actual process checks after initial implementation
+
+Actual6104 terminal0: `mcp-diagnostics-second-green.log`11PASS, comprising nine
+actual-child/process tests plus actual SDK global TRACE and all-output-layer
+namespace veto. Exact command/ordered args/env/cwd and ordinary successful payload
+remain faithful; public error payload opaque, invalidUTF8/overlong/flood stderr
+bounded. Post-intent spawn and post-child observation initialize refusals prevent
+their respective effects; canceled postspawn waiter retains observer until PID
+reaped. Each catalog page, post-lazy-connect tool call and actual health/reconnect
+tick checks permission. This follows four genuine RED12960 and compile-only47185.
+
+Injected callback tests do not establish real SQL Stop/archive/generation, retained
+original launch object cross-process exclusion, host descendant containment or
+cold/wake/private/Empty acceptance. ObservedTransport Drop uses tokio::spawn:
+helper flags runtime-unavailable/shutdown behavior for host verification; present
+inner has an actual child until cleanup_task takes it in pinned rmcp API. Whole
+unit remains initial build0/3, final project gates and independent5a/5b open.
