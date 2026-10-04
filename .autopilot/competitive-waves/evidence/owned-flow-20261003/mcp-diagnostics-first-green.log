@@ -1,0 +1,89 @@
+   Compiling regex-syntax v0.8.10
+   Compiling regex-automata v0.4.14
+   Compiling process-wrap v9.1.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling rmcp v1.6.0
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+error: expected a pattern, found an expression
+    --> crates/surge-mcp/src/connection.rs:1118:37
+     |
+1118 |             Err(McpError::Transport("mcp_transport_failed".into())) => {
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a pattern
+     |
+     = note: arbitrary expressions are not allowed in patterns: <https://doc.rust-lang.org/book/ch19-00-patterns.html>
+help: consider moving the expression to a match arm guard
+     |
+1118 -             Err(McpError::Transport("mcp_transport_failed".into())) => {
+1118 +             Err(McpError::Transport(val)) if val == "mcp_transport_failed".into() => {
+     |
+help: consider extracting the expression into a `const`
+     |
+1117 +         const VAL: /* Type */ = "mcp_transport_failed".into();
+1118 |         match r {
+1119 ~             Err(McpError::Transport(VAL)) => {
+     |
+
+error[E0603]: type alias `TxJsonRpcMessage` is private
+   --> crates/surge-mcp/src/connection.rs:831:32
+    |
+831 |         item: rmcp::transport::TxJsonRpcMessage<RoleClient>,
+    |                                ^^^^^^^^^^^^^^^^ private type alias
+    |
+note: the type alias `TxJsonRpcMessage` is defined here
+   --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-1.6.0/src/transport.rs:72:53
+    |
+ 72 | use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
+    |                                                     ^^^^^^^^^^^^^^^^
+help: import `TxJsonRpcMessage` directly
+    |
+831 -         item: rmcp::transport::TxJsonRpcMessage<RoleClient>,
+831 +         item: rmcp::service::TxJsonRpcMessage,
+    |
+
+error[E0603]: type alias `RxJsonRpcMessage` is private
+   --> crates/surge-mcp/src/connection.rs:845:68
+    |
+845 |     ) -> impl std::future::Future<Output = Option<rmcp::transport::RxJsonRpcMessage<RoleClient>>> + Send {
+    |                                                                    ^^^^^^^^^^^^^^^^ private type alias
+    |
+note: the type alias `RxJsonRpcMessage` is defined here
+   --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-1.6.0/src/transport.rs:72:22
+    |
+ 72 | use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
+    |                      ^^^^^^^^^^^^^^^^
+help: import `RxJsonRpcMessage` directly
+    |
+845 -     ) -> impl std::future::Future<Output = Option<rmcp::transport::RxJsonRpcMessage<RoleClient>>> + Send {
+845 +     ) -> impl std::future::Future<Output = Option<rmcp::service::RxJsonRpcMessage>> + Send {
+    |
+
+error[E0639]: cannot create non-exhaustive struct using struct expression
+   --> crates/surge-mcp/src/connection.rs:461:53
+    |
+461 |                   let page = match rs.list_tools(Some(rmcp::model::PaginatedRequestParams {
+    |  _____________________________________________________^
+462 | |                     meta: None,
+463 | |                     cursor,
+464 | |                 })).await {
+    | |_________________^
+
+warning: unused import: `rmcp::transport::Transport`
+   --> crates/surge-mcp/src/connection.rs:833:13
+    |
+833 |         use rmcp::transport::Transport;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `rmcp::transport::Transport`
+   --> crates/surge-mcp/src/connection.rs:846:13
+    |
+846 |         use rmcp::transport::Transport;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0603, E0639.
+For more information about an error, try `rustc --explain E0603`.
+warning: `surge-mcp` (lib) generated 2 warnings
+error: could not compile `surge-mcp` (lib) due to 4 previous errors; 2 warnings emitted

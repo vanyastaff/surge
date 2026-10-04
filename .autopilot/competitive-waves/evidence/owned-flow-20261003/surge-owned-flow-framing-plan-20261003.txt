@@ -1,0 +1,19 @@
+Initial T25 framing amendment, postbuild repair0/3.
+
+Observed: FramingError::Json currently retains raw serde_json::Error; its Display,
+Debug and source can echo untrusted unknown enum/transport values. Daemon logs
+malformed request errors before ownedFlow endpoint normalization.
+
+Accepted bounded plan: preserve typed Json variant with safe JsonFrameError
+payload containing only numeric line/column and fixed serde category. Explicit
+From<serde_json::Error> discards all raw parser prose and raw source. Display and
+Debug render only safe metadata; no raw error in nested source. All read/write
+serde question-mark conversions pass through this boundary. Io/size and valid
+wire framing behavior remain unchanged. This changes the public Rust payload
+type in active development; it does not promise full Rust source compatibility.
+Repository search found no constructor/match needing original serde payload.
+
+Root owning verdict ACCEPTABLE; independent security report beside this file
+ACCEPTABLE. Main author owns all source/test/Cargo here; actual malformed ownedFlow
+transport sentinel RED precedes fix, followed by metadata, valid framing and
+actual host TRACE socket proof. No implementation acceptance granted by plan.

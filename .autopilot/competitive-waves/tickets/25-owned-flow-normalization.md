@@ -237,3 +237,29 @@ New actual inner behavior REDs (before affected fixes):
   original log is retained and is not privacy-behavior RED evidence.
 These are initial-build inner loops; no independent review repair is dispatched.
 Full cold/private/empty/TRACE/physical-control and Windows proofs remain open.
+
+### Initial-build verification update: late manifest and MCP compilation
+
+Actual terminal52485 exited0: `manifest-late-repeat-green.log` has1PASS for
+`input_manifest_repeat_after_startup_closes_is_rejected`, following actual RED57535.
+This closes that inner-loop regression only. Whole unit acceptance remains open.
+
+`mcp-diagnostics-first-green.log` is a filename, not a verdict: its captured
+output contains four compiler errors and two warnings, before behavioral tests.
+The helper is correcting its initial implementation and retains original real
+child privacy/effect RED12960. No formal review repair dispatch occurred (0/3).
+
+ACP scoped physical worker checks: actual26842 terminal0,
+`acp-worker-fences-second.log` fourPASS: pre-spawn/initialize/new-session/options,
+stored-session prompt, approval-await/automatic grant, canceled queued awaiter.
+These use injected fence plus actual mock child; real SQL Stop/archive/generation
+and cross-process retained launch ownership remain required separately.
+Actual97237 terminal0 clean workspace-excluding-UI dev check,27.00s, is not the
+final all-targets/all-features strict gate.
+
+Framing diagnostic amendment accepted before behavior: retained raw serde JSON
+errors can echo explicit private inputs on malformed requests before endpoint
+normalization. Safe numeric/category-only payload replaces raw message/source;
+Rust Json payload API changes, valid wire framing remains. Owning plan and
+independent security verdict retained as `surge-owned-flow-framing-*.txt`.
+Actual sentinel RED, fix and host TRACE proof still required; count0/3.

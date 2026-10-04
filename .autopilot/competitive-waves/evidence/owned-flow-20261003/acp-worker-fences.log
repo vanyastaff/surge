@@ -1,0 +1,76 @@
+   Compiling chrono v0.4.44
+   Compiling schemars v1.2.1
+   Compiling serde_with v3.24.0
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling tempfile v3.27.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling agent-client-protocol v2.2.0
+   Compiling rusty-fork v0.3.1
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling insta v1.47.2
+   Compiling proptest v1.11.0
+error[E0600]: cannot apply unary operator `!` to type `&mut bool`
+  --> crates/surge-acp/tests/bridge_effect_fence.rs:32:128
+   |
+32 | ...).unwrap(),Duration::from_secs(4),|released|!released).unwrap();
+   |                                                ^^^^^^^^^ cannot apply unary operator `!`
+
+error[E0507]: cannot move out of an `Arc`
+   --> crates/surge-acp/tests/bridge_effect_fence.rs:67:9
+    |
+ 67 |         bridge.shutdown().await.unwrap();
+    |         ^^^^^^ ---------- value moved due to this method call
+    |         |
+    |         move occurs because value has type `surge_acp::bridge::AcpBridge`, which does not implement the `Copy` trait
+    |
+note: `surge_acp::bridge::AcpBridge::shutdown` takes ownership of the receiver `self`, which moves value
+   --> crates/surge-acp/src/bridge/acp_bridge.rs:309:31
+    |
+309 |     pub async fn shutdown(mut self) -> Result<(), BridgeError> {
+    |                               ^^^^
+
+error[E0507]: cannot move out of an `Arc`
+   --> crates/surge-acp/tests/bridge_effect_fence.rs:87:5
+    |
+ 87 |     bridge.shutdown().await.unwrap();
+    |     ^^^^^^ ---------- value moved due to this method call
+    |     |
+    |     move occurs because value has type `surge_acp::bridge::AcpBridge`, which does not implement the `Copy` trait
+    |
+note: `surge_acp::bridge::AcpBridge::shutdown` takes ownership of the receiver `self`, which moves value
+   --> crates/surge-acp/src/bridge/acp_bridge.rs:309:31
+    |
+309 |     pub async fn shutdown(mut self) -> Result<(), BridgeError> {
+    |                               ^^^^
+
+error[E0507]: cannot move out of an `Arc`
+   --> crates/surge-acp/tests/bridge_effect_fence.rs:124:9
+    |
+124 |         bridge.shutdown().await.unwrap();
+    |         ^^^^^^ ---------- value moved due to this method call
+    |         |
+    |         move occurs because value has type `surge_acp::bridge::AcpBridge`, which does not implement the `Copy` trait
+    |
+note: `surge_acp::bridge::AcpBridge::shutdown` takes ownership of the receiver `self`, which moves value
+   --> crates/surge-acp/src/bridge/acp_bridge.rs:309:31
+    |
+309 |     pub async fn shutdown(mut self) -> Result<(), BridgeError> {
+    |                               ^^^^
+
+error[E0507]: cannot move out of an `Arc`
+   --> crates/surge-acp/tests/bridge_effect_fence.rs:140:5
+    |
+140 |     bridge.shutdown().await.unwrap();
+    |     ^^^^^^ ---------- value moved due to this method call
+    |     |
+    |     move occurs because value has type `surge_acp::bridge::AcpBridge`, which does not implement the `Copy` trait
+    |
+note: `surge_acp::bridge::AcpBridge::shutdown` takes ownership of the receiver `self`, which moves value
+   --> crates/surge-acp/src/bridge/acp_bridge.rs:309:31
+    |
+309 |     pub async fn shutdown(mut self) -> Result<(), BridgeError> {
+    |                               ^^^^
+
+Some errors have detailed explanations: E0507, E0600.
+For more information about an error, try `rustc --explain E0507`.
+error: could not compile `surge-acp` (test "bridge_effect_fence") due to 5 previous errors

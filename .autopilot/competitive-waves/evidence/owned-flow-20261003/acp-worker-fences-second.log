@@ -1,0 +1,12 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized] target(s) in 6.98s
+     Running tests/bridge_effect_fence.rs (target/debug/deps/bridge_effect_fence-6976531733b23072)
+
+running 4 tests
+test cancelled_awaiter_does_not_drop_the_queued_worker_capability ... ok
+test queued_prompt_checks_stored_session_fence_and_close_remains_available ... ok
+test worker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission ... ok
+test permission_grant_is_checked_after_approval_await_and_automatic_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+

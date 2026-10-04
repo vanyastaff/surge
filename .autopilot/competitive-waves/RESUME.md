@@ -1,30 +1,37 @@
 # Текущее продолжение: 2026-10-03
 
 Активная цель — реализовать все требования; полный аудит требований ещё впереди.
-Рабочая ветка — `main`. Task-owned pre-dispatch и подготовка Start в фактическом
-worktree приняты независимыми проверками и закоммичены в `95c5295`; отчёты и
-manifest сохранены в `evidence/predispatch-20261003/`. Финальный прогон: 3451
-passed, 36 существующих skips. Полный T12 остаётся открытым.
+Рабочая ветка — `main`. Task-owned pre-dispatch принят и закоммичен в `95c5295`:
+3451 PASS, 36 существующих skips, независимые 5a/5b; evidence/predispatch-20261003/.
+Полный T12 открыт. Текущий этап — tickets/25-owned-flow-normalization.md,
+initial build, formal post-build repair count 0/3.
 
-Текущий этап — `tickets/25-owned-flow-normalization.md`, основной принятый план —
-`owned-flow-normalization-plan.txt`, переносимость и Empty MCP уточнены в
-`evidence/owned-flow-20261003/surge-owned-flow-portable-prep-*.txt`.
-Core и Windows helpers завершили свои узкие части и передали файлы основному
-`owned_flow_builder`: он один владеет текущим source и Cargo lane. Windows
-код/тесты написаны, но native Windows proof отсутствует и остаётся обязательным;
-исследование API и cross-compilation не заменяют выполнение.
+Основной план — owned-flow-normalization-plan.txt. Переносимость/Empty MCP и
+финальные physical effect fences приняты до реализации; точные дополнения и
+вердикты — evidence/owned-flow-20261003/surge-owned-flow-final-effects-*.txt.
+Core/Windows helpers передали source основному owned_flow_builder. Только он
+владеет Cargo/format lane. Отдельный owned_flow_mcp_diagnostics_builder владеет
+MCP connection/registry/cleanup/error/writer_observer и смежными тестами; основной
+автор не редактирует эту зону до явной передачи. Root пишет docs/evidence.
+Windows API исследованы и source написан, но native Windows proof обязателен
+и отсутствует; cross-compilation его не заменяет.
 
-Подтверждены foundation checks: core origin — 10 PASS, Unix work-items —
-72 PASS, private MCP inputs — 7 PASS. Первый coordinator dev check завершён;
-последующий log завершён без предупреждений, terminal handle пока уточняется.
-Это не финальные strict/outer gates. Обычный Flow должен получать устойчивую
-операцию и владельца до чтения текущих файлов и конфигурации. Принятие теперь
-передаёт host-only claim с той же удерживаемой Arc-блокировкой; внешняя receipt
-не даёт полномочия на запуск. Endpoint и outer replay/Stop/cold tests ещё открыты.
-Структурное Empty MCP должно проверять реальный startup journal, accepted binding
-и точный initial/continuation control перед эффектами; SQL equality недостаточно.
-Новая единица остаётся в initial build, formal post-build repair count 0/3.
-Все файлы/процессы и логи текущего дерева — источник фактического состояния.
+Подтверждены core origin10PASS, Unix work-items72PASS, private inputs7PASS,
+реальный daemon socket receipt и exact-body replay после удаления flow.toml и
+повреждения текущего config6PASS, original retained launch/canceled caller и
+cross-process ownership6selectedPASS. Это узкие результаты разных прогонов,
+не единый финальный gate. Поздний повтор OwnedFlowInputsBound после StageEntered
+дал настоящий RED; исправление проверки всего journal дало GREEN1PASS
+(manifest-late-repeat-green.log, actual terminal52485 exit0).
+
+MCP actualchild privacy и post-intent/post-child effect barriers дали четыре
+настоящих RED (mcp-diagnostics-second-red.log, actual12960 exit101). Реализация
+идёт; mcp-diagnostics-first-green.log вопреки имени содержит compiler errors и
+не является GREEN. Основной автор закрывает ACP final checks, coherent SQL
+snapshot и host adapters; helper сохраняет actual child/observer при отмене.
+Cold/private/Empty, все physical barrier cases, TRACE socket/subscriber proofs,
+полные project gates и замороженные независимые5a затем5b ещё открыты.
+Нельзя считать текущий Flow или весь продукт завершённым по узким тестам.
 
 Исторические разделы ниже описывают Linux-среду 2026-09-05/06. Текущая сборка
 выполняется на macOS с `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1

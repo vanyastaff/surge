@@ -1,0 +1,29 @@
+Independent T25 bounded framing diagnostic SECURITY PLAN review — 2026-10-03
+
+VERDICT: ACCEPTABLE.
+
+Scope: proposed safe JsonFrameError payload for engine/ipc.rs::FramingError::Json, actual request/response/event/inbound readers and write_frame, daemon malformed-frame logging and repository consumers. Read-only; no Cargo/source/docs/process changes. Only requested /tmp report written. Initial T25 count0/3 and historical accepted3/3 unchanged. No implementation/host TRACE/native acceptance granted.
+
+Actual leak seam
+
+ipc.rs:592-602 derives Debug/Error and retains serde_json::Error directly in Json(#[from]). read_request_frame at :698-707 parses the bounded raw request and uses '?' conversion; analogous response/event/inbound paths and write_frame also convert serde errors. daemon server.rs:363 logs malformed request framing errors with %e. Serde data errors can contain caller-provided unknown enum values or custom Deserialize error prose. A malformed private OwnedFlow input therefore can be rendered before a valid owned-flow runtime connection/capability exists. This requires origin sanitization at the framing boundary rather than the later MCP diagnostics policy.
+
+Accepted shape
+
+JsonFrameError stores only numeric line/column and one closed fixed category (Io/Syntax/Data/Eof), with fixed Display such as invalid JSON frame and safe Debug. It stores no serde_json::Error, copied message, original frame, arbitrary string, inner IO/source error or raw-source chain. Private fields/validated construction avoid introducing an arbitrary diagnostic text field. From<serde_json::Error> captures the three metadata values and discards the original before the safe error is returned. Preserve explicit From<serde_json::Error> for FramingError so all current read/write '?' seams sanitize uniformly; converting serde errors through std::io::Error first would bypass the proposed Json boundary and is not authorized.
+
+Inspected pinned serde_json1.0.151 error.rs from Cargo.lock: line()/column() return usize positions, and classify() returns a Copy closed Category. Custom error messages classify as Data without carrying their text into the category. Some metadata can be zero for serialization/IO errors; do not require positive positions or turn missing metadata into a raw-error fallback. Numeric positions and fixed categories are intentionally public diagnostics, not private content fingerprints.
+
+Source-chain policy
+
+JsonFrameError's Error::source must be None. FramingError may expose the safe JsonFrameError as its source if derive/from requires that; every nested safe Debug/Display/source then remains content-free. It must never expose the discarded serde_json::Error beneath it. DaemonError::Framing and client formatting can safely retain their typed wrapper once this origin policy holds. No logger-specific scrub or caller redaction bool is necessary.
+
+Compatibility boundary
+
+This preserves typed Json classification, line/column/category inspection through the new payload, explicit From<serde_json::Error>, existing bounded wire parsing/encoding and connection-closing behavior. It changes the public Rust Json variant payload from serde_json::Error to JsonFrameError, so it is not fully source-compatible for downstream code constructing Json(raw_error) or calling raw serde-specific methods through that payload. No such repository constructor/pattern requiring raw payload was found. State this narrowing honestly; preserving arbitrary raw parser-message compatibility would undermine the security fix. Wire format is unchanged because FramingError is not a wire DTO. Io and FrameTooLarge retain their existing behavior; actual socket errors and the explicit EOF diagnostic do not copy the JSON body. This verdict does not promise sanitization for arbitrary downstream custom IO adapters which intentionally manufacture secret-bearing io::Error prose.
+
+Required evidence
+
+First show a malformed real OwnedFlow transport/input sentinel producing a Data-category framing failure through the actual socket or reader, not merely a hand-created safe wrapper. Then inspect FramingError and nested wrapper Display, Debug and the complete Error::source chain plus metadata/category; neither raw nor escaped submitted content may survive. Include an unknown tagged enum value, unknown field/type/custom Deserialize message, syntax/invalid UTF8, EOF, and encode failure with custom Serialize error text to cover both From conversion directions. Numeric line/column/category and Io/oversize/clean EOF behavior remain correct. Host TRACE socket oracle must capture the actual server.rs warning under production logging configuration, prove no sentinel, close the malformed connection, and observe zero operation acceptance/provider/MCP effect. Raw test fixture/evidence must not be copied into public error reporting.
+
+No additional bounded blocker found. Implementation and tests remain to be reviewed/executed by the sole author/build lane. No post-build repair or requirement retirement follows this pre-code verdict.
