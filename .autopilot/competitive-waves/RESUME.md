@@ -1,3 +1,36 @@
+# Current product progress clarified and paired runtime fault GREEN 2026-10-04
+
+User points out remaining-plan summary looks as if nothing was implemented. Root
+updates docs/superplane-improvements.md current product table: accepted phases1/2/3A
+and95c5295, implemented/focused-verified3B/3C, mutable ownedFlow increment, not-yet
+complete orchestrator/PR/result scopes. Earlier dated discovery notes are historical;
+old 3B status explicitly labelled pre-quota snapshot. No acceptance waived or source
+commit implied. Source-owned increment remains uncommitted pending current gates/
+remainingfaults/independentacceptance. Developer note records narrowed crate-private
+spawn_writer with mandatory same actor/wrapper WriterLease and neutral panic leaf.
+
+Author87691 terminal0: second ACK-cut raw1PASS1.23s adds actual live-original-host
+kill(pid,0) before originalkill/reap and second resume_pending=0 after ACK/join.
+Author40344 terminal0: missingjournal/runtime first raw1PASS2.78s runs TWO paired
+fault scenarios. Root FULLread raw and actual outertest/runtime helper. Missing
+originaljournal after real hostdeath; new public recovery owner publishes; actual
+cold test TokioRuntime consumed before stdjoin. Parent sees noCREATE/ACKNULL/livehost/
+originalguardWouldBlock/blockedjoin; restoring originaljournal yields exactsame
+seq/payload,count1, token/acceptedtuple/effects unchanged and guardrelease. This is
+actual test-runtime drop plus production owner APIs, NOT production HostRuntime
+wrapper, full daemonstartup, absentdirectory/nativeclosure/CommitUnknown proof.
+
+Independent coldreview924f2d79 FULLread179lines, exactreport retained: scopedsource
+ACCEPTABLE, no confirmedduplicate/earlyACK/owner lifetime defect. Its snapshot predates
+40344; missingwrapper/path/CommitUnknown faults remain. Not formal5a/5b/countchange.
+Windows API plan1a96148d FULLread all12sections/hashverified, retained PROPOSED only.
+Originalfoundation explicitly trustedbinary/no universalhostile sameUID guarantee;
+actual ordinarydescendants/externalsettlement/LinuxMac positives remain mandatory.
+Broker B/capture/journal plus allactualmutator API closure supplement underway,
+no native sourceapproval or installation. Main sole source/build/processowner.
+Currentstrict third91708 running atauthorreceipt after two unsuppressed lint failures;
+no currentstrictPASS claimed. Fullgoal and allrequirements remain active.
+
 # Actual event-before-ACK crash recovery GREEN 2026-10-04
 
 Author98175 terminal0: cold-refusal-event-before-ack-first.log exact actual

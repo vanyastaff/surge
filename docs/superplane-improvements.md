@@ -6,6 +6,34 @@ execution, ACP and event replay. The app is the primary operator surface;
 Telegram duplicates decisions when connected. Existing ledger,
 verification, reports, inbox and capacity mechanisms are the starting point.
 
+## Product progress — 2026-10-04
+
+The remaining scope is not a list of untouched features. Implementation, focused
+verification and full acceptance have different statuses. This table is the
+current summary; dated discovery and test notes below retain their historical
+state. The active objective still includes every interview requirement.
+
+| Product area | Already delivered or implemented | What remains |
+|---|---|---|
+| Reliable completion and evidence | Phases 1 and 2 accepted: durable completion delivery, shared waiting reasons, verification tied to code and criteria revisions | Integrate later task-level result and readiness surfaces |
+| Persistent task | 3A accepted: immutable requirements, task discussion/history, ordered attempts, PR association and retained workspace ownership | Full lifecycle integration with resumable execution and cleanup choices |
+| Stop, Continue and provider limits | ACP session recovery, durable controls/decisions, candidate cycles and A→B fallback implemented with focused actual mock-ACP wire and restart tests; configured task-owned pre-dispatch accepted in `95c5295` | Full phase acceptance; ordinary Flow ownership, complete child-process settlement, remaining quota/accounting and recovery cases |
+| Desktop task experience | Create/discuss/edit and acknowledgement/currentness fixes implemented; isolated native Computer Use checks recorded on 2026-10-01 | Current-build end-to-end Flow/worktree controls, resume/archive/cleanup and full UX verification |
+| Ordinary Flow recovery — current worktree | Wake refusal enters lasting Attention; original lease survives caller exit; actual event-before-ACK host crash reuses the existing event without duplicate work. Missing-journal recovery after actual test-host runtime consumption passes its paired fault test | Remaining fault/control cases, current full strict checks and independent final acceptance. These source changes are still uncommitted and are not a released increment |
+| Orchestrator and PR review loop | Existing workflow and GitHub merge surfaces provide foundations | Full interview-defined stages/policies, multi-provider planning U01, durable human/bot inline repair and re-review, CI/spec/evidence-based merge decisions |
+| Result and notifications | Existing run reports, inbox and delivery mechanisms provide foundations | One task-level spec/evidence/readiness result; app and connected Telegram decisions throughout the full path |
+
+Current recovery evidence is scoped to actual local test processes and mock ACP
+providers. It is not native Linux/macOS/Windows child-domain acceptance, live
+provider interoperability or complete desktop-product acceptance. Native backend
+planning is underway; implementation and actual platform positives remain open.
+
+The next source milestone is the current Flow recovery/ownership increment with
+its own checked source commit. Then execution settlement and quota recovery must
+reach full acceptance before the remaining orchestrator/PR loop and product flows
+can be called complete. Documentation and raw-test evidence commits are not
+substitutes for that source milestone.
+
 ## Sequence and acceptance
 
 Configured task-owned pre-dispatch and actual-worktree Start preparation were
@@ -1732,7 +1760,7 @@ verification → PR → failing CI → repair → fresh verification → merge d
 including a forced daemon restart during the workflow. Each phase must keep its
 own independently checkable acceptance evidence.
 
-### 3B acceptance status
+### Historical 3B acceptance snapshot (before 2026-10-03 quota integration)
 
 Focused tests establish individual boundaries; they are not full phase approval.
 

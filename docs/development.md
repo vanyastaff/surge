@@ -36,6 +36,20 @@ cargo clippy --workspace --all-targets --all-features
 
 The strict clippy profile is in [`clippy.toml`](../clippy.toml). Test code relaxes most rules (`allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-print-in-tests`, etc.); production code does not.
 
+## Run-writer ownership
+
+In the current ownership implementation, the low-level
+`runs::writer::spawn_writer` helper is crate-private and requires an actor-held
+`WriterLease`. The actor and `RunWriter` wrapper retain the same lease, so dropping
+or cancelling a wrapper cannot release the OS writer lock while queued writes
+remain active. External callers use the existing `Storage` and `RunWriter` APIs;
+writer command/configuration exports remain data, not execution authority.
+
+`surge-process` contains the shared standard-library owner-panic boundary:
+`install_owner_panic_protection` and `abort_on_owner_panic`. Hosts install the same
+hook rather than maintaining separate copies. This boundary does not prove native
+child cleanup, domain closure or startup authority.
+
 ## Daemon restart check
 
 On Unix, this explicit subprocess test starts an isolated daemon with an

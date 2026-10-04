@@ -1,0 +1,467 @@
+Windows original-domain native API precode draft — 2026-10-04
+Author: /root/owned_flow_cold_oracle_builder, one reviewer/author.
+Status: PROPOSED, dependencies/unresolved decisions below. No source authorization,
+implementation acceptance, native certification, installation or formal5b. T25 0/3.
+Only this /tmp artifact written; no source/tests/Cargo/build/Git/process changes.
+
+1. Exact basis, scope and decisions
+FULL-read gap report264cd7b01586afbc747ab13063bcdf5ac1dbba1761d91c8a79f4e9e96e3d6aef
+and inventoryccb1ecc7c409e7dcfe4486503c309df03508e252ef0d109403c8829fe3646083.
+Preserve foundation5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8,
+root1944f0f784197d52e3a14759ff4b93864bba0a4112647ba7b443208570d61c54,
+no-dispatch4c58467e25164064b6f57edf680f651aab50322cf1f5e321aade2234ddb90f33,
+Bf289f1cb3a28bb2d3ce9785b1709c29db8459258ff22bb38eb28ee9158f87718+
+routing3147543a262a688c47bbf8155bd8859e067e3e128bf3c3c4c632e7541960f632.
+Native closure is one input to their full domain seal, not a replacement for wire,
+SDK retention, journal obligations, external settlement or exact control lineage.
+
+Selected process model: one persistent broker process per Surge home, launched in
+an INTERNAL mode of the existing surge-daemon binary. No new crate beyond the
+already present surge-process. Broker lifetime is independent of daemon runtime;
+it is not an auto-replaced Tokio task. Native Job creation, process birth, held
+thread release, termination and sole root waiter ALL execute inside that broker.
+Daemon never creates a target then transfers it. Bootstrap broker is separately
+owned as host infrastructure, not inserted into a target Job. Starting it under
+an incompatible parent Job refuses native admission BEFORE any target birth.
+No service installation or account/credential change is part of this draft.
+
+Alternative daemon-create/later-Duplicate rejected: actual crash gap loses original
+root/thread ownership. Alternative new named Job on cold reconnect rejected:
+matching name/empty membership is not original authority. Alternative broker as
+new platform crate rejected: existing daemon hosts persistence; process leaf owns
+native machinery; accepted B owns transport-neutral retention and capture.
+Future additional protocols/OSs reuse that leaf and host facade, not an OS-specific
+registry, SDK, journal schema or third independent waiter.
+
+This selection is productive for daemon death with original broker still alive.
+Broker death is Unknown, not a supported cold positive. No reboot inference or
+broker-replacement closure is introduced. Linux cgroup migration and macOS live
+observer/safe signaling/entitlement remain mandatory independent open work.
+
+2. Actual source reuse and affected integration closure
+Current anchors (read-only source, not frozen implementation):
+- surge-process/src/lib.rs and owner_panic.rs: currently only shared std panic
+  leaf. Retain EXACT install_owner_panic_protection/abort_on_owner_panic exports.
+- surge-mcp/src/child_settlement/mod.rs ChildParcel owns std::process::Child;
+  ObservedTransport owns runtime pipes; tracker/worker direct root settlement.
+  Windows native parcel MUST be another reviewed variant of accepted B sole owner,
+  not fabricated StdChild from PID, raw HANDLE ownership or duplicate waiter.
+- surge-acp/src/bridge/worker.rs existing Tokio spawn/wait/group cleanup: replace
+  owned Windows launch only through native owner seam; legacy behavior remains.
+- surge-persistence/src/work_items.rs WorkItemLaunchClaim has actual Arc lock;
+  owned_flow/launch.rs claim_owned_flow acquires stable lock AND rotates token.
+  Calling claim() on cold is NOT the unchanged-token recovery API required here.
+- runs/writer_slot.rs actor/wrapper share actual Arc<WriterLease>; run_writer.rs
+  event_recorder() is append-only. No cross-process serialized Arc may substitute.
+- work_items/control.rs existing execution_control/confirm_suspension/
+  confirm_continued preserve actual generation checks. They do not currently
+  serialize native syscalls with every control writer; section5 is NEW integration.
+- daemon owned_flows/work_items/admission/wake routes, CLI daemon entry and UI host
+  ownership/terminal barriers must all use identical broker routing for native runs.
+
+Dependency direction: daemon broker host -> persistence/core + surge-process;
+ACP/MCP adapters -> accepted B neutral retention/native client seam; process leaf
+-> pure core DATA, std, thiserror and target Windows bindings only. No SQLite,
+Tokio, ACP/MCP SDK, daemon or Git import in the process leaf. Persistence MUST NOT
+import daemon, ACP or MCP. Broker host may inspect registry and own finite journal
+sink protocol; leaf may not decide task generation from caller booleans.
+
+Reuse core IDs and accepted startup/dispatch/domain receipt records. New native
+DATA only where actual Windows identity/object/frontier is absent. Reuse accepted
+B reservation, Completion/RetentionToken, panic protection, frame scanner and
+byte/slot leases. Broker capture is SAME B responsibility relocated to the actual
+stdio owner, not a second parser or budgets. Required precode integration review:
+exact B frame-owner placement, append sink/ACK reconciliation and control adapter
+method signatures before source. This draft cannot self-approve that closure.
+
+3. Proposed private types and capabilities
+Names are proposals, not claims these methods exist. DATA may be Serde only after
+validating constructors; authority types have private fields, no Deserialize,
+Clone of raw owners, public bool constructor or public numeric-HANDLE accessor.
+
+Core DATA NativeDomainDescriptorV1:
+ version/backend; original run/attempt/operation/opening-control/writer ordinal;
+ accepted recipe hash; broker incarnation; domain nonce; immutable registration
+ hash; root PID+creation FILETIME after Birth; authenticated host/machine binding.
+ This descriptor locates evidence. It cannot construct a live native capability.
+ Broker incarnation is a fresh random nonce per actual process startup, bound to
+ held broker process HANDLE+creation time. If machine/boot identity cannot be
+ independently established, cold proof requires the same still-live verified
+ broker HANDLE/incarnation; no label-based reboot success.
+
+Leaf private state:
+ WinDomainPrepared { job: OwnedJob, immutable_registration, spawn_slot,
+                     membership_frontier: Open, terminal_slot }
+ WinHeldRoot { prepared, process: OwnedProcess, thread: OwnedPrimaryThread,
+               root_identity, stdio_owner, birth_state: BornHeld }
+ WinRunningDomain { original_job, sole_root_waiter, obligations, frontier }
+ WinFinalFrozen { original_job, frozen_frontier, retained_root_terminal,
+                  pending_broker_delivery }
+ NativeClosure { private backend issuance, original object/incarnation,
+                 frozen_frontier, actual wait+zero accounting observation }
+ NativeClosure is consumed by accepted domain coordinator seal. Never exported as
+ JSON authority. A cross-process signed/authenticated attestation is DATA verified
+ by a private authenticated broker facade and matched to independent journal and
+ accepted authority before it yields a process-local validated proof. No arbitrary
+ observer implementation can assert it.
+
+Host private state uses Arc<NativeRunOwner> with immutable original registration,
+B coordinator/capacity, broker ledger, per-domain serial dispatch lane. The broker
+retains this SAME Arc through every cancellation, caller drop, reconnect and late
+publication. The daemon separately retains its REAL original launch claim and
+writer Arc while alive. No assertion that those Arcs cross a process boundary.
+Cold exact original journal lock recovery/no-token and broker attestation must BOTH
+validate; broker object retention does not grant journal write/Continue authority.
+
+Conceptual closed leaf API (final visibility/signatures require independent review):
+ prepare(registration: ValidatedNativeRegistration, recipe: PreparedWinRecipe,
+         resources: ReservedNativeResources) -> PreparedTicket
+ birth(ticket: PreparedTicket) -> BornHeldOutcome
+ release(owner: &mut WinHeldRoot, permit: BrokerCurrentDispatchPermit)
+         -> ReleaseOutcome
+ freeze_and_stop(owner: &mut NativeOwner, permit: BrokerCurrentStopPermit)
+         -> SettlementPending
+ observe_frozen(owner: &mut NativeOwner) -> Pending | PrivateNativeClosure
+Handles stay on owning std dispatcher thread; Send/TLS bounds audited explicitly.
+No unsafe Send for attribute pointers, unknown SDK handles or shared raw structures.
+Gate permits are one-use, private, nonSerde and constructed only by broker host;
+public client RPC body names an intent, never carries a forgeable Rust permit.
+
+4. Native birth and retained ledger
+Before OS effects reserve accepted B responsibility/delivery/cleanup capacity and
+broker domain slot, validate original registry registration/current startup and
+recipe, and install owner ledger entry. A slot is not released by timeout or lost
+reply. Journal Startup/Pending0 and native launch intent must already have accepted
+receipts; original startup receipt is not inferred from malformed/missing manifest.
+
+Inside protected owner body, create UNNAMED Job with reviewed explicit security
+attributes, set no breakaway/silent-breakaway and KILL_ON_JOB_CLOSE policy, own
+stdio/attribute resources, then CreateProcessW with atomic JOB_LIST assignment,
+CREATE_SUSPENDED|EXTENDED_STARTUPINFO_PRESENT|CREATE_UNICODE_ENVIRONMENT and pinned
+recipe flags. The Job and ledger owner exist BEFORE successful CreateProcess.
+No create-then-Assign fallback. On success adopt hProcess/hThread into existing
+owner slot immediately, before fallible conversion, IPC ACK or journal await.
+Store actual root identity via held handle; append immutable Birth DATA through
+original journal sink. Lost Birth ACK leaves BornHeld+delivery debt, not permission
+to retry CreateProcess. Same request identity+same recipe returns existing state;
+changed identity/body is refusal. Child success after caller disconnect is retained
+and stopped/frozen by original owner, never classified NoChild.
+
+Broker ledger bound: initially 64 active domains globally/4 per run, matching B
+native-root reservation ceiling; no eviction of Unknown. Completed unreconciled
+receipts also retain slots until exact durable ACK. Queue 64 control envelopes,
+max 64KiB each; private recipe payload <=256KiB with checked UTF16/length ceilings;
+initial global queued recipe budget16MiB. Native recipe/control budgets are
+ADDITIONAL explicit pools, not silently charged twice against wire lanes. Admission
+returns Busy before effects when full; Stop/terminal signaling uses preallocated
+per-domain latch and cannot queue behind recipe/capture saturation. Ledger has one
+owner and bounded retained records, not one new unbounded thread per message.
+Dispatcher, root wait and capture progress must not mutually block on SDK delivery.
+Native OS wait/cleanup may remain indefinite; queries/timers are wakeups, never
+capacity forgiveness. Final byte accounting and worker count need review with B.
+
+5. Current Release/Stop gate and race semantics
+Selected serialization model: ALL control commits that affect native runs route
+through the ORIGINAL broker per-domain host lane; daemon/UI/Telegram/wake/intake
+may request intents but may not separately commit a newer Stop then send stale
+Release RPC. Broker facade applies existing transactional control predicates using
+WorkItemStore, independently accepted startup/claim/recipe/epoch and journal
+receipts. All non-native control paths remain existing behavior. Missing broker
+means Attention/Unknown and no new native dispatch, not registry-only Continue.
+
+At lane dequeue, check current registry control+accepted origin and durable Birth/
+launch intent. Reserve one-shot dispatch ID tied to original opening generation.
+Commit dispatch-intent journal receipt using B finite gate without holding registry
+TX across a pipe wait. Revalidate exact current authority in a short registry TX,
+release connection, then execute ResumeThread immediately in SAME serial lane.
+Stop and all native control writers cannot commit between this final revalidation
+and syscall dispatch because their committing lane work is serialized, not merely
+because callers promised to check. Native syscall may block that domain lane;
+new intent is requested but not represented as already committed Stop. This is the
+explicit linearization boundary, not OS/SQLite atomicity. Other registry mutation
+that can invalidate launch authority (workspace/revision/archive/delete/claim
+replacement) must acquire this same native barrier before its commit or refuse
+while native effects admitted. Enumerate ALL such mutation sites before source;
+a missed bypass is a blocker, not accepted TOCTOU. Cross-run lanes stay independent.
+
+ResumeThread prior suspend count1 -> released successfully;0 -> unexpected already
+running, >1 -> still held, MAX -> failure. Every unexpected result consumes this
+permit and retains actual Birth/Unknown; never repeated decrements with same permit.
+After syscall append outcome with original dispatch identity. Lost ACK/query must
+reconcile broker state and historical receipt, never ResumeThread again. Stop
+queued before Release admission cancels it, freezes spawn frontier and terminates
+born held root/Job. Stop after Release admission owns running debt, terminates
+original Job and collects actual terminal evidence. Newer Stop never rewrites old
+opening/Birth/release origins. Accepted no-dispatch Stop only when exact unconsumed
+startup/dispatch evidence proves no child; post-birth zero target instructions is
+NOT NoChild. Repeat Stop is idempotent observation of same original responsibility.
+
+Storage/lane enforcement is a required structural API, not a routing convention.
+Propose persistence NativeMutationAuthority with private constructor bound to live
+broker registration/current lane guard; native-bound mutation methods require it
+and independently verify registry native-owner binding inside their actual TX.
+Existing generic Store mutation entrypoints must reject native-bound runs unless
+using that authority. Daemon Stop/edit/archive/delete/workspace/revision writers
+send broker requests and wait for its ACTUAL transaction result; they must not
+precommit separately and then notify. Accepted historical receipt delivery remains
+allowed only under its exact existing stale-origin predicates, never a new effect.
+Prepare a complete mutation call-site map and source-backed bypass counterfactual
+before source permission. A callable direct registry mutation bypass defeats this
+design even if every happy-path daemon handler forwards requests correctly.
+
+All registry reads/revalidation/receipt gates retain accepted B TOTAL finite DB
+gate budget20ms, including pool checkout, busy wait and SQL; no resetting the
+budget at each helper or introducing an unbounded synchronous SQLite read in leaf.
+Budget exhaustion before physical dispatch keeps held child/debt, no stale permit.
+Registry TX is released BEFORE native syscall; native syscall/pipe/channel waits
+never occur inside it. Control requests blocked by the in-flight physical lane
+have not committed a newer control and cannot be presented as such. Actual tests
+must pin both lane admission and actual TX commits; command ordering alone cannot
+prove SQLite commit ordering. This does not silently replace B's final physical
+gate: broker host invokes it in the exact native dispatch body after every prior
+wait and validates SAME live owner/registration and accepted current predicates.
+Only full reviewed persistence authority+all-writers map makes the serialization
+claim implementable. Existing normal Stop/edit/archive paths are affected scope.
+
+This requires a concrete persistence/daemon adapter amendment and actual newer-
+control/race oracle. If maintainers reject broker-only native mutation routing,
+alternative must supply an equally exact serialized gate; an async pre-read token
+or a registry TX held across indefinite RPC is not an acceptable substitute.
+
+6. Cold channel, authentication and physical authority
+Create local named pipe with unpredictable per-incarnation name, FIRST_PIPE_INSTANCE
+and PIPE_REJECT_REMOTE_CLIENTS, explicit DACL for intended logon/host principals,
+individual read/write rights without granting clients FILE_CREATE_PIPE_INSTANCE.
+Do not accept default ACL or generic-write shorthand. Connect challenge-response
+uses fresh nonces and broker-issued secret stored only in private host credential
+storage; never argv/environment/inherited target handle/public startup DATA/logs.
+Verify GetNamedPipeClientProcessId/GetNamedPipeServerProcessId; open and retain
+peer process handle, creation time, expected executable identity and token/logon
+identity. PID check alone is not authentication. Peer identity failure/disconnect
+revokes future dispatch; numeric handle or stale pipe path cannot reconnect.
+
+Protocol v1: bounded versioned request ID + original registration + current control
+intent; Hello/QueryOriginal/RegisterPrepared/Birth/RequestRelease/RequestStop/
+DeliverRecord/AcknowledgeRecord/Freeze. Replay cache is ledger itself, not infinite
+per-request set. Request IDs and generations use checked monotonic counters;
+overflow closes admission. Only one authenticated controlling daemon lease at a
+time; cold replacement takes a fresh session after actual old-peer death/revocation.
+Broker launch uses explicit separate host-infrastructure ownership and no
+parent-death termination policy tied to daemon runtime. No arbitrary Windows
+creation flag is asserted to escape the runner's parent Job; actual parent Job
+constraints and broker survival under daemon kill are capability preflight/tests.
+If the runner kills the enclosing Job, broker loss remains Unknown. No broker
+replacement/election on timeout while an old incarnation may still retain debt.
+Daemon disconnect/actual death permanently fences that session, triggers native
+freeze/Stop+capture drain, and leaves broker alive until original responsibilities
+are physically terminal AND historical records durably acknowledged. Idle exit
+allowed only ledger empty, no pending bytes/outcomes, closed admission and explicit
+host termination acknowledgement. Unknown/unacknowledged debt prevents idle timer
+exit. Broker fatal abort/OS kill cannot publish proof; KILL_ON_JOB_CLOSE requests
+local termination but its success is not a durable original-domain receipt.
+Native ledger retains original Job/child state while channel disconnects. No
+arbitrary root PID adoption, OpenJobObject name lookup or second broker bootstrap
+may resolve pending original debt.
+
+Cold daemon queries same live broker incarnation, actual original ledger/hash,
+held original Job, root terminal/live evidence and pending B delivery. It validates
+original accepted attempt/workspace/journal/startup independently, reconciles exact
+historical records under reviewed stable lock recovery WITHOUT rotating original
+claim token, then may seal or dispatch a newly accepted Continue. It never calls
+current claim_owned_flow() merely to obtain that property. Lost/replaced broker,
+object/machine mismatch, damaged authority or lost pending record -> Attention/
+Unknown with retained workspace, not fresh owner or imported JSON closure.
+
+Cold IO policy: daemon death closes future provider/tool dispatch, broker freezes
+native birth admission and requests original domain termination, while B capture
+retains all already incoming frames and cleanup outcomes. Cold resumes ACP/session
+only AFTER full native+wire+external settlement and accepted Continue, with same
+original run/attempt/workspace/journal and stored provider sessions. Live stdout
+cannot be handed raw to a replacement SDK before B capture/pending frame sealing.
+Broker frame proxy must run accepted exact B scanner before any daemon SDK decode;
+not transport pass-through that loses capture on daemon crash. Journal append sink
+is a capability protocol to original actor, not another concurrent RunWriter.
+When actor dies, broker retains immutable pending record+bytes; cold writer recovery
+validates/commits it once. This broker/B/journal delivery seam is required precode
+closure, NOT already implemented or implied by Job support.
+
+7. Unsafe capsule and exact recipe
+windows0.58 pin archive checksum:
+dd04d41d93c4992d421894c18c8b43496aa748dd4c081bac0dc93eb0489272b6.
+Threading bindings CreateProcessW442, ResumeThread1619, JOB_LIST2713,
+PROCESS_INFORMATION3838, STARTUPINFOEXW4208; JobObjects Query70/accounting572.
+These Copy structs are DATA, not RAII. OwnedJob/OwnedProcess/OwnedPrimaryThread/
+OwnedPipe are nonClone private handle owners; invalid/NULL distinctions checked
+per constructor, CloseHandle exactly once. Std OwnedHandle conversion only through
+one documented unique from_raw_handle adoption per successful raw result. No
+process/thread handles duplicated into daemon; only approved stdio endpoints may
+be duplicated, with recipient ACK before sole pipe reference retirement. Actual
+terminal wait belongs to broker only, including every conversion failure.
+
+AttributeList owns std::alloc aligned Layout(size, align_of::<usize>()), pointer,
+initialized flag, stable boxed Job/HANDLE arrays and buffers. First NULL sizing
+Initialize call expected insufficient-buffer path; validate exact error, nonzero
+size, checked capacity and second successful initialization. Update exactly Job
+list+handle list. STARTUPINFOEXW.cb is complete extended size. Drop initialized list
+Delete exactly once BEFORE dealloc matching Layout; bindings Free performs Delete
+only and must not be combined with autoDelete/manualDelete. No Vec<u8> assumed
+alignment, reallocating borrowed arrays, premature pin drop or stale pointer.
+All fallible paths leak neither buffer nor any successful child. Fatal ownership
+panic/poison uses shared protected boundary; abort never manufactures settlement.
+
+Approved child stdio handles inheritable, parent ends non-inheritable;
+bInheritHandles TRUE+explicit HANDLE_LIST; Job/process/thread/control/credential/
+registry handles never inherit. Concurrent births verify no foreign inherited
+handles. Choose overlapped named stdio pipes with actual Windows async adapter
+and same B ownership leases; constructor/duplication/overlapped IO lifetime needs
+its own reviewed unsafe boundary, no assumed Tokio raw pipe support. Attribute/
+stdio cleanup on successful Create occurs only after returned handles owned.
+
+PreparedWinRecipe derives from accepted frozen command configuration, never from
+changed defaults: explicit resolved application path; ordered args; exact inherited
+base-env snapshot plus overrides/removals/frozen credentials; accepted cwd; stdio,
+console, creation flags and sandbox policy. UTF16 NUL checks/checked lengths;
+writable commandline inclNUL <=32767, Unicode double-NUL environment, correct
+Windows env-key case handling/drive variables. Resolver/quoting must reuse existing
+ACP accepted semantics; .cmd/.bat uses explicitly accepted interpreter and escaping
+recipe, not hidden ShellExecute fallback. If exact existing behavior cannot be
+reproduced, reject before effects and mark compatibility decision unresolved.
+Concrete quoting helper reuse/source survey and differential actual recorder tests
+required before unsafe API freeze. No private recipe Debug/error display.
+Features proposed: Foundation, System_Threading, System_JobObjects, Security,
+Storage_FileSystem, System_Pipes, System_IO plus exact token/security/overlapped
+requirements selected during API review; own manifest feature closure independent
+of ACP unions. Root workspace versions/MSRV preserved, no dependency change here.
+
+8. Frozen membership and terminal proof
+One unnamed Job per immutable native domain; no later AssignProcessToJobObject
+API exported, no target-accessible Job handle, no reuse for future opening. Freeze
+ledger spawn/assign frontier before observation. Retain Job across seal durability.
+Normal descendants and valid nested Jobs stay included; atomic nested-parent
+constraints verified before Release, failure has actual held Birth debt if success
+already occurred. No support fallback bypasses containment.
+Broker sole waiter observes actual process signaled, reads exit (259 is valid exit
+when waited), retains approved terminal receipt, then retires ALL owned root/thread
+and permitted duplicate process references. Only after retirement query ORIGINAL
+Job accounting. ActiveProcesses0 + frozen frontier + authentic terminal evidence +
+intact containment profile yields private native closure. Terminate success and
+completion-port message are not closure; absent message does not block polling
+query, failed query is Unknown. If a target/fixture retains process references and
+accounting stays nonzero, retain debt; no timeout approximation. Resource release
+is separate from proof delivery; pending immutable terminal record stays retained.
+
+9. Explicit unresolved trust/deployment choice — source blocker
+Jobs constrain ordinary CreateProcess lineage; they are not a security sandbox
+against identical unrestricted principal, WMI/service-created process or arbitrary
+remote effect. Unnamed handles/noninheritance/DACL do not prevent malicious same-
+user code opening broker/duplicating handles/changing ACL or spoofing private files.
+Choice U1 trusted cooperative targets: prove native closure ONLY for declared
+ordinary lineage under this explicit trust profile; classify unmediated outside-
+Job effects external Unknown. This is useful positive execution evidence, but
+CANNOT retire an original requirement demanding hostile same-user confinement.
+Choice U2 separate protected broker+target security profile (account/restricted
+capability/token/DACL/manager policy) with actual nonmigration/nonduplication proof:
+requires a separate deployment/credential compatibility design and authorization;
+no silently changed accepted credential/token/session in this draft.
+Maintainer MUST choose applicability against original scope before native coverage
+can be accepted. U1 is proposed first executable fixture profile, not a settled
+product security contract or approval to weaken requirements. Broker auth protects
+against accidental/stale/wrong peer within U1; it does not pretend isolate U2.
+Native object closure never settles undeclared arbitrary remote work. Tracked
+external adapters still require exact original occurrence/terminal evidence.
+
+10. Genuine Windows outer acceptance recipe, mandatory non-skipping
+Main-owned future lane on actual Windows10+/Server2016+ desktop process support;
+Windows CI parent Job+nested constraints documented. Build native recorder/provider
+fixture executables from source, invoke actual owned Flow daemon IPC/admission and
+actual provider/MCP launch/control, not raw leaf-only proof injection. Record OS
+build/architecture, exact fixture revision, independent original Job membership,
+process creation identity and fixed marker counters; redact private sentinels.
+Native tests fail if Unsupported, ignored/skipped or zero exercised positives.
+Crosscompile/unit mocks/ordinary nextest are supplemental, never these results.
+
+W1 held Birth: independent observer verifies original Job membership before Resume;
+root/child/grandchild markers0 then exact Release1 yields1/1/1; final real wait+
+accounting+wire+external seal allows exactly one original Continue.
+W2 root exit/stdio EOF while grandchild writes: Continue refused; genuine final
+child exit, reference retirement and original Job0 permit Continue. Benign nofork
+fixture cannot replace this. Retained exited-root duplicate counterfactual blocks
+selected accounting criterion, then release produces genuine closure.
+W3 Stop preBirth vs postCreate/preResume: zerochild vs actual born-held process;
+execution marker0 in both, actual terminal wait mandatory in latter. ResumeThread
+unexpected count/failure retains debt/no repeated permit; lost reply retry no exec2.
+W4 every creation/pipe/attribute/publication/journal failure and runtime/caller drop
+cut: same original broker owner remains, second process cannot acquire authority,
+actual root eventually collected; parent control/recipe tokens not inherited.
+W5 daemon killed before/after Birth ACK, Release dispatch/result and terminal ACK:
+same live broker/Job/ledger positive cold path, no duplicate process/attempt/run;
+exact historical journal replay once; original workspace/provider session retained.
+W6 kill broker, replace pipe/PID/incarnation, present same-name empty Job, replace
+private metadata or lose capture/receipt: retained Attention/Unknown, no Continue.
+W7 actual newer Stop/altered workspace/revision/archive competing with blocked
+Release gate: before gate no targetexec, after admitted gate genuine debt cleanup;
+no registry writer bypass, stale generation/historical ACK no newer control erase.
+W8 nested parent Job, breakaway and nested descendant Job; authentic ordinary
+lineage cannot escape under selected U1; WMI/service work tracked externalUnknown
+when original Job becomes empty. U2 must have separate hostile-target oracle.
+W9 quoted/empty/backslash/Unicode args, PATH/PATHEXT cmd/bat, env removal/override,
+credentials/cwd/sandbox exact frozen recipe; changed global defaults ignored.
+W10 two real MCP transports+ACP with B budgets/capture cleanup saturated; Stop
+latch remains serviceable, no unbounded slot/bytes, no inherited foreign handles,
+unknown-notification routing/compatibility and all prior A/B regressions retained.
+All original common P1–P5 required across Linux/macOS/Windows, not Windows-only
+scope. Actual runner availability/fixtures remain unexecuted dependencies here.
+
+11. Delivery/dependency gates
+First independent precode reviews: (a) broker control/cold original authority and
+B journal/capture integration, (b) Windows ABI/RAII/inheritance/recipe soundness,
+(c) containment trust/deployment choice, (d) actual non-skipping outer test matrix.
+Only then main may choose RED-first source stage under root permission. Suggested
+stages: pure recipe+unsafe leaf retained birth; broker auth/ledger/control/capture;
+actual owned outer Windows cold/settlement positives. Each stage carries full
+source dependency closure; no refusal-only completion. Linux/macOS/native external
+C/D/full product/5a5b/formal0/3 remain open. This author cannot accept this own plan.
+
+12. Primary source pins (read 2026-10-04; no API support inferred from docs alone)
+Official source content SHA256 pins below refer raw MicrosoftDocs paths rooted at
+https://raw.githubusercontent.com/MicrosoftDocs/ ; branches may move, matching
+content hash is required on reread. Local installed windows0.58 anchors section7
+and archive checksum pin generated ABI. Official links support corresponding facts:
+[W1] startup JOB_LIST/HANDLE_LIST/value lifetime:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute
+sdk-api/refs/heads/docs/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute.md
+55b78482e83b886d2bb3288f5c99c5141625e29eee830839fde02eba73c72353
+[W2] mutableUTF16/extended startup/env/CreateProcess:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw
+sdk-api/refs/heads/docs/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-createprocessw.md
+611ec4cb3c30018ac7a31532395339ff3da850c4da7ad4197f9d6a7a5e5fff85
+[W3] attribute sizing first call/lifetime:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-initializeprocthreadattributelist
+sdk-api/refs/heads/docs/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-initializeprocthreadattributelist.md
+14636d730fa6e4c7b05285c48abc2495cf1bd3d75dbfec1d7fd5bbee3a1a210d
+[W4] ResumeThread prior-count semantics:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-resumethread
+sdk-api/refs/heads/docs/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-resumethread.md
+f924c79a5ae58a50ea693262456a1cd3088845de71e2f4a4569ddec73992cd6b
+[W5] reference retirement/ActiveProcesses:
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information
+sdk-api/refs/heads/docs/sdk-api-src/content/winnt/ns-winnt-jobobject_basic_accounting_information.md
+d8c80143f5bed426aa729e8035fb2afd3c56bca73813379970cb3b6291e22ca0
+[W6] inheritance exceptions/completion limitations/nested Job scope:
+https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
+win32/refs/heads/docs/desktop-src/ProcThread/job-objects.md
+7bc691d199400d285dab2655583e4ab235ac8574f440d898baf3f004b6910c96
+[W7] Job rights/DACL:
+https://learn.microsoft.com/en-us/windows/win32/procthread/job-object-security-and-access-rights
+win32/refs/heads/docs/desktop-src/ProcThread/job-object-security-and-access-rights.md
+fe7179e5ce2065bc948af08a985d1486eb7e02925e7184d13e8e7a5935c7ae59
+[W8] explicit pipe DACL, logon SID, individual rights:
+https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights
+win32/refs/heads/docs/desktop-src/ipc/named-pipe-security-and-access-rights.md
+03e1ee9f8e0ade99f01a6423b0799b6a0d9c2465dab871dbce1821aa90512d06
+Pipe PID only identifies client, not entire authentication protocol (design inference):
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid
+https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-duplicatehandle
+https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-terminatejobobject
+Other references/limits are engineering decisions, not assertions Microsoft supplies
+Surge's cross-WAL/current-control/broker security contract.

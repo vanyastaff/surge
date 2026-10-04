@@ -1,0 +1,179 @@
+Wake-refusal cold/fault review — 2026-10-04
+
+Verdict: ACCEPTABLE scoped source protocol; remaining fault acceptance OPEN.
+No confirmed duplicate/early-ACK/published-owner lifetime defect found in this scope.
+This is not full source freeze, code authorization, formal5a/5b, native closure,
+full daemon startup or T25 completion. Only this report written; no tests run here.
+
+Scope: actual event commit / registry ACK interruption and cold replay, missing
+original run journal, published std owner through runtime consumption. Independent
+of earlier native research; no native proof/token APIs needed for these cases.
+
+1. Read source, exact snapshot
+Repository /Users/vanyastafford/Develop/surge; main may continue editing.
+Fully read production portions of refusal.rs/refusal_owner.rs/refusal_delivery.rs,
+migration0030, acceptance-frontier map; related file_lock/writer_slot/runtime wrapper
+and current real outer tests inspected. Hashes at this review read:
+- crates/surge-persistence/src/work_items/owned_flow/refusal.rs
+  d8a57a816746ad94d30516325458db8e6f7eb40f984005b001d188f61cb1e1db
+- same directory/refusal_owner.rs
+  d976f8bdfc5bc4ede463724c5c443a0ff428a7350f1ce7623e4b8901d0ff5431
+- same directory/refusal_delivery.rs
+  eb28a19a298943deffe26c240617523031b18b3c956062284a132c9816d7eecc
+- crates/surge-persistence/src/runs/migrations/registry/0030_owned_flow_wake_refusals.sql
+  c6434c0291638b51ad24c0c06e7335ce2d4e8899c34a9a942bf1cdeeacec3263
+- .autopilot/competitive-waves/evidence/owned-flow-20261003/
+  wake-refusal-acceptance-frontier-20261004.md
+  d23b6c7284489d2a27aebfe14a281a0aa77298148b2aff89153bb56d4b0f5f2c
+Frontier snapshot predates newly authored cold test; its remaining row is evidence
+status at snapshot, not proof that current source lacks that test.
+
+2. Current actual protocol, including failure windows
+refusal.rs: pre-reserves actual std worker with original guard, Ready before write
+transaction; validates independent original startup outside registry write txn.
+Mismatch transaction commits immutable receipt+pending outbox+Attention and clears
+wake. Publish follows tx.commit result, including CommitUnknown on commit error.
+A crash after registry commit and before publish leaves durable pending outbox,
+recoverable on fresh process; it does not create a dispatch claim.
+
+refusal_owner.rs: Slot retains Arc<PreparationLock>, pooled registry resources,
+clock and SAME ActiveWriters Arc independently of Tokio/caller. Registry entry is
+registered before thread creation, actual handle published, max8 owners. Unpublished
+reservation aborts and joins; published drop does not abort delivery. Worker retries
+errors every100ms and keeps acquired JournalOwner between attempts. A proven absent
+receipt only resolves uncertain commit; inaccessible/invalid DB is Err, not absent.
+Actual guard remains in registered slot even when worker has finished until join.
+Close refuses new admission before teardown; join waits actual handles. Permanent
+unavailable evidence can intentionally hold shutdown until repair/owner resolution;
+timeout is not proof that a retained owner may be discarded.
+
+refusal_delivery.rs:75–160 checks guard+immutable receipt+independent binding before
+acquiring SAME normal writer slot and existing-only .lock. Journal READ_WRITE open
+has no CREATE; missing file/dir errors retain slot original guard, and any acquired
+lease. Event append commits at139 before separate registry ACK. Retry validates
+startup anchors and scans exact lineage; existing exact receipt event reuses its
+sequence. Duplicate/conflicting same-lineage event is rejected, not silently ACKed.
+After event commit second journal transaction verifies exact durable occurrence;
+registry ACK validates key/hash and any prior sequence, then commits at158.
+If final read-tx commit fails after ACK, retry is idempotent. Neither append return
+value nor EOF nor worker timeout acts as authoritative delivery.
+
+0030 receipt update/delete and outbox key/hash rewrite/delete are blocked; once ACK
+nonnull it cannot change or clear. Outbox FK binds exact receipt key+hash. This is
+informational delivery evidence, not a provider/native Closed certificate.
+
+3. Confirmed current outer cold oracle and its limits
+crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:1606:
+cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect.
+Full test read. It performs actual accepted Flow/provider/MCP start+park, corruption
+of one manifest association, real wake scheduler and held normal writer. Parent
+holds actual registry BEGIN IMMEDIATE AFTER refusal+Attention commit; then releases
+writer and separately observes exactly one actual committed refusal journal event.
+ACK remains NULL while host alive; exact original host is killed/reaped. After
+registry blocker rollback, a NEW process calls production storage.resume_pending_
+owned_flow_refusals, closes admission and joins; exact original seq/payload/count1,
+claim token, immutable source/config/receipt and physical logs remain unchanged.
+Actual original guard Busy before crash and released after real joined delivery.
+No synthetic event insert, fake ACK, mocked Closed or direct PreparedRefusal publish.
+
+Parent reports raw1PASS in1.22s, terminal98175 receipt pending. This review did not
+run it and does not turn that report into formal acceptance. Test is cfg Linux/macOS;
+not a Windows positive. Explicit host-alive check already exists immediately before
+stop_and_wait via kill(pid,None). Exact full refusal lineage oracle is supplied by
+separate association test; cold replay also preserves actual pre-crash payload.
+
+Counterfactual this actual cold test detects:
+- ACK before event commit/crossing registry blocker -> pending assertion fails.
+- Reappend on replay -> event_count!=1 or changed original seq/payload.
+- New claim/provider/tool effect -> token/snapshots/physical-log equality fails.
+- Published guard released with producer -> external lock exclusion fails.
+- Cold delivery never completes or leaves stale owner -> real child bounded wait /
+  joined guard reacquisition fails; timeout alone is not a success observation.
+
+It is a NEW actual process with production storage recovery API, not the full
+surge-daemon binary startup sequence or runtime-consumption case: reclaim explicitly
+joins INSIDE host_probe before block_on returns. Existing refuse-held similarly
+closes writer and joins before dropping runtime. Do not relabel either as the
+published-owner-after-runtime-teardown positive.
+
+4. Exact feasible missing-journal + runtime fault oracle
+Goal is failure AFTER real refusal commit; removing journal BEFORE wake hits
+validate_original_startup and does not exercise a published delivery owner.
+Use same actual outer start+park -> one damaged association -> refuse-held witness,
+record original receipt/hash/five-field lineage/token/Attention/logs; event absent,
+outbox pending, original launch guard genuinely Busy. Kill/reap original host while
+normal writer blocks informational append. No receipt/event/ACK insertion.
+
+With no journal connections left, retain original files as an inert cohort (main
+SQLite plus WAL/SHM if present), and test two separate cuts: (a) original
+ events.sqlite missing but original .lock present; (b) original run directory absent.
+Move ORIGINAL files/directory aside; do not synthesize replacement or reopen absent
+path with SQLite CREATE. Observe absence via filesystem metadata, registry reads
+and independent launch-lock probe. Restoring exact original cohort later is repair,
+not claiming recreated journal is original. Platform rename constraints must be
+actually respected, not hidden by cfg-skipping a positive.
+
+Fresh actual host must call production resume_pending_owned_flow_refusals before
+launch work. Once recovery reservation published, obtain an observable ready marker;
+verify same original launch guard Busy from parent and unchanged token/effect logs.
+Now return from asynchronous host body while owner remains pending and consume
+ACTUAL runtime via same production HostRuntime wrapper order:
+close refusal admission -> runtime.take/drop (or production background policy) ->
+MCP child settlement -> refusal-owner actual join. Integration helper can reuse
+existing runtime_shutdown module under its actual host ownership path; no fake
+Drop tracker or manual join before runtime consumption qualifies.
+
+While join remains blocked with runtime gone, parent must observe host alive,
+original guard still Busy, outbox NULL, missing path remains absent and no target
+work. New reserve must immediately Busy after close (existing lifecycle tests cover
+admission mechanics, but not this full published fault cut). The observation marker
+must attest actual runtime wrapper consumption, not merely scheduler cancellation.
+
+Restore same original files/directory at accepted path. Std worker must then acquire
+actual existing-only writer lock, validate genuine startup and append real event;
+ACK exact seq, actual join completes, host exits, original launch guard becomes
+reacquirable. Verify count1/full payload/hash+lineage, unchanged claim/snapshots/
+Attention and unchanged physical logs. No timeout release, DELETE outbox, re-created
+journal, synthetic terminal state or direct receipt delivery call permitted.
+
+Counterfactuals: CREATE-open/normal startup recreates missing path -> absence fails;
+Tokio-owned delivery dies on teardown -> never actual event/ACK/exit after repair;
+join drops slot early -> lock probe succeeds before repair; wrapper joins before
+runtime consume -> runtime marker never observed; conflict silently delivered ->
+exact original seq/receipt mismatch; repair creates new journal -> original cohort
+identity/bytes and startup validation fail. Bound test harness waits; on failure
+retain diagnostic observations then terminate/reap test host, never count cleanup
+kill as successful delivery.
+
+5. Additional bounded faults / source versus evidence
+Missing initial journal and malformed independent startup are distinct no-refusal
+pretransaction failures; not interchangeable with post-publication pending outbox.
+CommitUnknown while registry unavailable is not tested by cold ACK blocker, because
+that blocker is introduced AFTER receipt commit. Separate actual registry IO/commit
+failure cut must distinguish inaccessible evidence from proved absent receipt.
+Current read_receipt uses Result<Option<_>> correctly; error retries with guard held.
+No confirmed commit-uncertainty release defect inferred merely from absent test.
+
+One unproved additional IO cut: JournalOwner.connection is retained after opening;
+metadata/existing-only checks run only on initial open (:106–119). Rename/unlink
+AFTER connection opens, especially after event commit while ACK blocked, has not
+been exercised. Do not assume SQLite's moved-DB detection covers every WAL/ACK
+window, or that path absence definitely causes a false ACK. Test actual retained
+connection/path fault if acceptance requires ACK remain pending when original
+journal becomes inaccessible. This is an explicit evidence gap, not a confirmed
+source bug from hypothetical filesystem behavior. Same-UID malicious replacement
+is outside this bounded ordinary fault claim; no native authority is involved.
+
+Admission/startup source distinction: daemon main.rs:108 invokes pending recovery
+before bridge/engine creation, but method returns after owners are published, not
+after all informational ACKs. It can proceed with pending per-run guard/Attention;
+this does not itself imply new execution of that refused run. A full daemon startup
+positive/negative must observe actual original run IPC/token/effects, not assume
+storage-level return proves all background delivery complete.
+
+Conclusion: current commit/dedup/ACK source shape and genuine cold oracle are
+coherent in this bounded scope. Missing original journal THROUGH actual runtime
+consumption, actual registry-unavailability/commit uncertainty, and optional
+post-open path-loss cut remain independently testable evidence debts. No source
+change prescribed without a falsifying actual observation; main owns implementation
+and tests. Full original native/external/cold requirements and formal0/3 preserved.
