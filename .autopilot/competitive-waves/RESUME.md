@@ -1,3 +1,27 @@
+# Independently captured refusal lineage GREEN 2026-10-04
+
+Author58788 terminal0: cold-permanent-association-lineage-green.log actual exact
+manifest_binding_refusal_must_persist_attention_after_actual_wake 1PASS1.59s.
+Root FULLread raw and prewake/postwake oracle. All five receipt lineage fields
+(invocation, cycle generation, source revision, wake identity, control generation)
+match independently captured prewake registry rows; due-count1 and refusal-count1.
+Original actual transport, unchanged physical-effect logs, claim token, lasting
+Attention, fixed diagnostics and real journal payload/ACK sequence checks retained.
+This strengthens exact refusal association; cold restart delivery and full native
+closure are not proved by this passing case.
+
+Author6653 terminal0: fifth production-entry Ready/Stop storage model
+1PASS0.10s. Root reads current source explicit storage-only cleanup=true comment;
+no fake Closed/provider/native or capacity-transfer proof. Root FULLread fifth raw/source: paired production Ready followed by real second-
+connection Suspend while public entry awaits workerReady; result Obsolete, no
+receipt/token mutation and newest control preserved. Actual ColdHost seam
+remains required. Root reactivated independent reviewer for bounded Windows native
+API precode draft only; no source/build/process/installation ownership delegated.
+Main reports no live Cargo at receipt; next actual registry-blocked ACK/hostdeath/
+cold-existing-event dedup, missing-journal retention/runtime barriers and current
+strict gates remain required. Full scope, formal initial0/3 and final freeze5a→5b
+remain open.
+
 # Published worker ownership proved across processes 2026-10-04
 
 Author39344 terminal0: exact populated IPC host test
