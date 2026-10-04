@@ -439,6 +439,37 @@ passed in `29181`. Final strict check `18822` and a complete, unfiltered canonic
 nextest run with two test threads still need terminal confirmation on the latest
 fixture source; source freeze and independent 5a/5b remain pending.
 
+The unfiltered resource-bounded full run `66117` terminated exit 100 in
+273.664 seconds: 3451 ran, 3449 passed, 2 failed, 36 skipped. Log:
+`/tmp/surge-predispatch-author-repair3-workspace-bounded-20261003.log`.
+Both post-ack Continue scenarios passed with their unchanged eight-second
+deadlines. The remaining failures were the cold planned-park proof and concurrent
+preparation first creation; no final candidate freeze or review acceptance occurred.
+
+Retained cold diagnostics show only `usage_seq` 0→24 and `usage_unknown` true→false
+differed between full attempt snapshots; binding, config, state and identity were
+identical. The first proof now uses the real `sync_usage` projection before capture,
+preserving exact second-child equality. The actual cold scenario passed 10/10
+repeats in `56553`. This is projection timing evidence, not proof of real ACP spend
+or a resolution of the earlier lost-diagnostic child failure `3061`.
+
+Concurrent creation produced genuine RED in `78381` and `11547`. An independent
+two-thread OS diagnostic, using a held directory FD and fresh basename each round,
+recorded 903 `ENOENT` errors in 1000 old `O_CREAT` rounds. Exclusive creation plus
+noncreating reopen only on raw `EEXIST` completed all 2000 opens in 1000 rounds.
+Artifacts: `/tmp/surge-openat-race-independent-20261003.py` and `.json`. Owning
+maintainer and independent security pre-code lenses accepted this bounded change.
+All secure flags, held inode/path/UID/mode/ACL/link checks remain; other errors
+fail closed, without retrying unsafe inputs or unlinking locks. Temporary caller
+and errno diagnostics were removed. The actual task concurrency law passed 30/30
+repeats in `11472`; 12 other preparation/security/lifecycle laws passed in `59950`.
+
+Corrected-source strict clippy `97825` passed all workspace targets/features with
+`-D warnings` (exit 0, 1m48s). Corrected release/docs, refreshed fixture binaries
+and the final complete nextest run still require terminal evidence. This remains
+author WIP in the same consolidated repair 3/3, not a fourth review repair or a
+completed T12 slice. Independent 5a must precede 5b after final executable gates.
+
 ### Ordinary flow ownership normalization (reviewed next dependency)
 
 The actual-cwd preparation dependency required a bounded amendment of this next
