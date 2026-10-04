@@ -1,3 +1,21 @@
+# Actual immutable history counterfactuals GREEN 2026-10-04
+
+Author78969 terminal0: cold-permanent-association-history-green.log exact real-host
+manifest-binding refusal 1PASS1.33s. Root FULLread raw and SQL oracle: receipt body
+update/delete and ACK null/sequence-change/delete rejected as SQLite constraints;
+actual stored hash/body/ACK reread unchanged after each. Independent prewake lineage,
+count1, original token, physical-effect traces and lasting Attention checks retained.
+New outbox key/hash reassignment assertions authored afterward remain unexecuted;
+not included in this PASS claim. Acceptance-frontier row updated accordingly.
+
+No live Cargo at author receipt. Main writes actual registry-blocked ACK → host
+SIGKILL/reap → cold original-event reuse test; no synthetic receipt/Closed insertion
+or production behavior change. Root proposed held-normal-writer then parent registry
+write lock to establish real journal-before-ACK cut without guessing timing. Separate
+architect now reviews current cold fault/lifetime source read-only in /tmp; Windows
+reviewer continues bounded API precode draft. Main alone owns source/build/processes.
+Full native/platform/product scope and freeze5a→5b remain open, formal initial0/3.
+
 # Independently captured refusal lineage GREEN 2026-10-04
 
 Author58788 terminal0: cold-permanent-association-lineage-green.log actual exact
