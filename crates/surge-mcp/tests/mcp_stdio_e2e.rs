@@ -185,10 +185,20 @@ async fn rejected_ownership_intent_prevents_actual_mcp_child_spawn() {
         Some(home.path().into()),
         std::sync::Arc::new(Reject),
     );
-    let result = connection.list_tools().await;
-    assert!(
-        matches!(result, Err(surge_mcp::McpError::StartFailed { reason, .. })
-        if reason.contains("journal deliberately rejected"))
-    );
-    assert!(!marker.exists());
+    for _ in 0..8 {
+        let result = connection.list_tools().await;
+        assert!(matches!(
+            result,
+            Err(surge_mcp::McpError::WriterOwnershipRefused { .. })
+        ));
+        assert!(
+            !marker.exists(),
+            "failed durable intent reached actual child"
+        );
+        assert_eq!(
+            connection.status().await,
+            surge_mcp::McpHealth::Disconnected,
+            "failed durable prerequisite must not change process liveness or restart history"
+        );
+    }
 }

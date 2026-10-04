@@ -2,7 +2,7 @@
 
 ## Overview
 
-Surge is a **Rust Cargo workspace organized as a modular monolith with hexagonal (ports-and-adapters) influences**. The workspace is the deployment unit; the 12 member crates are the modules. A leaf domain crate (`surge-core`) holds pure types with no I/O; adapter crates wrap each external concern (SQLite, git, ACP, MCP, notification channels, tracker APIs); two long-running binaries (`surge-cli`, `surge-daemon`) and one UI binary (`surge-ui`) compose those adapters into runnable products.
+Surge is a **Rust Cargo workspace organized as a modular monolith with hexagonal (ports-and-adapters) influences**. The workspace is the deployment unit; the 13 member crates are the modules. A leaf domain crate (`surge-core`) holds pure types with no I/O; adapter crates wrap each external concern (SQLite, git, ACP, MCP, notification channels, tracker APIs); two long-running binaries (`surge-cli`, `surge-daemon`) and one UI binary (`surge-ui`) compose those adapters into runnable products.
 
 This pattern was chosen because it matches what surge actually is: a single user-facing tool with clear internal seams. We get strong module boundaries (separate crates that cannot accidentally reach into one another's privates), an explicit dependency graph (cargo refuses cycles, so the rule is enforced by the compiler), and a single deployment surface (one daemon, one CLI, one UI on a developer's machine). The trade-offs that come with microservices — network hops, distributed transactions, polyglot persistence, ops complexity — are non-goals (see `docs/ARCHITECTURE.md` § 13). Multi-user collaboration on the same run is also a non-goal, so a monolith is the correct shape.
 
@@ -46,6 +46,9 @@ This pattern was chosen because it matches what surge actually is: a single user
 │   │   ├── bundled/flows/                  # First-party flow.toml assets baked in via include_str!
 │   │   └── benches/                        # criterion benches (harness = false)
 │   │
+│   │   ── Shared runtime leaf ────────────────────────────────────────────────
+│   ├── surge-process/                      # std-only shared owner panic boundary
+│   │
 │   │
 │   │   ── Application layer (orchestrator / engine) ──────────────────────────
 │   ├── surge-orchestrator/                 # Engine: graph executor + bootstrap chain + roadmap-amendment surfaces
@@ -86,6 +89,9 @@ Dependencies flow strictly downward through four conceptual layers. Cargo's cycl
 **Layer 1 — Domain (leaf):**
 - `surge-core` depends on nothing except external types crates (`serde`, `thiserror`, `chrono`, `ulid`, `bincode`, `toml_edit`, `sha2`, `hex`, `semver`, `humantime-serde`).
 - **No I/O. No `tokio`. No filesystem, network, database, process, or thread primitives.** Pure types and folds.
+
+**Shared runtime leaf:**
+- `surge-process` uses only `std`. MCP, persistence and host binaries share its once-installed owner panic boundary without cross-adapter dependencies. It is separate from the pure domain layer in `surge-core`.
 
 **Layer 2 — Application:**
 - `surge-orchestrator` depends on `surge-core` and adapter crates (`surge-persistence`, `surge-acp`, `surge-git`, `surge-mcp`, `surge-intake`, `surge-notify`).

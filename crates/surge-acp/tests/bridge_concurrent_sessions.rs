@@ -29,6 +29,7 @@ async fn inner_test() {
     let mut sids: Vec<SessionId> = Vec::with_capacity(5);
     for _ in 0..5 {
         let cfg = SessionConfig {
+            effect_fence: None,
             writer_id: surge_core::id::ExecutionWriterId::new(),
             invocation: surge_core::id::StageInvocationId::new(),
             runtime: "fixture".into(),

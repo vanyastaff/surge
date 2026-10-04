@@ -404,9 +404,15 @@ impl Engine {
             .prepare_run_start(run_id, &graph, &worktree_path, run_config, claim)
             .await?;
 
-        let per_run_mcp_registry =
-            self.resolve_run_mcp_registry(&run_config.mcp_servers, &worktree_path, &writer);
-        let mcp_servers_clone = run_config.mcp_servers.clone();
+        let effect_fence = self.owned_flow_effect_fence(&run_config, claim)?;
+        let run_bridge = super::owned_effects::bridge(self.bridge.clone(), effect_fence.clone());
+        let per_run_mcp_registry = self.resolve_run_mcp_registry(
+            &run_config,
+            &worktree_path,
+            &writer,
+            effect_fence.as_ref(),
+        );
+        let mcp_servers_clone = effective_run_mcp_servers(per_run_mcp_registry.as_deref());
 
         let (event_tx, event_rx) = broadcast::channel(256);
         let registration = self.register_active_run(run_id).await;
@@ -423,7 +429,7 @@ impl Engine {
             run_id,
             writer,
             artifact_store,
-            bridge: self.bridge.clone(),
+            bridge: run_bridge,
             tool_dispatcher: self.tool_dispatcher.clone(),
             notify_deliverer: self.notify_deliverer.clone(),
             graph,
@@ -500,6 +506,44 @@ impl Engine {
         Ok(context)
     }
 
+    async fn start_run_writer(
+        &self,
+        run_id: RunId,
+        worktree_path: &Path,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<surge_persistence::runs::run_writer::RunWriter, EngineError> {
+        let writer = if claim.is_some()
+            && self
+                .storage
+                .get_run(&run_id)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+                .is_some()
+        {
+            let inspected = self
+                .storage
+                .inspect_run(run_id)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+            if !matches!(inspected.database, surge_persistence::runs::inspection::RunDatabaseInspection::Present{ref events} if events.is_empty())
+            {
+                return Err(EngineError::Storage(
+                    "task start refuses nonempty existing journal".into(),
+                ));
+            }
+            self.storage
+                .open_run_writer(run_id)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+        } else {
+            self.storage
+                .create_run(run_id, worktree_path, None)
+                .await
+                .map_err(|error| EngineError::Storage(error.to_string()))?
+        };
+        Ok(writer)
+    }
+
     async fn prepare_run_start(
         &self,
         run_id: RunId,
@@ -517,6 +561,18 @@ impl Engine {
     > {
         use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
         let task_context = self.task_start_context(run_id, claim)?;
+        if let Some(inputs) = &run_config.owned_flow_inputs {
+            let claim = claim.ok_or_else(|| {
+                EngineError::Storage("owned Flow inputs require real launch ownership".into())
+            })?;
+            inputs
+                .validate_for(run_id, claim.binding(), worktree_path)
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+            self.storage
+                .work_items()
+                .validate_owned_flow_pending(claim)
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+        }
 
         tracing::info!(
             target: "surge.path.exercised",
@@ -570,35 +626,7 @@ impl Engine {
             return Err(EngineError::WorktreeMissing(worktree_path.to_path_buf()));
         }
 
-        let writer = if claim.is_some()
-            && self
-                .storage
-                .get_run(&run_id)
-                .await
-                .map_err(|error| EngineError::Storage(error.to_string()))?
-                .is_some()
-        {
-            let inspected = self
-                .storage
-                .inspect_run(run_id)
-                .await
-                .map_err(|error| EngineError::Storage(error.to_string()))?;
-            if !matches!(inspected.database, surge_persistence::runs::inspection::RunDatabaseInspection::Present{ref events} if events.is_empty())
-            {
-                return Err(EngineError::Storage(
-                    "task start refuses nonempty existing journal".into(),
-                ));
-            }
-            self.storage
-                .open_run_writer(run_id)
-                .await
-                .map_err(|error| EngineError::Storage(error.to_string()))?
-        } else {
-            self.storage
-                .create_run(run_id, worktree_path, None)
-                .await
-                .map_err(|error| EngineError::Storage(error.to_string()))?
-        };
+        let writer = self.start_run_writer(run_id, worktree_path, claim).await?;
         self.spawn_event_forwarder(run_id, &writer);
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
@@ -619,6 +647,15 @@ impl Engine {
             .append_events(events)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
+        if let Some(inputs) = &run_config.owned_flow_inputs {
+            let claim = claim
+                .ok_or_else(|| EngineError::Storage("owned Flow startup owner missing".into()))?;
+            super::work_items::validate_resume(&self.storage, claim).await?;
+            self.storage
+                .work_items()
+                .acknowledge_owned_flow_startup(claim, inputs.manifest())
+                .map_err(|error| EngineError::Storage(error.to_string()))?;
+        }
 
         Ok((writer, artifact_store, run_config))
     }
@@ -628,29 +665,64 @@ impl Engine {
     /// `McpRegistry` is built for this run; otherwise fall back to the
     /// engine-wide registry (typically `None` for daemon mode, where the
     /// per-run list is the only source).
+    fn owned_flow_effect_fence(
+        &self,
+        config: &EngineRunConfig,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+    ) -> Result<Option<Arc<super::owned_effects::OwnedFlowEffectFence>>, EngineError> {
+        if config.owned_flow_inputs.is_none() {
+            return Ok(None);
+        }
+        let claim = claim.ok_or_else(|| {
+            EngineError::WorkItemRejected("owned Flow requires retained launch ownership".into())
+        })?;
+        self.storage
+            .work_items()
+            .validate_owned_flow_effect(claim)
+            .map_err(|_| {
+                EngineError::WorkItemRejected("owned Flow current control forbids dispatch".into())
+            })?;
+        Ok(Some(Arc::new(
+            super::owned_effects::OwnedFlowEffectFence::new(
+                self.storage.work_items(),
+                claim.clone(),
+            ),
+        )))
+    }
+
     fn resolve_run_mcp_registry(
         &self,
-        mcp_servers: &[McpServerRef],
+        run_config: &EngineRunConfig,
         worktree_path: &Path,
         writer: &surge_persistence::runs::RunWriter,
+        effect_fence: Option<&Arc<super::owned_effects::OwnedFlowEffectFence>>,
     ) -> Option<Arc<surge_mcp::McpRegistry>> {
-        let configs = if mcp_servers.is_empty() {
+        let configs = if let Some(inputs) = &run_config.owned_flow_inputs {
+            let servers = inputs.servers();
+            if servers.is_empty() {
+                return None;
+            }
+            servers.to_vec()
+        } else if run_config.mcp_servers.is_empty() {
             self.mcp_registry
                 .as_ref()
                 .map(|registry| registry.configured_servers())?
         } else {
-            mcp_servers.to_vec()
+            run_config.mcp_servers.clone()
         };
         let observer: Arc<dyn surge_mcp::writer_observer::HostWriterObserver> =
             Arc::new(crate::engine::writer_coverage::McpWriterObserver {
                 recorder: writer.event_recorder(),
                 invocation: surge_core::id::StageInvocationId::new(),
+                effect_fence: effect_fence.cloned(),
             });
-        Some(Arc::new(surge_mcp::McpRegistry::from_config_owned(
-            &configs,
-            Some(worktree_path),
-            &observer,
-        )))
+        Some(Arc::new(
+            surge_mcp::McpRegistry::from_config_owned_on_demand(
+                &configs,
+                Some(worktree_path),
+                &observer,
+            ),
+        ))
     }
 
     /// Resolve the effective memory-store override for a run: the per-run
@@ -759,13 +831,17 @@ impl Engine {
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
-            mcp_servers: run_config.mcp_servers.clone(),
+            mcp_servers: if run_config.owned_flow_inputs.is_some() {
+                Vec::new()
+            } else {
+                run_config.mcp_servers.clone()
+            },
             // Persist the frozen budget so a daemon-restart resume re-arms spend
             // enforcement instead of reverting to the unlimited default.
             budget: run_config.budget,
         };
 
-        Ok(vec![
+        let mut events = vec![
             VersionedEventPayload::new(EventPayload::RunStarted {
                 pipeline_template: None,
                 project_path: worktree_path.to_path_buf(),
@@ -776,7 +852,15 @@ impl Engine {
                 graph: Box::new(graph.clone()),
                 graph_hash,
             }),
-        ])
+        ];
+        if let Some(inputs) = &run_config.owned_flow_inputs {
+            events.push(VersionedEventPayload::new(
+                EventPayload::OwnedFlowInputsBound {
+                    manifest: Box::new(inputs.manifest().clone()),
+                },
+            ));
+        }
+        Ok(events)
     }
 
     async fn collect_startup_artifact_events(
@@ -1088,6 +1172,44 @@ impl Engine {
         self.resume_run_owned(claim.run(), path, Some(claim)).await
     }
 
+    fn restored_run_config(
+        &self,
+        claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
+        replayed: &super::replay::ReplayedState,
+    ) -> Result<EngineRunConfig, EngineError> {
+        let mut resume_run_config = if let Some(claim) = claim {
+            super::work_items::pinned(&self.storage, claim)?.3
+        } else {
+            EngineRunConfig::default()
+        };
+        if let Some(persisted) = &replayed.run_config {
+            if resume_run_config.owned_flow_inputs.is_none() {
+                resume_run_config
+                    .mcp_servers
+                    .clone_from(&persisted.mcp_servers);
+            }
+            // Re-arm spend enforcement with the run's frozen budget.
+            resume_run_config.budget = persisted.budget;
+            if let Some(cap) = persisted.bootstrap_edit_loop_cap {
+                resume_run_config.bootstrap.edit_loop_cap = cap;
+            }
+        }
+        crate::engine::validate::validate_quota_policy(
+            &replayed.graph,
+            &resume_run_config.quota_recovery,
+            self.config.profile_registry.as_deref(),
+        )?;
+        // Task 12 M4 review: `memory_store_path` is deliberately never
+        // persisted (see `EngineRunConfig::memory_store_path`'s own doc),
+        // so there is nothing to recover from `replayed.run_config` above —
+        // this resumed run's only source for it is the engine-level
+        // fallback, the same one `start_run` consults.
+        resume_run_config.memory_store_path =
+            self.resolve_memory_store_path(resume_run_config.memory_store_path.take());
+
+        Ok(resume_run_config)
+    }
+
     async fn resume_run_owned(
         &self,
         run_id: RunId,
@@ -1125,38 +1247,18 @@ impl Engine {
         // mcp_servers and the frozen budget survive a daemon restart + resume.
         // Falls back to defaults (empty mcp list, unlimited budget) for runs that
         // predate those fields.
-        let mut resume_run_config = if let Some(claim) = claim {
-            super::work_items::pinned(&self.storage, claim)?.3
-        } else {
-            EngineRunConfig::default()
-        };
-        if let Some(persisted) = &replayed.run_config {
-            resume_run_config
-                .mcp_servers
-                .clone_from(&persisted.mcp_servers);
-            // Re-arm spend enforcement with the run's frozen budget.
-            resume_run_config.budget = persisted.budget;
-            if let Some(cap) = persisted.bootstrap_edit_loop_cap {
-                resume_run_config.bootstrap.edit_loop_cap = cap;
-            }
-        }
-        crate::engine::validate::validate_quota_policy(
-            &replayed.graph,
-            &resume_run_config.quota_recovery,
-            self.config.profile_registry.as_deref(),
-        )?;
-        // Task 12 M4 review: `memory_store_path` is deliberately never
-        // persisted (see `EngineRunConfig::memory_store_path`'s own doc),
-        // so there is nothing to recover from `replayed.run_config` above —
-        // this resumed run's only source for it is the engine-level
-        // fallback, the same one `start_run` consults.
-        resume_run_config.memory_store_path =
-            self.resolve_memory_store_path(resume_run_config.memory_store_path.take());
+        let resume_run_config = self.restored_run_config(claim, &replayed)?;
 
         // Build a per-run McpRegistry exactly like start_run does.
-        let per_run_mcp_registry =
-            self.resolve_run_mcp_registry(&resume_run_config.mcp_servers, &worktree_path, &writer);
-        let mcp_servers_for_resume = resume_run_config.mcp_servers.clone();
+        let effect_fence = self.owned_flow_effect_fence(&resume_run_config, claim)?;
+        let run_bridge = super::owned_effects::bridge(self.bridge.clone(), effect_fence.clone());
+        let per_run_mcp_registry = self.resolve_run_mcp_registry(
+            &resume_run_config,
+            &worktree_path,
+            &writer,
+            effect_fence.as_ref(),
+        );
+        let mcp_servers_for_resume = effective_run_mcp_servers(per_run_mcp_registry.as_deref());
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
@@ -1171,7 +1273,7 @@ impl Engine {
             run_id,
             writer,
             artifact_store,
-            bridge: self.bridge.clone(),
+            bridge: run_bridge,
             tool_dispatcher: self.tool_dispatcher.clone(),
             notify_deliverer: self.notify_deliverer.clone(),
             graph: replayed.graph,
@@ -1569,6 +1671,10 @@ fn terminal_resume_handle(run_id: RunId, outcome: crate::engine::RunOutcome) -> 
     }
 }
 
+fn effective_run_mcp_servers(registry: Option<&surge_mcp::McpRegistry>) -> Vec<McpServerRef> {
+    registry.map_or_else(Vec::new, surge_mcp::McpRegistry::configured_servers)
+}
+
 // Suppress unused-field warning for config until Phase 6+ uses it.
 #[allow(dead_code)]
 fn _engine_config_used(e: &Engine) {
@@ -1715,10 +1821,17 @@ async fn append_task_binding(
     context: surge_core::work_item::WorkItemContext,
     events: &mut Vec<VersionedEventPayload>,
 ) -> Result<(), EngineError> {
-    let bytes = serde_json::to_vec(context.requirements())
+    let bytes = context
+        .origin()
+        .canonical_bytes()
         .map_err(|error| EngineError::Internal(error.to_string()))?;
+    let artifact_name = if context.flow().is_some() {
+        "accepted_flow_contract"
+    } else {
+        "accepted_requirements"
+    };
     let artifact = store
-        .put(run, "accepted_requirements", &bytes)
+        .put(run, artifact_name, &bytes)
         .await
         .map_err(|error| EngineError::Storage(error.to_string()))?;
     events.push(artifact_produced_event(
@@ -1729,7 +1842,7 @@ async fn append_task_binding(
             })?,
         artifact.hash,
         artifact.path,
-        "accepted_requirements",
+        artifact_name,
     ));
     events.push(VersionedEventPayload::new(
         EventPayload::WorkItemAttemptBound { context },

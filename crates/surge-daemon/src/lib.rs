@@ -34,4 +34,5 @@ pub use server::{
     ServerConfig, run_runs_only, run_synthetic as run_synthetic_server, run_with_supervisor,
 };
 
+mod owned_flows;
 mod work_items;

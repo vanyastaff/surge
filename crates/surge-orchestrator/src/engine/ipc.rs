@@ -69,6 +69,13 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum DaemonRequest {
+    /// Normalize an ordinary Flow under the durable single host owner.
+    OwnedFlowStart {
+        /// Client frame identity.
+        request_id: RequestId,
+        /// Exact allowlisted first-body request and immutable operation identity.
+        request: Box<super::owned_flow::OwnedFlowStart>,
+    },
     /// Durable persistent-task control.
     WorkItem {
         /// Request identity.
@@ -279,7 +286,8 @@ impl DaemonRequest {
     #[must_use]
     pub fn request_id(&self) -> RequestId {
         match self {
-            Self::WorkItem { request_id, .. }
+            Self::OwnedFlowStart { request_id, .. }
+            | Self::WorkItem { request_id, .. }
             | Self::Ping { request_id }
             | Self::StartBootstrap { request_id, .. }
             | Self::BootstrapStatus { request_id, .. }
@@ -346,6 +354,13 @@ impl McpProbeReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    /// Ordinary Flow acceptance receipt; replay confers no new launch authority.
+    OwnedFlowStarted {
+        /// Client frame identity.
+        request_id: RequestId,
+        /// Original host-allocated acceptance.
+        receipt: Box<surge_core::work_item::OwnedFlowReceipt>,
+    },
     /// Durable task operation result.
     WorkItemOk {
         /// Request identity.
@@ -494,7 +509,8 @@ impl DaemonResponse {
     #[must_use]
     pub fn request_id(&self) -> RequestId {
         match self {
-            Self::WorkItemOk { request_id, .. }
+            Self::OwnedFlowStarted { request_id, .. }
+            | Self::WorkItemOk { request_id, .. }
             | Self::BootstrapOperation { request_id, .. }
             | Self::PingOk { request_id, .. }
             | Self::StartRunOk { request_id, .. }
@@ -570,6 +586,64 @@ pub enum GlobalDaemonEvent {
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
+/// Content-free classification of a JSON framing failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonFrameCategory {
+    /// Serialization or parsing encountered an I/O failure.
+    Io,
+    /// The JSON syntax is invalid.
+    Syntax,
+    /// The JSON value does not satisfy the expected type.
+    Data,
+    /// The JSON value ended prematurely.
+    Eof,
+}
+
+/// Safe JSON diagnostics without submitted content or the original error chain.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid JSON frame ({category:?}, line {line}, column {column})")]
+pub struct JsonFrameError {
+    line: usize,
+    column: usize,
+    category: JsonFrameCategory,
+}
+
+impl JsonFrameError {
+    /// One-based line when available; zero when serialization has no position.
+    #[must_use]
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    /// Column when available; zero when serialization has no position.
+    #[must_use]
+    pub fn column(&self) -> usize {
+        self.column
+    }
+
+    /// Fixed parser classification, without the parser's diagnostic text.
+    #[must_use]
+    pub fn category(&self) -> JsonFrameCategory {
+        self.category
+    }
+}
+
+impl From<serde_json::Error> for JsonFrameError {
+    fn from(error: serde_json::Error) -> Self {
+        let category = match error.classify() {
+            serde_json::error::Category::Io => JsonFrameCategory::Io,
+            serde_json::error::Category::Syntax => JsonFrameCategory::Syntax,
+            serde_json::error::Category::Data => JsonFrameCategory::Data,
+            serde_json::error::Category::Eof => JsonFrameCategory::Eof,
+        };
+        Self {
+            line: error.line(),
+            column: error.column(),
+            category,
+        }
+    }
+}
+
 /// Errors produced by the IPC framing layer.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -579,10 +653,16 @@ pub enum FramingError {
     Io(#[from] std::io::Error),
     /// Failed to encode or decode a frame as JSON.
     #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(#[from] JsonFrameError),
     /// A frame exceeded the maximum allowed size.
     #[error("frame too large ({0} bytes; cap is {1})")]
     FrameTooLarge(usize, usize),
+}
+
+impl From<serde_json::Error> for FramingError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error.into())
+    }
 }
 
 /// Maximum size of a single IPC frame in bytes, **including the trailing
@@ -820,6 +900,7 @@ fn fold_home(dir: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     #[test]
     fn pipe_names_differ_per_home_and_ignore_case() {
@@ -915,6 +996,111 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn malformed_owned_private_input_never_survives_framing_error() {
+        use std::error::Error;
+        let sentinel = "PRIVATE-IPC-UNKNOWN-TRANSPORT";
+        let body = serde_json::json!({"method":"owned_flow_start","request_id":1,"request":{
+            "operation_id":surge_core::id::WorkItemOperationId::new(),"source_project":std::env::temp_dir(),"input":{"kind":"template","key":"single-task"},"workspace":{"kind":"managed"},
+            "config":{"mcp":{"kind":"explicit","servers":[{"name":"public","transport":{"kind":sentinel}}]}}
+        }});
+        let mut bytes = serde_json::to_vec(&body).unwrap();
+        bytes.push(b'\n');
+        let original = serde_json::from_slice::<DaemonRequest>(&bytes).unwrap_err();
+        let metadata = (original.line(), original.column());
+        let error = read_request_frame(&mut BufReader::new(std::io::Cursor::new(bytes)))
+            .await
+            .unwrap_err();
+        let FramingError::Json(json) = &error else {
+            panic!("expected typed JSON failure");
+        };
+        assert_eq!(json.category(), JsonFrameCategory::Data);
+        assert_eq!((json.line(), json.column()), metadata);
+        let mut public = format!("{error} {error:?}");
+        let mut source = error.source();
+        while let Some(error) = source {
+            write!(public, " {error} {error:?}").unwrap();
+            source = error.source();
+        }
+        assert!(
+            !public.contains(sentinel),
+            "submitted private transport escaped framing diagnostics"
+        );
+    }
+
+    #[test]
+    fn json_framing_conversion_preserves_only_fixed_metadata() {
+        use std::error::Error;
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Empty {}
+        struct Reject;
+        impl<'de> serde::Deserialize<'de> for Reject {
+            fn deserialize<D: serde::Deserializer<'de>>(_d: D) -> Result<Self, D::Error> {
+                Err(serde::de::Error::custom("PRIVATE-CUSTOM-DECODE"))
+            }
+        }
+        let unknown = serde_json::from_str::<Empty>(r#"{"PRIVATE-UNKNOWN-FIELD":1}"#)
+            .err()
+            .unwrap();
+        let wrong_type = serde_json::from_str::<u64>(r#""PRIVATE-WRONG-TYPE""#).unwrap_err();
+        let custom = serde_json::from_str::<Reject>("null").err().unwrap();
+        let syntax =
+            serde_json::from_slice::<serde_json::Value>(b"{\"PRIVATE-SYNTAX\":}").unwrap_err();
+        let utf8 =
+            serde_json::from_slice::<serde_json::Value>(b"\"PRIVATE-UTF8\xff\"").unwrap_err();
+        let eof = serde_json::from_str::<serde_json::Value>("{\"PRIVATE-EOF\":").unwrap_err();
+        for raw in [unknown, wrong_type, custom, syntax, utf8, eof] {
+            let line = raw.line();
+            let column = raw.column();
+            let category = match raw.classify() {
+                serde_json::error::Category::Data => JsonFrameCategory::Data,
+                serde_json::error::Category::Syntax => JsonFrameCategory::Syntax,
+                serde_json::error::Category::Eof => JsonFrameCategory::Eof,
+                serde_json::error::Category::Io => JsonFrameCategory::Io,
+            };
+            let error: FramingError = raw.into();
+            let FramingError::Json(safe) = &error else {
+                panic!("expected JSON failure");
+            };
+            assert_eq!(
+                (safe.line(), safe.column(), safe.category()),
+                (line, column, category)
+            );
+            assert!(safe.source().is_none());
+            let mut diagnostics = format!("{error} {error:?}");
+            let mut source = error.source();
+            while let Some(next) = source {
+                write!(diagnostics, " {next} {next:?}").unwrap();
+                source = next.source();
+            }
+            assert!(
+                !diagnostics.contains("PRIVATE-"),
+                "parser payload leaked into diagnostics"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn json_encoding_custom_error_discards_private_source_text() {
+        use std::error::Error;
+        struct Reject;
+        impl serde::Serialize for Reject {
+            fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("PRIVATE-CUSTOM-ENCODE"))
+            }
+        }
+        let mut output = Vec::new();
+        let error = write_frame(&mut output, &Reject).await.unwrap_err();
+        assert!(output.is_empty());
+        let FramingError::Json(safe) = &error else {
+            panic!("expected JSON failure");
+        };
+        assert_eq!((safe.line(), safe.column()), (0, 0));
+        assert_eq!(safe.category(), JsonFrameCategory::Data);
+        assert!(safe.source().is_none());
+        assert!(!format!("{error} {error:?}").contains("PRIVATE-CUSTOM-ENCODE"));
+    }
     #[tokio::test]
     async fn read_request_frame_returns_none_on_eof() {
         use tokio::io::BufReader;

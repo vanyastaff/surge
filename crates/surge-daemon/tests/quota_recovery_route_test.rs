@@ -1524,7 +1524,10 @@ async fn quota_dispatch_fixture_source(
         b"retain dirty tracked source"
     );
     let final_detail = storage.work_items().show(item).unwrap();
-    assert_eq!(final_detail.revision.requirements, requirements);
+    assert_eq!(
+        final_detail.revision.origin.requirements(),
+        Some(&requirements)
+    );
     assert_eq!(final_detail.item.workspace, workspace);
     let attempts = storage
         .work_items()

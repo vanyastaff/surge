@@ -16,13 +16,13 @@ use crate::runs::clock::{Clock, SystemClock};
 use crate::runs::config::{StorageConfig, load_or_default};
 use crate::runs::error::OpenError;
 use crate::runs::process::ProcessProbe;
-use crate::runs::writer_slot::ActiveWriters;
+use crate::runs::writer_slot::{ActiveWriters, WriterLease};
 
 /// Top-level storage facade. Holds registry pool, active-writers, config.
 pub struct Storage {
     pub(crate) home: PathBuf,
     pub(crate) registry_pool: Pool<SqliteConnectionManager>,
-    pub(crate) active_writers: ActiveWriters,
+    pub(crate) active_writers: Arc<ActiveWriters>,
     pub(crate) config: StorageConfig,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) process_probe: ProcessProbe,
@@ -51,6 +51,7 @@ impl Storage {
         home: impl AsRef<Path>,
         clock: Arc<dyn Clock>,
     ) -> Result<Arc<Self>, OpenError> {
+        surge_process::owner_panic::install_owner_panic_protection();
         // Multi-thread runtime check — required by writer task design.
         match Handle::try_current().map(|h| h.runtime_flavor()) {
             Ok(RuntimeFlavor::MultiThread) => {},
@@ -72,7 +73,7 @@ impl Storage {
         Ok(Arc::new(Self {
             home,
             registry_pool,
-            active_writers: ActiveWriters::default(),
+            active_writers: Arc::new(ActiveWriters::default()),
             config,
             clock,
             process_probe: ProcessProbe::new(),
@@ -288,6 +289,7 @@ impl Storage {
             .active_writers
             .try_acquire(run_id.clone())
             .await
+            .map_err(|_| OpenError::WriterOwnershipPoisoned)?
             .ok_or_else(|| OpenError::WriterAlreadyHeld {
                 run_id: run_id.clone(),
             })?;
@@ -305,14 +307,18 @@ impl Storage {
             checkpoint_interval_secs: self.config.checkpoint_interval_seconds,
         };
 
-        let (writer_tx, writer_join) = spawn_writer(cfg, self.config.writer_channel_capacity);
+        let lease = Arc::new(WriterLease {
+            _token: token,
+            _file_lock: file_lock,
+        });
+        let (writer_tx, writer_join) =
+            spawn_writer(cfg, self.config.writer_channel_capacity, lease.clone());
 
         Ok(RunWriter {
             reader,
             writer_tx,
             writer_join: Some(writer_join),
-            _token: token,
-            _file_lock: file_lock,
+            _lease: lease,
             closed: false,
         })
     }
@@ -476,7 +482,12 @@ impl Storage {
         self: &Arc<Self>,
         run_id: &RunId,
     ) -> Result<(), crate::runs::error::StorageError> {
-        if self.active_writers.is_held(run_id).await {
+        if self
+            .active_writers
+            .is_held(run_id)
+            .await
+            .map_err(|_| crate::runs::error::StorageError::WriterOwnershipPoisoned)?
+        {
             return Err(crate::runs::error::StorageError::WriterStillActive {
                 run_id: run_id.clone(),
             });

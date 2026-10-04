@@ -254,6 +254,15 @@ pub enum EventPayload {
     WorkItemAttemptBound {
         context: crate::work_item::WorkItemContext,
     },
+    /// Exact public startup inputs of a host-owned ordinary flow. The projection
+    /// itself cannot grant private hydration or provider execution authority.
+    OwnedFlowInputsBound {
+        manifest: Box<crate::work_item::OwnedFlowInputsManifest>,
+    },
+    /// Historical permanent quota-wake refusal; never startup or cleanup authority.
+    OwnedFlowWakeRefused {
+        receipt: Box<crate::work_item::OwnedFlowWakeRefusalReceipt>,
+    },
     /// A provider operation may have been accepted if establishment is interrupted here.
     /// Coverage ownership intent committed before a provider or host tool may write.
     ExecutionWriterIntent {
@@ -745,6 +754,8 @@ impl EventPayload {
             Self::QuotaStagePlanned { .. } => "QuotaStagePlanned",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
             Self::WorkItemAttemptBound { .. } => "WorkItemAttemptBound",
+            Self::OwnedFlowInputsBound { .. } => "OwnedFlowInputsBound",
+            Self::OwnedFlowWakeRefused { .. } => "OwnedFlowWakeRefused",
             Self::ExecutionWriterIntent { .. } => "execution_writer_intent",
             Self::ExecutionWriterEstablished { .. } => "execution_writer_established",
             Self::ExecutionWriterClosed { .. } => "execution_writer_closed",

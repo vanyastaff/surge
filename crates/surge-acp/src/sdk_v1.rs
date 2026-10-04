@@ -47,9 +47,28 @@ struct PendingNotification {
     processed: oneshot::Sender<Result<()>>,
 }
 
+/// Private distinction between host authority refusal and a provider protocol error.
+#[derive(thiserror::Error)]
+pub(crate) enum SdkCallError {
+    #[error(transparent)]
+    HostEffectRefused(#[from] crate::bridge::effect_fence::HostEffectRefused),
+    #[error(transparent)]
+    Protocol(#[from] Error),
+}
+impl std::fmt::Debug for SdkCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HostEffectRefused(error) => std::fmt::Debug::fmt(error, formatter),
+            Self::Protocol(error) => std::fmt::Debug::fmt(error, formatter),
+        }
+    }
+}
+pub(crate) type CallResult<T> = std::result::Result<T, SdkCallError>;
+
 pub(crate) struct ClientConnection {
     ready: watch::Receiver<Option<ConnectionTo<Agent>>>,
     stop: CancellationToken,
+    effect_fence: Option<Arc<dyn crate::bridge::effect_fence::HostEffectFence>>,
 }
 impl Drop for ClientConnection {
     fn drop(&mut self) {
@@ -127,7 +146,20 @@ impl ClientConnection {
             };
             drive(client, requests, notifications, driven, pump).await
         };
-        (Self { ready, stop }, future)
+        (
+            Self {
+                ready,
+                stop,
+                effect_fence: None,
+            },
+            future,
+        )
+    }
+    pub(crate) fn set_effect_fence(
+        &mut self,
+        fence: Option<Arc<dyn crate::bridge::effect_fence::HostEffectFence>>,
+    ) {
+        self.effect_fence = fence;
     }
     pub(crate) fn stop(&self) {
         self.stop.cancel();
@@ -144,72 +176,86 @@ impl ClientConnection {
                 .map_err(|_| Error::new(-32000, "ACP connection driver ended"))?;
         }
     }
+    async fn effect_connection(&self) -> CallResult<ConnectionTo<Agent>> {
+        let connection = self.connection().await?;
+        // Final Surge boundary: callers immediately enqueue with send_request in
+        // this same poll, before awaiting the SDK response task.
+        crate::bridge::effect_fence::check(self.effect_fence.as_ref())?;
+        Ok(connection)
+    }
     pub(crate) async fn initialize(
         &self,
         request: InitializeRequest,
-    ) -> Result<InitializeResponse> {
-        self.connection()
+    ) -> CallResult<InitializeResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
     pub(crate) async fn new_session(
         &self,
         request: NewSessionRequest,
-    ) -> Result<NewSessionResponse> {
-        self.connection()
+    ) -> CallResult<NewSessionResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
     pub(crate) async fn load_session(
         &self,
         request: agent_client_protocol::schema::v1::LoadSessionRequest,
-    ) -> Result<agent_client_protocol::schema::v1::LoadSessionResponse> {
-        self.connection()
+    ) -> CallResult<agent_client_protocol::schema::v1::LoadSessionResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
     pub(crate) async fn resume_session(
         &self,
         request: agent_client_protocol::schema::v1::ResumeSessionRequest,
-    ) -> Result<agent_client_protocol::schema::v1::ResumeSessionResponse> {
-        self.connection()
+    ) -> CallResult<agent_client_protocol::schema::v1::ResumeSessionResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
     pub(crate) async fn set_session_mode(
         &self,
         request: SetSessionModeRequest,
-    ) -> Result<SetSessionModeResponse> {
-        self.connection()
+    ) -> CallResult<SetSessionModeResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
     pub(crate) async fn set_session_config_option(
         &self,
         request: SetSessionConfigOptionRequest,
-    ) -> Result<SetSessionConfigOptionResponse> {
-        self.connection()
+    ) -> CallResult<SetSessionConfigOptionResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
-    pub(crate) async fn prompt(&self, request: PromptRequest) -> Result<PromptResponse> {
-        self.connection()
+    pub(crate) async fn prompt(&self, request: PromptRequest) -> CallResult<PromptResponse> {
+        self.effect_connection()
             .await?
             .send_request(request)
             .block_task()
             .await
+            .map_err(SdkCallError::Protocol)
     }
     pub(crate) async fn cancel(&self, request: CancelNotification) -> Result<()> {
         self.connection().await?.send_notification(request)
@@ -347,6 +393,249 @@ mod lifecycle_tests {
     use tokio::io::AsyncWriteExt;
     use tokio::sync::Notify;
     use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+    struct ReadinessFence {
+        permitted: AtomicBool,
+        checks: std::sync::atomic::AtomicUsize,
+    }
+    impl crate::bridge::effect_fence::HostEffectFence for ReadinessFence {
+        fn check(&self) -> std::result::Result<(), crate::bridge::effect_fence::HostEffectRefused> {
+            self.checks.fetch_add(1, Ordering::SeqCst);
+            if self.permitted.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(crate::bridge::effect_fence::HostEffectRefused)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_rechecks_host_after_driver_readiness_before_wire_admission() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        tokio::task::LocalSet::new().run_until(async {
+            for permitted_after_ready in [true,false] {
+                let (local,peer)=tokio::io::duplex(4096);
+                let (read,write)=tokio::io::split(local);
+                let (peer_read,mut peer_write)=tokio::io::split(peer);
+                let callbacks=HeldNotification { entered:Arc::new(Notify::new()),release:Arc::new(Notify::new()),dropped:Arc::new(AtomicBool::new(false)) };
+                let (mut connection,driver)=ClientConnection::new(callbacks,write.compat_write(),read.compat());
+                let fence=Arc::new(ReadinessFence { permitted:AtomicBool::new(true),checks:std::sync::atomic::AtomicUsize::new(0) });
+                let host:Arc<dyn crate::bridge::effect_fence::HostEffectFence>=fence.clone();
+                connection.set_effect_fence(Some(host.clone()));
+                let mut opening=Box::pin(crate::bridge::effect_fence::admitted(Some(&host),connection.initialize(InitializeRequest::new(ProtocolVersion::V1))));
+                let mut context=std::task::Context::from_waker(std::task::Waker::noop());
+                assert!(std::future::Future::poll(opening.as_mut(),&mut context).is_pending());
+                assert_eq!(fence.checks.load(Ordering::SeqCst),1,"initial admission must precede readiness wait");
+                fence.permitted.store(permitted_after_ready,Ordering::SeqCst);
+                let task=tokio::task::spawn_local(driver);
+                let mut reader=BufReader::new(peer_read);
+                let mut line=String::new();
+                let (sent,result)=tokio::time::timeout(std::time::Duration::from_secs(2),async {
+                    tokio::select! {
+                        result=&mut opening=>(false,result),
+                        count=reader.read_line(&mut line)=>{
+                            assert!(count.unwrap()>0,"actual peer closed before admission observation");
+                            let request:Value=serde_json::from_str(&line).unwrap();
+                            assert_eq!(request["method"],"initialize");
+                            let response=serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":InitializeResponse::new(ProtocolVersion::V1)});
+                            let mut bytes=serde_json::to_vec(&response).unwrap();bytes.push(b'\n');
+                            peer_write.write_all(&bytes).await.unwrap();
+                            (true,opening.await)
+                        }
+                    }
+                }).await.unwrap();
+                let final_checks=fence.checks.load(Ordering::SeqCst);
+                let late_request=if permitted_after_ready { false } else {
+                    let mut late=String::new();
+                    tokio::time::timeout(std::time::Duration::from_millis(100),reader.read_line(&mut late)).await.is_ok()
+                };
+                connection.stop();
+                drop(reader);drop(peer_write);
+                tokio::time::timeout(std::time::Duration::from_secs(2),task).await.unwrap().unwrap().unwrap();
+                if permitted_after_ready {
+                    assert!(sent && result.is_ok_and(|response|response.is_ok()),"positive readiness transition must initialize exactly");
+                } else {
+                    assert!(!sent,"Stop during Surge-owned readiness wait admitted actual initialize bytes");
+                    assert!(!late_request,"refused initialize was queued after the result completed");
+                    assert!(matches!(result,Ok(Err(SdkCallError::HostEffectRefused(_)))),"final readiness refusal lost its exact host type");
+                }
+                assert_eq!(final_checks,2,"final callback must follow driver readiness");
+            }
+        }).await;
+    }
+
+    async fn effect_method(connection: &ClientConnection, method: usize) -> CallResult<()> {
+        use agent_client_protocol::schema::ProtocolVersion;
+        match method {
+            0 => connection
+                .initialize(InitializeRequest::new(ProtocolVersion::V1))
+                .await
+                .map(|_| ()),
+            1 => connection
+                .new_session(NewSessionRequest::new("/workspace"))
+                .await
+                .map(|_| ()),
+            2 => connection
+                .load_session(LoadSessionRequest::new("provider-session", "/workspace"))
+                .await
+                .map(|_| ()),
+            3 => connection
+                .resume_session(ResumeSessionRequest::new("provider-session", "/workspace"))
+                .await
+                .map(|_| ()),
+            4 => connection
+                .set_session_mode(SetSessionModeRequest::new("provider-session", "safe-mode"))
+                .await
+                .map(|_| ()),
+            5 => connection
+                .set_session_config_option(SetSessionConfigOptionRequest::new(
+                    "provider-session",
+                    "mode",
+                    "safe",
+                ))
+                .await
+                .map(|_| ()),
+            6 => connection
+                .prompt(PromptRequest::new("provider-session", Vec::new()))
+                .await
+                .map(|_| ()),
+            _ => panic!("unknown test effect method"),
+        }
+    }
+
+    #[tokio::test]
+    async fn all_effect_methods_refuse_after_readiness_without_retry_or_cleanup_blocking() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for method in 0..7 {
+                    let (local, peer) = tokio::io::duplex(4096);
+                    let (read, write) = tokio::io::split(local);
+                    let (peer_read, _peer_write) = tokio::io::split(peer);
+                    let callbacks = HeldNotification {
+                        entered: Arc::new(Notify::new()),
+                        release: Arc::new(Notify::new()),
+                        dropped: Arc::new(AtomicBool::new(false)),
+                    };
+                    let (mut connection, driver) =
+                        ClientConnection::new(callbacks, write.compat_write(), read.compat());
+                    let fence = Arc::new(ReadinessFence {
+                        permitted: AtomicBool::new(true),
+                        checks: std::sync::atomic::AtomicUsize::new(0),
+                    });
+                    connection.set_effect_fence(Some(fence.clone()));
+                    let mut request = Box::pin(effect_method(&connection, method));
+                    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                    assert!(std::future::Future::poll(request.as_mut(), &mut context).is_pending());
+                    assert_eq!(fence.checks.load(Ordering::SeqCst), 0);
+                    fence.permitted.store(false, Ordering::SeqCst);
+                    let task = tokio::task::spawn_local(driver);
+                    assert!(matches!(
+                        tokio::time::timeout(std::time::Duration::from_secs(2), request)
+                            .await
+                            .unwrap(),
+                        Err(SdkCallError::HostEffectRefused(_))
+                    ));
+                    assert!(matches!(
+                        effect_method(&connection, method).await,
+                        Err(SdkCallError::HostEffectRefused(_))
+                    ));
+                    assert_eq!(fence.checks.load(Ordering::SeqCst), 2);
+                    let mut reader = BufReader::new(peer_read);
+                    let mut line = String::new();
+                    assert!(
+                        tokio::time::timeout(
+                            std::time::Duration::from_millis(100),
+                            reader.read_line(&mut line)
+                        )
+                        .await
+                        .is_err(),
+                        "refused effect or retry reached the actual peer"
+                    );
+                    connection
+                        .cancel(CancelNotification::new("provider-session"))
+                        .await
+                        .unwrap();
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        reader.read_line(&mut line),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                    let cleanup: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(cleanup["method"], "session/cancel");
+                    assert!(
+                        cleanup.get("id").is_none(),
+                        "cleanup must remain a notification"
+                    );
+                    assert_eq!(
+                        fence.checks.load(Ordering::SeqCst),
+                        2,
+                        "cleanup must not require effect admission"
+                    );
+                    connection.stop();
+                    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap();
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn all_admitted_effect_methods_reach_the_actual_peer_and_typed_response() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let methods = [
+            "initialize",
+            "session/new",
+            "session/load",
+            "session/resume",
+            "session/set_mode",
+            "session/set_config_option",
+            "session/prompt",
+        ];
+        let responses = [
+            serde_json::json!({"protocolVersion":1,"agentCapabilities":{}}),
+            serde_json::json!({"sessionId":"provider-session"}),
+            serde_json::json!({}),
+            serde_json::json!({}),
+            serde_json::json!({}),
+            serde_json::json!({"configOptions":[]}),
+            serde_json::json!({"stopReason":"end_turn"}),
+        ];
+        tokio::task::LocalSet::new().run_until(async {
+            for (method, expected) in methods.into_iter().enumerate() {
+                let (local, peer) = tokio::io::duplex(4096);
+                let (read, write) = tokio::io::split(local);
+                let (peer_read, mut peer_write) = tokio::io::split(peer);
+                let callbacks = HeldNotification { entered: Arc::new(Notify::new()), release: Arc::new(Notify::new()), dropped: Arc::new(AtomicBool::new(false)) };
+                let (mut connection, driver) = ClientConnection::new(callbacks, write.compat_write(), read.compat());
+                let fence = Arc::new(ReadinessFence { permitted: AtomicBool::new(true), checks: std::sync::atomic::AtomicUsize::new(0) });
+                connection.set_effect_fence(Some(fence.clone()));
+                let task = tokio::task::spawn_local(driver);
+                let mut reader = BufReader::new(peer_read);
+                let peer_response = async {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(request["method"], expected);
+                    assert!(request["id"].is_number() || request["id"].is_string(), "actual JSON-RPC request ID is absent");
+                    let response = serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":responses[method]});
+                    let mut bytes = serde_json::to_vec(&response).unwrap(); bytes.push(b'\n');
+                    peer_write.write_all(&bytes).await.unwrap();
+                };
+                let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async { tokio::join!(effect_method(&connection, method), peer_response) }).await.unwrap();
+                assert!(result.is_ok(), "admitted method failed its actual typed response: {expected}");
+                assert_eq!(fence.checks.load(Ordering::SeqCst), 1);
+                connection.stop();
+                tokio::time::timeout(std::time::Duration::from_secs(2), task).await.unwrap().unwrap().unwrap();
+            }
+        }).await;
+    }
 
     struct HeldNotification {
         entered: Arc<Notify>,

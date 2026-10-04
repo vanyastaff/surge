@@ -187,7 +187,7 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
             tracing::warn!(
                 target: "mcp::supervisor",
                 "MCP registry shutdown exceeded budget on run teardown; \
-                 abandoning remaining children to RAII"
+                 outstanding child ownership remains pending settlement"
             );
         }
     }
@@ -1647,8 +1647,7 @@ fn validate_persistent_dispatch_authority(params: &RunTaskParams) -> Option<Stri
     params
         .storage
         .work_items()
-        .validate_claim(claim)
-        .map(|_| ())
+        .validate_owned_flow_effect(claim)
         .err()
         .map(|error| error.to_string())
 }

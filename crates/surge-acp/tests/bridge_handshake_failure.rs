@@ -19,6 +19,7 @@ async fn handshake_failure_returns_open_session_error() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

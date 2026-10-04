@@ -326,6 +326,7 @@ async fn try_one_attempt(
     bindings.insert("intake.attempt".into(), attempt.to_string());
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "claude-acp".into(),

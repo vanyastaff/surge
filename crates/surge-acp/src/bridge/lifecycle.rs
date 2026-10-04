@@ -155,19 +155,19 @@ pub(super) async fn run(
                                     entry.prompt_running = true;
                                     entry.inner.borrow_mut().live_ingress = true;
                                     entry.prompt_done = CancellationToken::new();
-                                    Ok((entry.connection.clone(), entry.inner.borrow().acp_session_id.clone(), entry.cancel.clone(), entry.prompt_done.clone(), entry.secrets.clone()))
+                                    Ok((entry.connection.clone(), entry.inner.borrow().acp_session_id.clone(), entry.cancel.clone(), entry.prompt_done.clone(), entry.secrets.clone(), entry.effect_fence.clone()))
                                 },
                             }
                         };
                         match ready {
                             Err(error) => { let _ = reply.send(Err(error)); },
-                            Ok((connection, acp_id, cancel, finished, secrets)) => {
+                            Ok((connection, acp_id, cancel, finished, secrets, effect_fence)) => {
                                 prompts.push(tokio::task::spawn_local(async move {
                                     let _finished = finished.drop_guard();
                                     let result = tokio::select! {
                                         biased;
                                         () = cancel.cancelled() => Err(SendMessageError::SessionEnded { session, reason: SessionEndReason::ForcedClose }),
-                                        result = worker::send_message_impl(connection, acp_id, session, content, secrets) => result,
+                                        result = worker::send_message_impl(connection, acp_id, session, content, secrets, effect_fence) => result,
                                     };
                                     PromptDone { session, result, reply }
                                 }));

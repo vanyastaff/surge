@@ -22,6 +22,8 @@ pub use error::McpError;
 
 pub mod redact;
 
+pub mod diagnostics;
+
 pub mod registry;
 /// Injected run-owned child writer observation.
 pub mod writer_observer;
@@ -29,3 +31,6 @@ pub use registry::{McpContent, McpRegistry, McpToolEntry, McpToolResult};
 
 /// Authenticated per-session stdio stage-tool transport.
 pub mod stage;
+
+mod child_settlement;
+pub use child_settlement::shutdown_children_and_join;

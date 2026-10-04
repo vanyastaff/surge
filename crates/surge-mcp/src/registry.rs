@@ -71,6 +71,12 @@ impl McpToolEntry {
     }
 }
 
+#[derive(Clone, Copy)]
+enum MonitorPolicy {
+    LegacyProactive,
+    OnDemand,
+}
+
 /// Engine-wide registry of MCP server connections. Holds one
 /// [`McpServerConnection`] per configured server. Connections are
 /// constructed in `Disconnected` state — first use of each server
@@ -86,6 +92,7 @@ pub struct McpRegistry {
     /// first async use, when a Tokio runtime is guaranteed present —
     /// `from_config` is sync and may be called outside a runtime).
     monitors_started: AtomicBool,
+    monitor_policy: MonitorPolicy,
 }
 
 impl McpRegistry {
@@ -124,6 +131,7 @@ impl McpRegistry {
             servers,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             monitors_started: AtomicBool::new(false),
+            monitor_policy: MonitorPolicy::LegacyProactive,
         }
     }
 
@@ -133,6 +141,26 @@ impl McpRegistry {
         refs: &[McpServerRef],
         cwd: Option<&Path>,
         observer: &Arc<dyn crate::writer_observer::HostWriterObserver>,
+    ) -> Self {
+        Self::owned_registry(refs, cwd, observer, MonitorPolicy::LegacyProactive)
+    }
+
+    /// Build durably observed run-owned connections without background probes.
+    /// Each catalog or tool operation reconnects only on explicit demand.
+    #[must_use]
+    pub fn from_config_owned_on_demand(
+        refs: &[McpServerRef],
+        cwd: Option<&Path>,
+        observer: &Arc<dyn crate::writer_observer::HostWriterObserver>,
+    ) -> Self {
+        Self::owned_registry(refs, cwd, observer, MonitorPolicy::OnDemand)
+    }
+
+    fn owned_registry(
+        refs: &[McpServerRef],
+        cwd: Option<&Path>,
+        observer: &Arc<dyn crate::writer_observer::HostWriterObserver>,
+        monitor_policy: MonitorPolicy,
     ) -> Self {
         let servers = refs
             .iter()
@@ -151,6 +179,7 @@ impl McpRegistry {
             servers,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             monitors_started: AtomicBool::new(false),
+            monitor_policy,
         }
     }
 
@@ -159,6 +188,9 @@ impl McpRegistry {
     /// entry points (`list_all_tools` / `call_tool`) so a Tokio runtime
     /// is guaranteed present; idempotent.
     fn ensure_monitors_started(&self) {
+        if matches!(self.monitor_policy, MonitorPolicy::OnDemand) {
+            return;
+        }
         if self.monitors_started.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -219,8 +251,8 @@ impl McpRegistry {
             match h.await {
                 Ok(Ok(())) => {},
                 Ok(Err(error)) => failures.push(error),
-                Err(error) => failures.push(crate::cleanup::CleanupError::WorkerJoin {
-                    reason: error.to_string(),
+                Err(_error) => failures.push(crate::cleanup::CleanupError::WorkerJoin {
+                    reason: "mcp_cleanup_worker_join_failed".into(),
                 }),
             }
         }
@@ -241,15 +273,35 @@ impl McpRegistry {
     /// per-server `tools/list` ordering.
     pub async fn list_all_tools(&self) -> Result<Vec<McpToolEntry>, McpError> {
         self.ensure_monitors_started();
-        let mut out = Vec::new();
-        // Iterate servers in sorted order for deterministic output.
-        let mut server_names: Vec<&String> = self.servers.keys().collect();
+        let mut server_names: Vec<String> = self.servers.keys().cloned().collect();
         server_names.sort();
+        self.query_tools(server_names).await
+    }
+
+    /// Query only configured selected servers without starting health monitors.
+    /// All names are validated before any query; duplicates are queried once.
+    pub async fn list_tools_for_servers(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<McpToolEntry>, McpError> {
+        let mut selected = names.to_vec();
+        selected.sort();
+        selected.dedup();
+        for name in &selected {
+            if !self.servers.contains_key(name) {
+                return Err(McpError::ServerNotConfigured(name.clone()));
+            }
+        }
+        self.query_tools(selected).await
+    }
+
+    async fn query_tools(&self, server_names: Vec<String>) -> Result<Vec<McpToolEntry>, McpError> {
+        let mut out = Vec::new();
         for name in server_names {
             let conn = self
                 .servers
-                .get(name)
-                .expect("just collected from this map");
+                .get(&name)
+                .ok_or_else(|| McpError::ServerNotConfigured(name.clone()))?;
             let tools = conn.list_tools().await?;
             for t in tools {
                 // Call `schema_as_json_value()` first (borrows `t`) before
@@ -298,6 +350,7 @@ impl McpRegistry {
             Ok(Err(e)) => return Err(e),
             Err(_elapsed) => return Err(McpError::Timeout(timeout)),
         };
+        let r = crate::connection::opaque_error_result(r);
         // `r.content: Vec<Content>` where `Content = Annotated<RawContent>`.
         // `Annotated<T>` exposes the inner value as `pub raw: T`.
         // `RawContent::Text(t)` carries a `RawTextContent` with field `t.text: String`.

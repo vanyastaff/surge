@@ -302,6 +302,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 | Crate | Responsibility |
 |---|---|
 | `surge-core` | Graph, profile, event, sandbox, approval, validation types. No I/O. |
+| `surge-process` | Dependency-free shared owner panic boundary: one process-wide hook and protected fatal scope. |
 | `surge-acp` | ACP bridge, agent pool, agent registry, discovery, health, mock agent. |
 | `surge-orchestrator` | Graph executor (`engine/`), bootstrap chain, project context, roadmap-amendment surfaces. |
 | `surge-persistence` | SQLite stores, event log, materialized views, memory, analytics. |
@@ -313,7 +314,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 | `surge-mcp` | Production stdio MCP server lifecycle: structured crash detection, backoff restart policy + escalation, health monitor, deterministic per-run teardown, redacted stderr capture. See [`docs/mcp.md`](mcp.md) / [ADR-0014](adr/0014-mcp-server-lifecycle.md). |
 | `surge-ui` | GPUI desktop shell. |
 
-Dependencies flow downward — no cycles. `surge-core` is leaf; binaries (`surge-cli`, `surge-daemon`, `surge-ui`) depend on the workspace and on each other only through stable trait surfaces.
+Dependencies flow downward — no cycles. `surge-core` is a pure domain leaf; `surge-process` is a separate runtime leaf shared by hosts and adapters. Binaries (`surge-cli`, `surge-daemon`, `surge-ui`) depend on the workspace and on each other only through stable trait surfaces.
 
 ## 13. Non-goals
 

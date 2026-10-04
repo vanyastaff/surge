@@ -1,5 +1,7 @@
 //! `surge-daemon` binary entry point.
 
+mod runtime_shutdown;
+
 use clap::Parser;
 use std::collections::HashMap;
 use std::env;
@@ -49,7 +51,17 @@ fn parse_humantime(s: &str) -> Result<Duration, String> {
 }
 
 fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt::init();
+    surge_process::owner_panic::install_owner_panic_protection();
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::filter_fn(|metadata| {
+            surge_mcp::diagnostics::permits_target(metadata.target())
+        }))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .init();
     let args = Args::parse();
 
     // Acquire PID lock before touching the runtime — failure exits cheaply.
@@ -79,7 +91,8 @@ fn main() -> std::process::ExitCode {
         },
     };
 
-    let exit = rt.block_on(async {
+    let rt = runtime_shutdown::HostRuntime::new(rt, false);
+    let exit = rt.runtime().block_on(async {
         let shutdown = CancellationToken::new();
         lifecycle::install_signal_handlers(shutdown.clone());
 
@@ -91,6 +104,11 @@ fn main() -> std::process::ExitCode {
                 return 2u8;
             },
         };
+
+        if storage.resume_pending_owned_flow_refusals().is_err() {
+            tracing::error!("owned Flow informational recovery unavailable; startup admission refused");
+            return 2u8;
+        }
 
         let bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade> =
             match AcpBridge::with_defaults() {
@@ -122,12 +140,13 @@ fn main() -> std::process::ExitCode {
         // resolves agent_config.profile through it. A failure here is a
         // hard error: a daemon without a registry would silently drop
         // back to mocking every agent stage.
-        let profile_registry = Arc::new(
-            surge_orchestrator::profile_loader::ProfileRegistry::load().unwrap_or_else(|e| {
-                tracing::error!(error = %e, "profile registry failed to load; daemon shutting down");
-                std::process::exit(2);
-            }),
-        );
+        let profile_registry = match surge_orchestrator::profile_loader::ProfileRegistry::load() {
+            Ok(registry) => Arc::new(registry),
+            Err(error) => {
+                tracing::error!(error = %error, "profile registry failed to load; daemon shutting down");
+                return 2u8;
+            },
+        };
 
         // Loaded here, before the engine is constructed, so its
         // `[capacity]` section can reach `CapacityPolicy` via
@@ -443,6 +462,7 @@ fn main() -> std::process::ExitCode {
         0u8
     });
 
+    drop(rt);
     let _ = pidfile::release_lock();
     let _ = std::fs::remove_file(&socket_path);
     std::process::ExitCode::from(exit)

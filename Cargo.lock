@@ -2528,17 +2528,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fd-lock"
-version = "4.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
-dependencies = [
- "cfg-if",
- "rustix 1.1.4",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9307,6 +9296,7 @@ dependencies = [
  "surge-notify",
  "surge-orchestrator",
  "surge-persistence",
+ "surge-process",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -9353,6 +9343,7 @@ dependencies = [
  "clap",
  "dirs 5.0.1",
  "futures",
+ "git2",
  "humantime",
  "interprocess",
  "nix 0.29.0",
@@ -9369,6 +9360,7 @@ dependencies = [
  "surge-notify",
  "surge-orchestrator",
  "surge-persistence",
+ "surge-process",
  "surge-telegram",
  "sysinfo 0.32.1",
  "teloxide",
@@ -9436,11 +9428,13 @@ dependencies = [
  "serde",
  "serde_json",
  "surge-core",
+ "surge-process",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -9511,10 +9505,10 @@ dependencies = [
  "async-stream",
  "chrono",
  "dirs 5.0.1",
- "fd-lock",
  "futures",
  "futures-core",
  "hex",
+ "hmac",
  "insta",
  "nix 0.29.0",
  "proptest",
@@ -9526,6 +9520,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "surge-core",
+ "surge-process",
  "sysinfo 0.32.1",
  "tempfile",
  "thiserror 2.0.18",
@@ -9535,7 +9530,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "windows 0.58.0",
 ]
+
+[[package]]
+name = "surge-process"
+version = "0.1.0"
 
 [[package]]
 name = "surge-telegram"
@@ -9586,8 +9586,10 @@ dependencies = [
  "surge-acp",
  "surge-core",
  "surge-daemon",
+ "surge-mcp",
  "surge-orchestrator",
  "surge-persistence",
+ "surge-process",
  "tempfile",
  "tokio",
  "toml 0.8.23",

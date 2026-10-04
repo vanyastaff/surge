@@ -102,6 +102,7 @@ async fn exercise() -> String {
     let mut events = bridge.subscribe();
     let session = bridge
         .open_session(SessionConfig {
+            effect_fence: None,
             writer_id: surge_core::id::ExecutionWriterId::new(),
             invocation: surge_core::id::StageInvocationId::new(),
             runtime: "fixture".into(),

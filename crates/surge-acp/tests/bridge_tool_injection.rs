@@ -17,6 +17,7 @@ async fn report_stage_outcome_notification_has_no_authority() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

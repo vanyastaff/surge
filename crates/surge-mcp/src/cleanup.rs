@@ -14,7 +14,7 @@ pub enum CleanupError {
     ServiceJoin {
         /// Configured server whose cancellation task failed.
         server: String,
-        /// Original task failure diagnostic.
+        /// Fixed opaque task failure category.
         reason: String,
     },
     /// The bounded host wait ended without a confirmed result.
@@ -26,7 +26,7 @@ pub enum CleanupError {
     /// A teardown worker failed instead of returning a cleanup result.
     #[error("MCP cleanup worker failed: {reason}")]
     WorkerJoin {
-        /// Join failure diagnostic retained by registry teardown.
+        /// Fixed opaque join failure category retained by registry teardown.
         reason: String,
     },
 }

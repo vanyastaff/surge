@@ -129,6 +129,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0028-start-preparations",
         include_str!("migrations/registry/0028_start_preparations.sql"),
     ),
+    (
+        "registry-0029-owned-flows",
+        include_str!("migrations/registry/0029_owned_flows.sql"),
+    ),
+    (
+        "registry-0030-owned-flow-wake-refusals",
+        include_str!("migrations/registry/0030_owned_flow_wake_refusals.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

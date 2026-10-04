@@ -60,7 +60,7 @@ See `.ai-factory/ARCHITECTURE.md` for the AI-context architecture guidelines (pa
 
 ## Architecture Notes
 
-- **Workspace with 12 crates.** Dependencies flow downward; no cycles. `surge-core` is leaf (no I/O). Binaries (`surge-cli`, `surge-daemon`, `surge-ui`) consume the workspace through stable trait surfaces. See `docs/ARCHITECTURE.md` for full layering and the canonical architecture document.
+- **Workspace with 13 crates.** Dependencies flow downward; no cycles. `surge-core` is leaf (no I/O); `surge-process` separately owns the shared std-only process panic boundary. Binaries (`surge-cli`, `surge-daemon`, `surge-ui`) consume the workspace through stable trait surfaces. See `docs/ARCHITECTURE.md` for full layering and the canonical architecture document.
 - **Engine is dumb, agents are smart.** Routing decisions are graph data (declarative edges keyed by outcome). The LLM only does the work.
 - **Sandbox is delegated.** Surge configures the agent runtime's native sandbox and observes elevation requests; it does not reimplement OS isolation.
 - **Closed `NodeKind` enum.** Extensibility happens via profiles, named agents, and templates — not new node kinds.

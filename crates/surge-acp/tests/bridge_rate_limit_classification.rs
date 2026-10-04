@@ -39,6 +39,7 @@ async fn real_429_with_retry_after_survives_the_acp_wire_as_rate_limited() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

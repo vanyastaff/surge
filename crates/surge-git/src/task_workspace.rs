@@ -27,6 +27,32 @@ pub fn plan(
         base_commit: spec.base().commit().to_string(),
     })
 }
+/// Capture a clean original base for an explicit new workspace location.
+/// The later preparation still refuses any foreign existing checkout.
+pub fn plan_at_path(
+    project: &Path,
+    path: &Path,
+    creation_run: RunId,
+) -> Result<WorkItemWorkspace, GitError> {
+    let manager = GitManager::new(project.to_path_buf())?;
+    let base = manager.capture_clean_base()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| git2::Error::from_str("workspace parent missing"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| git2::Error::from_str("workspace name missing"))?;
+    let path = parent.canonicalize()?.join(name);
+    let spec = RunWorktreeSpec::new(creation_run, base, path)?;
+    Ok(WorkItemWorkspace {
+        repository: spec.base().git_common_dir().to_path_buf(),
+        checkout: spec.base().repository().to_path_buf(),
+        path: spec.path().to_path_buf(),
+        ownership: creation_run.to_string(),
+        branch: spec.branch(),
+        base_commit: spec.base().commit().to_string(),
+    })
+}
 /// Prepare/reconcile the exact original registered owner; never reset, adopt or remove.
 pub fn prepare(intent: &WorkItemWorkspace, phase: ReconcilePhase) -> Result<(), GitError> {
     let owner: RunId = intent

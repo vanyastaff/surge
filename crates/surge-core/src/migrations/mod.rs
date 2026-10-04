@@ -94,7 +94,10 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// Old unbound TaskVerified events decode but cannot establish fresh proof.
 /// **v11:** immutable persistent-task attempt association.
 /// **v12:** recoverable suspension and provider establishment fences.
-pub const MAX_SUPPORTED_VERSION: u32 = 13;
+/// **v13:** host-owned human-decision effect and route commitments.
+/// **v14:** immutable public owned-flow startup input snapshots.
+/// **v15:** informational permanent owned-flow quota-wake refusal.
+pub const MAX_SUPPORTED_VERSION: u32 = 15;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -342,6 +345,34 @@ impl Migration for IdentityV13 {
     }
 }
 
+/// Identity decoder for public immutable owned-flow startup snapshots.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV14;
+impl Migration for IdentityV14 {
+    fn version(&self) -> u32 {
+        14
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v14 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for informational owned-flow wake refusals.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV15;
+impl Migration for IdentityV15 {
+    fn version(&self) -> u32 {
+        15
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v15 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -350,7 +381,8 @@ pub struct MigrationChain {
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
-    /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], and [`IdentityV11`].
+    /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
+    /// [`IdentityV12`], [`IdentityV13`], and [`IdentityV14`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -368,6 +400,8 @@ impl MigrationChain {
                 Box::new(IdentityV11),
                 Box::new(IdentityV12),
                 Box::new(IdentityV13),
+                Box::new(IdentityV14),
+                Box::new(IdentityV15),
             ],
         }
     }
@@ -689,5 +723,72 @@ mod work_item_golden {
                 max: MAX_SUPPORTED_VERSION
             }) if found == future_version
         ));
+    }
+}
+
+#[cfg(test)]
+mod owned_flow_manifest_version_tests {
+    use super::*;
+    use crate::work_item::{
+        FrozenOwnedFlowMcp, OwnedFlowInputsManifest, OwnedFlowMcpSelection,
+        OwnedFlowRequestIdentity, WorkItemBinding, WorkItemWorkspace,
+    };
+
+    #[test]
+    fn schema14_roundtrips_empty_snapshot_without_changing_prior_events() {
+        let checkout = if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\repo")
+        } else {
+            std::path::PathBuf::from("/repo")
+        };
+        let manifest = OwnedFlowInputsManifest::new(
+            "00000000000000000000000001".parse().unwrap(),
+            OwnedFlowRequestIdentity::PlainPublic {
+                digest: crate::ContentHash::compute(b"public"),
+            },
+            WorkItemBinding {
+                item: "00000000000000000000000002".parse().unwrap(),
+                revision: 1,
+                requirements_hash: crate::ContentHash::compute(b"flow"),
+                generation: 1,
+            },
+            "00000000000000000000000003".parse().unwrap(),
+            "00000000000000000000000004".parse().unwrap(),
+            WorkItemWorkspace {
+                repository: checkout.join(".git"),
+                path: checkout.join(".worktrees/owned"),
+                checkout,
+                ownership: "owned".into(),
+                branch: "codex/owned".into(),
+                base_commit: "a".repeat(40),
+            },
+            FrozenOwnedFlowMcp::empty(OwnedFlowMcpSelection::Explicit),
+        )
+        .unwrap();
+        let payload = EventPayload::OwnedFlowInputsBound {
+            manifest: Box::new(manifest),
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, 15);
+        assert_eq!(payload.discriminant_str(), "OwnedFlowInputsBound");
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert_eq!(migrate_payload(14, &bytes).unwrap(), payload);
+        let old = br#"{"schema_version":13,"payload":{"type":"run_failed","error":"historical"}}"#;
+        assert_eq!(
+            migrate_payload(13, old).unwrap(),
+            EventPayload::RunFailed {
+                error: "historical".into()
+            }
+        );
+        assert!(matches!(
+            migrate_payload(16, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 16, max: 15 })
+        ));
+    }
+
+    #[test]
+    fn schema14_rejects_malformed_snapshot_during_event_decode() {
+        let bytes = br#"{"schema_version":14,"payload":{"type":"owned_flow_inputs_bound","manifest":{"schema_version":2}}}"#;
+        assert!(migrate_payload(14, bytes).is_err());
     }
 }

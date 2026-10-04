@@ -281,6 +281,9 @@ impl MockAgent {
         req: acp::InitializeRequest,
     ) -> Result<acp::InitializeResponse, acp::Error> {
         self.log(&format!("initialize: {req:?}"));
+        if env::args().any(|arg| arg == "--wire-all") {
+            record_wire("initialize", &req)?;
+        }
         let args: Vec<_> = env::args().collect();
         if let Some(index) = args.iter().position(|arg| arg == "--capabilities-file") {
             let path = args.get(index + 1).ok_or_else(acp::Error::internal_error)?;

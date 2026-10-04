@@ -668,6 +668,7 @@ fn read_folded_with_gate_receipt(
     let mut startup = Vec::new();
     let mut sequence = 0;
     let mut bindings = 0;
+    let mut flow_input_bindings = 0;
     let mut startup_open = true;
     let mut definitive_terminal_seen = false;
     let mut recent = std::collections::VecDeque::new();
@@ -913,6 +914,7 @@ fn read_folded_with_gate_receipt(
                     | E::PipelineMaterialized { .. }
                     | E::ArtifactProduced { .. }
                     | E::WorkItemAttemptBound { .. }
+                    | E::OwnedFlowInputsBound { .. }
             );
             if matches!(payload, E::WorkItemAttemptBound { .. }) {
                 bindings += 1;
@@ -922,11 +924,25 @@ fn read_folded_with_gate_receipt(
                     ));
                 }
             }
+            if matches!(payload, E::OwnedFlowInputsBound { .. }) {
+                flow_input_bindings += 1;
+                if flow_input_bindings > 1 {
+                    return Err(StorageError::MigrationFailed(
+                        "owned history repeats Flow input binding".into(),
+                    ));
+                }
+                if !startup_open {
+                    return Err(StorageError::MigrationFailed(
+                        "owned Flow input binding is outside startup".into(),
+                    ));
+                }
+            }
             let keep=startup_open && match &payload {
                 E::RunStarted{..}=>sequence==0,
                 E::PipelineMaterialized{..}=>!startup.iter().any(|row:&ReadEvent|matches!(row.payload.payload,E::PipelineMaterialized{..})),
-                E::ArtifactProduced{name,..} if name=="accepted_requirements" || name=="user_prompt"=>!startup.iter().any(|row:&ReadEvent|matches!(&row.payload.payload,E::ArtifactProduced{name:seen,..} if seen==name)),
+                E::ArtifactProduced{name,..} if name=="accepted_requirements" || name=="accepted_flow_contract" || name=="user_prompt"=>!startup.iter().any(|row:&ReadEvent|matches!(&row.payload.payload,E::ArtifactProduced{name:seen,..} if seen==name)),
                 E::WorkItemAttemptBound{..}=>true,
+                E::OwnedFlowInputsBound{..}=>true,
                 _=>false,
             };
             if keep {
@@ -1232,6 +1248,82 @@ fn validate_stage_commit(
 #[cfg(test)]
 mod paged_owned_history_tests {
     use super::*;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn input_manifest_repeat_after_startup_closes_is_rejected() {
+        use surge_core::{EventPayload as E, VersionedEventPayload as V, work_item::*};
+        let home = tempfile::tempdir().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let run = RunId::new();
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        let graph: surge_core::Graph =
+            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
+        let manifest = OwnedFlowInputsManifest::new(
+            surge_core::id::WorkItemOperationId::new(),
+            OwnedFlowRequestIdentity::PlainPublic {
+                digest: surge_core::ContentHash::compute(b"request"),
+            },
+            WorkItemBinding {
+                item: surge_core::id::WorkItemId::new(),
+                revision: 1,
+                generation: 1,
+                requirements_hash: surge_core::ContentHash::compute(b"accepted"),
+            },
+            run,
+            RunId::new(),
+            WorkItemWorkspace {
+                repository: home.path().join("project/.git"),
+                checkout: home.path().join("project"),
+                path: home.path().join("workspace"),
+                ownership: "original-owner".into(),
+                branch: "codex/owned".into(),
+                base_commit: "a".repeat(40),
+            },
+            FrozenOwnedFlowMcp::empty(OwnedFlowMcpSelection::Explicit),
+        )
+        .unwrap();
+        writer
+            .append_events(vec![
+                V::new(E::RunStarted {
+                    project_path: home.path().into(),
+                    pipeline_template: None,
+                    initial_prompt: String::new(),
+                    config: surge_core::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                        budget: surge_core::budget::BudgetGuard::default(),
+                    },
+                }),
+                V::new(E::PipelineMaterialized {
+                    graph_hash: surge_core::ContentHash::compute(
+                        &serde_json::to_vec(&graph).unwrap(),
+                    ),
+                    graph: Box::new(graph),
+                }),
+                V::new(E::OwnedFlowInputsBound {
+                    manifest: Box::new(manifest.clone()),
+                }),
+                V::new(E::StageEntered {
+                    node: surge_core::NodeKey::try_from("end").unwrap(),
+                    attempt: 1,
+                }),
+            ])
+            .await
+            .unwrap();
+        assert!(storage.inspect_folded_run(run).await.is_ok());
+        writer
+            .append_event(V::new(E::OwnedFlowInputsBound {
+                manifest: Box::new(manifest),
+            }))
+            .await
+            .unwrap();
+        assert!(
+            storage.inspect_folded_run(run).await.is_err(),
+            "late duplicate must not escape the startup-only retention check"
+        );
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn folded_history_rejects_forged_stage_effects_digest() {
         use surge_core::execution_recovery::{

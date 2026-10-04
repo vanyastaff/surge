@@ -33,6 +33,7 @@ async fn denied_tool_does_not_appear_in_visible_list() {
     let sandbox = DenyListSandbox::deny_tools(["shell_exec"]);
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

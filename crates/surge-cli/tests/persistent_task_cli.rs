@@ -206,7 +206,10 @@ async fn compiled_task_commands_create_start_replay_and_show_the_same_persistent
     .await;
     let accepted = storage.work_items().show(item).unwrap();
     assert_eq!(accepted.revision.accepted_proposal, Some(1));
-    assert_eq!(accepted.revision.requirements.text(), "Proposed feedback");
+    assert_eq!(
+        accepted.revision.origin.requirements().unwrap().text(),
+        "Proposed feedback"
+    );
     std::fs::write(
         &requirements,
         r#"{"text":"Explicit final acceptance","criteria":["Preserve PR and files"]}"#,

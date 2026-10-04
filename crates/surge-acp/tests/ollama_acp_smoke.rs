@@ -98,6 +98,7 @@ async fn ollama_runtime_handshakes_and_answers() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

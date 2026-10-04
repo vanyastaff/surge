@@ -9,14 +9,28 @@ use surge_persistence::runs::run_writer::RunEventRecorder;
 pub(crate) struct McpWriterObserver {
     pub(crate) recorder: RunEventRecorder,
     pub(crate) invocation: StageInvocationId,
+    pub(crate) effect_fence: Option<std::sync::Arc<super::owned_effects::OwnedFlowEffectFence>>,
 }
 
 #[async_trait::async_trait]
 impl surge_mcp::writer_observer::HostWriterObserver for McpWriterObserver {
+    fn before_effect(
+        &self,
+        _server: &str,
+    ) -> Result<(), surge_mcp::writer_observer::WriterObservationError> {
+        use surge_acp::bridge::HostEffectFence;
+        self.effect_fence.as_ref().map_or(Ok(()), |fence| {
+            fence.check().map_err(|_| {
+                surge_mcp::writer_observer::WriterObservationError("host-effect-refused".into())
+            })
+        })
+    }
+
     async fn before_child(
         &self,
         server: &str,
     ) -> Result<ExecutionWriterId, surge_mcp::writer_observer::WriterObservationError> {
+        surge_mcp::writer_observer::HostWriterObserver::before_effect(self, server)?;
         begin(
             &self.recorder,
             self.invocation,

@@ -127,12 +127,9 @@ impl FleetScreen {
                 "Accepted revision {}",
                 detail.revision.revision
             )))
-            .child(div().child(detail.revision.requirements.text().to_owned()))
+            .child(div().child(accepted_origin_text(&detail.revision.origin).to_owned()))
             .children(
-                detail
-                    .revision
-                    .requirements
-                    .criteria()
+                accepted_origin_criteria(&detail.revision.origin)
                     .iter()
                     .map(|criterion| div().child(format!("• {criterion}"))),
             )
@@ -632,7 +629,7 @@ impl FleetScreen {
             });
             let requirements = cx.new(|cx| TextareaState::new(window, cx).rows(5));
             requirements.update(cx, |input, cx| {
-                input.set_value(detail.revision.requirements.text(), window, cx)
+                input.set_value(accepted_origin_text(&detail.revision.origin), window, cx)
             });
             let criteria = cx.new(|cx| {
                 TextareaState::new(window, cx)
@@ -641,7 +638,7 @@ impl FleetScreen {
             });
             criteria.update(cx, |input, cx| {
                 input.set_value(
-                    detail.revision.requirements.criteria().join("\n"),
+                    accepted_origin_criteria(&detail.revision.origin).join("\n"),
                     window,
                     cx,
                 )
@@ -792,11 +789,11 @@ impl FleetScreen {
             return;
         };
         draft.requirements.update(cx, |input, cx| {
-            input.set_value(detail.revision.requirements.text(), window, cx)
+            input.set_value(accepted_origin_text(&detail.revision.origin), window, cx)
         });
         draft.criteria.update(cx, |input, cx| {
             input.set_value(
-                detail.revision.requirements.criteria().join("\n"),
+                accepted_origin_criteria(&detail.revision.origin).join("\n"),
                 window,
                 cx,
             )
@@ -1189,7 +1186,7 @@ impl FleetScreen {
                 ..
             } => {
                 if let WorkItemResult::Detail(detail) = result {
-                    if &detail.revision.requirements == requirements {
+                    if detail.revision.origin.requirements() == Some(requirements) {
                         if let Some(draft) = self.task_drafts.get_mut(&item) {
                             let text = draft.requirements.read(cx).value();
                             let criteria = draft.criteria.read(cx).value();
@@ -1227,5 +1224,23 @@ impl FleetScreen {
             _ => "Task operation accepted".into(),
         };
         self.task_feedback.insert(item, feedback);
+    }
+}
+
+fn accepted_origin_text(origin: &surge_core::work_item::AcceptedWorkItemOrigin) -> &str {
+    match origin {
+        surge_core::work_item::AcceptedWorkItemOrigin::Requirements(requirements) => {
+            requirements.text()
+        },
+        surge_core::work_item::AcceptedWorkItemOrigin::Flow(flow) => flow.raw_prompt(),
+    }
+}
+
+fn accepted_origin_criteria(origin: &surge_core::work_item::AcceptedWorkItemOrigin) -> &[String] {
+    match origin {
+        surge_core::work_item::AcceptedWorkItemOrigin::Requirements(requirements) => {
+            requirements.criteria()
+        },
+        surge_core::work_item::AcceptedWorkItemOrigin::Flow(_) => &[],
     }
 }

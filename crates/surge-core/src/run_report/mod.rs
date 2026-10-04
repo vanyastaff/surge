@@ -694,6 +694,8 @@ impl RunReport {
                 | EventPayload::VerificationCriteriaAccepted { .. }
                 | EventPayload::NotifyDelivered { .. }
                 | EventPayload::WorkItemAttemptBound { .. }
+                | EventPayload::OwnedFlowInputsBound { .. }
+                | EventPayload::OwnedFlowWakeRefused { .. }
                 | EventPayload::ExecutionWriterIntent { .. }
                 | EventPayload::ExecutionWriterEstablished { .. }
                 | EventPayload::ExecutionWriterClosed { .. }

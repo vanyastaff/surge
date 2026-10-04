@@ -425,6 +425,12 @@ async fn launch_attempt(
                 )?;
                 return Err(WorkItemError::Conflict(error.to_string()));
             }
+            if store.has_pending_owned_flow(attempt.run)? {
+                let manifest = store
+                    .owned_flow_manifest(attempt.run)?
+                    .ok_or(WorkItemError::PrivateInputsCorrupt)?;
+                store.acknowledge_owned_flow_startup(&claim, &manifest)?;
+            }
             let folded = &history.state;
             if !continue_reserved
                 && matches!(folded.attention(),surge_core::run_state::Attention::Waiting{until,..} if until>chrono::Utc::now())
@@ -510,7 +516,16 @@ pub(crate) async fn resume_parked_work_item(
     };
     if attempt.state == WorkItemAttemptState::Suspended {
         let should_resume = {
-            let claim = store.claim(run_id)?;
+            let claim = match store.claim_owned_flow_quota_wake(run_id, now_ms)? {
+                surge_persistence::work_items::OwnedFlowWakeAdmission::Legacy => {
+                    store.claim(run_id)?
+                },
+                surge_persistence::work_items::OwnedFlowWakeAdmission::Ready(claim) => *claim,
+                surge_persistence::work_items::OwnedFlowWakeAdmission::Refused
+                | surge_persistence::work_items::OwnedFlowWakeAdmission::Obsolete => {
+                    return Ok(true);
+                },
+            };
             let current = store.execution_control(run_id)?;
             if let Some(control) = current.as_ref()
                 && control.state == surge_core::execution_recovery::ExecutionControlState::Suspended
@@ -665,6 +680,22 @@ async fn dispatch_attempt(
     Ok(WorkItemResult::Attempt(Box::new(
         store.for_run(attempt.run)?.ok_or(WorkItemError::NotFound)?,
     )))
+}
+
+pub(crate) async fn launch_owned_flow(
+    claim: surge_persistence::work_items::WorkItemLaunchClaim,
+    tracking: &TrackingContext,
+    admission: &Arc<AdmissionController>,
+    broadcasts: &Arc<BroadcastRegistry>,
+) -> Result<(), WorkItemError> {
+    let (_, storage) = tracking
+        .task_sources()
+        .ok_or_else(|| WorkItemError::Invalid("owned Flow host unavailable".into()))?;
+    let store = storage.work_items();
+    store.validate_owned_flow_pending(&claim)?;
+    let attempt = store.validate_claim(&claim)?;
+    dispatch_attempt(&attempt, claim, false, tracking, admission, broadcasts).await?;
+    Ok(())
 }
 
 async fn supervise_completion(
@@ -834,7 +865,7 @@ pub(crate) async fn reconcile_page(
         // Never turn a reservation without a startup commit into an implicit new dispatch.
         let inspected = storage.inspect_folded_run(attempt.run).await;
         let present = matches!(&inspected,Ok(inspected) if matches!(&inspected.database,Some(history) if history.event_count>0));
-        if !present {
+        if !present && !store.has_pending_owned_flow(attempt.run)? {
             if let Err(error) = inspected {
                 store.settle(
                     attempt.run,

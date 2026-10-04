@@ -135,6 +135,9 @@ impl std::fmt::Debug for StageMcpConfig {
 /// it calls `Sandbox::boxed_clone()` and reconstructs the box. Callers that
 /// want to hold a config across multiple opens must rebuild it from inputs.
 pub struct SessionConfig {
+    /// Runtime host admission retained by queued work, session and callbacks.
+    /// `None` preserves the legacy opening contract.
+    pub effect_fence: Option<std::sync::Arc<dyn super::HostEffectFence>>,
     /// Unique local writer whose intent precedes this connection attempt.
     pub writer_id: surge_core::id::ExecutionWriterId,
     /// Stable stage invocation, independent from authenticated connection generations.
@@ -335,6 +338,7 @@ mod tests {
 
     fn cfg_with(outcomes: Vec<&str>, tools: Vec<ToolDef>) -> SessionConfig {
         SessionConfig {
+            effect_fence: None,
             writer_id: surge_core::id::ExecutionWriterId::new(),
             invocation: surge_core::id::StageInvocationId::new(),
             runtime: "fixture".into(),

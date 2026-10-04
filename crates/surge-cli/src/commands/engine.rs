@@ -4,10 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Subcommand, ValueEnum};
 use owo_colors::{OwoColorize, Stream};
 use std::path::PathBuf;
-use std::sync::Arc;
-use surge_core::SurgeConfig;
 use surge_core::id::RunId;
-use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
 use surge_persistence::runs::Storage;
 
 /// Output format for read-only inspection commands.
@@ -42,6 +39,9 @@ pub enum EngineCommands {
         /// `feature`, `code-review`, ...) treat this as the spec.
         #[arg(long, short = 'p')]
         prompt: Option<String>,
+        /// Stable operation identity for exact retries after disconnects.
+        #[arg(long)]
+        operation_id: Option<surge_core::id::WorkItemOperationId>,
     },
     /// Tail events from an existing run by id.
     Watch {
@@ -130,7 +130,19 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             worktree,
             daemon,
             prompt,
-        } => run_command(spec_path, template, watch, worktree, daemon, prompt).await,
+            operation_id,
+        } => {
+            run_command(
+                spec_path,
+                template,
+                watch,
+                worktree,
+                daemon,
+                prompt,
+                operation_id,
+            )
+            .await
+        },
         EngineCommands::Watch { run_id, daemon } => watch_command(run_id, daemon).await,
         EngineCommands::Resume { run_id, daemon } => resume_command(run_id, daemon).await,
         EngineCommands::Stop {
@@ -165,159 +177,72 @@ async fn run_command(
     worktree: Option<PathBuf>,
     daemon: bool,
     prompt: Option<String>,
+    operation_id: Option<surge_core::id::WorkItemOperationId>,
 ) -> Result<()> {
-    use surge_core::graph::Graph;
-    use surge_orchestrator::engine::facade::EngineFacade;
-    use surge_orchestrator::engine::handle::EngineRunEvent;
-
-    let graph: Graph = match (spec_path, template) {
-        (Some(_), Some(template)) => {
-            return Err(anyhow!(
-                "pass either SPEC_PATH or --template {template}, not both; either form skips bootstrap"
-            ));
-        },
-        (Some(path), None) => {
-            let toml_text = std::fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
-            toml::from_str(&toml_text).with_context(|| format!("parse {}", path.display()))?
-        },
-        (None, Some(template)) => {
-            let registry = surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
-                .context("load archetype registry")?;
-            let resolved = registry
-                .resolve(&template)
-                .with_context(|| format!("resolve template {template:?}"))?;
-            eprintln!(
-                "using template {} ({:?})",
-                resolved.name, resolved.provenance
-            );
-            resolved.graph
-        },
-        (None, None) => {
-            return Err(anyhow!(
-                "provide SPEC_PATH or --template <name>; both forms skip bootstrap"
-            ));
-        },
+    use surge_orchestrator::engine::owned_flow::{
+        FlowInput, OwnedFlowRunConfig, OwnedFlowStart, WorkspaceRequest,
     };
-
-    let worktree_path = worktree.map_or_else(|| std::env::current_dir().context("cwd"), Ok)?;
-    if !worktree_path.exists() {
-        return Err(anyhow!(
-            "worktree path does not exist: {}",
-            worktree_path.display()
-        ));
-    }
-
-    // Loaded here, before the engine is constructed, so its `[capacity]`
-    // section can reach `CapacityPolicy` via `EngineConfig::capacity`
-    // below (Task 12 M3, acceptance criterion B) — `surge.toml`'s
-    // `blind_backoff` was a documented knob nothing read until this wiring
-    // existed.
-    let app_config =
-        SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
-
-    let mut local_events = None;
-    let facade: Arc<dyn EngineFacade> = if daemon {
-        ensure_daemon_running().await?;
-        let socket = surge_daemon::pidfile::socket_path()?;
-        Arc::new(
-            surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?,
-        )
-    } else {
-        let storage = Storage::open(&surge_runs_dir()?)
-            .await
-            .context("open storage")?;
-
-        let bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade> = Arc::new(
-            surge_acp::bridge::AcpBridge::with_defaults().context("AcpBridge::with_defaults")?,
-        );
-
-        let tool_dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> = Arc::new(
-            surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
-                worktree_path.clone(),
-            ),
-        );
-
-        let notifier = build_default_notifier();
-
-        // Load the profile registry on engine startup so agent stages
-        // resolve `agent_config.profile` through it instead of the
-        // M5 mock-only fallback. A registry-load failure is a hard
-        // error here: production CLI runs should never silently fall
-        // back to mocking.
-        let profile_registry = Arc::new(
-            surge_orchestrator::profile_loader::ProfileRegistry::load()
-                .context("load profile registry")?,
-        );
-
-        let engine = Arc::new(Engine::new_full(
-            bridge,
-            storage,
-            tool_dispatcher,
-            notifier,
-            None, // mcp_registry: not wired in the CLI in-process path
-            Some(profile_registry),
-            EngineConfig {
-                capacity: (&app_config.capacity).into(),
-                // The unified catalog: user `[agents.*]` over builtins, so a
-                // custom provider is a first-class runtime with no code change.
-                agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::for_run(
-                    &app_config,
-                ))),
-                ..EngineConfig::default()
-            },
-        ));
-        local_events = Some(engine.subscribe_tap());
-        Arc::new(surge_orchestrator::engine::facade::LocalEngineFacade::new(
-            engine,
-        ))
+    let input = match (spec_path, template) {
+        (Some(locator), None) => FlowInput::ProjectFile { locator },
+        (None, Some(key)) => FlowInput::Template { key },
+        (Some(_), Some(_)) => return Err(anyhow!("pass either SPEC_PATH or --template, not both")),
+        (None, None) => return Err(anyhow!("provide SPEC_PATH or --template <name>")),
     };
-
-    let run_id = RunId::new();
-    println!("{run_id}");
-
-    let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
-        EngineRunConfig::default(),
-        &worktree_path,
-        &app_config,
-    );
-    if let Some(prompt) = prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-        run_config.initial_prompt = prompt.to_owned();
-    }
-    // Freeze the operator's [analytics] budget into the run so the engine
-    // enforces it at every stage boundary (warn → abort by default).
-    run_config.budget = app_config.analytics.budget_guard();
-
-    let handle = facade
-        .start_run(run_id, graph, worktree_path, run_config)
-        .await?;
-
+    let source_project = std::env::current_dir().context("cwd")?;
+    let workspace = worktree.map_or(WorkspaceRequest::Managed, |path| {
+        WorkspaceRequest::Explicit { path }
+    });
+    let request = OwnedFlowStart {
+        operation_id: operation_id.unwrap_or_default(),
+        source_project,
+        input,
+        config: OwnedFlowRunConfig {
+            initial_prompt: prompt.unwrap_or_default(),
+            ..OwnedFlowRunConfig::default()
+        },
+        workspace,
+    };
+    let request = request.normalize()?;
+    // Immutable intent reaches the owner before reading source files, project
+    // configuration, templates, profiles or credential discovery.
+    ensure_daemon_running().await?;
+    let socket = surge_daemon::pidfile::socket_path()?;
+    let facade =
+        surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
+    let receipt = facade.owned_flow_start(request).await?;
+    println!("{}", receipt.run);
     if daemon && !watch {
         return Ok(());
     }
-    let outcome = super::run_lifecycle::drive_run(
-        handle,
-        local_events,
-        !daemon,
-        |event| async move {
-            if watch {
-                print_event(&event);
-            }
-            if !daemon && matches!(event, EngineRunEvent::Persisted { payload, .. }
-                if matches!(*payload, surge_core::run_event::EventPayload::HumanInputRequested { .. }))
-            {
-                return Err(anyhow!("run {run_id} needs human input that local engine run cannot answer. Use --daemon with an approval client, or the bootstrap console for bootstrap flows"));
-            }
-            Ok(())
-        },
-        |reason| facade.stop_run(run_id, reason),
-    ).await?;
-    if watch && !daemon {
-        print_event(&EngineRunEvent::Terminal {
-            outcome: outcome.clone(),
-        });
+    wait_owned_startup(receipt.run).await?;
+    watch_command(receipt.run.to_string(), true).await
+}
+
+async fn wait_owned_startup(run: RunId) -> Result<()> {
+    let storage = Storage::open(&surge_runs_dir()?)
+        .await
+        .context("open accepted run storage")?;
+    loop {
+        let inspected = storage.inspect_folded_run(run).await?;
+        if inspected
+            .database
+            .is_some_and(|history| history.event_count > 0)
+        {
+            return Ok(());
+        }
+        let attempt = storage
+            .work_items()
+            .for_run(run)?
+            .ok_or_else(|| anyhow!("accepted run is missing"))?;
+        if !attempt.state.is_active() {
+            return Err(anyhow!(
+                "accepted run {} ended before startup: {:?}",
+                run,
+                attempt.state
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    super::run_lifecycle::require_completed(run_id, outcome)
 }
 
 async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
@@ -751,14 +676,6 @@ fn surge_runs_dir() -> Result<PathBuf> {
     // Storage::open expects the surge-home dir (parent of runs/), which it
     // populates with the runs/ subdir itself.
     Ok(surge_home)
-}
-
-fn build_default_notifier() -> Arc<dyn surge_notify::NotifyDeliverer> {
-    Arc::new(
-        surge_notify::MultiplexingNotifier::new()
-            .with_desktop(Arc::new(surge_notify::DesktopDeliverer::new()))
-            .with_webhook(Arc::new(surge_notify::WebhookDeliverer::new())),
-    )
 }
 
 fn print_event(event: &surge_orchestrator::engine::handle::EngineRunEvent) {

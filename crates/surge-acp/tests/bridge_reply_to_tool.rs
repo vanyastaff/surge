@@ -48,6 +48,7 @@ async fn reply_to_unknown_call_id_within_session_returns_unknown_call_id() {
     // `echo` scenario doesn't fire any tool calls, so any call_id we pass is
     // guaranteed to be unknown.
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),
@@ -97,6 +98,7 @@ async fn reply_to_observed_call_id_cannot_fabricate_tool_result() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

@@ -5,6 +5,8 @@
 #![allow(clippy::excessive_nesting)]
 #![allow(clippy::identity_op)]
 
+mod runtime_shutdown;
+
 use std::io::{self, Write as _};
 
 use anyhow::Result;
@@ -340,20 +342,48 @@ fn install_panic_hook() {
     }));
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     install_panic_hook();
+    surge_process::owner_panic::install_owner_panic_protection();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::filter_fn(|metadata| {
+            surge_mcp::diagnostics::permits_target(metadata.target())
+        }))
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "surge=info".into()),
         )
-        .with_writer(std::io::stderr)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     let cli = Cli::parse();
+    let background = matches!(&cli.command, Commands::InternalStageMcp);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let runtime = runtime_shutdown::HostRuntime::new(runtime, background);
+    let result = runtime.runtime().block_on(async_main(cli));
+    drop(runtime);
+    if let Err(error) = &result
+        && let Some(exit) = error.downcast_ref::<ExitRequested>()
+    {
+        std::process::exit(exit.0);
+    }
+    result
+}
 
+#[derive(Debug)]
+struct ExitRequested(i32);
+impl std::fmt::Display for ExitRequested {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "requested exit status {}", self.0)
+    }
+}
+impl std::error::Error for ExitRequested {}
+
+async fn async_main(cli: Cli) -> Result<()> {
     // Check for orphaned worktrees at startup (skip for certain commands)
     let should_check_orphans = !matches!(
         cli.command,
@@ -395,7 +425,7 @@ async fn main() -> Result<()> {
         }
         _ = setup_signal_handler() => {
             // Signal received, exit gracefully
-            std::process::exit(130); // Standard exit code for SIGINT
+            Err(ExitRequested(130).into()) // Standard exit code for SIGINT
         }
     }
 }
@@ -416,7 +446,7 @@ async fn run_command(command: Commands) -> Result<()> {
                     1
                 },
             };
-            std::process::exit(status);
+            return Err(ExitRequested(status).into());
         },
         Commands::Ping { agent } => {
             let mut config = SurgeConfig::discover()?;
@@ -463,7 +493,7 @@ async fn run_command(command: Commands) -> Result<()> {
                 },
                 Err(e) => {
                     println!("❌ Agent '{agent_name}' failed: {e}");
-                    std::process::exit(2);
+                    return Err(ExitRequested(2).into());
                 },
             }
         },

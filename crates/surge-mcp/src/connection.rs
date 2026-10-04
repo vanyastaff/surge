@@ -1,23 +1,20 @@
 //! Per-server MCP connection state. Wraps an rmcp `RunningService`
 //! and handles spawn / crash detection / reconnect.
 
+use crate::child_settlement::ObservedTransport;
 use crate::error::McpError;
-use crate::redact::redact_line;
 use rmcp::ServiceExt;
 use rmcp::service::{RoleClient, RunningService, ServiceError};
-use rmcp::transport::child_process::TokioChildProcess;
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use surge_core::mcp_config::{McpServerRef, McpTransportConfig};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// Max stderr lines retained per connection in the bounded tee file.
+/// Max opaque stderr records published per connection, plus one suppression record.
 /// Documented default; not configurable in v0.1 (decide-or-defer).
 const MAX_STDERR_LINES: usize = 500;
 
@@ -300,6 +297,9 @@ impl McpServerConnection {
                 self.unhealthy.store(false, Ordering::Relaxed);
                 Ok(rs)
             },
+            Err(
+                error @ (McpError::EffectRefused { .. } | McpError::WriterOwnershipRefused { .. }),
+            ) => Err(error),
             Err(e) => {
                 match restart_decision(prior_attempts) {
                     RestartDecision::Backoff { attempts, delay } => {
@@ -340,9 +340,8 @@ impl McpServerConnection {
                 observer
                     .before_child(&self.config.name)
                     .await
-                    .map_err(|error| McpError::StartFailed {
+                    .map_err(|_error| McpError::WriterOwnershipRefused {
                         server: self.config.name.clone(),
-                        reason: error.to_string(),
                     })?,
             )
         } else {
@@ -369,12 +368,25 @@ impl McpServerConnection {
                 }
                 #[cfg(unix)]
                 tokio_cmd.process_group(0);
-                TokioChildProcess::builder(tokio_cmd)
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|e| McpError::StartFailed {
-                        server: self.config.name.clone(),
-                        reason: e.to_string(),
+                ObservedTransport::spawn(tokio_cmd, self.writer_observer.clone(), &self.config.name)
+                    .map_err(|error| match error {
+                        crate::child_settlement::ChildStartError::EffectRefused => {
+                            McpError::EffectRefused {
+                                server: self.config.name.clone(),
+                            }
+                        },
+                        crate::child_settlement::ChildStartError::OwnerUnavailable => {
+                            McpError::StartFailed {
+                                server: self.config.name.clone(),
+                                reason: "mcp_child_owner_unavailable".into(),
+                            }
+                        },
+                        crate::child_settlement::ChildStartError::Preparation => {
+                            McpError::StartFailed {
+                                server: self.config.name.clone(),
+                                reason: "mcp_child_spawn_failed".into(),
+                            }
+                        },
                     })?
             },
             // `McpTransportConfig` is `#[non_exhaustive]`; future
@@ -387,23 +399,31 @@ impl McpServerConnection {
             },
         };
 
-        if let (Some(observer), Some(writer)) = (&self.writer_observer, writer) {
-            observer
-                .child_started(writer, transport.id())
-                .await
-                .map_err(|error| McpError::StartFailed {
-                    server: self.config.name.clone(),
-                    reason: error.to_string(),
-                })?;
-        }
-
-        // Forward child stderr to `tracing` + a bounded, redacted,
-        // run-scoped file. The task ends when the pipe closes (child
-        // exit / shutdown); it holds no handle to the connection.
         if let Some(stderr) = stderr {
             let server = self.config.name.clone();
             let path = stderr_log_path(self.cwd.as_deref(), &server);
-            tokio::spawn(stderr_forwarder(stderr, server, path));
+            tokio::spawn(stderr_forwarder(
+                stderr,
+                server,
+                path,
+                self.writer_observer.clone(),
+            ));
+        }
+        if let (Some(observer), Some(writer)) = (&self.writer_observer, writer)
+            && observer
+                .child_started(writer, Some(transport.id()))
+                .await
+                .is_err()
+        {
+            transport.settle(false).await;
+            return Err(McpError::StartFailed {
+                server: self.config.name.clone(),
+                reason: "mcp_child_observation_failed".into(),
+            });
+        }
+        if let Err(error) = self.check_effect() {
+            transport.settle(false).await;
+            return Err(error);
         }
 
         // `()` implements `ClientHandler` (all methods defaulted), and
@@ -414,10 +434,10 @@ impl McpServerConnection {
         let call_timeout = self.config.call_timeout;
         let service = match tokio::time::timeout(call_timeout, ().serve(transport)).await {
             Ok(Ok(svc)) => svc,
-            Ok(Err(e)) => {
+            Ok(Err(_error)) => {
                 return Err(McpError::StartFailed {
                     server: self.config.name.clone(),
-                    reason: e.to_string(),
+                    reason: "mcp_handshake_failed".into(),
                 });
             },
             Err(_elapsed) => {
@@ -442,9 +462,30 @@ impl McpServerConnection {
     pub async fn list_tools(&self) -> Result<Vec<rmcp::model::Tool>, McpError> {
         let rs = self.ensure_connected().await?;
         let timeout = self.config.call_timeout;
-        match tokio::time::timeout(timeout, rs.list_all_tools()).await {
-            Ok(Ok(tools)) => Ok(tools),
-            Ok(Err(e)) => Err(self.handle_service_error(e).await),
+        // Keep one deadline across all pages, matching list_all_tools semantics.
+        let catalog = async {
+            let mut tools = Vec::new();
+            let mut cursor = None;
+            loop {
+                self.check_effect()?;
+                let page = match rs
+                    .list_tools(Some(
+                        rmcp::model::PaginatedRequestParams::default().with_cursor(cursor),
+                    ))
+                    .await
+                {
+                    Ok(page) => page,
+                    Err(error) => return Err(self.handle_service_error(error).await),
+                };
+                tools.extend(page.tools);
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    return Ok(tools);
+                }
+            }
+        };
+        match tokio::time::timeout(timeout, catalog).await {
+            Ok(result) => result,
             Err(_elapsed) => Err(McpError::Timeout(timeout)),
         }
     }
@@ -479,23 +520,39 @@ impl McpServerConnection {
             params = params.with_arguments(map);
         }
 
-        match tokio::time::timeout(timeout, rs.call_tool(params)).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(e)) => Err(self.handle_service_error(e).await),
+        let call = async {
+            self.check_effect()?;
+            match rs.call_tool(params).await {
+                Ok(result) => Ok(opaque_error_result(result)),
+                Err(error) => Err(self.handle_service_error(error).await),
+            }
+        };
+        match tokio::time::timeout(timeout, call).await {
+            Ok(result) => result,
             Err(_elapsed) => Err(McpError::Timeout(timeout)),
         }
+    }
+
+    fn check_effect(&self) -> Result<(), McpError> {
+        if let Some(observer) = &self.writer_observer {
+            observer
+                .before_effect(&self.config.name)
+                .map_err(|_error| McpError::EffectRefused {
+                    server: self.config.name.clone(),
+                })?;
+        }
+        Ok(())
     }
 
     /// Map an rmcp [`ServiceError`] to an [`McpError`], marking the
     /// connection crashed on transport-class failures.
     async fn handle_service_error(&self, e: ServiceError) -> McpError {
-        let msg = e.to_string();
         match classify_service_error(&e) {
             ErrorClass::Transport => {
                 self.mark_crashed(None).await;
-                McpError::Transport(msg)
+                McpError::Transport("mcp_transport_failed".into())
             },
-            ErrorClass::Service => McpError::Service(msg),
+            ErrorClass::Service => McpError::Service("mcp_service_failed".into()),
         }
     }
 
@@ -575,6 +632,9 @@ impl McpServerConnection {
                             consecutive_failures = 0;
                             continue;
                         };
+                        if me.check_effect().is_err() {
+                            continue;
+                        }
                         let probe_ok = if rs.is_closed() {
                             false
                         } else {
@@ -585,15 +645,21 @@ impl McpServerConnection {
                             // timeout counts as a failed probe.
                             match tokio::time::timeout(
                                 me.config.call_timeout,
-                                rs.list_tools(None),
+                                async {
+                                    if me.check_effect().is_err() {
+                                        return None;
+                                    }
+                                    Some(rs.list_tools(None).await)
+                                },
                             )
                             .await
                             {
-                                Ok(Ok(_)) => true,
+                                Ok(None) => continue,
+                                Ok(Some(Ok(_))) => true,
                                 // A service-level error means the server
                                 // answered — it is alive, just rejected
                                 // the call; only transport death counts.
-                                Ok(Err(e)) => !matches!(
+                                Ok(Some(Err(e))) => !matches!(
                                     classify_service_error(&e),
                                     ErrorClass::Transport
                                 ),
@@ -606,6 +672,9 @@ impl McpServerConnection {
                         } else {
                             consecutive_failures += 1;
                             if consecutive_failures >= HEALTH_FAIL_THRESHOLD {
+                                if me.check_effect().is_err() {
+                                    continue;
+                                }
                                 me.unhealthy.store(true, Ordering::Relaxed);
                                 tracing::warn!(
                                     target: "mcp::supervisor",
@@ -615,6 +684,9 @@ impl McpServerConnection {
                                      handing to restart policy"
                                 );
                                 me.mark_crashed(None).await;
+                                if me.check_effect().is_err() {
+                                    continue;
+                                }
                                 // Proactively recover under backoff.
                                 // interval >= backoff cap ⇒ no hot-loop.
                                 let _ = me.ensure_connected().await;
@@ -641,16 +713,16 @@ impl McpServerConnection {
         };
         if let ConnState::Running(arc) = taken {
             if let Some(svc) = Arc::into_inner(arc) {
-                if let Err(e) = svc.cancel().await {
+                if let Err(_error) = svc.cancel().await {
                     tracing::warn!(
                         target: "mcp::supervisor",
                         server = %self.config.name,
-                        error = %e,
+                        reason = "mcp_service_join_failed",
                         "mcp shutdown: join error while cancelling service"
                     );
                     return Err(crate::cleanup::CleanupError::ServiceJoin {
                         server: self.config.name.clone(),
-                        reason: e.to_string(),
+                        reason: "mcp_service_join_failed".into(),
                     });
                 }
             } else {
@@ -677,6 +749,70 @@ impl std::fmt::Debug for McpServerConnection {
             .field("name", &self.config.name)
             .field("cwd", &self.cwd)
             .finish_non_exhaustive()
+    }
+}
+
+/// Clear every diagnostic field of a successful RPC carrying an error result.
+/// Ordinary successful product data passes through unchanged.
+pub(crate) fn opaque_error_result(
+    mut result: rmcp::model::CallToolResult,
+) -> rmcp::model::CallToolResult {
+    if result.is_error == Some(true) {
+        result.content = vec![rmcp::model::Content::text("mcp_tool_error")];
+        result.structured_content = None;
+        result.meta = None;
+    }
+    result
+}
+
+#[derive(Default)]
+struct StderrRecords {
+    bytes: u64,
+    after_cr: bool,
+    safe: Vec<&'static str>,
+    suppressed: u64,
+}
+
+impl StderrRecords {
+    fn byte(&mut self, byte: u8) -> bool {
+        if byte == b'\n' && self.after_cr {
+            self.after_cr = false;
+            return false;
+        }
+        self.after_cr = byte == b'\r';
+        if byte == b'\r' || byte == b'\n' {
+            self.finish()
+        } else {
+            self.bytes = self.bytes.saturating_add(1);
+            false
+        }
+    }
+
+    fn finish(&mut self) -> bool {
+        let reason = if self.bytes > 16 * 1024 {
+            "mcp_stderr_overlong_record"
+        } else {
+            "mcp_stderr_record"
+        };
+        self.bytes = 0;
+        self.complete(reason)
+    }
+
+    fn complete(&mut self, reason: &'static str) -> bool {
+        if self.safe.len() >= MAX_STDERR_LINES {
+            self.suppressed = self.suppressed.saturating_add(1);
+            false
+        } else {
+            self.safe.push(reason);
+            true
+        }
+    }
+
+    async fn publish(&self, server: &str, path: &Path) {
+        if let Some(reason) = self.safe.last() {
+            tracing::info!(target: "mcp::child::stderr", server = %server, reason);
+        }
+        let _ = tokio::fs::write(path, self.safe.join("\n")).await;
     }
 }
 
@@ -728,15 +864,20 @@ pub fn stderr_log_path(cwd: Option<&Path>, server: &str) -> PathBuf {
     base.join(format!("{safe}.log"))
 }
 
-/// Stream a child's stderr to `tracing` and a bounded, redacted file.
-async fn stderr_forwarder(stderr: tokio::process::ChildStderr, server: String, path: PathBuf) {
+/// Drain raw stderr in fixed memory; publish only bounded opaque records.
+async fn stderr_forwarder(
+    mut stderr: tokio::process::ChildStderr,
+    server: String,
+    path: PathBuf,
+    owner: Option<Arc<dyn crate::writer_observer::HostWriterObserver>>,
+) {
+    let _owner = owner;
     if let Some(parent) = path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
         // Owner-only capture dir. Daemon-scoped probes write under
         // `temp_dir()/surge-mcp-stderr/`, which would otherwise inherit
-        // a world-readable umask default — and even redacted child
-        // stderr can carry hostnames, paths, and short tokens that slip
-        // past redaction (ADR-0014 decision 6). Run-scoped paths live
+        // a world-readable umask default. Public files contain opaque
+        // operational categories only. Run-scoped paths live
         // under the user-owned worktree, so 0700 is harmless there too.
         #[cfg(unix)]
         {
@@ -752,8 +893,8 @@ async fn stderr_forwarder(stderr: tokio::process::ChildStderr, server: String, p
     // Truncate: this call runs once per spawned child (including
     // restarts), and the path is stable across restarts — without
     // truncation a restarted child's log would start by showing the
-    // previous (possibly crashed) child's stderr tail until its own
-    // first line arrives, which is exactly the moment `surge mcp logs`
+    // previous (possibly crashed) child's categories until its own
+    // first record arrives, which is exactly the moment `surge mcp logs`
     // is most likely to be read for a diagnosis.
     #[cfg(unix)]
     {
@@ -770,21 +911,35 @@ async fn stderr_forwarder(stderr: tokio::process::ChildStderr, server: String, p
             let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await;
         }
     }
-    let mut lines = BufReader::new(stderr).lines();
-    let mut ring: VecDeque<String> = VecDeque::with_capacity(MAX_STDERR_LINES);
-    while let Ok(Some(line)) = lines.next_line().await {
-        let red = redact_line(&line);
-        tracing::info!(target: "mcp::child::stderr", server = %server, "{red}");
-        if ring.len() == MAX_STDERR_LINES {
-            ring.pop_front();
+    let mut buffer = [0_u8; 4096];
+    let mut records = StderrRecords::default();
+    loop {
+        match stderr.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(count) => {
+                for byte in &buffer[..count] {
+                    if records.byte(*byte) {
+                        records.publish(&server, &path).await;
+                    }
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
+            Err(_error) => {
+                if records.complete("mcp_stderr_read_failed") {
+                    records.publish(&server, &path).await;
+                }
+                break;
+            },
         }
-        ring.push_back(red);
-        // Rewrite the bounded window. MCP stderr is low-volume
-        // (startup banner + occasional warnings); an exact last-N tail
-        // is worth the rewrite. Best-effort: a write failure must not
-        // kill the forwarder.
-        let body = ring.iter().cloned().collect::<Vec<_>>().join("\n");
-        let _ = tokio::fs::write(&path, body).await;
+    }
+    if records.bytes != 0 && records.finish() {
+        records.publish(&server, &path).await;
+    }
+    if records.suppressed != 0 {
+        tracing::info!(target: "mcp::child::stderr", server = %server,
+            suppressed = records.suppressed, reason = "mcp_stderr_records_suppressed");
+        records.safe.push("mcp_stderr_records_suppressed");
+        let _ = tokio::fs::write(&path, records.safe.join("\n")).await;
     }
 }
 
@@ -893,6 +1048,104 @@ mod tests {
     async fn disconnected_connection_reports_disconnected_not_unhealthy() {
         let conn = McpServerConnection::new(fake_server_ref(), None);
         assert_eq!(conn.status().await, McpHealth::Disconnected);
+    }
+
+    struct RefuseSpawn;
+    struct RefuseOwnership(std::sync::atomic::AtomicUsize);
+    #[async_trait::async_trait]
+    impl crate::writer_observer::HostWriterObserver for RefuseOwnership {
+        async fn before_child(
+            &self,
+            _: &str,
+        ) -> Result<surge_core::id::ExecutionWriterId, crate::writer_observer::WriterObservationError>
+        {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(crate::writer_observer::WriterObservationError(
+                "PRIVATE-OWNERSHIP-ERROR-SENTINEL".into(),
+            ))
+        }
+        async fn child_started(
+            &self,
+            _: surge_core::id::ExecutionWriterId,
+            _: Option<u32>,
+        ) -> Result<(), crate::writer_observer::WriterObservationError> {
+            panic!("rejected ownership callback reached actual child observation")
+        }
+    }
+    #[tokio::test]
+    async fn ownership_refusal_preserves_exact_crash_history_and_safe_error() {
+        let observer = Arc::new(RefuseOwnership(std::sync::atomic::AtomicUsize::new(0)));
+        let conn = McpServerConnection::new_owned(fake_server_ref(), None, observer.clone());
+        let retry_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        *conn.state.lock().await = ConnState::Crashed {
+            last_exit: Some(7),
+            attempts: 3,
+            next_retry_at: Some(retry_at),
+        };
+        conn.unhealthy.store(true, Ordering::SeqCst);
+        for expected in 1..=8 {
+            let error = conn.list_tools().await.unwrap_err();
+            assert!(matches!(error, McpError::WriterOwnershipRefused { .. }));
+            assert_eq!(observer.0.load(Ordering::SeqCst), expected);
+            assert!(
+                matches!(*conn.state.lock().await, ConnState::Crashed {
+                    last_exit: Some(7), attempts: 3, next_retry_at: Some(value)
+                } if value == retry_at),
+                "ownership prerequisite changed prior process history"
+            );
+            assert!(conn.unhealthy.load(Ordering::SeqCst));
+            let diagnostic = format!("{error} {error:?}");
+            assert!(!diagnostic.contains("PRIVATE-OWNERSHIP-ERROR-SENTINEL"));
+            assert!(diagnostic.contains("mcp_writer_ownership_refused"));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+    }
+    #[async_trait::async_trait]
+    impl crate::writer_observer::HostWriterObserver for RefuseSpawn {
+        fn before_effect(
+            &self,
+            _server: &str,
+        ) -> Result<(), crate::writer_observer::WriterObservationError> {
+            Err(crate::writer_observer::WriterObservationError(
+                "fixed refusal".into(),
+            ))
+        }
+        async fn before_child(
+            &self,
+            _server: &str,
+        ) -> Result<surge_core::id::ExecutionWriterId, crate::writer_observer::WriterObservationError>
+        {
+            Ok(surge_core::id::ExecutionWriterId::new())
+        }
+        async fn child_started(
+            &self,
+            _writer: surge_core::id::ExecutionWriterId,
+            _pid: Option<u32>,
+        ) -> Result<(), crate::writer_observer::WriterObservationError> {
+            panic!("refused physical spawn reached child observation")
+        }
+    }
+    #[tokio::test]
+    async fn spawn_refusal_preserves_prior_restart_state_and_counter() {
+        let conn = McpServerConnection::new_owned(fake_server_ref(), None, Arc::new(RefuseSpawn));
+        let retry_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        *conn.state.lock().await = ConnState::Crashed {
+            last_exit: Some(7),
+            attempts: 3,
+            next_retry_at: Some(retry_at),
+        };
+        conn.unhealthy.store(true, Ordering::SeqCst);
+        for _ in 0..8 {
+            assert!(matches!(
+                conn.list_tools().await,
+                Err(McpError::EffectRefused { .. })
+            ));
+            assert!(
+                matches!(*conn.state.lock().await,ConnState::Crashed { last_exit:Some(7),attempts:3,next_retry_at:Some(value) } if value==retry_at),
+                "host refusal reset prior crash history"
+            );
+            assert!(conn.unhealthy.load(Ordering::SeqCst));
+        }
     }
 
     #[test]

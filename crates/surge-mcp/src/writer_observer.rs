@@ -10,6 +10,12 @@ pub struct WriterObservationError(pub String);
 /// Narrow host boundary injected by the engine without importing storage or ACP.
 #[async_trait::async_trait]
 pub trait HostWriterObserver: Send + Sync {
+    /// Admit exactly the immediately following physical MCP effect.
+    /// Cleanup remains available regardless of this synchronous permission.
+    fn before_effect(&self, _server: &str) -> Result<(), WriterObservationError> {
+        Ok(())
+    }
+
     /// Commit a distinct ownership intent before each child launch, including respawns.
     async fn before_child(&self, server: &str)
     -> Result<ExecutionWriterId, WriterObservationError>;

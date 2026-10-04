@@ -9,6 +9,9 @@ use thiserror::Error;
 /// Failure modes for opening or creating a `Storage`, run reader, or run writer.
 #[derive(Debug, Error)]
 pub enum OpenError {
+    /// The in-process writer ownership registry is poisoned.
+    #[error("writer ownership registry is poisoned")]
+    WriterOwnershipPoisoned,
     /// Another writer (this process or another) currently holds the slot for this run.
     #[error("writer already held for run {run_id}")]
     WriterAlreadyHeld {
@@ -48,6 +51,9 @@ pub enum OpenError {
 /// Failure modes for reads and writes against an open run.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    /// The in-process writer ownership registry is poisoned.
+    #[error("writer ownership registry is poisoned")]
+    WriterOwnershipPoisoned,
     /// A durable operation was rejected without terminating the writer.
     #[error("journal operation rejected: {0}")]
     OperationRejected(String),

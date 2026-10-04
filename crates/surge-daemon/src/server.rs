@@ -480,6 +480,30 @@ async fn dispatch(
     bootstrap: Option<&Arc<BootstrapSupervisor>>,
 ) -> Option<DaemonResponse> {
     match req {
+        DaemonRequest::OwnedFlowStart {
+            request_id,
+            request,
+        } => Some(
+            match crate::owned_flows::execute(&request, tracking, admission, broadcast).await {
+                Ok(receipt) => DaemonResponse::OwnedFlowStarted {
+                    request_id,
+                    receipt: Box::new(receipt),
+                },
+                Err(error) => DaemonResponse::Error {
+                    request_id,
+                    code: match error {
+                        surge_persistence::work_items::WorkItemError::Conflict(_) => {
+                            ErrorCode::WorkItemConflict
+                        },
+                        surge_persistence::work_items::WorkItemError::Busy => {
+                            ErrorCode::WorkItemBusy
+                        },
+                        _ => ErrorCode::WorkItemRejected,
+                    },
+                    message: error.to_string(),
+                },
+            },
+        ),
         DaemonRequest::WorkItem {
             request_id,
             command,
@@ -515,6 +539,12 @@ async fn dispatch(
             worktree_path,
             run_config,
         } => {
+            if let Some((engine, storage)) = tracking.task_sources() {
+                let owned = storage.work_items().for_run(run_id);
+                if engine.requires_start_preparation(&graph) || !matches!(owned, Ok(None)) {
+                    return Some(DaemonResponse::Error { request_id,code:ErrorCode::WorkItemRejected,message:"legacy StartRun cannot normalize or replace this caller run identity; use owned Flow submission".into() });
+                }
+            }
             if let Some(response) = reserved_run_refusal(bootstrap, run_id, request_id) {
                 return Some(response);
             }
@@ -679,6 +709,31 @@ async fn dispatch(
             run_id,
             worktree_path,
         } => {
+            if let Some((_, storage)) = tracking.task_sources() {
+                match storage.work_items().for_run(run_id) {
+                    Ok(Some(attempt)) => {
+                        return Some(
+                            crate::owned_flows::resume(
+                                request_id,
+                                &attempt,
+                                &worktree_path,
+                                tracking,
+                                admission,
+                                broadcast,
+                            )
+                            .await,
+                        );
+                    },
+                    Ok(None) => (),
+                    Err(error) => {
+                        return Some(DaemonResponse::Error {
+                            request_id,
+                            code: ErrorCode::StorageError,
+                            message: error.to_string(),
+                        });
+                    },
+                }
+            }
             if let Some(response) = reserved_run_refusal(bootstrap, run_id, request_id) {
                 return Some(response);
             }
@@ -729,6 +784,26 @@ async fn dispatch(
             run_id,
             reason,
         } => {
+            if let Some((_, storage)) = tracking.task_sources() {
+                match storage.work_items().for_run(run_id) {
+                    Ok(Some(attempt)) => {
+                        return Some(
+                            crate::owned_flows::stop(
+                                request_id, &attempt, tracking, admission, broadcast,
+                            )
+                            .await,
+                        );
+                    },
+                    Ok(None) => (),
+                    Err(error) => {
+                        return Some(DaemonResponse::Error {
+                            request_id,
+                            code: ErrorCode::StorageError,
+                            message: error.to_string(),
+                        });
+                    },
+                }
+            }
             if let Some(response) = reserved_run_refusal(bootstrap, run_id, request_id) {
                 return Some(response);
             }

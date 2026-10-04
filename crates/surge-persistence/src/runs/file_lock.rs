@@ -13,45 +13,44 @@ use crate::runs::error::OpenError;
 /// cooperating processes that take the same lock will be blocked —
 /// non-cooperating tools (Windows Explorer reading the file) are not.
 ///
-/// Implementation note: the underlying `fd_lock::RwLock` is intentionally
-/// `Box::leak`-ed onto the heap so the guard's `'static` lifetime is real
-/// rather than synthesized via unsafe. The leak is ~24 bytes per `FileLock`
-/// instance (one `RwLock<File>` plus heap allocation overhead). Since
-/// `RunWriter` instances are infrequent and bounded by run count for the
-/// process lifetime, the leak is acceptable. The OS releases the underlying
-/// file descriptor when the process exits.
+/// The owned file closes on every failed acquisition and on final lease drop.
 pub struct FileLock {
-    _guard: fd_lock::RwLockWriteGuard<'static, File>,
+    _file: File,
 }
 
 impl FileLock {
-    /// Try to acquire the exclusive lock for `lock_path`.
-    ///
-    /// Returns `OpenError::WriterAlreadyHeld { run_id }` if the lock is
-    /// already held by another process (or another in-process holder, on
-    /// platforms where `fd-lock` is per-handle).
+    /// Obtain the normal run writer lock, creating its file when necessary.
     pub fn try_acquire(lock_path: &Path, run_id: surge_core::RunId) -> Result<Self, OpenError> {
-        if let Some(parent) = lock_path.parent() {
+        Self::acquire(lock_path, run_id, true)
+    }
+
+    /// Informational recovery may only use an already-existing original journal lock.
+    pub(crate) fn try_acquire_existing(
+        lock_path: &Path,
+        run_id: surge_core::RunId,
+    ) -> Result<Self, OpenError> {
+        Self::acquire(lock_path, run_id, false)
+    }
+
+    fn acquire(
+        lock_path: &Path,
+        run_id: surge_core::RunId,
+        create: bool,
+    ) -> Result<Self, OpenError> {
+        if create && let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new()
-            .create(true)
+            .create(create)
             .read(true)
             .write(true)
             .truncate(false)
             .open(lock_path)?;
-
-        // Box + leak: the guard borrows from the leaked RwLock with a real
-        // 'static lifetime. No unsafe required. The 24-byte leak per acquire
-        // is acceptable (RunWriter creations are rare, leaks end at process
-        // exit).
-        let lock_box: &'static mut fd_lock::RwLock<File> =
-            Box::leak(Box::new(fd_lock::RwLock::new(file)));
-        let guard = lock_box
-            .try_write()
-            .map_err(|_| OpenError::WriterAlreadyHeld { run_id })?;
-
-        Ok(Self { _guard: guard })
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => OpenError::WriterAlreadyHeld { run_id },
+            std::fs::TryLockError::Error(error) => OpenError::Io(error),
+        })?;
+        Ok(Self { _file: file })
     }
 }
 
@@ -80,5 +79,82 @@ mod tests {
         drop(l1);
         let l2 = FileLock::try_acquire(&lock_path, RunId::new());
         assert!(l2.is_ok(), "lock should be reacquirable after drop");
+    }
+
+    #[test]
+    fn existing_only_refuses_missing_without_creating_anything() {
+        let tmp = TempDir::new().unwrap();
+        let lock_path = tmp.path().join("missing").join("events.sqlite.lock");
+        assert!(matches!(
+            FileLock::try_acquire_existing(&lock_path, RunId::new()),
+            Err(OpenError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert!(!tmp.path().join("missing").exists());
+    }
+
+    #[test]
+    fn lock_probe() {
+        let Some(path) = std::env::var_os("SURGE_WRITER_LOCK_PROBE") else {
+            return;
+        };
+        let result = FileLock::try_acquire_existing(Path::new(&path), RunId::new());
+        if std::env::var_os("SURGE_WRITER_LOCK_EXPECT_BUSY").is_some() {
+            assert!(matches!(result, Err(OpenError::WriterAlreadyHeld { .. })));
+        } else {
+            let _held = result.unwrap();
+            std::fs::write(
+                std::env::var_os("SURGE_WRITER_LOCK_READY").unwrap(),
+                b"held",
+            )
+            .unwrap();
+            let mut byte = [0];
+            std::io::Read::read_exact(&mut std::io::stdin(), &mut byte).unwrap();
+        }
+    }
+
+    #[test]
+    fn actual_second_process_exclusion_and_death_release() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("events.sqlite.lock");
+        let ready = tmp.path().join("ready");
+        let initial = FileLock::try_acquire(&path, RunId::new()).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runs::file_lock::tests::lock_probe",
+                "--nocapture",
+            ])
+            .env("SURGE_WRITER_LOCK_PROBE", &path)
+            .env("SURGE_WRITER_LOCK_EXPECT_BUSY", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        drop(initial);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runs::file_lock::tests::lock_probe",
+                "--nocapture",
+            ])
+            .env("SURGE_WRITER_LOCK_PROBE", &path)
+            .env("SURGE_WRITER_LOCK_READY", &ready)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            assert!(child.try_wait().unwrap().is_none());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let observed_ready = ready.exists();
+        let excluded = matches!(
+            FileLock::try_acquire_existing(&path, RunId::new()),
+            Err(OpenError::WriterAlreadyHeld { .. })
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(observed_ready);
+        assert!(excluded);
+        let _reacquired = FileLock::try_acquire_existing(&path, RunId::new()).unwrap();
     }
 }

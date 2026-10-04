@@ -55,6 +55,23 @@ struct PendingRunCompletion {
 }
 
 impl DaemonClient {
+    /// Submit ordinary Flow intent to the single durable owner before project I/O.
+    pub async fn owned_flow_start(
+        &self,
+        request: super::owned_flow::OwnedFlowStart,
+    ) -> Result<surge_core::work_item::OwnedFlowReceipt, EngineError> {
+        match self
+            .rpc(|request_id| DaemonRequest::OwnedFlowStart {
+                request_id,
+                request: Box::new(request),
+            })
+            .await?
+        {
+            DaemonResponse::OwnedFlowStarted { receipt, .. } => Ok(*receipt),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            _ => Err(EngineError::Storage("unexpected owned Flow reply".into())),
+        }
+    }
     /// Open a connection to the daemon at `socket_path` and start
     /// the background read loop. On Unix this is a Unix-domain
     /// socket path; on Windows it is the named-pipe path the daemon
@@ -248,6 +265,13 @@ pub enum BootstrapClientError {
 }
 
 impl DaemonEngineFacade {
+    /// Submit an allowlisted ordinary Flow under the original operation identity.
+    pub async fn owned_flow_start(
+        &self,
+        request: super::owned_flow::OwnedFlowStart,
+    ) -> Result<surge_core::work_item::OwnedFlowReceipt, EngineError> {
+        self.inner.owned_flow_start(request).await
+    }
     /// Send a typed persistent-task control to the durable daemon owner.
     pub async fn work_item(
         &self,

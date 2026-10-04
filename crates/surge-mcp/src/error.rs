@@ -6,6 +6,19 @@ use std::time::Duration;
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
+    /// The host did not complete the pre-birth ownership prerequisite.
+    /// This callback failure does not establish a process liveness change.
+    #[error("MCP server '{server}' ownership prerequisite refused: mcp_writer_ownership_refused")]
+    WriterOwnershipRefused {
+        /// Public configured server identity.
+        server: String,
+    },
+    /// The host refused the immediately following physical effect.
+    #[error("MCP server '{server}' effect refused: mcp_effect_refused")]
+    EffectRefused {
+        /// Public configured server identity.
+        server: String,
+    },
     /// The named server is not in the run-level
     /// `RunConfig::mcp_servers` registry.
     #[error("server '{0}' not configured in run-level mcp_servers registry")]
@@ -15,7 +28,7 @@ pub enum McpError {
     StartFailed {
         /// Server name from the configuration.
         server: String,
-        /// Underlying error message from the spawn / handshake.
+        /// Fixed opaque reason category from spawn / handshake.
         reason: String,
     },
     /// The server's child process exited mid-call (or before the call

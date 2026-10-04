@@ -375,6 +375,7 @@ impl RunStreamState {
                     | EventPayload::PipelineMaterialized { .. }
                     | EventPayload::ArtifactProduced { .. }
                     | EventPayload::WorkItemAttemptBound { .. }
+                    | EventPayload::OwnedFlowInputsBound { .. }
             );
             if let EventPayload::WorkItemAttemptBound { context } = payload.as_ref() {
                 self.ownership_invalid |= !self.ownership_startup_open

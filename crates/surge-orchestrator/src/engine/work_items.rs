@@ -25,11 +25,23 @@ pub(super) fn pinned(
     let accepted = store
         .requirements(&attempt)
         .map_err(|error| EngineError::Storage(error.to_string()))?;
-    let context = WorkItemContext::new(attempt.binding.clone(), accepted.requirements)
+    let context = WorkItemContext::from_origin(attempt.binding.clone(), accepted.origin)
         .map_err(EngineError::Internal)?;
     let mut config: EngineRunConfig = serde_json::from_str(&attempt.config)
         .map_err(|error| EngineError::Internal(error.to_string()))?;
     config.initial_prompt = context.prompt();
+    if context.flow().is_some() {
+        let inputs = store
+            .hydrate_owned_flow_inputs(claim)
+            .map_err(|error| EngineError::Storage(error.to_string()))?
+            .ok_or_else(|| {
+                EngineError::Storage("owned Flow host input capability missing".into())
+            })?;
+        inputs
+            .validate_for(attempt.run, &attempt.binding, &detail.item.workspace.path)
+            .map_err(|error| EngineError::Storage(error.to_string()))?;
+        config.owned_flow_inputs = Some(std::sync::Arc::new(inputs));
+    }
     Ok((attempt, detail.item.workspace, context, config))
 }
 pub(super) async fn validate_resume(
@@ -96,7 +108,36 @@ pub(super) async fn validate_resume(
     if bound != Some(&context) {
         return Err(EngineError::Storage("task journal binding mismatch".into()));
     }
+    let manifests = events
+        .iter()
+        .filter_map(|event| match &event.payload.payload {
+            EventPayload::OwnedFlowInputsBound { manifest } => Some(manifest.as_ref()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    match &config.owned_flow_inputs {
+        Some(inputs) if manifests.as_slice() == [inputs.manifest()] => (),
+        None if manifests.is_empty() => (),
+        _ => {
+            return Err(EngineError::Storage(
+                "owned Flow startup input binding is not unique or authentic".into(),
+            ));
+        },
+    }
     validate_graph(&events, &attempt.graph)?;
+    if let Some(flow) = context.flow() {
+        flow.validate_graph(&attempt.graph)
+            .map_err(|error| EngineError::Storage(error.to_string()))?;
+    }
+    validate_accepted_artifact(&events, &context)?;
+    validate_prompt(&events, &workspace.path, &context)?;
+    Ok(workspace.path)
+}
+
+fn validate_accepted_artifact(
+    events: &[surge_persistence::runs::ReadEvent],
+    context: &WorkItemContext,
+) -> Result<(), EngineError> {
     let path = events
         .iter()
         .find_map(|event| match &event.payload.payload {
@@ -105,7 +146,12 @@ pub(super) async fn validate_resume(
                 path,
                 name,
                 ..
-            } if name == "accepted_requirements"
+            } if name
+                == if context.flow().is_some() {
+                    "accepted_flow_contract"
+                } else {
+                    "accepted_requirements"
+                }
                 && *artifact == context.binding().requirements_hash =>
             {
                 Some(path)
@@ -119,8 +165,7 @@ pub(super) async fn validate_resume(
             "task accepted requirement bytes mismatch".into(),
         ));
     }
-    validate_prompt(&events, &workspace.path, &context)?;
-    Ok(workspace.path)
+    Ok(())
 }
 
 fn validate_prompt(
@@ -128,6 +173,12 @@ fn validate_prompt(
     workspace: &std::path::Path,
     context: &WorkItemContext,
 ) -> Result<(), EngineError> {
+    if context.prompt().is_empty() {
+        if events.iter().any(|event| matches!(&event.payload.payload, EventPayload::ArtifactProduced { name, .. } if name == "user_prompt")) {
+            return Err(EngineError::Storage("empty flow prompt has unexpected artifact".into()));
+        }
+        return Ok(());
+    }
     let prompt_hash = ContentHash::compute(context.prompt().as_bytes());
     let prompt_path = events
         .iter()

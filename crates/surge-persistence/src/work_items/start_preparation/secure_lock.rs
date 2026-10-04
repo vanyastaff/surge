@@ -1,53 +1,167 @@
-//! Private preparation lock. Held descriptors fence path replacement; never PID/TTL authority.
+//! Held-object preparation ownership. It grants no provider or registry authority.
 use super::super::{Result, WorkItemError};
 use std::path::Path;
+use surge_core::{
+    RunId,
+    id::{WorkItemId, WorkItemOperationId},
+};
+
+#[derive(Clone, Copy)]
+pub(in crate::work_items) enum PreparationLockKey {
+    Task(WorkItemId),
+    FlowOperation(WorkItemOperationId),
+    FlowLaunch {
+        operation: WorkItemOperationId,
+        run: RunId,
+    },
+}
+impl PreparationLockKey {
+    fn name(self) -> String {
+        match self {
+            Self::Task(item) => item.to_string(),
+            Self::FlowOperation(operation) => format!("flow-operation-v1-{operation}"),
+            Self::FlowLaunch { operation, run } => format!("flow-launch-v1-{operation}-{run}"),
+        }
+    }
+}
+enum Requirement {
+    StableOwnership,
+    RestrictedPrivateInputs,
+}
 
 pub(in crate::work_items) struct PreparationLock {
+    key: Option<PreparationLockKey>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     inner: unix::Held,
+    #[cfg(windows)]
+    inner: windows::Held,
 }
 impl PreparationLock {
-    pub(super) fn acquire(home: &Path, name: &str) -> Result<Self> {
+    pub(in crate::work_items) fn acquire_task(home: &Path, item: WorkItemId) -> Result<Self> {
+        Self::acquire_required(
+            home,
+            PreparationLockKey::Task(item),
+            Requirement::RestrictedPrivateInputs,
+        )
+    }
+    pub(in crate::work_items) fn acquire_stable(
+        home: &Path,
+        key: PreparationLockKey,
+    ) -> Result<Self> {
+        match key {
+            PreparationLockKey::Task(item) => Self::acquire_task(home, item),
+            _ => Self::acquire_required(home, key, Requirement::StableOwnership),
+        }
+    }
+    pub(in crate::work_items) fn acquire_private(
+        home: &Path,
+        key: PreparationLockKey,
+    ) -> Result<Self> {
+        Self::acquire_required(home, key, Requirement::RestrictedPrivateInputs)
+    }
+    fn acquire_required(
+        home: &Path,
+        key: PreparationLockKey,
+        requirement: Requirement,
+    ) -> Result<Self> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
+            let _ = requirement;
             Ok(Self {
-                inner: unix::acquire(home, name)?,
+                key: Some(key),
+                inner: unix::acquire(home, &key.name())?,
             })
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
         {
-            let _ = (home, name);
+            if matches!(requirement, Requirement::RestrictedPrivateInputs) {
+                return Err(WorkItemError::Invalid(
+                    "private preparation unsupported on this platform".into(),
+                ));
+            }
+            Ok(Self {
+                key: Some(key),
+                inner: windows::acquire(home, &key.name())?,
+            })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            let _ = (home, key, requirement);
             Err(WorkItemError::Invalid(
-                "configured source preparation unsupported on this platform".into(),
+                "stable preparation unsupported on this platform".into(),
             ))
         }
     }
-    pub(super) fn identity(&self) -> Result<String> {
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    fn acquire(home: &Path, name: &str) -> Result<Self> {
+        Ok(Self {
+            key: None,
+            inner: unix::acquire(home, name)?,
+        })
+    }
+    pub(in crate::work_items) fn require_private(&self) -> Result<()> {
         self.verify()?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            self.inner.identity()
+            Ok(())
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             Err(WorkItemError::Invalid(
-                "configured source preparation unsupported on this platform".into(),
+                "private preparation unsupported on this platform".into(),
             ))
         }
     }
-    pub(super) fn verify(&self) -> Result<()> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(in crate::work_items) fn identity(&self) -> Result<String> {
+        self.verify()?;
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            let chain = self.inner.identity()?;
+            match self.key {
+                None | Some(PreparationLockKey::Task(_)) => Ok(chain),
+                Some(key) => Ok(serde_json::to_string(&(
+                    "stable-owned-flow-v1",
+                    key.name(),
+                    chain,
+                ))?),
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            Err(WorkItemError::Invalid(
+                "stable preparation unsupported on this platform".into(),
+            ))
+        }
+    }
+    pub(in crate::work_items) fn verify(&self) -> Result<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             self.inner.verify()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             Err(WorkItemError::Invalid(
-                "configured source preparation unsupported on this platform".into(),
+                "stable preparation unsupported on this platform".into(),
             ))
         }
     }
 }
+pub(in crate::work_items) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unix::check_acl(file)
+            .map_err(|()| WorkItemError::Invalid("unsafe private preparation ACL".into()))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = file;
+        Err(WorkItemError::Invalid(
+            "private preparation unsupported on this platform".into(),
+        ))
+    }
+}
+#[cfg(windows)]
+pub(in crate::work_items) mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix {
     use super::*;
@@ -148,7 +262,7 @@ mod unix {
             Err(())
         }
     }
-    fn check_acl(file: &File) -> std::result::Result<(), ()> {
+    pub(super) fn check_acl(file: &File) -> std::result::Result<(), ()> {
         #[cfg(target_os = "macos")]
         {
             mac_acl::rejects_grants(file)
@@ -321,6 +435,67 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
+    fn typed_namespaces_hold_the_original_object_and_reject_replacement_after_death() {
+        use surge_core::{
+            RunId,
+            id::{WorkItemId, WorkItemOperationId},
+        };
+        let home = tempfile::tempdir().unwrap();
+        let operation = WorkItemOperationId::new();
+        let key = PreparationLockKey::FlowOperation(operation);
+        let guard = PreparationLock::acquire_stable(home.path(), key).unwrap();
+        let identity = guard.identity().unwrap();
+        assert!(matches!(
+            PreparationLock::acquire_stable(home.path(), key),
+            Err(WorkItemError::Busy)
+        ));
+        let launch = PreparationLock::acquire_stable(
+            home.path(),
+            PreparationLockKey::FlowLaunch {
+                operation,
+                run: RunId::new(),
+            },
+        )
+        .unwrap();
+        assert_ne!(identity, launch.identity().unwrap());
+        let task = WorkItemId::new();
+        let task_guard = PreparationLock::acquire_task(home.path(), task).unwrap();
+        assert!(
+            home.path()
+                .join(format!("work-items/preparation-locks/{task}.lock"))
+                .exists()
+        );
+        assert!(serde_json::from_str::<Vec<(u64, u64)>>(&task_guard.identity().unwrap()).is_ok());
+        drop(guard);
+        let resumed = PreparationLock::acquire_stable(home.path(), key).unwrap();
+        assert_eq!(identity, resumed.identity().unwrap());
+        drop(resumed);
+        let parent = home.path().join("work-items/preparation-locks");
+        let name = format!("{}.lock", key.name());
+        std::fs::rename(parent.join(&name), home.path().join("retired-original")).unwrap();
+        let replaced = PreparationLock::acquire_stable(home.path(), key).unwrap();
+        assert_ne!(identity, replaced.identity().unwrap());
+    }
+    #[test]
+    fn arc_retains_real_exclusion_until_last_effect_owner_exits() {
+        use surge_core::{RunId, id::WorkItemOperationId};
+        let home = tempfile::tempdir().unwrap();
+        let key = PreparationLockKey::FlowLaunch {
+            operation: WorkItemOperationId::new(),
+            run: RunId::new(),
+        };
+        let supervisor =
+            std::sync::Arc::new(PreparationLock::acquire_stable(home.path(), key).unwrap());
+        let effect = supervisor.clone();
+        drop(supervisor);
+        assert!(matches!(
+            PreparationLock::acquire_stable(home.path(), key),
+            Err(WorkItemError::Busy)
+        ));
+        drop(effect);
+        assert!(PreparationLock::acquire_stable(home.path(), key).is_ok());
+    }
+    #[test]
     fn preparation_lock_rejects_symlink_fifo_links_permissions_and_parent_replacement() {
         let home = tempfile::tempdir().unwrap();
         let lock = PreparationLock::acquire(home.path(), "item").unwrap();
@@ -382,5 +557,63 @@ mod tests {
                 .success()
         );
         assert!(PreparationLock::acquire(home.path(), "item").is_err());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    #[test]
+    fn stable_flow_namespaces_remain_distinct_and_do_not_mint_private_capability() {
+        let home = tempfile::tempdir().unwrap();
+        let operation = WorkItemOperationId::new();
+        let run = RunId::new();
+        let preparation = PreparationLock::acquire_stable(
+            home.path(),
+            PreparationLockKey::FlowOperation(operation),
+        )
+        .unwrap();
+        let launch = std::sync::Arc::new(
+            PreparationLock::acquire_stable(
+                home.path(),
+                PreparationLockKey::FlowLaunch { operation, run },
+            )
+            .unwrap(),
+        );
+        assert_ne!(preparation.identity().unwrap(), launch.identity().unwrap());
+        assert!(preparation.require_private().is_err());
+        assert!(launch.require_private().is_err());
+        let worker = launch.clone();
+        drop(launch);
+        assert!(matches!(
+            PreparationLock::acquire_stable(
+                home.path(),
+                PreparationLockKey::FlowLaunch { operation, run }
+            ),
+            Err(WorkItemError::Busy)
+        ));
+        drop(worker);
+        assert!(
+            PreparationLock::acquire_stable(
+                home.path(),
+                PreparationLockKey::FlowLaunch { operation, run }
+            )
+            .is_ok()
+        );
+    }
+    #[test]
+    fn restricted_task_and_populated_flow_fail_before_touching_private_namespaces() {
+        let home = tempfile::tempdir().unwrap();
+        let absent = home.path().join("never-created");
+        assert!(PreparationLock::acquire_task(&absent, WorkItemId::new()).is_err());
+        assert!(
+            PreparationLock::acquire_private(
+                &absent,
+                PreparationLockKey::FlowOperation(WorkItemOperationId::new())
+            )
+            .is_err()
+        );
+        assert!(!absent.exists());
+        assert!(!home.path().join("work-items").exists());
     }
 }

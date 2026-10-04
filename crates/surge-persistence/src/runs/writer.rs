@@ -5,6 +5,7 @@
 //! transaction inside the writer task; readers go through a separate r2d2
 //! pool and never touch the writer connection.
 
+use super::writer_slot::WriterLease;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -136,21 +137,23 @@ pub struct WriterConfig {
 ///
 /// `capacity` bounds the mpsc channel; backpressure kicks in once full.
 #[must_use]
-pub fn spawn_writer(
+pub(crate) fn spawn_writer(
     cfg: WriterConfig,
     capacity: usize,
+    lease: Arc<WriterLease>,
 ) -> (
     mpsc::Sender<WriterCommand>,
     tokio::task::JoinHandle<Result<(), WriterError>>,
 ) {
     let (tx, rx) = mpsc::channel(capacity);
-    let join = tokio::spawn(async move { writer_loop(cfg, rx).await });
+    let join = tokio::spawn(async move { writer_loop(cfg, rx, lease).await });
     (tx, join)
 }
 
 async fn writer_loop(
     cfg: WriterConfig,
     mut rx: mpsc::Receiver<WriterCommand>,
+    lease: Arc<WriterLease>,
 ) -> Result<(), WriterError> {
     let span = tracing::info_span!("writer_task", run_id = %cfg.run_id);
     let _enter = span.enter();
@@ -182,30 +185,15 @@ async fn writer_loop(
     }
 
     tracing::debug!("writer task exiting");
+    drop(conn);
+    drop(lease);
     Ok(())
 }
 
 async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCommand) -> bool {
     match cmd {
         WriterCommand::AppendEvent { payload, reply } => {
-            let result = (|| -> Result<EventSeq, WriterError> {
-                let blob = serde_json::to_vec(&payload)?;
-                let kind = payload.payload().discriminant_str();
-                let ts = cfg.clock.now_ms();
-                let schema_version = i64::from(payload.schema_version());
-
-                let tx = conn.transaction()?;
-                let seq: i64 = tx.query_row(
-                    "INSERT INTO events (timestamp, kind, payload, schema_version)
-                     VALUES (?, ?, ?, ?) RETURNING seq",
-                    params![ts, kind, blob, schema_version],
-                    |row| row.get(0),
-                )?;
-                let seq = EventSeq(seq as u64);
-                views::maintain(&tx, seq, ts, payload.payload())?;
-                tx.commit()?;
-                Ok(seq)
-            })();
+            let result = append_event(conn, cfg.clock.as_ref(), &payload);
             let _ = reply.send(result);
         },
         WriterCommand::AppendBatch { payloads, reply } => {
@@ -395,6 +383,39 @@ async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCo
         },
     }
     true
+}
+
+/// The single-event production transaction shared with informational recovery.
+pub(crate) fn append_event(
+    conn: &mut Connection,
+    clock: &dyn Clock,
+    payload: &VersionedEventPayload,
+) -> Result<EventSeq, WriterError> {
+    let tx = conn.transaction()?;
+    let seq = append_event_in(&tx, clock, payload)?;
+    tx.commit()?;
+    Ok(seq)
+}
+
+/// Caller retains the same actual writer lease and transaction through validation.
+pub(crate) fn append_event_in(
+    tx: &rusqlite::Transaction<'_>,
+    clock: &dyn Clock,
+    payload: &VersionedEventPayload,
+) -> Result<EventSeq, WriterError> {
+    let blob = serde_json::to_vec(payload)?;
+    let kind = payload.payload().discriminant_str();
+    let ts = clock.now_ms();
+    let schema_version = i64::from(payload.schema_version());
+    let seq: i64 = tx.query_row(
+        "INSERT INTO events (timestamp, kind, payload, schema_version)
+         VALUES (?, ?, ?, ?) RETURNING seq",
+        params![ts, kind, blob, schema_version],
+        |row| row.get(0),
+    )?;
+    let seq = EventSeq(seq as u64);
+    views::maintain(tx, seq, ts, payload.payload())?;
+    Ok(seq)
 }
 
 fn commit_stage_route(

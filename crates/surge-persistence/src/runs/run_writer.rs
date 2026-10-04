@@ -13,12 +13,11 @@ use surge_core::{ContentHash, RunId};
 use tokio::sync::mpsc;
 
 use crate::runs::error::StorageError;
-use crate::runs::file_lock::FileLock;
 use crate::runs::reader::{ReadEvent, RunReader};
 use crate::runs::seq::EventSeq;
 use crate::runs::types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
 use crate::runs::writer::WriterCommand;
-use crate::runs::writer_slot::WriterToken;
+use crate::runs::writer_slot::WriterLease;
 
 /// Exclusive write handle for a per-run database.
 ///
@@ -33,8 +32,7 @@ pub struct RunWriter {
     pub(crate) writer_tx: mpsc::Sender<WriterCommand>,
     pub(crate) writer_join:
         Option<tokio::task::JoinHandle<Result<(), crate::runs::error::WriterError>>>,
-    pub(crate) _token: Arc<WriterToken>,
-    pub(crate) _file_lock: FileLock,
+    pub(crate) _lease: Arc<WriterLease>,
     pub(crate) closed: bool,
 }
 

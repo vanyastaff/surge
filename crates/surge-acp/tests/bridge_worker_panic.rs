@@ -47,6 +47,7 @@ async fn inner_test() {
 
     let wt = TempDir::new().unwrap();
     let cfg = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

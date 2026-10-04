@@ -1,5 +1,5 @@
 //! Exclusive host preparation before freezing sources in the actual launch workspace.
-mod secure_lock;
+pub(in crate::work_items) mod secure_lock;
 use super::*;
 use secure_lock::PreparationLock;
 
@@ -151,7 +151,7 @@ impl WorkItemStore {
         else {
             return Err(WorkItemError::Invalid("preparation requires Start".into()));
         };
-        let lock = PreparationLock::acquire(&self.home, &item.to_string())?;
+        let lock = PreparationLock::acquire_task(&self.home, *item)?;
         lock.verify()?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -204,7 +204,7 @@ impl WorkItemStore {
         if !active {
             return Ok(None);
         }
-        let lock = PreparationLock::acquire(&self.home, &item.to_string())?;
+        let lock = PreparationLock::acquire_task(&self.home, item)?;
         lock.verify()?;
         let conn = self.pool.get()?;
         verify_stable_identity(&conn, item, &lock.identity()?)?;

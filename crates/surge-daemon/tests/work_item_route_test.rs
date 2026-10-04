@@ -382,7 +382,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         events[0].payload.payload,
         surge_core::EventPayload::RunStarted { .. }
     ));
-    assert!(events.iter().any(|event|matches!(&event.payload.payload,surge_core::EventPayload::WorkItemAttemptBound{context} if context.requirements().text()=="Preserve accepted requirements")));
+    assert!(events.iter().any(|event|matches!(&event.payload.payload,surge_core::EventPayload::WorkItemAttemptBound{context} if context.requirements().unwrap().text()=="Preserve accepted requirements")));
     engine
         .stop_run(run, "acceptance cleanup".into())
         .await
@@ -651,13 +651,16 @@ async fn write_owned_startup(
         .work_items()
         .requirements(attempt)
         .unwrap()
-        .requirements;
+        .origin
+        .requirements()
+        .unwrap()
+        .clone();
     let context = WorkItemContext::new(attempt.binding.clone(), requirements).unwrap();
     let artifact = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"))
         .put(
             attempt.run,
             "accepted_requirements",
-            &serde_json::to_vec(context.requirements()).unwrap(),
+            &serde_json::to_vec(context.requirements().unwrap()).unwrap(),
         )
         .await
         .unwrap();
@@ -3763,7 +3766,7 @@ async fn pre_admission_task_conflict_is_typed_and_has_no_operation_receipt() {
         item: attempt.item,
         expected_version: detail.item.version + 1,
         expected_revision: detail.item.accepted_revision,
-        requirements: detail.revision.requirements.clone(),
+        requirements: detail.revision.origin.requirements().unwrap().clone(),
     };
     let response = request(&socket, serde_json::to_value(command).unwrap()).await;
     cancel.cancel();

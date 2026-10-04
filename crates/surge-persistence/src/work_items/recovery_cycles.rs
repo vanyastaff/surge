@@ -283,8 +283,8 @@ pub enum ReservationDisposition {
 }
 
 fn owner_fence(tx: &Transaction<'_>, claim: &WorkItemLaunchClaim) -> Result<()> {
-    verify_lock_identity(&claim.lock, &claim.path)?;
-    let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_attempts a JOIN work_items i ON i.id=a.item WHERE a.run=? AND a.generation=? AND a.claim_token=? AND a.item=? AND i.active_run=a.run AND i.generation=a.generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','attention','suspended'))", params![claim.run.to_string(), claim.binding.generation, claim.token,claim.binding.item.to_string()], |row|row.get(0))?;
+    claim.verify_lock()?;
+    let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_attempts a JOIN work_items i ON i.id=a.item WHERE a.run=? AND a.generation=? AND a.claim_token=? AND a.item=? AND i.active_run=a.run AND i.generation=a.generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','suspended'))", params![claim.run.to_string(), claim.binding.generation, claim.token,claim.binding.item.to_string()], |row|row.get(0))?;
     if !valid {
         return Err(WorkItemError::Conflict("obsolete recovery owner".into()));
     }
@@ -310,7 +310,7 @@ fn fence(tx: &Transaction<'_>, claim: &WorkItemLaunchClaim, control: u64) -> Res
     }
     Ok(())
 }
-fn read_cycle(
+pub(super) fn read_cycle(
     conn: &Connection,
     run: RunId,
     invocation: &str,
@@ -330,6 +330,65 @@ fn read_cycle(
         wake: wake.map(|value| serde_json::from_str(&value)).transpose()?,
     })
 }
+/// Shared read-only predicates: refusal does not manufacture new quota lineage.
+pub(super) fn validate_capacity_transfer(
+    conn: &Connection,
+    binding_run: RunId,
+    binding: &WorkItemBinding,
+    expected: &RecoveryCycle,
+    new_control: u64,
+) -> Result<bool> {
+    let current = read_cycle(conn, binding_run, &expected.invocation, expected.generation)?;
+    if expected.run != binding_run
+        || current.invocation != expected.invocation
+        || current.closed
+        || current.revision != expected.revision
+        || current.control_generation != expected.control_generation
+        || expected.control_generation.checked_add(1) != Some(new_control)
+    {
+        return Ok(false);
+    }
+    let latest = control::read_control(conn, binding_run, None)?.ok_or(WorkItemError::NotFound)?;
+    if latest.generation != new_control
+        || latest.run != binding_run
+        || latest.attempt_generation != binding.generation
+        || latest.item != binding.item
+        || !matches!(
+            latest.state,
+            surge_core::execution_recovery::ExecutionControlState::Suspended
+                | surge_core::execution_recovery::ExecutionControlState::Executing
+        )
+        || !capacity_fence(conn, &latest, &current.invocation)?
+    {
+        return Ok(false);
+    }
+    let raw:Option<String>=conn.query_row("SELECT observation FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=? AND runtime=? AND observation IS NOT NULL",params![binding_run.to_string(),current.invocation,current.generation,current.selected_runtime],|row|row.get(0)).optional()?;
+    let evidence = raw
+        .map(|value| serde_json::from_str::<QuotaObservation>(&value))
+        .transpose()?
+        .is_some_and(|value| {
+            !matches!(
+                value.evidence(),
+                QuotaEvidence::Observed {
+                    available: true,
+                    ..
+                }
+            )
+        });
+    let planned = handoffs::read_capacity_association(conn, &current)?
+        .map(|association| {
+            association
+                .evidence_origin()
+                .map(|origin| matches!(origin, CapacityEvidenceOrigin::PlannedExhaustion(_)))
+        })
+        .transpose()?
+        .unwrap_or(false);
+    if !evidence && !(planned && current.selected_runtime.is_none()) {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 fn check_cycle(
     tx: &Transaction<'_>,
     claim: &WorkItemLaunchClaim,
@@ -717,61 +776,12 @@ impl WorkItemStore {
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         owner_fence(&tx, claim)?;
-        let current = read_cycle(&tx, claim.run, &expected.invocation, expected.generation)?;
-        if expected.run != claim.run
-            || current.invocation != expected.invocation
-            || current.closed
-            || current.revision != expected.revision
-            || current.control_generation != expected.control_generation
-            || expected.control_generation.checked_add(1) != Some(new_control)
-        {
+        if !validate_capacity_transfer(&tx, claim.run, &claim.binding, expected, new_control)? {
             return Err(WorkItemError::Conflict(
                 "obsolete capacity control transfer".into(),
             ));
         }
-        let latest = control::read_control(&tx, claim.run, None)?.ok_or(WorkItemError::NotFound)?;
-        if latest.generation != new_control
-            || latest.run != claim.run
-            || latest.attempt_generation != claim.binding.generation
-            || latest.item != claim.binding.item
-            || !matches!(
-                latest.state,
-                surge_core::execution_recovery::ExecutionControlState::Suspended
-                    | surge_core::execution_recovery::ExecutionControlState::Executing
-            )
-            || !capacity_fence(&tx, &latest, &current.invocation)?
-        {
-            return Err(WorkItemError::Conflict(
-                "control has no matching confirmed capacity fence".into(),
-            ));
-        }
-        let raw:Option<String>=tx.query_row("SELECT observation FROM work_item_quota_candidates WHERE run=? AND invocation=? AND cycle_generation=? AND runtime=? AND observation IS NOT NULL",params![claim.run.to_string(),current.invocation,current.generation,current.selected_runtime],|row|row.get(0)).optional()?;
-        let evidence = raw
-            .map(|value| serde_json::from_str::<QuotaObservation>(&value))
-            .transpose()?
-            .is_some_and(|value| {
-                !matches!(
-                    value.evidence(),
-                    QuotaEvidence::Observed {
-                        available: true,
-                        ..
-                    }
-                )
-            });
-        let planned = handoffs::read_capacity_association(&tx, &current)?
-            .map(|association| {
-                association
-                    .evidence_origin()
-                    .map(|origin| matches!(origin, CapacityEvidenceOrigin::PlannedExhaustion(_)))
-            })
-            .transpose()?
-            .unwrap_or(false);
-        if !evidence && !(planned && current.selected_runtime.is_none()) {
-            return Err(WorkItemError::Conflict(
-                "capacity cycle has no recorded selected candidate or planned exhaustion evidence"
-                    .into(),
-            ));
-        }
+        let current = read_cycle(&tx, claim.run, &expected.invocation, expected.generation)?;
         tx.execute("UPDATE work_item_quota_cycles SET control_generation=?,revision=revision+1 WHERE run=? AND invocation=? AND cycle_generation=?",params![new_control,current.run.to_string(),current.invocation,current.generation])?;
         let current = read_cycle(&tx, current.run, &current.invocation, current.generation)?;
         tx.commit()?;
@@ -806,9 +816,9 @@ fn due_recovery_wakes(
         ));
     }
     let sql = if run_filter.is_some() {
-        "SELECT q.run,q.invocation,q.cycle_generation FROM work_item_quota_cycles q JOIN work_item_attempts a ON a.run=q.run JOIN work_items i ON i.id=q.item WHERE q.closed=0 AND q.wake_at_ms<=? AND q.run=? AND a.generation=q.attempt_generation AND i.active_run=q.run AND i.generation=q.attempt_generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','attention','suspended') ORDER BY q.wake_at_ms,q.run,q.invocation LIMIT ?"
+        "SELECT q.run,q.invocation,q.cycle_generation FROM work_item_quota_cycles q JOIN work_item_attempts a ON a.run=q.run JOIN work_items i ON i.id=q.item WHERE q.closed=0 AND q.wake_at_ms<=? AND q.run=? AND a.generation=q.attempt_generation AND i.active_run=q.run AND i.generation=q.attempt_generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','suspended') ORDER BY q.wake_at_ms,q.run,q.invocation LIMIT ?"
     } else {
-        "SELECT q.run,q.invocation,q.cycle_generation FROM work_item_quota_cycles q JOIN work_item_attempts a ON a.run=q.run JOIN work_items i ON i.id=q.item WHERE q.closed=0 AND q.wake_at_ms<=? AND a.generation=q.attempt_generation AND i.active_run=q.run AND i.generation=q.attempt_generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','attention','suspended') ORDER BY q.wake_at_ms,q.run,q.invocation LIMIT ?"
+        "SELECT q.run,q.invocation,q.cycle_generation FROM work_item_quota_cycles q JOIN work_item_attempts a ON a.run=q.run JOIN work_items i ON i.id=q.item WHERE q.closed=0 AND q.wake_at_ms<=? AND a.generation=q.attempt_generation AND i.active_run=q.run AND i.generation=q.attempt_generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','suspended') ORDER BY q.wake_at_ms,q.run,q.invocation LIMIT ?"
     };
     let keys = if let Some(run) = run_filter {
         conn.prepare(sql)?

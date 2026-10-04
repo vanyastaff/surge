@@ -746,7 +746,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         .unwrap_or_default();
 
     // Short-circuit: stage doesn't expose any MCP servers, so skip the
-    // potentially expensive list_all_tools call entirely. Also covers the
+    // potentially expensive catalog call entirely. Also covers the
     // no-MCP-registry-configured case (`p.mcp_registry` is `None`) — there
     // is nothing to list either way.
     let (filtered_mcp_tools, mcp_timeouts): (
@@ -755,17 +755,6 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
     ) = if allowed_servers.is_empty() {
         (Vec::new(), std::collections::HashMap::new())
     } else if let Some(ref reg) = p.mcp_registry {
-        let all_mcp_tools = match reg.list_all_tools().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    err = %e,
-                    "MCP list_all_tools failed; proceeding with engine tools only"
-                );
-                Vec::new()
-            },
-        };
-
         // Build per-server `allowed_tools` lookup from the run-level
         // registry. `None` means "expose all tools the server reports".
         let allowed_tools_per_server: std::collections::HashMap<&str, Option<&[String]>> = p
@@ -791,6 +780,24 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 }
             })
             .collect();
+
+        let permitted_servers: Vec<String> = p
+            .mcp_servers
+            .iter()
+            .filter(|server| allowed_servers.contains(server.name.as_str()))
+            .filter(|server| !mcp_denied_servers.contains(server.name.as_str()))
+            .map(|server| server.name.clone())
+            .collect();
+        let all_mcp_tools = match reg.list_tools_for_servers(&permitted_servers).await {
+            Ok(tools) => tools,
+            Err(error) => {
+                tracing::warn!(
+                    err = %error,
+                    "MCP selected catalog failed; proceeding with engine tools only"
+                );
+                Vec::new()
+            },
+        };
 
         let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
             .into_iter()
@@ -897,6 +904,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         }
     }
     let mut session_config = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: p
             .quota_opening

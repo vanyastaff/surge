@@ -33,6 +33,7 @@ use crate::shared::secrets::SecretsRedactor;
 /// Phase 8.1 starts inserting; Phase 8.2 expands with the live ACP connection
 /// + handles to the spawned waiter / drainer / io tasks.
 pub(crate) struct AcpSession {
+    pub effect_fence: Option<Arc<dyn super::HostEffectFence>>,
     pub secrets: Arc<SecretsRedactor>,
     pub session_id: SessionId,
     pub agent_label: String,
@@ -342,6 +343,7 @@ async fn open_session_attempt(
     // separate group so forced cleanup reaches the adapter, not just its shim.
     #[cfg(unix)]
     cmd.process_group(0);
+    super::effect_fence::check(config.effect_fence.as_ref())?;
     let mut child: Child = cmd.spawn().map_err(|e| {
         warn!(
             kind = config.agent_kind.label(),
@@ -403,7 +405,7 @@ async fn open_session_attempt(
         config.working_dir.clone()
     });
 
-    let bridge_client = BridgeClient::new(
+    let mut bridge_client = BridgeClient::new(
         session_id,
         event_tx.clone(),
         inner.clone(),
@@ -412,6 +414,7 @@ async fn open_session_attempt(
         config.bindings.clone(),
         worktree_root_canonical,
     );
+    bridge_client.effect_fence = config.effect_fence.clone();
     inner.borrow_mut().live_ingress = false;
 
     // The ACP SDK requires `futures::AsyncWrite + Unpin` / `futures::AsyncRead + Unpin`.
@@ -421,7 +424,8 @@ async fn open_session_attempt(
     let writer = stdin.compat_write();
     let reader = stdout.compat();
 
-    let (connection, io_task) = ClientConnection::new(bridge_client, writer, reader);
+    let (mut connection, io_task) = ClientConnection::new(bridge_client, writer, reader);
+    connection.set_effect_fence(config.effect_fence.clone());
 
     // Drive the io_task in the background (same pattern as legacy connection.rs).
     // We capture the JoinHandle so it can be moved into `AcpSession` for proper
@@ -444,23 +448,23 @@ async fn open_session_attempt(
 
     let handshake = async {
         use surge_core::execution_recovery::{SessionOpening, SessionOpenMode, SessionRestoreCapabilities};
-        let initialized = handshake_step(connection.initialize(init_request), "initialize", shutdown, reply, deadline, handshake_timeout).await?;
+        let initialized = handshake_step(connection.initialize(init_request), "initialize", shutdown, reply, deadline, handshake_timeout, config.effect_fence.as_ref()).await?;
         let capabilities = SessionRestoreCapabilities { resume: initialized.agent_capabilities.session_capabilities.resume.is_some(), load: initialized.agent_capabilities.load_session };
         let servers = config.stage_mcp.as_ref().map(|stage| vec![agent_client_protocol::schema::v1::McpServer::Stdio(stage.server.clone())]).unwrap_or_default();
         let canonical_cwd = config.working_dir.canonicalize().map_err(|_| OpenSessionError::HandshakeFailed { reason: "session directory unavailable".into() })?;
         let launch_hash = surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes());
         let (response, mode) = match &config.opening {
-            SessionOpening::New => (handshake_step(connection.new_session(NewSessionRequest::new(&canonical_cwd).mcp_servers(servers)), "new_session", shutdown, reply, deadline, handshake_timeout).await?, SessionOpenMode::New),
+            SessionOpening::New => (handshake_step(connection.new_session(NewSessionRequest::new(&canonical_cwd).mcp_servers(servers)), "new_session", shutdown, reply, deadline, handshake_timeout, config.effect_fence.as_ref()).await?, SessionOpenMode::New),
             SessionOpening::Continue(saved) => {
                 if saved.cwd() != canonical_cwd || saved.runtime() != config.runtime || saved.launch_hash() != &launch_hash || saved.invocation() != config.invocation {
                     return Err(OpenSessionError::HandshakeFailed { reason: "saved provider session differs from pinned runtime, launch, invocation or cwd".into() });
                 }
                 let provider_id = agent_client_protocol::schema::v1::SessionId::new(saved.provider_session_id().as_str());
                 let (options, mode) = if capabilities.resume {
-                    let restored = handshake_step(connection.resume_session(agent_client_protocol::schema::v1::ResumeSessionRequest::new(provider_id.clone(), &canonical_cwd).mcp_servers(servers)), "resume_session", shutdown, reply, deadline, handshake_timeout).await?;
+                    let restored = handshake_step(connection.resume_session(agent_client_protocol::schema::v1::ResumeSessionRequest::new(provider_id.clone(), &canonical_cwd).mcp_servers(servers)), "resume_session", shutdown, reply, deadline, handshake_timeout, config.effect_fence.as_ref()).await?;
                     (restored.config_options, SessionOpenMode::Resume)
                 } else if capabilities.load {
-                    let restored = handshake_step(connection.load_session(agent_client_protocol::schema::v1::LoadSessionRequest::new(provider_id.clone(), &canonical_cwd).mcp_servers(servers)), "load_session", shutdown, reply, deadline, handshake_timeout).await?;
+                    let restored = handshake_step(connection.load_session(agent_client_protocol::schema::v1::LoadSessionRequest::new(provider_id.clone(), &canonical_cwd).mcp_servers(servers)), "load_session", shutdown, reply, deadline, handshake_timeout, config.effect_fence.as_ref()).await?;
                     (restored.config_options, SessionOpenMode::Load)
                 } else { return Err(OpenSessionError::HandshakeFailed { reason: "provider supports neither session/resume nor session/load; explicit replacement decision required".into() }); };
                 let mut response = agent_client_protocol::schema::v1::NewSessionResponse::new(provider_id);
@@ -502,19 +506,26 @@ async fn open_session_attempt(
                     },
                     Err(error) => return Err(error),
                 };
-                connection
-                    .set_session_config_option(
+                super::effect_fence::admitted(
+                    config.effect_fence.as_ref(),
+                    connection.set_session_config_option(
                         agent_client_protocol::schema::v1::SetSessionConfigOptionRequest::new(
                             response.session_id.clone(),
                             config_id,
                             value,
                         ),
-                    )
-                    .await
-                    .map_err(|error| OpenSessionError::HandshakeFailed {
-                        reason: secrets
-                            .redact_json(&format!("session/set_config_option failed: {error}")),
-                    })?;
+                    ),
+                )
+                .await?
+                .map_err(|error| match error {
+                    crate::sdk_v1::SdkCallError::HostEffectRefused(error) => error.into(),
+                    crate::sdk_v1::SdkCallError::Protocol(error) => {
+                        OpenSessionError::HandshakeFailed {
+                            reason: secrets
+                                .redact_json(&format!("session/set_config_option failed: {error}")),
+                        }
+                    },
+                })?;
             }
             Ok::<(), OpenSessionError>(())
         }
@@ -573,6 +584,7 @@ async fn open_session_attempt(
     inner.borrow_mut().acp_session_id = response.session_id.to_string();
     debug!(session = %session_id, hidden_count = hidden_names.len(), "ACP handshake completed");
     Ok(AcpSession {
+        effect_fence: config.effect_fence.clone(),
         opened,
         secrets,
         session_id,
@@ -688,7 +700,7 @@ pub(crate) fn kill_owned_child(child: &mut Child) -> std::io::Result<()> {
 }
 
 async fn handshake_step<T>(
-    future: impl std::future::Future<Output = agent_client_protocol::schema::v1::Result<T>>,
+    future: impl std::future::Future<Output = crate::sdk_v1::CallResult<T>>,
     phase: &'static str,
     shutdown: &tokio_util::sync::CancellationToken,
     reply: &mut tokio::sync::oneshot::Sender<
@@ -696,13 +708,17 @@ async fn handshake_step<T>(
     >,
     deadline: tokio::time::Instant,
     timeout: Duration,
+    fence: Option<&Arc<dyn super::HostEffectFence>>,
 ) -> Result<T, OpenSessionError> {
     tokio::select! {
         biased;
         () = shutdown.cancelled() => Err(OpenSessionError::Cancelled),
         () = reply.closed() => Err(OpenSessionError::Cancelled),
         () = tokio::time::sleep_until(deadline) => Err(OpenSessionError::HandshakeTimedOut { phase, timeout }),
-        result = future => result.map_err(|error| OpenSessionError::HandshakeFailed { reason: format!("{phase}: {error}") }),
+        result = super::effect_fence::admitted(fence, future) => result?.map_err(|error| match error {
+            crate::sdk_v1::SdkCallError::HostEffectRefused(error) => error.into(),
+            crate::sdk_v1::SdkCallError::Protocol(error) => OpenSessionError::HandshakeFailed { reason: format!("{phase}: {error}") },
+        }),
     }
 }
 
@@ -930,6 +946,7 @@ pub(crate) async fn send_message_impl(
     session: SessionId,
     content: crate::bridge::session::MessageContent,
     secrets: Arc<SecretsRedactor>,
+    effect_fence: Option<Arc<dyn super::HostEffectFence>>,
 ) -> Result<(), super::error::SendMessageError> {
     use crate::bridge::session::MessageContent;
     let connection =
@@ -942,7 +959,11 @@ pub(crate) async fn send_message_impl(
         agent_client_protocol::schema::v1::SessionId::new(acp_session_str),
         blocks,
     );
-    let response = connection.prompt(req).await.map_err(|e| {
+    let response = super::effect_fence::admitted(effect_fence.as_ref(), connection.prompt(req)).await?.map_err(|error| {
+        let e = match error {
+            crate::sdk_v1::SdkCallError::HostEffectRefused(error) => return error.into(),
+            crate::sdk_v1::SdkCallError::Protocol(error) => error,
+        };
         let classified = classify_prompt_dispatch_error(secrets.redact_json(&e.to_string()));
         match &classified {
             super::error::SendMessageError::AgentAuthenticationFailed { .. } => {

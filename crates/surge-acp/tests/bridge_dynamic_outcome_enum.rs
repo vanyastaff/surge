@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 fn cfg_with(outcome: &str, wt: &std::path::Path) -> SessionConfig {
     SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: "fixture".into(),

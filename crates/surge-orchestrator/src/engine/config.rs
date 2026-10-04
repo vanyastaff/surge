@@ -94,6 +94,9 @@ pub enum SnapshotPolicy {
 /// Per-run configuration; passed to `Engine::start_run` and `Engine::resume_run`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineRunConfig {
+    /// In-process host capability for frozen owned Flow inputs. Wire data cannot mint it.
+    #[serde(skip)]
+    pub owned_flow_inputs: Option<Arc<surge_persistence::work_items::AuthenticatedOwnedFlowInputs>>,
     /// Host-frozen per-stage quota fallback candidates for persistent tasks.
     /// Candidate order and launch fingerprints are accepted before reservation
     /// and remain unchanged across daemon restarts.
@@ -310,6 +313,7 @@ impl Default for BootstrapRunConfig {
 impl Default for EngineRunConfig {
     fn default() -> Self {
         Self {
+            owned_flow_inputs: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(300),
@@ -381,6 +385,7 @@ mod tests {
     #[test]
     fn engine_run_config_with_mcp_servers_serde_roundtrip() {
         let cfg = EngineRunConfig {
+            owned_flow_inputs: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(120),
@@ -428,6 +433,7 @@ mod tests {
     #[test]
     fn engine_run_config_serializes_initial_prompt() {
         let cfg = EngineRunConfig {
+            owned_flow_inputs: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(60),
@@ -456,6 +462,7 @@ mod tests {
     fn engine_run_config_serializes_bootstrap_parent() {
         let parent = RunId::new();
         let cfg = EngineRunConfig {
+            owned_flow_inputs: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             bootstrap_parent: Some(parent),
@@ -484,6 +491,7 @@ mod tests {
     #[test]
     fn bootstrap_run_config_serde_roundtrip() {
         let cfg = EngineRunConfig {
+            owned_flow_inputs: None,
             quota_recovery:
                 surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy::default(),
             human_input_timeout: Duration::from_secs(60),

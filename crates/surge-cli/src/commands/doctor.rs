@@ -114,6 +114,7 @@ async fn run_real_smoke(
     surge_acp::settings_seed::seed_settings_files(&entry.settings_files, &workdir);
     let outcome = OutcomeKey::try_from("done").expect("static outcome key");
     let config = SessionConfig {
+        effect_fence: None,
         writer_id: surge_core::id::ExecutionWriterId::new(),
         invocation: surge_core::id::StageInvocationId::new(),
         runtime: entry.id.clone(),

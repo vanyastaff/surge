@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/surge-core",
+    "crates/surge-process",
     "crates/surge-acp",
     "crates/surge-git",
     "crates/surge-persistence",
@@ -134,7 +135,6 @@ rand = "0.9"
 # M2 storage layer
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"  # must match rusqlite 0.32 — bump together
-fd-lock = "4"
 async-stream = "0.3"
 tokio-stream = "0.1"
 tokio-util = "0.7"
@@ -149,6 +149,7 @@ tokio-test = "0.4"
 
 # Internal crates
 surge-core = { path = "crates/surge-core" }
+surge-process = { path = "crates/surge-process" }
 surge-acp = { path = "crates/surge-acp" }
 surge-git = { path = "crates/surge-git" }
 surge-persistence = { path = "crates/surge-persistence" }
@@ -162,7 +163,8 @@ surge-telegram = { path = "crates/surge-telegram" }
 # M7 dependencies
 rmcp = { version = ">=1.6, <2.0", default-features = false, features = ["client", "transport-child-process", "which-command"] }
 interprocess = { version = "2", features = ["tokio"] }
-nix = { version = "0.29", default-features = false, features = ["signal", "fs", "user"] }
+nix = { version = "0.29", default-features = false, features = ["signal", "fs", "user", "dir"] }
+windows = { version = "0.58", features = ["Win32_Foundation"] }
 
 # Debug builds keep line tables (panics and backtraces still name file:line)
 # but not full variable-level debug info: with full debug info `target/`

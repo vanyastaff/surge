@@ -1,6 +1,12 @@
 //! Registry-owned persistent tasks. Transactions never span provisioning or engine awaits.
 mod control;
+mod owned_flow;
 mod start_preparation;
+pub use owned_flow::{
+    AuthenticatedOwnedFlowInputs, OwnedFlowAcceptance, OwnedFlowCapturedSource,
+    OwnedFlowPreparation, OwnedFlowPreparationResult, OwnedFlowSourceSnapshot,
+    OwnedFlowWakeAdmission,
+};
 pub use start_preparation::StartPreparation;
 pub mod recovery_cycles;
 use r2d2::Pool;
@@ -41,6 +47,24 @@ pub enum WorkItemError {
     /// Another host holds launch ownership or admission is full.
     #[error("task launch already claimed")]
     Busy,
+    /// Sensitive inputs cannot be captured securely on this platform.
+    #[error("owned Flow private inputs unsupported on this platform")]
+    PrivateInputsUnsupported,
+    /// Host key/immutable input loss requires explicit recovery, never new capture.
+    #[error("owned Flow private input recovery required")]
+    PrivateInputsRecoveryRequired,
+    /// Independent accepted facts disagree; this is not a manifest-only refusal.
+    #[error("owned Flow independent accepted data is invalid")]
+    IndependentAcceptedDataInvalid,
+    /// Structurally valid frozen inputs contradict the independent accepted binding.
+    #[error("owned Flow frozen input association mismatch")]
+    InputsAssociationMismatch,
+    /// Descriptor ownership, permissions or ancestry fail the private-input contract.
+    #[error("owned Flow private input location is unsafe")]
+    PrivateInputsUnsafe,
+    /// An immutable input object or its authenticated binding is invalid.
+    #[error("owned Flow private input authentication failed")]
+    PrivateInputsCorrupt,
 }
 type Result<T> = std::result::Result<T, WorkItemError>;
 #[derive(Serialize, Deserialize)]
@@ -63,19 +87,48 @@ pub enum WorkItemAdmission {
 pub struct WorkItemStore {
     pool: Pool<SqliteConnectionManager>,
     home: PathBuf,
+    clock: std::sync::Arc<dyn crate::runs::Clock>,
+    writers: std::sync::Arc<crate::runs::writer_slot::ActiveWriters>,
 }
 /// Host-only launch ownership. The OS file lock is retained until this value drops.
 #[derive(Clone)]
 pub struct WorkItemLaunchClaim {
     // Sharing the open file description keeps one lock alive across both the
     // daemon supervisor and the engine task without creating a new authority.
-    lock: std::sync::Arc<File>,
-    path: PathBuf,
+    lock: LaunchLock,
     run: RunId,
     token: String,
     binding: WorkItemBinding,
 }
+#[derive(Clone)]
+enum LaunchLock {
+    Legacy {
+        file: std::sync::Arc<File>,
+        path: PathBuf,
+    },
+    OwnedFlow {
+        guard: std::sync::Arc<start_preparation::secure_lock::PreparationLock>,
+        operation: surge_core::id::WorkItemOperationId,
+        identity: String,
+    },
+}
 impl WorkItemLaunchClaim {
+    fn verify_lock(&self) -> Result<()> {
+        match &self.lock {
+            LaunchLock::Legacy { file, path } => verify_lock_identity(file, path),
+            LaunchLock::OwnedFlow {
+                guard, identity, ..
+            } => {
+                guard.verify()?;
+                if guard.identity()? != *identity {
+                    return Err(WorkItemError::Conflict(
+                        "owned Flow launch object changed".into(),
+                    ));
+                }
+                Ok(())
+            },
+        }
+    }
     /// Run reserved under this ownership.
     pub fn run(&self) -> RunId {
         self.run
@@ -91,6 +144,8 @@ impl crate::runs::Storage {
         WorkItemStore {
             pool: self.registry_pool.clone(),
             home: self.home.clone(),
+            clock: self.clock.clone(),
+            writers: self.active_writers.clone(),
         }
     }
 }
@@ -271,7 +326,7 @@ impl WorkItemStore {
         expected: &surge_core::execution_recovery::WorkItemExecutionControl,
         diagnostic: &str,
     ) -> Result<()> {
-        verify_lock_identity(&claim.lock, &claim.path)?;
+        claim.verify_lock()?;
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let valid: bool = tx.query_row(
@@ -474,7 +529,7 @@ impl WorkItemStore {
         tx.execute("INSERT INTO work_items(id,project_id,title,accepted_revision,version,workspace) VALUES(?,?,?,1,1,?)",params![item.to_string(),project.to_string(),title,serde_json::to_string(workspace)?])?;
         let revision = WorkItemRevision {
             revision: 1,
-            requirements: requirements.clone(),
+            origin: AcceptedWorkItemOrigin::Requirements(requirements.clone()),
             hash: requirements.hash()?,
             actor: actor.into(),
             accepted_proposal: None,
@@ -496,6 +551,27 @@ impl WorkItemStore {
         graph: &Graph,
         config: &str,
     ) -> Result<OperationResult> {
+        self.reserve_with_host_run(tx, id, version, graph, config, RunId::new())
+    }
+    // Private host-allocation boundary shared with atomic owned-Flow acceptance.
+    fn reserve_with_host_run(
+        &self,
+        tx: &Transaction<'_>,
+        id: WorkItemId,
+        version: u64,
+        graph: &Graph,
+        config: &str,
+        run: RunId,
+    ) -> Result<OperationResult> {
+        let collision: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 UNION ALL SELECT 1 FROM work_item_attempts WHERE run=?1)",
+            [run.to_string()], |row| row.get(0),
+        )?;
+        if run == RunId::nil() || collision {
+            return Err(WorkItemError::Conflict(
+                "host run identity already exists".into(),
+            ));
+        }
         let preparing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_start_preparations WHERE item=? AND state='preparing')",[id.to_string()],|row|row.get(0))?;
         if preparing {
             return Err(WorkItemError::Busy);
@@ -508,7 +584,6 @@ impl WorkItemStore {
             |row| row.get(0),
         )?;
         let accepted = revision(tx, id, item.accepted_revision)?;
-        let run = RunId::new();
         item.generation += 1;
         item.active_run = Some(run);
         item.version += 1;
@@ -663,6 +738,18 @@ impl WorkItemStore {
     }
     /// Obtain a stable OS lock and a SQL claimant token for exactly this generation.
     pub fn claim(&self, run: RunId) -> Result<WorkItemLaunchClaim> {
+        {
+            let conn = self.pool.get()?;
+            let value = attempt(&conn, run)?;
+            if revision(&conn, value.item, value.binding.revision)?
+                .origin
+                .flow()
+                .is_some()
+            {
+                drop(conn);
+                return self.claim_owned_flow(run);
+            }
+        }
         let locks = self.home.join("work-items/locks");
         std::fs::create_dir_all(&locks)?;
         let path = locks.join(format!("{run}.lock"));
@@ -701,8 +788,10 @@ impl WorkItemStore {
         tx.commit()?;
         verify_lock_identity(&lock, &path)?;
         Ok(WorkItemLaunchClaim {
-            lock: std::sync::Arc::new(lock),
-            path,
+            lock: LaunchLock::Legacy {
+                file: std::sync::Arc::new(lock),
+                path,
+            },
             run,
             token,
             binding: value.binding,
@@ -710,13 +799,31 @@ impl WorkItemStore {
     }
     /// Validate host ownership at every engine boundary, never caller configuration.
     pub fn validate_claim(&self, claim: &WorkItemLaunchClaim) -> Result<WorkItemAttempt> {
-        verify_lock_identity(&claim.lock, &claim.path)?;
-        let conn = self.pool.get()?;
+        claim.verify_lock()?;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+        let value = self.validate_claim_in(&tx, claim)?;
+        claim.verify_lock()?;
+        tx.commit()?;
+        Ok(value)
+    }
+    fn validate_claim_in(
+        &self,
+        conn: &Connection,
+        claim: &WorkItemLaunchClaim,
+    ) -> Result<WorkItemAttempt> {
         let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM work_item_attempts a JOIN work_items i ON i.id=a.item WHERE a.run=? AND a.generation=? AND a.claim_token=? AND i.active_run=a.run AND i.generation=a.generation AND i.archived_at_ms IS NULL AND a.state IN ('reserved','launched','attention','suspended'))",params![claim.run.to_string(),claim.binding.generation,claim.token],|row|row.get(0))?;
         if !valid {
             return Err(WorkItemError::Conflict("stale launch claim".into()));
         }
-        attempt(&conn, claim.run)
+        if matches!(claim.lock, LaunchLock::OwnedFlow { .. }) {
+            self.validate_owned_flow_association(conn, claim)?;
+        }
+        let value = attempt(conn, claim.run)?;
+        if value.binding != claim.binding {
+            return Err(WorkItemError::Conflict("launch binding changed".into()));
+        }
+        Ok(value)
     }
     /// Settle only this run's historical attempt; ownership release is run/generation scoped.
     pub fn settle(
@@ -780,10 +887,15 @@ fn accept(
     if item.accepted_revision != expected {
         return Err(WorkItemError::Conflict("stale accepted revision".into()));
     }
+    if revision(tx, item.id, expected)?.origin.flow().is_some() {
+        return Err(WorkItemError::Invalid(
+            "flow origin cannot be replaced by task requirements".into(),
+        ));
+    }
     item.accepted_revision += 1;
     let revision = WorkItemRevision {
         revision: item.accepted_revision,
-        requirements: requirements.clone(),
+        origin: AcceptedWorkItemOrigin::Requirements(requirements.clone()),
         hash: requirements.hash()?,
         actor: actor.into(),
         accepted_proposal: proposal,
@@ -1640,7 +1752,9 @@ mod tests {
                     ..reserve(&store, &store.show(created.item.id).unwrap().item)
                 })
                 .unwrap()
-                .requirements
+                .origin
+                .requirements()
+                .unwrap()
                 .text(),
             "Original"
         );
@@ -1719,7 +1833,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            store.requirements(&attempt).unwrap().requirements.text(),
+            store
+                .requirements(&attempt)
+                .unwrap()
+                .origin
+                .requirements()
+                .unwrap()
+                .text(),
             "Original"
         );
     }
@@ -2077,3 +2197,12 @@ mod usage_tests {
 }
 
 pub mod recipe_capacity;
+
+/// Permanently close new informational refusal owners before consuming the runtime.
+pub fn close_owned_flow_refusal_admission() {
+    owned_flow::refusal_owner::close_admission();
+}
+/// Join actual refusal delivery threads after runtime teardown; unavailable journals retain ownership.
+pub fn join_owned_flow_refusal_owners() {
+    owned_flow::refusal_owner::join_all();
+}

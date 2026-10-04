@@ -38,6 +38,9 @@ pub enum BridgeError {
 /// Errors from `AcpBridge::open_session`.
 #[derive(Debug, Error)]
 pub enum OpenSessionError {
+    /// Current host execution control refused final provider admission.
+    #[error(transparent)]
+    HostEffectRefused(#[from] super::HostEffectRefused),
     /// Opening was cancelled before a session was delivered.
     #[error("ACP session opening cancelled")]
     Cancelled,
@@ -107,6 +110,9 @@ pub enum OpenSessionError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SendMessageError {
+    /// Current host execution control refused final prompt admission.
+    #[error(transparent)]
+    HostEffectRefused(#[from] super::HostEffectRefused),
     /// A session accepts at most one prompt at a time.
     #[error("session {session} already has a prompt in progress")]
     PromptAlreadyRunning {

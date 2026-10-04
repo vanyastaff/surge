@@ -339,6 +339,7 @@ mod descriptor_tests {
     #[tokio::test]
     async fn descriptor_is_self_contained_without_provider_environment_secrets() {
         let mut config = SessionConfig {
+            effect_fence: None,
             writer_id: surge_core::id::ExecutionWriterId::new(),
             invocation: surge_core::id::StageInvocationId::new(),
             runtime: "fixture".into(),

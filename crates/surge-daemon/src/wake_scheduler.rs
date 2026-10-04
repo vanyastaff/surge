@@ -192,6 +192,10 @@ impl WakeScheduler {
     /// worktree — or the recorded path itself — is missing. Never a silent
     /// resume attempt into a path that does not exist.
     async fn wake_one(&self, run_id: RunId, now_ms: i64) {
+        // Authoritative operator/recovery Attention wins over a stale Parked journal.
+        if !self.automation_allowed(run_id) {
+            return;
+        }
         let snapshot = match self.read_snapshot(run_id).await {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -247,33 +251,8 @@ impl WakeScheduler {
             return;
         }
 
-        let task_resume = crate::work_items::resume_parked_work_item(
-            run_id,
-            now_ms,
-            &self.tracking,
-            &self.admission,
-            &self.broadcast,
-        )
-        .await;
-        match task_resume {
-            Ok(true) => {
-                info!(
-                    target: "surge.wake_scheduler",
-                    %run_id,
-                    "woke parked work item through its durable task claim"
-                );
-                return;
-            },
-            Err(error) => {
-                warn!(
-                    target: "surge.wake_scheduler",
-                    %run_id,
-                    %error,
-                    "claim-fenced work-item wake failed; leaving it parked for a later tick"
-                );
-                return;
-            },
-            Ok(false) => {},
+        if self.resume_work_item(run_id, now_ms).await {
+            return;
         }
 
         match crate::server::resume_run_tracked(
@@ -293,6 +272,49 @@ impl WakeScheduler {
                 %error,
                 "wake resume failed; the run stays Parked for a later tick to retry"
             ),
+        }
+    }
+
+    /// A handled or refused task wake must never fall through to legacy resume.
+    async fn resume_work_item(&self, run_id: RunId, now_ms: i64) -> bool {
+        let task_resume = crate::work_items::resume_parked_work_item(
+            run_id,
+            now_ms,
+            &self.tracking,
+            &self.admission,
+            &self.broadcast,
+        )
+        .await;
+        match task_resume {
+            Ok(true) => {
+                info!(
+                    target: "surge.wake_scheduler",
+                    %run_id,
+                    "woke parked work item through its durable task claim"
+                );
+                return true;
+            },
+            Err(error) => {
+                warn!(
+                    target: "surge.wake_scheduler",
+                    %run_id,
+                    %error,
+                    "claim-fenced work-item wake failed; leaving it parked for a later tick"
+                );
+                return true;
+            },
+            Ok(false) => {},
+        }
+        false
+    }
+
+    fn automation_allowed(&self, run_id: RunId) -> bool {
+        match self.storage.work_items().for_run(run_id) {
+            Ok(Some(attempt)) => {
+                attempt.state != surge_core::work_item::WorkItemAttemptState::Attention
+            },
+            Ok(None) => true,
+            Err(_) => false,
         }
     }
 

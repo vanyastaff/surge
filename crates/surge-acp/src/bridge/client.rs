@@ -42,6 +42,7 @@ const PENDING_PERMISSION_WARN_THRESHOLD: usize = 32;
 /// do the work, emit `BridgeEvent` only when relevant. Most IO methods are
 /// silent — ACP carries its own observability for those.
 pub(crate) struct BridgeClient {
+    pub(crate) effect_fence: Option<Arc<dyn super::HostEffectFence>>,
     /// Surge-side session identifier (distinct from the ACP session id).
     pub(crate) session_id: SessionId,
     /// Broadcast channel for emitting `BridgeEvent`s to subscribers.
@@ -151,7 +152,7 @@ impl BridgeClient {
                     request_id = %request_id,
                     "permission resolved by engine"
                 );
-                Ok(response)
+                Ok(self.fenced_permission(&req, response))
             },
             Err(_recv_err) => {
                 // The oneshot sender was dropped before the engine replied —
@@ -191,6 +192,7 @@ impl BridgeClient {
     ) -> Self {
         let terminals = Arc::new(Mutex::new(Terminals::new(worktree_root.clone())));
         Self {
+            effect_fence: None,
             session_id,
             event_tx,
             state,
@@ -239,16 +241,44 @@ impl BridgeClient {
         );
 
         match decision {
-            SandboxDecision::Allow => Ok(RequestPermissionResponse::new(permission_outcome(
+            SandboxDecision::Allow => Ok(self.fenced_permission(
                 &req,
-                PermissionOptionKind::AllowOnce,
-            ))),
+                RequestPermissionResponse::new(permission_outcome(
+                    &req,
+                    PermissionOptionKind::AllowOnce,
+                )),
+            )),
             SandboxDecision::Deny { .. } => Ok(RequestPermissionResponse::new(permission_outcome(
                 &req,
                 PermissionOptionKind::RejectOnce,
             ))),
             SandboxDecision::Elevate { capability } => self.await_elevation(req, capability).await,
         }
+    }
+
+    fn fenced_permission(
+        &self,
+        request: &RequestPermissionRequest,
+        response: RequestPermissionResponse,
+    ) -> RequestPermissionResponse {
+        let RequestPermissionOutcome::Selected(selected) = &response.outcome else {
+            return response;
+        };
+        let Some(option) = request
+            .options
+            .iter()
+            .find(|option| option.option_id == selected.option_id)
+        else {
+            return RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+        };
+        if matches!(
+            option.kind,
+            PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+        ) && super::effect_fence::check(self.effect_fence.as_ref()).is_err()
+        {
+            return RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+        }
+        response
     }
 
     /// Write a text file within the worktree. Path-guard enforced before any IO.

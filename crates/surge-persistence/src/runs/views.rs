@@ -493,6 +493,8 @@ pub fn maintain(
         | EventPayload::QuotaStagePlanned { .. }
         | StageInputsResolved { .. }
         | EventPayload::WorkItemAttemptBound { .. }
+        | EventPayload::OwnedFlowInputsBound { .. }
+        | EventPayload::OwnedFlowWakeRefused { .. }
         | EventPayload::ExecutionWriterIntent { .. }
         | EventPayload::ExecutionWriterEstablished { .. }
         | EventPayload::ExecutionWriterClosed { .. }

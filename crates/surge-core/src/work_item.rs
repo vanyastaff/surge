@@ -4,6 +4,19 @@ use crate::{ContentHash, Graph, RunId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod flow_inputs;
+mod wake_refusal;
+pub use wake_refusal::{
+    OwnedFlowWakeLineage, OwnedFlowWakeRefusalError, OwnedFlowWakeRefusalReason,
+    OwnedFlowWakeRefusalReceipt,
+};
+mod origin;
+pub use flow_inputs::{
+    FrozenOwnedFlowMcp, HmacSha256Tag, OwnedFlowInputsManifest, OwnedFlowManifestError,
+    OwnedFlowMcpManifestEntry, OwnedFlowMcpSelection, OwnedFlowObjectRef, OwnedFlowRequestIdentity,
+};
+pub use origin::{AcceptedFlowContract, AcceptedFlowError, AcceptedWorkItemOrigin, FlowOrigin};
+
 /// Immutable accepted requirement text and criterion definitions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawRequirements")]
@@ -116,11 +129,13 @@ pub struct WorkItemRecord {
 }
 /// Immutable accepted history entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "RawRevision")]
 pub struct WorkItemRevision {
     /// Revision number.
     pub revision: u64,
     /// Exact accepted content.
-    pub requirements: WorkItemRequirements,
+    #[serde(flatten)]
+    pub origin: AcceptedWorkItemOrigin,
     /// Content identity.
     pub hash: ContentHash,
     /// Acceptance provenance.
@@ -130,6 +145,33 @@ pub struct WorkItemRevision {
     pub accepted_proposal: Option<u64>,
     /// Acceptance timestamp.
     pub accepted_at_ms: i64,
+}
+#[derive(Deserialize)]
+struct RawRevision {
+    revision: u64,
+    #[serde(flatten)]
+    origin: AcceptedWorkItemOrigin,
+    hash: ContentHash,
+    actor: String,
+    #[serde(default)]
+    accepted_proposal: Option<u64>,
+    accepted_at_ms: i64,
+}
+impl TryFrom<RawRevision> for WorkItemRevision {
+    type Error = String;
+    fn try_from(raw: RawRevision) -> Result<Self, Self::Error> {
+        if raw.revision == 0 || raw.origin.hash().map_err(|error| error.to_string())? != raw.hash {
+            return Err("invalid accepted task revision".into());
+        }
+        Ok(Self {
+            revision: raw.revision,
+            origin: raw.origin,
+            hash: raw.hash,
+            actor: raw.actor,
+            accepted_proposal: raw.accepted_proposal,
+            accepted_at_ms: raw.accepted_at_ms,
+        })
+    }
 }
 /// Relation of a historical attempt to the item's currently accepted requirements.
 /// This describes requirement ownership, not verification evidence.
@@ -401,52 +443,113 @@ pub enum WorkItemResult {
     Control(Box<crate::execution_recovery::WorkItemExecutionControl>),
 }
 /// Host-pinned execution context, validated again when journals are decoded.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawContext")]
 pub struct WorkItemContext {
     binding: WorkItemBinding,
-    requirements: WorkItemRequirements,
+    #[serde(flatten)]
+    origin: AcceptedWorkItemOrigin,
 }
 #[derive(Deserialize)]
 struct RawContext {
     binding: WorkItemBinding,
-    requirements: WorkItemRequirements,
+    #[serde(flatten)]
+    origin: AcceptedWorkItemOrigin,
 }
 impl TryFrom<RawContext> for WorkItemContext {
     type Error = String;
     fn try_from(raw: RawContext) -> Result<Self, Self::Error> {
-        Self::new(raw.binding, raw.requirements)
+        Self::from_origin(raw.binding, raw.origin)
     }
 }
 impl WorkItemContext {
-    /// Construct a validated host context; agent-provided hashes cannot substitute content.
+    /// Construct a validated legacy specification context.
+    ///
+    /// # Errors
+    /// Rejects invalid reservation identities or a content/hash mismatch.
     pub fn new(
         binding: WorkItemBinding,
         requirements: WorkItemRequirements,
     ) -> Result<Self, String> {
+        Self::from_origin(binding, AcceptedWorkItemOrigin::Requirements(requirements))
+    }
+    /// Construct a flow context without synthesizing task requirements.
+    ///
+    /// # Errors
+    /// Rejects invalid reservation identities or a content/hash mismatch.
+    pub fn new_flow(
+        binding: WorkItemBinding,
+        contract: AcceptedFlowContract,
+    ) -> Result<Self, String> {
+        Self::from_origin(binding, AcceptedWorkItemOrigin::Flow(contract))
+    }
+    /// Construct a validated host context from its typed accepted origin.
+    ///
+    /// # Errors
+    /// Rejects invalid reservation identities or a content/hash mismatch.
+    pub fn from_origin(
+        binding: WorkItemBinding,
+        origin: AcceptedWorkItemOrigin,
+    ) -> Result<Self, String> {
         if binding.item == WorkItemId::nil()
             || binding.revision == 0
             || binding.generation == 0
-            || requirements.hash().map_err(|error| error.to_string())? != binding.requirements_hash
+            || origin.hash().map_err(|error| error.to_string())? != binding.requirements_hash
         {
             return Err("invalid host task context".into());
         }
-        Ok(Self {
-            binding,
-            requirements,
-        })
+        Ok(Self { binding, origin })
     }
     /// Durable reservation identity.
+    #[must_use]
     pub fn binding(&self) -> &WorkItemBinding {
         &self.binding
     }
-    /// Exact accepted specification.
-    pub fn requirements(&self) -> &WorkItemRequirements {
-        &self.requirements
+    /// Exact typed accepted origin.
+    #[must_use]
+    pub fn origin(&self) -> &AcceptedWorkItemOrigin {
+        &self.origin
+    }
+    /// Exact accepted legacy specification, absent for flows.
+    #[must_use]
+    pub fn requirements(&self) -> Option<&WorkItemRequirements> {
+        self.origin.requirements()
+    }
+    /// Exact flow contract, absent for legacy specifications.
+    #[must_use]
+    pub fn flow(&self) -> Option<&AcceptedFlowContract> {
+        self.origin.flow()
     }
     /// Accepted context shared by every agent stage.
+    #[must_use]
     pub fn prompt(&self) -> String {
-        self.requirements
-            .prompt(self.binding.revision, self.binding.requirements_hash)
+        match &self.origin {
+            AcceptedWorkItemOrigin::Requirements(requirements) => {
+                requirements.prompt(self.binding.revision, self.binding.requirements_hash)
+            },
+            AcceptedWorkItemOrigin::Flow(flow) => flow.raw_prompt().to_owned(),
+        }
     }
 }
+
+/// Immutable acknowledgement of one atomically accepted ordinary Flow operation.
+/// This projection contains no request body, transport inputs or secret-derived digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedFlowReceipt {
+    /// Caller operation whose first body was accepted.
+    pub operation_id: crate::id::WorkItemOperationId,
+    /// Host-allocated persistent item.
+    pub item: crate::id::WorkItemId,
+    /// Host-allocated execution, retained across cold recovery.
+    pub run: RunId,
+    /// Immutable accepted origin/reservation association.
+    pub binding: WorkItemBinding,
+    /// Original Git workspace creation owner, independent of later attempts.
+    pub workspace_owner: RunId,
+    /// Atomic acceptance timestamp.
+    pub accepted_at_ms: i64,
+}
+
+#[cfg(test)]
+mod tests;

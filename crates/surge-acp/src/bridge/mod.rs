@@ -28,7 +28,9 @@
 //! (see spec §11.8).
 
 // Submodules are wired in subsequent tasks.
+pub mod effect_fence;
 pub mod error;
+pub use effect_fence::{HostEffectFence, HostEffectRefused};
 pub use error::{
     AcpError, BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError,
     ReplyToToolError, SendMessageError,

@@ -32,22 +32,29 @@ mod top_bar;
 mod ui;
 mod work_items;
 
+mod runtime_shutdown;
+
 use gpui_kit::*;
 
 use app::SurgeApp;
 use app_state::AppState;
 
 fn main() {
+    surge_process::owner_panic::install_owner_panic_protection();
     // `from_default_env()` with no `RUST_LOG` set builds an *empty* filter:
     // the app then logs nothing at all, errors included, and a user whose
     // run misbehaves has not one line to look at. Fall back to the same
     // default `surge-cli` uses so the desktop app is not the silent one.
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::filter_fn(|metadata| {
+            surge_mcp::diagnostics::permits_target(metadata.target())
+        }))
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "surge=info".into()),
         )
-        .with_writer(std::io::stderr)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     // Start a background tokio runtime for ACP pool operations.
@@ -57,7 +64,10 @@ fn main() {
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
-    let _guard = tokio_rt.enter();
+    let tokio_rt = runtime_shutdown::HostRuntime::new(tokio_rt, false);
+    let _guard = tokio_rt.runtime().enter();
+    let exit_status = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let app_exit_status = exit_status.clone();
 
     let app = gpui_kit::application().with_assets(assets::AppAssets);
 
@@ -113,7 +123,14 @@ fn main() {
                 eprintln!(
                     "surge: could not open a window ({err}) — likely no usable GPU/compositor surface; try a different compositor or update your GPU driver"
                 );
-                std::process::exit(1);
+                app_exit_status.store(1, std::sync::atomic::Ordering::SeqCst);
+                cx.quit();
             }
     });
+    drop(_guard);
+    drop(tokio_rt);
+    let status = exit_status.load(std::sync::atomic::Ordering::SeqCst);
+    if status != 0 {
+        std::process::exit(status);
+    }
 }

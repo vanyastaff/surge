@@ -10,6 +10,7 @@ use surge_persistence::runs::Storage;
 
 fn config(writer: ExecutionWriterId, invocation: StageInvocationId) -> SessionConfig {
     SessionConfig {
+        effect_fence: None,
         writer_id: writer,
         invocation,
         runtime: "mock".into(),
