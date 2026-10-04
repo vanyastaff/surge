@@ -1,0 +1,134 @@
+Foundation security/storage focused re-review — 2026-10-04
+Verdict: ACCEPTABLE for the bounded R1–R3 design correction and no-dispatch Stop
+contract, read together as the current plan. NOT implementation acceptance or source
+permission. A+B integration still awaits independently accepted concrete Stage B.
+Formal T25 0/3 unchanged; no frozen 5a/5b, native certification or installation.
+
+Pinned objects read in full:
+- original domain revised plan SHA256
+5bdd46491a4b408f3a0745926a0e352baa315162c06a393f60dd57f8b12fc4a8
+- /tmp/surge-owned-flow-domain-stage-a-root-reshape-20261004.txt
+1944f0f784197d52e3a14759ff4b93864bba0a4112647ba7b443208570d61c54
+- /tmp/surge-owned-flow-no-dispatch-stop-proposal-20261004.txt
+4c58467e25164064b6f57edf680f651aab50322cf1f5e321aade2234ddb90f33
+These supplements explicitly supersede original startup/exact-one and control
+mapping errors. A future consolidated document must preserve the distinctions below;
+the original revised file alone remains insufficient.
+
+R1 — typed startup and immutable actor mode: resolved in this bounded plan.
+Actual source remains generic: surge-orchestrator/src/engine/engine.rs startup
+producer appends events; surge-persistence/src/runs/run_writer.rs:198 AppendBatch;
+runs/storage.rs:215 create_run/:286 open_run_writer construct writer config;
+runs/writer.rs:122 WriterConfig/:139 spawn_writer are public, mod.rs:91 reexports.
+The supplement no longer claims an already existing typed startup transaction.
+It names private config/command/spawn exports, immutable registry association before
+journal birth, actor mode derived from storage-selected registry rather than caller
+flags, and typed original one-shot startup command/actual raw receipt. Known owned
+registry plus missing events DB refuses/reconciles; marker mismatch or inaccessible
+association cannot become legacy. Exact original ordered empty-journal commit is
+atomic; replay returns original bytes/seq; conflicting batch changes nothing.
+Initial PendingStartup0 obtains Running0 only by separate actual-journal receipt
+inspection and registry newest-control CAS. No initial open_epoch(None) bypass.
+Readability of legacy task-bound journals does not mint new closure or owned rights.
+
+Startup cancellation distinction is adequate and important. PendingStartup0 startup
+ALREADY COMMITTED, Stop1 before ACK: after actual zero full-registry obligations,
+complete original preparation and exact startup/prefix association, typed suspension
+snapshot/receipt seals epoch0 with closing1; ACK1 may set Suspended0. Late startup
+ACK cannot open Running0. Then Continue2 follows normal typed previous-seal route.
+Startup NOT COMMITTED: no synthetic RunStarted or empty seal. CanceledBeforeDispatch
+requires surviving ORIGINAL non-Tokio owner retaining genuinely unconsumed startup
+command slot plus no journal-birth dispatch, completed host preparation and zero
+admitted native/RPC/host obligations. This is NoStartupDispatch, not native NoChild.
+Consumed/inflight slot, uncertain transaction, owner loss, missing marker or merely
+absent DB is Unknown/receipt inspection/Attention. A newly acquired launch claim
+cannot issue that proof. No successful cancellation can silently release a live
+preparation obligation.
+
+R2 — opening vs closing generations and Stop-before-ACK: resolved.
+Actual current producer surge-orchestrator/src/engine/run_task.rs:368 appends plain
+RunContinued; surge-persistence/src/work_items/control.rs:223 confirm_continued
+uses generic folded memory before latest-control CAS; daemon/work_items.rs:710
+acknowledges it. Those seams require typed replacement, not preservation as bypasses.
+New plan has immutable epoch PK opening generation, separate closing generation,
+historical existing-control origin/proof columns, typed receipt DATA and epoch
+capability only after registry ACK. Registry receipt inspection is exact raw journal
+plus immutable snapshots/full debt set, never generic fold authority.
+
+Required worked transition now has a lawful path:
+1 epoch0 genuinely sealed under Stop1; immutable seal/snapshot1 remain fixed.
+2 Continue2 typed origin committed, but no Running2 ACK/capability yet.
+3 Stop3 freezes/cancels that opening intent and blocks every ACK/reserve/dispatch2.
+4 private no-dispatch permit validates exact old terminal set/seal1 and whole prefix,
+then actor appends exact OpeningCanceled + control3 RunSuspended/snapshot receipt.
+5 registry ACK validates old seal1 + actual new receipt + canceled2 + newest Stop3
+and CAS writes proof on control3, not epoch0 closing/seal. It creates NO Running2.
+6 Continue4 consumes latest control3 proof with old epoch0/seal1/canceled2 linkage,
+commits its own origin, then newest-control CAS can create Running4.
+No arithmetic inference or opening2=closing3 equality is used. Stop5 before ACK4
+repeats exact linked cancellation. Stop5 racing ACK3 preserves historical proof3
+but cannot overwrite newest Stop5. Lost ACK repairs same occurrence only.
+
+This explicitly permits typed control/cancellation ancestry in the later journal,
+not arbitrary events after seal. Whole-prefix validation must classify each earlier
+OpeningCanceled/RunSuspended/RunContinued association through its exact original
+private receipt chain, plus the narrow permitted audit kinds; an unexpected event
+or generic origin is refusal. Original seal closure-prefix remains immutable while
+latest control proof has its own newer prefix. Do not mechanically apply original
+post-seal audit-only allowlist to reject valid typed Continue/cancel ancestry, and
+do not broaden it into a generic late-event allowance. The no-dispatch supplement's
+full ancestry requirement supplies this distinction. Pagination must inspect the
+complete bounded chain with cycle/conflict detection, not just latest index rows.
+
+No-dispatch issuance is impossible once Running2 exists or any epoch2/effect/routing
+admission exists; it then enters normal freeze/cleanup. Journal control origin alone
+never dispatches restored routing. Preparation, native and external debts are all
+included: no pending or unknown debt can reuse a prior empty/Closed proof. Historical
+terminal evidence does not confer present execution permission.
+
+R3 — all helper gates, immutable snapshot, deletion: resolved in stated scope.
+Actual writer.rs:235 CommitGateAnswer, :243 CommitStageRoute, :256 StoreArtifact,
+:344 WriteSnapshot, :360 old SealSuspension remain distinct actor branches today.
+StoreArtifact :269 starts filesystem mkdir before its transaction; guarding only
+AppendBatch or transaction event insertion would miss this concrete mutation.
+New proposal explicitly places same loaded-mode/freeze admission BEFORE filesystem
+mutation, including StoreArtifact/private-file helpers, and requires revalidation
+after actor queue wait. Stage/gate commits need exact original host association;
+old bool seal is denied for owned mode. Typed snapshots are write-once exact
+prefix/schema/bytes/digest/phase; exact replay only, no INSERT OR REPLACE overwrite.
+Rebuild remains display-only and cannot erase or reconstruct protected authority.
+OpeningCanceled is newly protected authority event and denied on generic append.
+Public opaque RunWriter still cannot bypass private actor mode via alternate helper.
+
+Actual deletion seams: runs/storage.rs:475 public Storage::delete_run and
+runs/registry.rs:202 public registry helper. The latest clarification deliberately
+holds ALL owned deletion fail-closed pending independent retention/tombstone
+lifecycle acceptance, including direct lower helper invocation. This is stronger
+than permitting debt-free cascade now. Legacy ordinary deletion can retain accepted
+semantics under authoritative legacy identification; missing/corrupt owned journal
+or registry cannot downgrade to that path. No new owned cleanup authorization is
+inferred from future tombstone design or a completed display state.
+
+Cross-WAL ownership and acceptance limits retained.
+Typed permit -> actual journal transaction -> private receipt data -> registry
+IMMEDIATE newest-control CAS is coherent. It does not pretend to be one cross-DB
+transaction. Retained original owner holds receipt/repair and same launch-lock Arc
+before caller/runtime loss; Attention+exact pending projection commit precedes any
+intentional authority release. Disk-full retains owner; cancellation/timeouts are
+not receipts. Stage A tests alone cannot certify this non-Tokio Stage B owner.
+A+B integrated acceptance closure is explicit; no refusal-only checkpoint, ignored
+productive regression, fake Closed/NoChild or serialized proof constructor accepted.
+
+Required verification from main after future source authorization: actual startup
+positive/replay/atomic conflict; generic command/missing association/cold actor
+bypass negatives; literal PendingStartup0/Stop1 and origin2/Stop3/Continue4/repeat5
+positives; late ACK2/reserve2/spawn2/frame2/route2 deny; every cross-WAL lost reply;
+StoreArtifact pre-filesystem fence; immutable snapshot and authority-safe rebuild;
+second-process lock exclusion and disk-full lease retention; owned direct/public
+delete deny; legacy startup/resume/delete positives. Fixed actual receipts and peer/
+filesystem/second-process evidence, not a second arithmetic reducer implementation.
+Native/provider/external productive cold proofs remain open B/C/D dependencies.
+
+No remaining R1–R3 design blocker under these exact combined commitments.
+ACCEPTABLE bounded foundation design; concrete B architecture review and main's
+source/build acceptance are separate, still held. Only this report was written.

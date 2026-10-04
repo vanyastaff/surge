@@ -1,3 +1,9 @@
+# Authoritative foundation checkpoint 2026-10-04
+
+T25initial0/3: root FULLread foundation security rereview ACCEPTABLE combined5bdd46+1944f0+4c58467 design; critic alsoACCEPTABLE, source/integrationheld pending concreteB owning plan. Actual nix/ACP1MiB/queue31/rmcpunboundedcodec primaryfacts retained. Main corrected9 orchestrator lintissues withoutsuppression, no liveCargo at receipt; next actual forwarding SessionConfig.tools whitelist start+resume,275ms catalogdeadline pair and fixture-only offline immutable-manifest corruption, then tests/strict. Genuine populated cold writerproof RED persists; native/externalC/D and wholefullgoal remainopen.
+
+Earlier checkpoints remain history and superseded where contradictory.
+
 # Authoritative checkpoint: cold and StageB evidence 2026-10-04
 
 T25initial0/3:46767 terminal0 real legacy global START+freshhost RESUME allowedA/readOnlyB positive, original nonterminal; metadata fidelity extensions pending.87626 terminal101 fixture operation-vs-kind mistake.69344 terminal101 integrated11PASS3FAIL;15773 terminal101 corrected12PASS2FAIL. Actual missing/corrupt key/object/server/purpose cold refusal now PASS. Genuine populated cold missing writer cleanup proof RED remains; manifest mutation hits immutable snapshot trigger1811, production refusal must be retained separately from explicitly authorized tempfile-only offline damaged-storage negative.74326 scoped strict running at author receipt, root must not poll. StageA focused rereview RESHAPE one no-dispatch Stop completion gap; root proposed4c58467 typed receipt/currentCAS/prior immutable proof and NextContinue, critic re-review pending. StageB exact ACP/rmcp seam report RESHAPE, root FULLread: ACP sync enqueue/retain ID workable, rmcp prepare/bootstrap, physical pipe/frame/result owner/shared coordinator concrete amendments needed. Domain sourceheld, fullnative/externalC/D/allrequirements remainopen.

@@ -662,3 +662,10 @@ Scoped strict74326 terminal1019 orchestrator issues, raw complete log retained;
 author fixes without lint suppression. Actual forwarded SessionConfig.tools
 whitelist bothstart/resume and275ms catalogdeadline pair remain author verification
 work; no generic production tools/call claim. Formal0/3, fullC/D/native open.
+
+
+T25initial0/3: root FULLread foundation security rereview ACCEPTABLE combined5bdd46+1944f0+4c58467 design; critic alsoACCEPTABLE, source/integrationheld pending concreteB owning plan. Actual nix/ACP1MiB/queue31/rmcpunboundedcodec primaryfacts retained. Main corrected9 orchestrator lintissues withoutsuppression, no liveCargo at receipt; next actual forwarding SessionConfig.tools whitelist start+resume,275ms catalogdeadline pair and fixture-only offline immutable-manifest corruption, then tests/strict. Genuine populated cold writerproof RED persists; native/externalC/D and wholefullgoal remainopen.
+Foundation ACCEPTABLE verdict is for combined pinned documents only; original
+5bdd46 alone retains superseded startup/control defects. Exact snapshot anchor/
+raw receipts/current control links/StoreArtifact gate/owneddeletionhold must survive
+consolidation. No B source/native closure/5a/5b approval follows.
