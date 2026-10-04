@@ -1,3 +1,38 @@
+# Authoritative lasting Attention GREEN and lifecycle gates 2026-10-04
+
+Author20861 terminal0:firstcoldgreen0tests/18filtered WRONGFILTER, setup-only.
+Author45012 terminal101:exactcase1FAIL1.46s oldstderrConflictassertion; author
+retainedtmp0LoxiK. RootFULLread raw and old/newtest; read-only retainedregistry/
+wake.ready independentlyshows lastingattempt/controlAttention,1refusal key==hash,
+outboxACK25. RootsystemPythonROjournalopenfails unabletoopenexistingfile; no direct
+journaloccurrence proofclaimed fromthatprobe. Rustnextoracle independentlyreads
+actualjournal. Author75154 terminal0:third exactrealIPC/populatedinitial→offline
+bindingcorruption→oneactualwake1PASS1.41s. Strong typedrun/op/binding/reason/domainhash,
+fixeddiagnostics/journalpayload+ACKsequence equality, tokenunchanged, no newphysical
+provider/MCPeffects, lastingAttention. ROOTFULLread raw/test; originalstderrassertion
+replaced with strongeractualreceiptproof, alloriginalstate/token/effect checks kept.
+Rootrequested exact lineage vs INDEPENDENTprewake rows (not onlyselfhash) in followups.
+
+Author9902 terminal0:lifecycle3harnessPASS0.48s = primitiveReady/Stop + actualisolated
+creation/close/join and closedreservebehindpendingjoin+finishedB counterfactual,
+plus standaloneprobeNOOP. ROOTrawfullread; widercommitunknown/disk/cold/postpublish
+secondprocessowner tests stillOPEN. Newactualheldnormalwriter/postpublication
+FlowLaunchcontention/deliveryrelease oracle authorednotexecutedatreceipt. Main
+sole source/build/processowner. Startup/artifact IO nowoutsideBEGIN, exact immutable
+source/config/receipt/identitytuple rereadinsideTX; rootsourceconfirmed. Formal0/3,
+fullnativeC/D/productivecold/malformed/finalgates/freeze5a→5b remainrequired.
+
+Root FULLread macOSfeasibility816a5113 all192lines and directlyverified pinned
+AppleXNUwrapper/kernel: kernelidentity-bound signal candidate, errnoVALUE return;
+privateAPI/minimumruntime/entitledcontinuouscoverage/realnativeacceptance unresolved.
+Exactreports+canonical citedAIresearchnote retained. IndependentWindowsgapreview
+264cd7b0 FULLread: mapACCEPTABLEONLY, nativeAPIplan needs broker-atBirthownership,
+originalobject/peeridentity/currentphysicalReleasegate, RAIIalignedattributes,
+exactrecipe/ResumeThreadcounts/terminalreference retirement and realnativeWindows
+runneroracles. No source/OSinstallation approval/nativecertificate inferred; Linux/
+macOS allscope retained. Newresearchnote located.ai-factory perprojectdetailedcontext
+policy; rootAGENTSstructuralresearchrowheldalongside13thcrate mappingforsourcecheckpoint.
+
 # Integrated compilation and native dependency inventory 2026-10-04
 
 Author4378 terminal0 cleancargo check daemon+CLI via newreceipt/schema/owner/

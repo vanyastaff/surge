@@ -1,0 +1,192 @@
+macOS descendant Stop: identity-safe signal feasibility — 2026-10-04
+
+Verdict: ACCEPTABLE bounded feasibility research; deployment/native acceptance OPEN.
+Answer: a stronger direct candidate exists in installed Apple SDK and published
+Darwin: proc_signal_with_audittoken. Prefer reviewing this kernel identity-bound
+primitive over making ES AUTH_SIGNAL the sole safety barrier around kill(pid).
+Mach task_terminate is not established as a viable ordinary BSD-process backend.
+ES-gated numeric kill is conditionally plausible during complete live coverage,
+but not established safe through queue/client-loss cases. No supported native
+factory, OS execution, installation, source approval or T25 count is claimed.
+
+Scope: follow-up ONLY to native inventory ccb1ecc7c409e7dcfe4486503c309df03508e252ef0d109403c8829fe3646083.
+Accepted foundation/B tuples unchanged. Full C/D remains OPEN. This report narrows
+an unresolved signaling dependency, not descendant observation/drain or cold proof.
+Research skill: rust-studio:research (already read); exact SDK then Apple OSS.
+
+1. Versions and authoritative evidence
+Installed /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/SDKSettings.json says
+macOS27.0. Runtime version, loaded symbols, ES entitlement, FDA and ability to signal
+were NOT probed. SDK availability is not current runtime or deployment acceptance.
+Apple OSS implementation pinned to tag xnu-12377.1.9, not assumed identical to the
+running kernel. Main branch was used for discovery, then relevant tagged files read.
+SDK headers:
+- usr/include/libproc.h:42–45 private interfaces/subject to change; :132–135 token
+  signal/terminate and delegated variants. No minimum macOS availability annotation
+  on these signal declarations. Do not infer one from nearby path API annotation.
+- usr/lib/libproc.tbd:2608–2610 exports token signal/terminate symbols for this SDK.
+- usr/include/EndpointSecurity/ESMessage.h:230–243 exec updates pidversion/audit
+  token; :463–497 signal target and no-caching contract.
+- ESClient.h:88–107 auth response/cache; :143–207 process muting roles; :740–827
+  entitlement/FDA/subtree client; :828–852 deadline/overflow policy.
+- ESTypes.h:853–857 deadline KILL/FAIL_CLOSED/FAIL_OPEN; ESMessage.h:2695–2795
+  callback lifetime, seq_num/global_seq_num runtime-version constraints.
+- usr/include/mach/task.h:88–98 task_terminate(task_t); task_info.h:242 audit token.
+Official pinned URLs and implementation anchors are in section7.
+
+2. Direct token API: grounded feasible candidate
+Apple libproc wrapper forwards a complete audit_token_t to PROC_INFO_CALL_SIGNAL_
+AUDITTOKEN and returns zero or an errno VALUE, not the conventional -1 result [S1].
+Kernel proc_info dispatch copies the token. psignal_by_audit_token resolves exact
+proc_ident, runs MAC authorization without retained refs, then reacquires that
+identity before checking normal caller signal permission and psignal delivery [S2].
+proc_find_audit_token checks pidversion; proc_find_ident additionally checks uniqueid
+and disallows exec-version change for EXACT policy [S3]. Thus the authorization
+wait is not followed by a new unvalidated numeric PID signal. This is an inference
+from those explicit checks, not a claim of runtime validation on this host.
+
+Candidate host seam (design only): opaque OriginalMacProcess identity is issued
+only from continuous pre-Birth ES lineage and exact original launch ownership.
+A leaf-private send_original_signal(original, SIGKILL) uses token API directly;
+no public raw-token authority, numeric kill fallback, manual syscall number or
+proc_terminate(pid). Symbol/contract unavailable refuses before Release or retains
+Unknown after effects. Root held-child ownership and sole wait owner unchanged.
+Copied token bytes are bounded DATA; the original coordinator/lineage binds authority.
+
+Exit/exec semantics and errors matter:
+- Stale token can fail ESRCH because process exited OR its exec changed pidversion.
+  Treat it as an unsuccessful signal attempt, not all-descendant extinction.
+  Process current token advances only through continuous observed EXEC target.
+  Never repair a stale token by looking up current PID and accepting a new token.
+- New EXEC may race a request: retain debt, process its authentic continuity event,
+  then issue a separately recorded bounded attempt for that original lineage
+  incarnation if cleanup policy allows. Do not spin/retry unchanged ESRCH forever.
+- EPERM/invalid token/buffer/API error remains failed/Unknown. Success means signal
+  requested for exact target, not termination/reap/domain closure. ES terminal
+  lineage+stable live-client drain and frozen authority remain required.
+- proc_terminate_with_audittoken chooses sudden-termination behavior, which can send
+  SIGTERM instead of SIGKILL [S2]. Prefer explicit signal API for Stop's kill policy.
+- Delegated variants require Apple private delegate-signals entitlement [S2];
+  not needed for direct host signaling. No assumption that ES entitlement grants
+  caller permission to signal changed-credential descendants.
+
+Deployment limitation: header expressly private, symbols unversioned in inspected
+public declaration. Review distribution policy and exact minimum/runtime symbol
+contract before enabling this profile. This report proposes no private-entitlement
+acquisition or OS setup. Normal signal credential/MAC restrictions still apply [S4].
+Continuous ES collection still needs its entitlement and appropriate client profile;
+direct token safety does not itself require ES enforcement to survive authorization.
+
+3. Mach control task port / task_terminate assessment
+A Mach send right refers to a kernel task object, so retaining and identity-checking
+the acquired object could avoid numeric-PID retargeting. But acquire-by-PID without
+validating that same returned port against original identity is not sufficient.
+The published task_for_pid path has POSIX checks, MAC control-task authorization
+and possible task-access-server upcalls; ES entitlement alone is not a control-task
+port grant [S3]. Same UID/root is not a universal advertised deployment contract.
+Name/inspect/read rights must not be treated as control rights.
+
+More decisively, pinned osfmk/kern/task.c:2380–2390 task_terminate returns
+KERN_FAILURE when get_bsdtask_info(task) is present [S5]. Installed declaration
+alone therefore does not establish termination of ordinary provider BSD processes.
+No alternate public BSD task-port termination wrapper has been established by
+this bounded review. Do not route to private internal task_terminate_internal,
+PID-derived kill, ptrace or target debugger entitlement changes to paper over this.
+Mach route remains UNRESOLVED / not selected. A retained port dead-name/error is
+not continuous descendant closure, and descendants still need individual capture.
+
+4. ES AUTH_SIGNAL as a guarded numeric-kill candidate
+Installed ESMessage.h explicitly says signal events do not support caching and
+carry target process identity; self-signals do not produce this event. Use
+es_respond_auth_result(..., cache=false) nonetheless. Generic cache-key descriptions
+in ESClient.h do not override this event-specific no-cache contract.
+
+Conditional protocol would require a dedicated sole issuing host/broker with
+known original audit identity, positive PID-only requests and serialized retained
+PendingSignalOccurrence BEFORE calling kill. AUTH handler matches sender identity,
+signum and actual target.audit_token to that occurrence; mismatch/unmatched host
+signal DENY, never approve by current PID or target pathname. Other processes'
+signal requests must follow a separately explicit policy, not global blanket DENY.
+An SDK event has no host occurrence nonce: serialize matching host requests, bounded
+pending slots and response ownership; no concurrent identical calls or delegated
+launchd requests guessed as the current host request. Execute kill outside ES serial
+handler so it cannot deadlock waiting for its own AUTH callback. No SQL/async capacity
+await in deadline handler; precomputed bounded immutable decision and synchronous
+response; record result later with original retained occurrence.
+
+XNU kill holds the selected proc for permission check and psignal [S4]. This supports
+an inference that approving its real target cannot redirect that in-flight call to
+a substitute PID. It does NOT prove ES delivers every call in every failure mode.
+Physical safety cannot be recovered by journaling Unknown AFTER a wrongly allowed
+substitute has already received SIGKILL.
+
+Mandatory gaps preventing selection as sole safety barrier:
+- Caller/path/instigator muting must not suppress host AUTH_SIGNAL. SDK process
+  muting follows submitter/instigator roles, not just target. Inspect actual default
+  mute subscriptions; never assume target lineage coverage implies host AUTH coverage.
+- macOS27 descendants client scopes callers/descendants. An outside host broker or
+  substituted non-descendant target requires explicit actual coverage proof; do not
+  assume a callback will fire merely because intended target was a descendant.
+- SDK27 says queue-full AUTH normally ALLOWs. es_set_deadline_miss_mode(FAIL_CLOSED)
+  changes queue-full and deadline behavior to DENY; verify successful configuration
+  before launch, not only handler-level timeout logic. Earlier runtime is unproved.
+- Default missed deadline kills CLIENT, not necessarily denies OPERATION. Client
+  deletion/death/unsubscription removes enforcement; FAIL_CLOSED declaration does
+  not promise persistent enforcement after client loss. Published XNU MAC hook
+  and SDK contract do not expose the closed ES implementation proving these cases.
+- Process credential/muting/policy changes, missed handler response, no callback,
+  client death during pending kill or loss of authenticated occurrence remain
+  unresolved physical-gate cases. A pre-call alive check has the same race.
+Thus live AUTH_SIGNAL positive/denial tests are useful independent oracles, but
+cannot presently justify a fail-safe kill(pid) profile across observer loss.
+
+5. Minimum real acceptance evidence before native selection
+No tests run. Required future actual macOS runner checks, not injected receipts:
+A. Root/child/grandchild including setsid/reparent actually execute; Stop directly
+   token-signals original survivors; ES sees genuine exits, stable drain closes.
+B. Token recorded before EXEC rejects old version, then authentic EXEC target token
+   allows intended signal; an unrelated still-running sentinel is never affected.
+C. Actual stale original token against reused PID fails without affecting substitute;
+   use genuine native reuse evidence if obtained. A forged mismatching version is
+   supplemental deterministic coverage, not the complete PID-reuse positive oracle.
+D. Exit during authorization returns failed/no-effect-on-substitute; independently
+   observe sentinel survival and original terminal event. Failure cannot close domain.
+E. EPERM (changed target credentials/MAC denial), missing symbol/unsupported runtime,
+   gap/client death/overflow all preserve debt and no numeric-kill fallback.
+F. For any ES-gate alternative: actual non-cache repeated callbacks, substitution
+   DENY, host muting, queue overflow/deadline and client death during in-flight kill;
+   independent target/sentinel markers, never merely asserted receipt. Unobserved
+   auth still allowing signal falsifies that gate regardless of Unknown projection.
+G. Cold host death leaves original observer/owner authority retained; fresh observer
+   or fresh token lookup cannot restore pre-Birth continuity. External debt separate.
+
+6. Tactical next dependency / remaining open facts
+Select direct proc_signal_with_audittoken for a bounded native API/security review
+candidate: pin exact supported runtime/symbol/version/deployment policy, Rust FFI
+32-byte token layout and return convention, immutable original-lineage authority,
+EXEC version advancement and actual runner counterfactuals. Native source review
+must reject fallback to lookup+kill. No need to introduce ES AUTH enforcement solely
+for Stop if direct kernel identity binding is supported by selected runtime.
+Open: private-interface distribution/minimum version; actual permitted target
+credentials; entitled continuous observer/drain deployment; kernel/runtime match
+and genuine broad-descendant Stop/cold tests. These do not permit requirement
+retirement or claiming macOS currently supported. Full C/D stays OPEN.
+
+7. Primary sources, pinned implementation
+[S1] Apple XNU xnu-12377.1.9 libproc wrapper:462–488:
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-12377.1.9/libsyscall/wrappers/libproc/libproc.c
+[S2] Apple XNU xnu-12377.1.9 proc_info.c:3232–3253,3330–3500:
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-12377.1.9/bsd/kern/proc_info.c
+[S3] Apple XNU xnu-12377.1.9 kern_proc.c:400–510,5408–5548:
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-12377.1.9/bsd/kern/kern_proc.c
+[S4] Apple XNU xnu-12377.1.9 kern_sig.c:284–355,1304–1336:
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-12377.1.9/bsd/kern/kern_sig.c
+[S5] Apple XNU xnu-12377.1.9 task.c:2380–2390:
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/xnu-12377.1.9/osfmk/kern/task.c
+[S6] Apple published MAC signal hook (discovery main; no closed ES policy proof):
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/security/mac_process.c
+Apple installed SDK paths/anchors in section1 are primary for inspected declarations.
+
+Outcome: ANSWERED for a grounded identity-bound direct signaling candidate;
+UNRESOLVED for supported deployment and actual complete native Stop/closure acceptance.
+Only this report was written. No source/test/Cargo/build/git/OS/process mutation.
