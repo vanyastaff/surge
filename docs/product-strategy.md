@@ -164,6 +164,20 @@ older text below disagree, this section wins.
   the user's own skills and servers from a folder or git; Surge hosts and
   moderates nothing, and every entry shows its source.
 
+- **Existing projects keep their conventions.** Surge reads existing agent
+  instructions (`CLAUDE.md`, `AGENTS.md`, Cursor rules) as context and never
+  replaces them.
+- **Surge's project files live in the repository** under `.surge/` (memory, flows,
+  profiles, `surge.toml`) and are committed; run journals and the code index
+  stay local in `~/.surge`.
+- **One PR per task; the user merges by default**, with auto-merge as a project
+  setting. Without a GitHub remote the same PR exists locally as a branch with
+  a review card in the app. Dependent tasks stack on unmerged PRs while
+  independent tasks continue; the dashboard shows "N PRs waiting to merge" with
+  a hint about auto-merge.
+- **Conflicts with the user's own commits** are resolved by an agent and then
+  re-verified; if the agent cannot resolve them, the rejection ladder applies.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
@@ -182,7 +196,10 @@ to test; "no context loss" stays a differentiator only while vendors leave
 context management to the user, so back it with Surge's own measurements on
 large projects; trusting runtime compaction means a rare oversized task can
 still degrade, so sizing quality must be measured; the judge is one more model
-call and failure point; Hub quality depends on third-party catalogs; the v1 cut is sizable new code (`Escalate` and `Rotate` are
+call and failure point; Hub quality depends on third-party catalogs; manual merging grows PR
+stacks where a fix at the bottom shakes everything above; an agent can
+misread a human change while resolving a conflict; dozens of PRs per stage add
+noise to a team's GitHub; the v1 cut is sizable new code (`Escalate` and `Rotate` are
 reserved today), so it, not MCP alone, sets the release date; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
