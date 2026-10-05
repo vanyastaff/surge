@@ -25,7 +25,7 @@ starts by confirming them, because a mapping pass can miss existing code.
 | # | Task | Depends on | Done when |
 |---|---|---|---|
 | 0.1 | **MCP restart recovery** ([ADR-0021](../adr/0021-mcp-restart-recovery.md), [plan](2026-10-05-001-feat-mcp-restart-recovery-plan.md)): group termination, best-effort cleanup record, restart from frozen manifest, outcome-unknown notice for interrupted calls. | — | Owned-flow MCP suite 23/23 on macOS and Linux CI, refusal oracles unchanged. |
-| 0.2 | **CI scope for the macOS release.** Windows is deferred, yet its Clippy and test jobs fail on a known compile error (`GETFINALPATHNAMEBYHANDLE_FLAGS`). Either fix that error or mark Windows jobs non-required for this release, recorded in release readiness. | — | PR checks reflect the macOS scope honestly. |
+| 0.2 | **CI scope for the macOS release.** Decided 2026-10-05: Windows Clippy and test jobs are advisory (`continue-on-error`, named "advisory"); their known compile error (`GETFINALPATHNAMEBYHANDLE_FLAGS`) is fixed with Windows support after v1. | — | Done in CI; Windows failures stay visible but no longer fail the workflow. |
 
 ## Phase 1 — engine foundations (no UI)
 
@@ -67,10 +67,9 @@ starts by confirming them, because a mapping pass can miss existing code.
 | 4.1 | Run real multi-stage projects (a new idea and an existing repository) through the bundled desktop app; fix every failure found. | Several projects reach their stages with verified tasks and no manual repair. |
 | 4.2 | Release gates: strict Clippy, nextest, MSRV, packaging contract, macOS CI green, fresh release candidate and provenance. | Independent GO verdict recorded in release readiness. |
 
-## Not in the v1 cut (decide before phase 2)
+## After v1
 
-Decided in later interviews, after the cut was set; treated as after v1 unless
-the maintainer moves them in: master agent proposing viewpoint nodes, judge
+Confirmed by the maintainer on 2026-10-05: master agent proposing viewpoint nodes, judge
 agent, skills/MCP Hub, personal memory and code index, three customization
 paths, benchmark ratings, cross-project priorities, Telegram in onboarding,
 budget UI, Windows and Linux.
@@ -79,4 +78,3 @@ budget UI, Windows and Linux.
 
 - What "run the app" does for an arbitrary stack (a run command recorded by the
   planner per project, or per stage).
-- Phase 0.2: fix Windows compilation now, or make Windows jobs non-required.

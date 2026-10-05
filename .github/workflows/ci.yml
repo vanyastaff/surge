@@ -30,8 +30,11 @@ jobs:
       - run: python -m unittest discover -s scripts -p 'test_release*.py' -v
 
   test:
-    name: Test Suite
+    name: Test Suite (${{ matrix.os }}${{ matrix.os == 'windows-latest' && ', advisory' || '' }})
     runs-on: ${{ matrix.os }}
+    # Windows is outside the macOS release scope: its result is reported but does
+    # not fail the workflow. See docs/release-readiness-2026-10-05.md.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -145,8 +148,11 @@ jobs:
         timeout-minutes: 10
 
   clippy:
-    name: Clippy
+    name: Clippy (${{ matrix.os }}${{ matrix.os == 'windows-latest' && ', advisory' || '' }})
     runs-on: ${{ matrix.os }}
+    # Windows is outside the macOS release scope: its result is reported but does
+    # not fail the workflow. See docs/release-readiness-2026-10-05.md.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

@@ -259,3 +259,12 @@ is implemented and the ten original cases pass under its acceptance mapping,
 with refusal oracles unchanged. This is a documentation decision only; no new
 executable evidence is claimed and NO-GO is unchanged until that acceptance
 passes.
+
+## Windows CI is advisory for the macOS release — 2026-10-05
+
+Windows Clippy and test jobs now run with `continue-on-error` and carry
+"advisory" in their names. Their results stay visible, including the known
+`GETFINALPATHNAMEBYHANDLE_FLAGS` compile error, but they no longer fail the
+workflow. This reflects the user-directed macOS scope and grants no Windows
+support claim; Windows repair is scheduled after v1
+([release plan](plans/2026-10-05-002-feat-v1-release-plan.md)).
