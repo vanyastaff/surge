@@ -79,6 +79,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev libfontconfig1-dev
 
+      # Ordinary daemon fixtures launch this binary on Linux and macOS.
+      # Building test targets alone does not create target/debug/mock_acp_agent.
+      - name: Build mock_acp_agent for engine integration tests
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+        run: cargo build --locked -p surge-acp --bin mock_acp_agent
+
       # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
       # in its own process by default, which avoids parallel SQLite/WAL races
       # we hit on Windows under the old harness.
@@ -102,10 +108,6 @@ jobs:
       - name: Run doctests
         if: matrix.os != 'ubuntu-latest'
         run: cargo test --locked --workspace --exclude surge-ui --doc
-
-      - name: Build mock_acp_agent for engine integration tests
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo build --locked -p surge-acp --bin mock_acp_agent
 
       - name: Build local integration helpers
         if: matrix.os == 'ubuntu-latest'

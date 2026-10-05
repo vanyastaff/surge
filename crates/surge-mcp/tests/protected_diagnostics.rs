@@ -2,6 +2,8 @@
 #![cfg(unix)]
 
 use std::error::Error;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use surge_core::mcp_config::McpTransportConfig;
 use surge_mcp::{McpContent, McpRegistry, McpServerConnection, stderr_log_path};
@@ -10,10 +12,86 @@ use surge_mcp::{McpContent, McpRegistry, McpServerConnection, stderr_log_path};
 mod protected_fixture;
 use protected_fixture::Fixture;
 
+/// Fixture startup readiness only; this supplies no production containment evidence.
+struct CatalogReadyObserver(PathBuf);
+
+#[async_trait::async_trait]
+impl surge_mcp::writer_observer::HostWriterObserver for CatalogReadyObserver {
+    async fn before_child(
+        &self,
+        _server: &str,
+    ) -> Result<surge_core::id::ExecutionWriterId, surge_mcp::writer_observer::WriterObservationError>
+    {
+        Ok(surge_core::id::ExecutionWriterId::new())
+    }
+
+    async fn child_started(
+        &self,
+        _writer: surge_core::id::ExecutionWriterId,
+        pid: Option<u32>,
+    ) -> Result<(), surge_mcp::writer_observer::WriterObservationError> {
+        use surge_mcp::writer_observer::WriterObservationError;
+        let pid = pid.ok_or_else(|| WriterObservationError("fixture child PID missing".into()))?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match std::fs::read_to_string(&self.0) {
+                    Ok(value) if value.trim().parse::<u32>() == Ok(pid) => return Ok(()),
+                    Ok(_) => {
+                        return Err(WriterObservationError(
+                            "fixture readiness PID mismatch".into(),
+                        ));
+                    },
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(_) => {
+                        return Err(WriterObservationError(
+                            "fixture readiness read failed".into(),
+                        ));
+                    },
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .map_err(|_| WriterObservationError("fixture startup readiness timed out".into()))?
+    }
+}
+
+fn delayed_catalog_fixture() -> Fixture {
+    let fixture = Fixture::new("deadline-oracle");
+    let script = fixture.dir.path().join("child.py");
+    let original = std::fs::read_to_string(&script).unwrap();
+    let ready = original.replace(
+        "for line in sys.stdin:",
+        "with open(os.environ['RECORDER'] + '.ready-writing', 'w') as f:\n    f.write(str(os.getpid()))\nos.replace(os.environ['RECORDER'] + '.ready-writing', os.environ['RECORDER'] + '.ready')\nfor line in sys.stdin:",
+    );
+    // Deterministic cold-start counterfactual exceeds the 120ms RPC deadline.
+    std::fs::write(&script, format!("import time; time.sleep(0.25)\n{ready}")).unwrap();
+    fixture
+}
+
+async fn assert_cold_start_is_not_catalog_evidence() {
+    let mut fixture = delayed_catalog_fixture();
+    fixture.config.call_timeout = Duration::from_millis(120);
+    let connection =
+        McpServerConnection::new(fixture.config.clone(), Some(fixture.dir.path().to_owned()));
+    assert!(matches!(connection.list_tools().await,
+        Err(surge_mcp::McpError::Timeout(timeout)) if timeout == Duration::from_millis(120)));
+    assert!(
+        !fixture
+            .dir
+            .path()
+            .join("private-recorder.json.requests")
+            .exists(),
+        "cold initialization timeout must not stand in for the two-page catalog oracle"
+    );
+    connection.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn actual_catalog_deadline_spans_pages_and_call_timeout_remains_exact() {
+    assert_cold_start_is_not_catalog_evidence().await;
     for (budget, succeeds) in [(120, false), (500, true)] {
-        let mut fixture = Fixture::new("deadline-oracle");
+        let mut fixture = delayed_catalog_fixture();
         let script = fixture.dir.path().join("child.py");
         let original = std::fs::read_to_string(&script).unwrap();
         std::fs::write(&script, original.replace(
@@ -25,8 +103,13 @@ async fn actual_catalog_deadline_spans_pages_and_call_timeout_remains_exact() {
         };
         env.insert("PAGINATE".into(), "1".into());
         fixture.config.call_timeout = Duration::from_millis(budget);
-        let connection =
-            McpServerConnection::new(fixture.config.clone(), Some(fixture.dir.path().to_owned()));
+        let connection = McpServerConnection::new_owned(
+            fixture.config.clone(),
+            Some(fixture.dir.path().to_owned()),
+            Arc::new(CatalogReadyObserver(
+                fixture.dir.path().join("private-recorder.json.ready"),
+            )),
+        );
         let catalog = connection.list_tools().await;
         if succeeds {
             let names = catalog
