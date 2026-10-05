@@ -1,15 +1,14 @@
 # Schema Versioning
 
-Surge persists and exchanges four versioned formats. v0.1 **freezes the
-first three at version 1** and defines how future bumps are handled; the
-memory database versions independently (see below).
+Surge persists and exchanges four versioned formats. The current release keeps config and graph formats at version 1; event payloads and
+the memory database version independently (see below).
 
 | Format | Where | Version constant | v0.1 |
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **11** (see below) |
-| Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **2** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **15** (see below) |
+| Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **3** (see below) |
 
 ## `surge.toml` (config)
 
@@ -105,6 +104,13 @@ enum/struct encoding is positional, so an unrecognized field is not
 ignorable, it desyncs the decode. Rewrite this paragraph then, don't carry
 it forward on the strength of the *last* format's guarantee.
 
+Versions 12–15 add recoverable execution fences, human-decision effect and route
+commitments, immutable owned-flow startup snapshots, and informational owned-flow
+wake refusals respectively. The current maximum supported payload version is 15.
+Older binaries may reject these envelopes before decoding; forward readability does
+not provide downgrade support. SQLite storage migrations are separate from payload
+versions. See [Release and rollback procedure](release-procedure.md).
+
 ## Memory DB (`surge-persistence`)
 
 A separate, locally-scoped SQLite database (`~/.surge/memory.db`) versioned
@@ -139,6 +145,8 @@ called once per version behind on open).
   exactly the case the "Principles" section's additive-fields exception
   does not cover.
 
+- **v3:** repairs external-content FTS update/delete triggers and rebuilds indexes.
+
 ## Migration plan for future bumps
 
 When a breaking change to any format is unavoidable:
@@ -156,7 +164,7 @@ When a breaking change to any format is unavoidable:
    ambiguous cases.
 4. **Document** the change here and in the release notes; keep the previous
    version's reader for at least one minor release (deprecation window).
-5. **CI** asserts the version constants (`SCHEMA_VERSION == 1` today) so an
+5. **CI** asserts the version constants (config/graph 1, event payload 15, memory DB 3 today) so an
    accidental bump cannot land without updating this document and the
    migration tests.
 

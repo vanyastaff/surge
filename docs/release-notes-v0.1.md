@@ -25,7 +25,8 @@ Status: **draft** — finalize the date and verify native release builds at tag 
 - **MCP server lifecycle.** Per-run, supervised, sandbox-delegated MCP
   children with crash detection + backoff restart ([ADR-0014](adr/0014-mcp-server-lifecycle.md)).
 - **Telegram cockpit.** Approve/redo bootstrap + HumanGate cards, live
-  progress, completion/failure cards, `/run` `/status` `/abort` `/runs`.
+  progress, completion/failure cards, `/status` `/abort` `/runs`.
+  `/run` still returns an explicit deferred response; start workflows through the CLI.
 - **Tracker automation tiers L0–L3** on GitHub Issues + Linear, label-driven.
 - **Crash recovery (this release's v0.1 blocker).** The daemon survives an
   unclean exit and resumes in-flight runs from the event log
@@ -78,9 +79,12 @@ surge doctor report
 
 ## Schema stability
 
-`surge.toml`, `flow.toml`, and the per-run event payloads are **frozen at
-schema version 1**. Older configs without `schema_version` are read as 1;
-event payloads migrate forward on read. Bump policy:
+`surge.toml` and `flow.toml` use schema **1**; per-run event payloads support
+versions through **15**, and the memory database uses schema **3**. Older configs
+without `schema_version` are read as 1; event payloads migrate forward on read.
+Downgrade requires restoring a pre-upgrade backup rather than opening upgraded
+state with older binaries. See [Release and rollback procedure](release-procedure.md).
+Bump policy:
 [docs/schema-versioning.md](schema-versioning.md).
 
 ## Telemetry posture
@@ -110,10 +114,13 @@ Third-party license compliance is CI-enforced via `cargo deny`
 - **`kill -9` / power-cut fault-injection harness** for WAL checkpointing is
   a follow-up; WAL durability is configured and the resume-from-log path is
   integration-tested.
-- **Dependency advisories:** `bincode` (unmaintained, RUSTSEC-2025-0141) and
-  a narrow `rand` unsoundness (RUSTSEC-2026-0097) are tracked via
-  `cargo audit`; neither affects the default run path. Migration is planned
-  post-v0.1.
+- **Windows runtime parity:** durable Task Start preparation and MCP executable
+  writer dispatch fail closed at unsupported host ownership boundaries. See
+  [Windows runtime limitations](getting-started.md#windows-runtime-limitations).
+- **Desktop:** the optional GPUI shell is in development and excluded from archives.
+- **Dependency audit:** preparation updated affected locked dependencies and removed
+  unused direct `bincode`. Allowed transitive maintenance, unsoundness and yanked
+  warnings remain under repository policy; retain exact final audit evidence.
 
 ---
 

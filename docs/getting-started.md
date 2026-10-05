@@ -68,10 +68,20 @@ not require a package manager. A manual release workflow run on a branch only
 produces downloadable workflow artifacts and checksums; it does not publish a
 GitHub Release.
 
+## Windows runtime limitations
+
+Windows binaries are packaged, but workflow parity is incomplete. Durable Task Start
+preparation rejects restricted private inputs because secure Windows preparation locks
+are not implemented. MCP executable writer dispatch cannot establish the host process
+identity required by writer coverage and fails closed; recovery writer liveness is
+unknown. This does not imply that every direct ACP operation is unavailable. Native
+archive `--version` checks alone do not validate these workflows.
+
 ## Requirements
 
 - Rust `1.96+` and native build tools (only for source builds)
 - Git
+- Python `3.11+` only for release packaging scripts and their tests
 - An ACP-compatible agent on `PATH` for any flow that contains an `Agent` node (Claude Code, Codex, Gemini, or a custom ACP-conformant binary)
 
 ## Build
@@ -141,8 +151,8 @@ cargo build -p surge-ui
 For a fresh repository, create project configuration and stable project context:
 
 ```bash
-cargo run -p surge-cli --bin surge -- init --default
-cargo run -p surge-cli --bin surge -- project describe
+surge init --default
+surge project describe
 ```
 
 `surge init --default` writes a validated `surge.toml` with safe onboarding defaults and the best detected Agent Client Protocol (ACP) agent, falling back to an installable `claude-acp` entry when no agent is found. Run `surge init` without `--default` for the interactive wizard.
@@ -151,19 +161,44 @@ cargo run -p surge-cli --bin surge -- project describe
 
 ## Run the Smallest Flow
 
-`examples/flow_terminal_only.toml` contains only a terminal node, so it does not need an agent. This is the canonical smoke test:
+Create `flow-terminal.toml` in your project with the following contents. This smoke
+test needs no agent and works with an installed archive without a source checkout:
+
+```toml
+schema_version = 1
+start = "end"
+edges = []
+
+[metadata]
+name = "flow_terminal_only"
+created_at = "2026-05-05T00:00:00Z"
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 0.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+```
 
 ```bash
-cargo run -p surge-cli --bin surge -- engine run examples/flow_terminal_only.toml --watch
+surge engine run flow-terminal.toml --watch
 ```
 
 Run the same flow through the daemon — start the daemon, run the flow against it, list runs, then stop the daemon:
 
 ```bash
-cargo run -p surge-cli --bin surge -- daemon start --detached
-cargo run -p surge-cli --bin surge -- engine run examples/flow_terminal_only.toml --daemon --watch
-cargo run -p surge-cli --bin surge -- engine ls --daemon
-cargo run -p surge-cli --bin surge -- daemon stop
+surge daemon start --detached
+surge engine run flow-terminal.toml --daemon --watch
+surge engine ls --daemon
+surge daemon stop
 ```
 
 Detached startup redirects daemon output to `~/.surge/daemon/daemon.log`
@@ -179,9 +214,9 @@ a longer `--shutdown-grace`, use `restart --wait-timeout-secs <seconds>`.
 Inspect or detect available ACP agents on the host:
 
 ```bash
-cargo run -p surge-cli --bin surge -- registry list
-cargo run -p surge-cli --bin surge -- registry detect
-cargo run -p surge-cli --bin surge -- agent list
+surge registry list
+surge registry detect
+surge agent list
 ```
 
 Then edit `surge.toml`, rerun `surge init`, or use registry commands to add an ACP agent. The annotated [`surge.example.toml`](../surge.example.toml) shows local, `npx`, custom, TCP, MCP-flavored agents, sandbox defaults, worktree defaults, approvals, Telegram env placeholders, and inbox defaults side by side.
@@ -191,8 +226,8 @@ Then edit `surge.toml`, rerun `surge init`, or use registry commands to add an A
 Once an ACP agent is configured, verify it answers a simple ping and a one-shot prompt:
 
 ```bash
-cargo run -p surge-cli --bin surge -- ping --agent claude
-cargo run -p surge-cli --bin surge -- prompt "Summarize this repository" --agent claude
+surge ping --agent claude
+surge prompt "Summarize this repository" --agent claude
 ```
 
 ## Run the Bootstrap Path
@@ -200,7 +235,7 @@ cargo run -p surge-cli --bin surge -- prompt "Summarize this repository" --agent
 The canonical first useful run is bootstrap:
 
 ```bash
-cargo run -p surge-cli --bin surge -- bootstrap "add a small health-check command to this project"
+surge bootstrap "add a small health-check command to this project"
 ```
 
 Bootstrap generates `description.md`, `roadmap.toml`, `roadmap.md`, and
@@ -211,28 +246,28 @@ See [Bootstrap](bootstrap.md) for the edit loop, archetypes, and resume path.
 You can validate generated artifacts directly while debugging a run:
 
 ```bash
-cargo run -p surge-cli --bin surge -- artifact validate --kind description description.md
-cargo run -p surge-cli --bin surge -- artifact validate --kind roadmap roadmap.toml
-cargo run -p surge-cli --bin surge -- artifact validate --kind flow flow.toml
+surge artifact validate --kind description description.md
+surge artifact validate --kind roadmap roadmap.toml
+surge artifact validate --kind flow flow.toml
 ```
 
 ## Run the Minimal Agent Graph
 
-`examples/flow_minimal_agent.toml` is the smallest flow that opens an ACP session. Run it once at least one agent is wired up:
+In a source checkout, `examples/flow_minimal_agent.toml` is the smallest flow that opens an ACP session. Run it once at least one agent is wired up:
 
 ```bash
-cargo run -p surge-cli --bin surge -- engine run examples/flow_minimal_agent.toml --watch
+surge engine run examples/flow_minimal_agent.toml --watch
 ```
 
 You can also skip bootstrap with a bundled template:
 
 ```bash
-cargo run -p surge-cli --bin surge -- engine run --template linear-3 --watch
+surge engine run --template linear-3 --watch
 ```
 
 ## Local State
 
-Local runtime state lives under `~/.surge/`, including run databases and daemon metadata. Project-local state may appear under `.surge/` inside the project. Both directories are safe to delete to start fresh; deleting `~/.surge/` removes all run history.
+Local runtime state lives under `~/.surge/`, including run databases and daemon metadata. Project-local state may appear under `.surge/` inside the project. These directories contain durable run history, task state and recovery metadata. Do not delete them as a troubleshooting step. Stop all writers and preserve a complete backup before upgrading or resetting state; see [Release and rollback procedure](release-procedure.md).
 
 For setup troubleshooting, run commands with `RUST_LOG=surge=debug` to see agent detection, project-context scan decisions, and skipped optional files.
 

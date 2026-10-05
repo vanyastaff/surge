@@ -17,21 +17,26 @@ just lint                  # fmt-check + clippy-strict + clippy (mirrors ci.yml)
 just smoke                 # run the smallest example flow
 just audit                 # cargo audit (install: just install-tools)
 just ci                    # full local CI run
-just ci-full               # ci + audit + ignored integration tests
+just ci-full               # ci + audit + deny + deterministic ignored integrations
 ```
 
 The cargo commands below are equivalent if you prefer not to install `just`.
+
+Release packaging scripts and `scripts/test_release.py` require Python 3.11+
+(`tomllib` is part of the standard library from 3.11). Run their contract tests with
+`python3.12 -m unittest discover -s scripts -p test_release.py`.
 
 ## Common Checks
 
 Format check, full workspace tests (excluding the GPUI desktop shell), and clippy on the most-touched crates plus the whole workspace:
 
 ```bash
-cargo fmt --check
-cargo test --workspace --exclude surge-ui
+cargo fmt --all --check
+cargo nextest run --locked --workspace --exclude surge-ui
+cargo test --locked --workspace --exclude surge-ui --doc
 cargo clippy -p surge-core --all-targets --all-features -- -D warnings
 cargo clippy -p surge-acp --all-targets -- -D warnings
-cargo clippy --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 ```
 
 The strict clippy profile is in [`clippy.toml`](../clippy.toml). Test code relaxes most rules (`allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-print-in-tests`, etc.); production code does not.
@@ -97,11 +102,11 @@ accessibility value assignment, and synthetic typing are distinct paths.
 
 ## Long-Running / External-Agent Tests
 
-Some `surge-orchestrator` tests need the bundled mock Agent Client Protocol (ACP) agent. Build it and run the ignored tests separately:
+The deterministic ignored integration allowlist is maintained in `just integration`
+and the reusable CI workflow. Run it separately from optional external service tests:
 
 ```bash
-cargo build -p surge-acp --bin mock_acp_agent
-cargo test -p surge-orchestrator --tests -- --ignored
+just integration
 ```
 
 ### Optional: real-agent smoke test
@@ -144,7 +149,7 @@ cargo bench -p surge-orchestrator --bench stage_transition -- --quick --save-bas
 
 ## Local Runtime State
 
-Runtime state is stored under `~/.surge/`, including run databases (`~/.surge/runs/<run_id>/events.sqlite`) and daemon metadata. Project-local state may appear under `.surge/` inside the project. Both directories are safe to delete to start fresh.
+Runtime state is stored under `~/.surge/`, including run databases (`~/.surge/runs/<run_id>/events.sqlite`) and daemon metadata. Project-local state may appear under `.surge/` inside the project. They contain durable history and ownership/recovery state. Stop all writers and back up the complete runtime and associated project workspaces before a reset or upgrade; see [Release and rollback procedure](release-procedure.md).
 
 ## Crate-Level READMEs
 

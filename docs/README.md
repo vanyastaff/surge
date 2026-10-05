@@ -25,6 +25,9 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Native UI automation](ui-automation-evaluation.md) | Observed GPUI/egui Computer Use results, limitations and migration decision criteria |
 | [Agent OS and coding-agent landscape](agent-os-landscape.md) | Market survey: Pi, Herdr, BridgeMind, Factory Droid, Devin, Codex, Claude Code, 2026 manager-view convergence, orchestrator graveyard |
 | [Migrate `.spec.toml` → `flow.toml`](migrate-spec-to-flow.md) | Auto-translator (`surge migrate-spec`) reference and manual-edit guidance for the legacy pipeline retirement |
+| [Release and rollback](release-procedure.md) | Exact-revision evidence, complete runtime snapshots and restore-only rollback |
+| [Schema versioning](schema-versioning.md) | Config, graph, event payload and memory database versions |
+| [Release notes (draft)](release-notes-v0.1.md) | v0.1 archive scope and known limitations |
 | [Development](development.md) | `cargo` checks, ignored long-running tests, local runtime state |
 
 > **Documentation convention.** **Current** means implemented enough to try from the repository. **Target** means product direction; command names may still change while the CLI is being aligned.

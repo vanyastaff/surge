@@ -18,6 +18,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  validation:
+    name: Validate release revision
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   metadata:
     runs-on: ubuntu-24.04
     outputs:
@@ -36,7 +42,7 @@ jobs:
 
   build-release:
     name: Build ${{ matrix.target }}
-    needs: metadata
+    needs: [metadata, validation]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -114,7 +120,7 @@ jobs:
 
   publish:
     name: Publish validated tag
-    needs: [metadata, collect]
+    needs: [metadata, validation, collect]
     if: startsWith(github.ref, 'refs/tags/') && needs.metadata.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:

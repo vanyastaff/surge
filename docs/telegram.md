@@ -79,7 +79,7 @@ silently drops unpaired callers (Decision 6).
 | `/pair <token>` | Consume a pairing token and add the chat to the allowlist. The label travels through to the inbox-card "paired as" string. |
 | `/status <run_id>` | Render a `RunStatusSnapshot` for the given run (active node, last outcome, elapsed time). Use `/runs` to discover ids. |
 | `/runs` | List recent runs newest-first. |
-| `/run <archetype>` | Start a fresh run from a bundled or user archetype. Wraps `Engine::start_run` via `ArchetypeRegistry::resolve`. |
+| `/run <archetype>` | Not yet wired in the production cockpit; returns a deferred response. Use `surge engine run` from the CLI. |
 | `/abort <run_id>` | Request graceful cancellation. Reason embeds the originating chat id. |
 | `/snooze <duration>` | Reply to a cockpit card with `/snooze 30m` (or `2h`, `1d`, `90s`) to defer it. The card edits back to active state once the timer elapses. See [Snooze](#snooze) below. |
 | `/feedback <run_id> <text>` | Keyboard-less edit feedback path. Equivalent to tapping `✏ Edit` and replying. |

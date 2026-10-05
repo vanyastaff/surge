@@ -1,13 +1,14 @@
 name: CI
 
 on:
+  workflow_call:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -86,35 +87,60 @@ jobs:
       # libs installed above); macOS/Windows keep the exclude.
       - name: Run tests (nextest, incl. surge-ui)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --locked --workspace --no-fail-fast
 
       - name: Run tests (nextest)
         if: matrix.os != 'ubuntu-latest'
-        run: cargo nextest run --workspace --exclude surge-ui --no-fail-fast
+        run: cargo nextest run --locked --workspace --exclude surge-ui --no-fail-fast
 
       # nextest does not run doctests; the canonical workaround is a single
-      # extra `cargo test --doc` invocation. Cheap because no recompilation.
+      # extra `cargo test --locked --doc` invocation. Cheap because no recompilation.
       - name: Run doctests (incl. surge-ui)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --doc
+        run: cargo test --locked --workspace --doc
 
       - name: Run doctests
         if: matrix.os != 'ubuntu-latest'
-        run: cargo test --workspace --exclude surge-ui --doc
+        run: cargo test --locked --workspace --exclude surge-ui --doc
 
       - name: Build mock_acp_agent for engine integration tests
         if: matrix.os == 'ubuntu-latest'
-        run: cargo build -p surge-acp --bin mock_acp_agent
+        run: cargo build --locked -p surge-acp --bin mock_acp_agent
 
-      # `--ignored` covers tests that need the mock_acp_agent binary or a real
-      # external ACP runtime. Linux-only because that's where the binary is
-      # built above. `continue-on-error` keeps a single external-dep flake
-      # from blocking the rest of the gate.
-      - name: Run engine integration tests (--ignored)
+      - name: Build local integration helpers
         if: matrix.os == 'ubuntu-latest'
-        run: cargo nextest run -p surge-acp -p surge-orchestrator --run-ignored only
+        run: cargo build --locked -p surge-cli --bin surge -p surge-daemon --bin surge-daemon
+
+      - name: Build mock MCP server
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build --locked -p surge-mcp --example mock_mcp_server --features mock-server
+
+      # Explicit local-only allowlist: external runtimes and empty placeholder
+      # tests must not be counted as release evidence.
+      - name: Run mock ACP integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked -p surge-acp --test bridge_rate_limit_classification --test reconnect_integration_test -- --ignored
         timeout-minutes: 10
-        continue-on-error: true
+
+      - name: Run mock engine integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked -p surge-orchestrator --test engine_e2e_linear_pipeline --test engine_concurrent_runs --test engine_resume_after_crash -- --ignored
+        timeout-minutes: 10
+
+      - name: Run mock MCP integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked -p surge-mcp --features mock-server --test mcp_stdio_e2e -- --ignored
+        timeout-minutes: 10
+
+      - name: Run controlled daemon MCP smoke
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked -p surge-daemon --test live_provider_smoke controlled_daemon_mcp_smoke -- --ignored --exact
+        timeout-minutes: 10
+
+      - name: Run daemon restart integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked -p surge-cli --test daemon_restart -- --ignored
+        timeout-minutes: 10
 
   clippy:
     name: Clippy
@@ -154,7 +180,7 @@ jobs:
             ${{ runner.os }}-target-clippy-
             ${{ runner.os }}-target-
 
-      # The permissive workspace pass below builds surge-ui (GPUI), which needs the
+      # The workspace pass below builds surge-ui (GPUI), which needs the
       # same Linux system libraries as the test job (fontconfig via the text stack).
       - name: Install surge-ui system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -164,17 +190,17 @@ jobs:
 
       # Strict: M1's surge-core crate must be warning-free.
       - name: Run clippy (strict on surge-core)
-        run: cargo clippy -p surge-core --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked -p surge-core --all-targets --all-features -- -D warnings
 
       # Strict: M3's surge-acp crate (bridge::* + shared::*) must be warning-free.
       - name: Run clippy (strict on surge-acp)
-        run: cargo clippy -p surge-acp --all-targets -- -D warnings
+        run: cargo clippy --locked -p surge-acp --all-targets -- -D warnings
 
-      # Permissive: legacy crates have accumulated clippy debt that's tracked
-      # as separate cleanup work, not blocking. We still run clippy to catch
-      # new errors / clippy::correctness regressions, but don't fail on warnings.
-      - name: Run clippy (permissive on workspace)
-        run: cargo clippy --workspace --all-targets --all-features
+      - name: Run clippy (strict workspace, all features)
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run clippy (strict workspace, default features)
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   fmt:
     name: Format Check
@@ -189,7 +215,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
   msrv:
     name: MSRV (1.96)
@@ -224,8 +250,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: cargo check (MSRV)
-        run: cargo check --workspace --exclude surge-ui --all-targets
+      - name: cargo check --locked (MSRV)
+        run: cargo check --locked --workspace --exclude surge-ui --all-targets
 
   bench:
     name: Engine Bench (stage transition)
@@ -260,11 +286,11 @@ jobs:
             ${{ runner.os }}-target-
 
       # Compile-only smoke: full bench is too slow for the PR gate; the GA
-      # cut runs `cargo bench --bench stage_transition -- --save-baseline ga`
+      # cut runs `cargo bench --locked --bench stage_transition -- --save-baseline ga`
       # locally. CI builds the bench so a bench-breaking change cannot land
       # silently.
       - name: Build stage_transition bench
-        run: cargo bench -p surge-orchestrator --bench stage_transition --no-run
+        run: cargo bench --locked -p surge-orchestrator --bench stage_transition --no-run
 
       # Quick smoke run with the explicit P95 gate enabled. `--save-baseline ci`
       # keeps Criterion history available on the runner, while
@@ -273,4 +299,19 @@ jobs:
       - name: Budget-check stage_transition bench
         env:
           SURGE_STAGE_TRANSITION_BUDGET_CHECK: "1"
-        run: cargo bench -p surge-orchestrator --bench stage_transition -- --quick --save-baseline ci
+        run: cargo bench --locked -p surge-orchestrator --bench stage_transition -- --quick --save-baseline ci
+
+  security:
+    name: Current dependency security and licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
+      - name: Audit current RustSec advisories
+        run: cargo audit
+      - name: Validate locked dependency policy
+        run: cargo deny --locked check advisories licenses bans sources
