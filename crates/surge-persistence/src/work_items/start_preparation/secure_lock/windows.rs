@@ -30,8 +30,9 @@ use windows::{
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
             FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TYPE_DISK,
-            FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GetFileInformationByHandleEx,
-            GetFileType, GetFinalPathNameByHandleW, SYNCHRONIZE, VOLUME_NAME_DOS,
+            FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS,
+            GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW, SYNCHRONIZE,
+            VOLUME_NAME_DOS,
         },
         System::{
             IO::IO_STATUS_BLOCK,
@@ -112,7 +113,8 @@ fn final_path(file: &File) -> Result<PathBuf> {
         GetFinalPathNameByHandleW(
             handle(file),
             &mut buffer,
-            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            // windows 0.58 flag newtypes do not implement BitOr.
+            GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0),
         )
     } as usize;
     if length == 0 || length >= buffer.len() {
