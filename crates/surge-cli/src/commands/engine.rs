@@ -219,15 +219,12 @@ async fn run_command(
 }
 
 async fn wait_owned_startup(run: RunId) -> Result<()> {
-    let storage = Storage::open(&surge_runs_dir()?)
+    let home = surge_runs_dir()?;
+    let storage = Storage::open(&home)
         .await
         .context("open accepted run storage")?;
     loop {
-        let inspected = storage.inspect_folded_run(run).await?;
-        if inspected
-            .database
-            .is_some_and(|history| history.event_count > 0)
-        {
+        if owned_startup_ready(&storage, &home, run).await? {
             return Ok(());
         }
         let attempt = storage
@@ -243,6 +240,25 @@ async fn wait_owned_startup(run: RunId) -> Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+async fn owned_startup_ready(
+    storage: &std::sync::Arc<Storage>,
+    home: &std::path::Path,
+    run: RunId,
+) -> Result<bool> {
+    // create_run publishes this exact registry row only after schema migration.
+    // Acceptance can precede launch: an existing SQLite file alone is not ready.
+    if Storage::inspect_existing_run_summary(home.to_path_buf(), run)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let inspected = storage.inspect_folded_run(run).await?;
+    Ok(inspected
+        .database
+        .is_some_and(|history| history.event_count > 0))
 }
 
 async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
@@ -948,6 +964,70 @@ mod tests {
     use surge_core::id::RunId;
     use surge_core::run_status::RunStatus;
     use surge_persistence::runs::RunSummary;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owned_startup_waits_for_schema_publication_and_preserves_errors() {
+        let home = tempfile::tempdir().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let run = RunId::new();
+        let db = home
+            .path()
+            .join("runs")
+            .join(run.to_string())
+            .join("events.sqlite");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        // Deterministic create_run window: file exists, migration and registry
+        // publication have not happened. Inspection must not treat it as ready.
+        drop(rusqlite::Connection::open(&db).unwrap());
+        assert!(
+            !super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .unwrap()
+        );
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        assert!(
+            !super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .unwrap()
+        );
+        writer
+            .append_event(surge_core::VersionedEventPayload::new(
+                surge_core::EventPayload::RunStarted {
+                    project_path: home.path().into(),
+                    pipeline_template: None,
+                    initial_prompt: String::new(),
+                    config: surge_core::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                        budget: surge_core::budget::BudgetGuard::default(),
+                    },
+                },
+            ))
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        assert!(
+            super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .unwrap()
+        );
+        writer.close().await.unwrap();
+        // Once published, invalid schema is a real error, never pending startup.
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute("DROP TABLE events", [])
+            .unwrap();
+        assert!(
+            super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn run_table_lists_registry_runs_with_status_not_home_dirs() {
