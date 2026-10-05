@@ -349,10 +349,12 @@ Open questions still unresolved:
 - [CLI](cli.md) — concrete commands that exercise the engine today
 - [Development](development.md) — running tests and lints across the workspace
 
-## Accepted managed MCP direction (not implemented)
+## MCP cold recovery (accepted, not implemented)
 
-[ADR-0020](adr/0020-managed-mcp-recovery.md) adds a future opt-in host-owned MCP
-execution domain and external-effect broker. This is an exception to the general
-runtime-delegation principle for host-launched MCP only. ACP enforcement remains
-delegated. Implementation requires a demonstrated backend and independent domain
-closure and effect settlement; the current native path retains safe refusal.
+[ADR-0021](adr/0021-mcp-restart-recovery.md) replaces the managed VM and
+effect-broker direction of [ADR-0020](adr/0020-managed-mcp-recovery.md). On cold
+recovery the daemon stops the prior MCP server's process group, records that
+best-effort (`GroupOnly`) cleanup, starts a fresh server from the frozen
+manifest and resumes. Interrupted tool calls are reported to the agent and never
+replayed. Identity conflicts, changed manifests and bad private inputs still
+refuse. ACP enforcement remains delegated.

@@ -1,6 +1,6 @@
 # Product strategy
 
-Status: decision note, written 2026-07-07. Companion to the market survey in
+Status: decision note, written 2026-07-07, updated 2026-10-05. Companion to the market survey in
 [`agent-os-landscape.md`](agent-os-landscape.md) and the technical reference in
 [`ARCHITECTURE.md`](ARCHITECTURE.md). This page records *what we bet on and in
 which order*; the landscape page records *what everyone else is doing*.
@@ -21,6 +21,35 @@ Two user pains anchor everything below:
 2. **Large projects** — work that exceeds one context window forces the user to
    hand-slice specs/features into many sessions; state is lost between them and
    projects stall before completion.
+
+## Product decisions — 2026-10-05
+
+Recorded from a product interview with the maintainer. Where this section and
+older text below disagree, this section wins.
+
+- **Audience: people and developers.** Plain language by default, technical
+  detail on request. Developers keep a complete CLI.
+- **First contact: the macOS desktop app** with the daemon inside. The CLI and
+  Telegram stay first-class, but the release is judged by the desktop path.
+- **The promise: large projects get finished.** Verification, the task ledger
+  and the event log are how Surge keeps that promise, not the headline. Demos
+  show multi-milestone projects, not a single PR.
+- **MCP recovery follows agent-runtime practice.** No managed VM or effect
+  broker: the prior server's process group is stopped and a fresh server is
+  started; an interrupted call is reported to the agent, never replayed
+  ([ADR-0021](adr/0021-mcp-restart-recovery.md), superseding ADR-0020).
+- **Local only.** No remote daemon and no hosted executor. During a run the
+  desktop keeps the Mac awake and shows it.
+- **Fully open source.** MIT/Apache-2.0, no telemetry, no paid tier; everything
+  valuable lives in the open core.
+- **First priority once the release is unblocked: prove the promise.** Run a real
+  multi-milestone project from idea to working app through the desktop, fix
+  every failure it finds, and make that recording the main demo (replacing the
+  single-binary pomodoro run in the README).
+
+Accepted risks: an agent can repeat a non-idempotent call after a crash despite
+the notice; first-party vendor tools may absorb "finishing projects", which
+would erode the differentiation (see revisit triggers below).
 
 ## What the research established
 

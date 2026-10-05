@@ -1,5 +1,6 @@
 +++
-status = "accepted"
+status = "superseded"
+superseded_by = "0021"
 deciders = ["vanyastaff"]
 date = "2026-10-05"
 +++
@@ -8,9 +9,13 @@ date = "2026-10-05"
 
 ## Status
 
-Accepted direction; implementation and executable acceptance remain open.
-Supersedes ADR-0014 decision 4 only for the future managed opt-in path.
-Native MCP behavior and ACP runtime delegation remain unchanged.
+Superseded on 2026-10-05 by [ADR-0021](0021-mcp-restart-recovery.md): cold
+recovery uses process-group cleanup and restart, with no managed VM or effect
+broker. Kept for history; nothing below is planned work.
+
+Original status: accepted direction; implementation and executable acceptance
+remained open. Superseded ADR-0014 decision 4 only for the future managed
+opt-in path.
 
 ## Context
 

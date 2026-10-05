@@ -245,3 +245,17 @@ The final local strict Clippy gates pass in both feature configurations. These
 source changes require a new compiled release candidate and provenance capture;
 the prior archive remains historical. Original MCP acceptance and managed macOS
 backend/effect-broker requirements remain open. NO-GO is unchanged.
+
+## MCP recovery direction change — 2026-10-05
+
+The maintainer replaced the managed VM and effect-broker direction with
+[ADR-0021](adr/0021-mcp-restart-recovery.md): cold recovery stops the prior MCP
+process group and restarts from the frozen manifest; interrupted calls are
+reported to the agent and never replayed. Managed VM provisioning and the host
+broker are no longer release prerequisites. The P0 row "Productive MCP cold
+recovery" now means: the
+[restart-recovery plan](plans/2026-10-05-001-feat-mcp-restart-recovery-plan.md)
+is implemented and the ten original cases pass under its acceptance mapping,
+with refusal oracles unchanged. This is a documentation decision only; no new
+executable evidence is claimed and NO-GO is unchanged until that acceptance
+passes.

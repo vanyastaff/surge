@@ -55,6 +55,8 @@ Multi-crate workspace. See `docs/ARCHITECTURE.md` for vision and design notes (i
 - ACP Rust SDK: https://docs.rs/agent-client-protocol
 - Project docs: docs/
 
-Managed MCP opt-in is an accepted, unimplemented exception to host MCP sandbox
-delegation; see [ADR-0020](docs/adr/0020-managed-mcp-recovery.md). Do not infer
-complete writer coverage from configuration or direct-child termination.
+MCP cold recovery stops the prior server's process group and restarts it from the
+frozen manifest; there is no managed VM or effect broker (ADR-0020 is superseded).
+See [ADR-0021](docs/adr/0021-mcp-restart-recovery.md). Group cleanup is
+best-effort: never record or display it as confirmed writer closure, and never
+replay an interrupted tool call.
