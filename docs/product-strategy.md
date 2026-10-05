@@ -68,11 +68,28 @@ older text below disagree, this section wins.
   ([ADR-0019](adr/0019-providers-are-registry-data.md)) refreshed on the user's
   request; Surge never silently fetches third-party sites.
 
+- **Two equal starting points:** "new project from an idea" and "open an existing
+  folder". For an existing project Surge scans it (`project describe`), proposes
+  stages and never touches the working copy; all work happens in worktrees,
+  stated in one line when the project opens.
+- **No agent installed or signed in:** the app guides step by step (supported
+  agents, copyable install and sign-in commands) and switches screens itself
+  once `surge doctor` sees the agent ready. Surge downloads nothing on its own.
+- **Default agent permissions: project folder plus network** (`workspace+network`).
+  Writes outside the worktree go through an elevation request in the Inbox. The
+  verifier stays sealed (read-only, no network) regardless of this setting.
+- **Notifications:** native macOS notifications by default; Telegram is opt-in
+  in settings for replying from a phone.
+- **Git is always visible** (branches, commits, diffs), with short hover hints
+  for key terms instead of renamed concepts.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
 project (local per-run history can complement them later, with no telemetry);
-first-party vendor tools may absorb "finishing projects", which would erode the
+default network access lets an agent fetch anything (accepted for unattended
+runs); command-only agent onboarding may be hard for people without a terminal
+and should be tested with a real user; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
 ## What the research established
