@@ -2198,7 +2198,7 @@ mod memory_claim_snapshot_artifact_tests {
         let bytes = store.open(run_id, artifact).await.unwrap();
         let snapshot: crate::project_context::MemoryClaimSnapshot =
             serde_json::from_slice(&bytes).unwrap();
-        assert!(snapshot.claims.is_empty());
+        assert_eq!(snapshot.claims.len(), 0);
         assert_eq!(
             snapshot.budget,
             surge_core::context_pack::ContextPackConfig::default()

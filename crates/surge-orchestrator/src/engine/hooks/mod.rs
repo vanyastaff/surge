@@ -991,7 +991,7 @@ mod tests {
         let outcome = exec.run_hooks(&hooks, HookTrigger::OnOutcome, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
-        assert!(spawner.calls().is_empty());
+        assert_eq!(spawner.calls().len(), 0);
     }
 
     #[tokio::test]

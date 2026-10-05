@@ -389,7 +389,7 @@ mod tests {
         );
         {
             let conn = storage.acquire_registry_conn().unwrap();
-            assert!(inbox_queue::list_pending_actions(&conn).unwrap().is_empty());
+            assert_eq!(inbox_queue::list_pending_actions(&conn).unwrap().len(), 0);
         }
         assert_eq!(
             handler.handle(42, "inbox:start:bound-token").await.unwrap(),

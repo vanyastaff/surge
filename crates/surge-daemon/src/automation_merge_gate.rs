@@ -959,10 +959,11 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(
+        assert_eq!(
             reconciliation_candidates(&conn, "mock:test#063")
                 .unwrap()
-                .is_empty()
+                .len(),
+            0
         );
     }
 

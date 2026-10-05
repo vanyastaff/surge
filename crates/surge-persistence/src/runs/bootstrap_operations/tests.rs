@@ -95,7 +95,7 @@ fn cancellation_is_monotonic_and_claim_is_compare_and_swap() {
         vec![claimed.status.planning_run]
     );
     let cancelled = store.request_cancel(id).unwrap();
-    assert!(store.pending_admission_runs().unwrap().is_empty());
+    assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
     assert!(cancelled.status.cancel_requested);
     assert_eq!(
         cancelled.status.state,
@@ -125,8 +125,8 @@ fn attention_requires_explicit_retry_with_original_pins() {
             BootstrapAttentionReason::ConfigurationChanged,
         )
         .unwrap();
-    assert!(store.queued().unwrap().is_empty());
-    assert!(store.pending_admission_runs().unwrap().is_empty());
+    assert_eq!(store.queued().unwrap().len(), 0);
+    assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
     assert!(store.claim(id, blocked.status.revision).is_err());
     assert!(matches!(
         store.retry(id, blocked.status.revision, &capture(temp.path())),
@@ -156,8 +156,8 @@ fn unknown_versions_are_inspectable_but_not_claimable() {
             [],
         )
         .unwrap();
-    assert!(store.queued().unwrap().is_empty());
-    assert!(store.pending_admission_runs().unwrap().is_empty());
+    assert_eq!(store.queued().unwrap().len(), 0);
+    assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
     let record = store.get(id).unwrap().unwrap();
     assert!(matches!(
         record.payload,
@@ -378,8 +378,8 @@ fn cancellation_attention_preserves_stop_intent_and_cannot_retry() {
             reason: BootstrapAttentionReason::StorageUnconfirmed,
         }
     );
-    assert!(store.queued().unwrap().is_empty());
-    assert!(store.pending_admission_runs().unwrap().is_empty());
+    assert_eq!(store.queued().unwrap().len(), 0);
+    assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
     assert!(matches!(
         store.claim(id, blocked.status.revision),
         Err(BootstrapStoreError::InvalidTransition)

@@ -240,7 +240,7 @@ mod tests {
         )
         .await;
 
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
@@ -276,7 +276,7 @@ mod tests {
             },
         )
         .await;
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         let row = IntakeRepo::new(&conn)
             .fetch("mock:test#1")
@@ -304,7 +304,7 @@ mod tests {
             },
         )
         .await;
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
@@ -352,7 +352,7 @@ mod tests {
             }),
         })
         .await;
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {

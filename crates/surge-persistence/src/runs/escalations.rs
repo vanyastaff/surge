@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn no_escalation_yields_empty() {
-        assert!(fold_escalations(&[]).is_empty());
+        assert_eq!(fold_escalations(&[]).len(), 0);
     }
 
     /// Proves the SQL query itself (kind filter + `stage_executions`

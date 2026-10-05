@@ -653,7 +653,7 @@ async fn live_planning_gate_cancel_joins_and_never_launches_child() {
     fixture.owner.services.shutdown.cancel();
     supervisor.await.unwrap();
     assert_eq!(result.state, State::Cancelled);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
     assert!(
         fixture
@@ -686,7 +686,7 @@ async fn production_lost_reply_retry_precedes_changed_environment_and_conflict()
         Err(BootstrapError::Store(BootstrapStoreError::IntentConflict))
     ));
     assert!(fixture.owner.submit(RunId::new(), &intent).await.is_err());
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -764,7 +764,7 @@ async fn production_ipc_accepts_durable_operation_and_fences_raw_reserved_runs()
     let terminal = client.bootstrap_status(id).await.unwrap();
     assert_eq!(terminal.state, State::Cancelled);
     assert_eq!(client.cancel_bootstrap(id).await.unwrap(), terminal);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
     fixture.owner.services.shutdown.cancel();
     supervisor.await.unwrap();
     server.await.unwrap().unwrap();
@@ -809,7 +809,7 @@ async fn partial_engine_startup_is_preserved_for_attention_without_retrying_agen
         }
     ));
     assert!(!status.cancel_requested);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
     let inspection = fixture
         .storage
@@ -862,7 +862,7 @@ async fn explicit_attention_retry_requires_restored_git_ownership() {
         }
     );
     assert!(path.join(".git").exists());
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -974,13 +974,9 @@ async fn restart_after_parent_completion_before_child_commit_reuses_parent_evide
     let ordered = restarted.admission_order.clone().lock_owned().await;
     restarted.process(id, ordered).await.unwrap();
     assert_eq!(restarted.status(id).unwrap().state, State::Completed);
-    assert!(
-        restarted
-            .services
-            .engine
-            .snapshot_active_runs()
-            .await
-            .is_empty()
+    assert_eq!(
+        restarted.services.engine.snapshot_active_runs().await.len(),
+        0
     );
     let next = RunId::new();
     restarted.submit(next, &fixture.intent()).await.unwrap();
@@ -1174,7 +1170,7 @@ async fn bootstrap_preflight_error_releases_execution_slot_but_retains_ownership
         }
     ));
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
     assert_eq!(fixture.owner.store.list().unwrap().len(), 1);
 }
 

@@ -401,14 +401,13 @@ mod tests {
         assert_eq!(found, vec![oldest]);
 
         // Nothing matches an unrelated tail, an empty suffix, or LIKE wildcards.
-        assert!(
-            find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5).unwrap().len(),
+            0
         );
-        assert!(find_ids_by_suffix(&pool, "", 5).unwrap().is_empty());
-        assert!(find_ids_by_suffix(&pool, "%", 5).unwrap().is_empty());
-        assert!(find_ids_by_suffix(&pool, "_", 5).unwrap().is_empty());
+        assert_eq!(find_ids_by_suffix(&pool, "", 5).unwrap().len(), 0);
+        assert_eq!(find_ids_by_suffix(&pool, "%", 5).unwrap().len(), 0);
+        assert_eq!(find_ids_by_suffix(&pool, "_", 5).unwrap().len(), 0);
 
         // A one-character tail is shared by several runs; newest first, capped.
         let c = tail(&ids[119], 1);

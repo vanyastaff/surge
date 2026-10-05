@@ -280,7 +280,7 @@ mod tests {
         };
         let signal = on_terminal_decision(&frames, &cursor);
         assert!(matches!(signal, TerminalSignal::OuterComplete));
-        assert!(frames.is_empty());
+        assert_eq!(frames.len(), 0);
     }
 
     #[test]

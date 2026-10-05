@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn engine_run_config_default_mcp_servers_empty() {
         let cfg = EngineRunConfig::default();
-        assert!(cfg.mcp_servers.is_empty());
+        assert_eq!(cfg.mcp_servers.len(), 0);
     }
 
     #[test]
@@ -422,11 +422,11 @@ mod tests {
         // Old serialised blobs without the field should still round-trip.
         let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
         let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
-        assert!(parsed.mcp_servers.is_empty());
-        assert!(parsed.quota_recovery.stages().is_empty());
+        assert_eq!(parsed.mcp_servers.len(), 0);
+        assert_eq!(parsed.quota_recovery.stages().len(), 0);
         // Legacy blobs without `initial_prompt` must default to the empty
         // string so the engine treats them as non-bootstrap runs.
-        assert!(parsed.initial_prompt.is_empty());
+        assert_eq!(parsed.initial_prompt.len(), 0);
         assert!(parsed.bootstrap_parent.is_none());
     }
 

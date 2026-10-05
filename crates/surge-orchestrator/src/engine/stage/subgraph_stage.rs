@@ -415,7 +415,7 @@ mod tests {
     fn resolve_subgraph_inputs_empty_slice_returns_empty_vec() {
         let memory = RunMemory::default();
         let result = resolve_subgraph_inputs(&[], &memory).unwrap();
-        assert!(result.is_empty());
+        assert_eq!(result.len(), 0);
     }
 
     #[test]
