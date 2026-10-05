@@ -69,7 +69,7 @@ pub fn open_registry_pool(
 
     let manager =
         SqliteConnectionManager::file(&db_path).with_init(|c| apply_pragmas(c, REGISTRY_PRAGMAS));
-    let pool = Pool::builder()
+    let pool = super::pool::sqlite_pool_builder()
         .max_size(8)
         .build(manager)
         .map_err(|e| OpenError::Pool(e.to_string()))?;

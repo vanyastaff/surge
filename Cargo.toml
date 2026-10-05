@@ -131,6 +131,7 @@ rand = "0.9"
 
 # M2 storage layer
 r2d2 = "0.8"
+scheduled-thread-pool = "0.2.7"
 r2d2_sqlite = "0.25"  # must match rusqlite 0.32 — bump together
 async-stream = "0.3"
 tokio-stream = "0.1"

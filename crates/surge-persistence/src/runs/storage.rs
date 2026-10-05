@@ -271,7 +271,7 @@ impl Storage {
         }
         let manager = SqliteConnectionManager::file(&events_path)
             .with_init(|c| apply_pragmas(c, PER_RUN_PRAGMAS));
-        let pool = Pool::builder()
+        let pool = super::pool::sqlite_pool_builder()
             .max_size(self.config.reader_pool_size)
             .build(manager)
             .map_err(|e| OpenError::Pool(e.to_string()))?;

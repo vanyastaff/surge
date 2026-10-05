@@ -9396,6 +9396,7 @@ dependencies = [
  "r2d2_sqlite",
  "rand 0.9.3",
  "rusqlite",
+ "scheduled-thread-pool",
  "serde",
  "serde_json",
  "sha2",

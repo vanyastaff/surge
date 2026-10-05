@@ -54,6 +54,7 @@ pub mod inspection;
 mod inspection_route;
 mod macros;
 pub mod migrations;
+mod pool;
 pub mod pragmas;
 pub mod process;
 pub mod query;

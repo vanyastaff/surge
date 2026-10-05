@@ -38,6 +38,7 @@ contract. Artifact identity is recorded in
 | CLI outcome and abort projection | P1 | R05/R26 | Durable owner/history | Failed/aborted/missing/conflicting outcome is nonzero | Watch units 7/7; lifecycle 6/6; final projection PASS |
 | Fixture ownership/readiness | P1 | R26/R25/R15 | Actual owner settlement | Await writer close; stale socket/partial JSONL cannot signal readiness | Scheduler 9/9; route/JSONL final PASS |
 | MCP cleanup authority safety | P0 | R15/R32 | Fresh journal | Unknown evidence refuses seal/resume before fresh effects | Actual RED→GREEN 1/1; independent ACCEPTABLE |
+| SQLite maintenance settlement | P1 | R25/R26/R32 | Actual DB owner lifetime | Dropped reader workers exit promptly; live pool policies and owners preserved | RED 0/390 exits → GREEN 390/390 (524 connections, 0.24s); final workspace repeat pending |
 | Productive MCP cold recovery | P0 | R15/R32 | Complete containment/effect proof | Original accepted productive and downstream recovery tests pass | OPEN; NO-GO; ten acceptance failures retained |
 | Release workflow gates | P0 | R28/R19 | Same revision CI | Strict features/security/tests; native archive linkage | actionlint PASS; remote native execution unverified |
 | macOS archive OpenSSL | P1 | R19 | Native release build | Static OpenSSL; no non-system dylib path; target15 | ARM64 build/linkage/archive E2E PASS; other runners unverified |
@@ -90,6 +91,22 @@ skill test. The IPC fixture now waits for durable Completed before one strict
 journal inspection; errors are not swallowed. Both targeted tests pass (2/2).
 Final frozen workspace repeat and native capture remain pending at this checkpoint.
 These pending checks are not covered by earlier passing receipts.
+
+The `da89ba2` full repeat passed 3,829/3,840 with 11 failures and 37 skips:
+IPC and the previous skill failure passed, but OS35 thread creation recurred in
+another skill test. It is not classified as resolved by an isolated pass.
+Independent lifetime review found that the default scheduler drains its future
+30-second reaper even after a DB pool loses its last owner, retaining three
+threads per expired pool. The new private builder retains separate three-worker
+executors and discards pending callbacks only after their last owner is gone.
+Live connection limits, pragmas, idle timeout and maximum lifetime are unchanged;
+in-flight jobs retain their executor. A permanent shared executor was rejected
+because it would accumulate dead periodic jobs. Actual lifecycle regression:
+old behavior 0/390 exits within 3 seconds; corrected behavior 390/390 exits,
+524 connection acquisitions, 0.24 seconds. The oracle uses real connection paths
+and thread-local destruction, scoped to its unique test home. This fixes expired
+pool retention; initial executor creation can still fail under OS exhaustion.
+Final integrated checks and the authenticated native candidate remain pending.
 
 ## Blocking work and limits
 
