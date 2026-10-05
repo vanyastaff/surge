@@ -178,6 +178,15 @@ older text below disagree, this section wins.
 - **Conflicts with the user's own commits** are resolved by an agent and then
   re-verified; if the agent cannot resolve them, the rejection ladder applies.
 
+- **Verification is test-based for now.** Results can be anything (a website, an
+  app on any platform, a script), so v1 adds no browser or visual checking. The
+  existing App Tester stays an optional flow node. The verifier checks that the
+  tests actually cover the stage's criteria, not only that they pass.
+- **Who writes tests depends on the chosen method.** If the user wants TDD, the
+  master agent puts a test-author first in the flow; otherwise the implementer
+  writes the tests. The method is one question in the wizard's agents-and-flow
+  step, with a default proposed per project type.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
@@ -199,7 +208,9 @@ still degrade, so sizing quality must be measured; the judge is one more model
 call and failure point; Hub quality depends on third-party catalogs; manual merging grows PR
 stacks where a fix at the bottom shakes everything above; an agent can
 misread a human change while resolving a conflict; dozens of PRs per stage add
-noise to a team's GitHub; the v1 cut is sizable new code (`Escalate` and `Rotate` are
+noise to a team's GitHub; test-only verification can pass a feature that does
+not work, especially UI; without TDD the implementer writes tests for its own
+code and protection rests on the verifier's coverage check; the v1 cut is sizable new code (`Escalate` and `Rotate` are
 reserved today), so it, not MCP alone, sets the release date; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
