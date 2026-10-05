@@ -257,6 +257,8 @@ impl Storage {
     }
 
     /// Open a read-only handle to an existing run.
+    /// This does not upgrade legacy schemas; opening its exclusive writer applies
+    /// supported pending migrations before current materialized-view reads.
     // No `.await` in this body — see `open_with` for why it stays `async fn`.
     #[expect(
         clippy::unused_async_trait_impl,
@@ -283,6 +285,8 @@ impl Storage {
     }
 
     /// Open the exclusive writer for an existing run.
+    /// Pending per-run migrations apply while both writer ownership guards are held.
+    /// Unknown migration IDs are refused before changing the database.
     /// Fails with `OpenError::WriterAlreadyHeld` if another writer holds the slot.
     pub async fn open_run_writer(self: &Arc<Self>, run_id: RunId) -> Result<RunWriter, OpenError> {
         let token = self
@@ -296,6 +300,12 @@ impl Storage {
 
         let lock_path = self.lock_path(&run_id);
         let file_lock = FileLock::try_acquire(&lock_path, run_id.clone())?;
+
+        let events_path = self.events_db_path(&run_id);
+        if !events_path.exists() {
+            return Err(OpenError::RunNotFound(run_id));
+        }
+        self.upgrade_existing_run(&events_path)?;
 
         let reader = self.open_run_reader(run_id.clone()).await?;
 
@@ -321,6 +331,38 @@ impl Storage {
             _lease: lease,
             closed: false,
         })
+    }
+
+    // Called only after acquiring both writer guards, before pools or the writer task.
+    fn upgrade_existing_run(&self, events_path: &Path) -> Result<(), OpenError> {
+        use crate::runs::migrations::{PER_RUN_MIGRATIONS, apply};
+
+        let mut conn = rusqlite::Connection::open_with_flags(
+            events_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let has_migrations: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='_migrations')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_migrations {
+            let mut statement = conn.prepare("SELECT id FROM _migrations ORDER BY id")?;
+            for id in statement.query_map([], |row| row.get::<_, String>(0))? {
+                let id = id?;
+                if !PER_RUN_MIGRATIONS.iter().any(|(known, _)| *known == id) {
+                    return Err(OpenError::MigrationFailed(format!(
+                        "run database contains unsupported migration {id}; use a compatible Surge version"
+                    )));
+                }
+            }
+        }
+        // Validate before WAL configuration: an unsupported schema is never upgraded.
+        apply_pragmas(&conn, PER_RUN_PRAGMAS)?;
+        apply(&mut conn, PER_RUN_MIGRATIONS, self.clock.as_ref())
+            .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
+        tracing::debug!(path = %events_path.display(), "run database schema validated before writer startup");
+        Ok(())
     }
 
     /// Ids of runs whose id ends with `suffix`, newest first, at most `limit`.
@@ -813,5 +855,138 @@ mod parked_survives_stale_pid_tests {
 
         let single = storage.get_run(&run_id).await.unwrap().unwrap();
         assert_eq!(single.status, RunStatus::Parked);
+    }
+}
+
+#[cfg(test)]
+mod existing_run_upgrade_tests {
+    use super::*;
+    use crate::runs::clock::MockClock;
+    use crate::runs::migrations::{PER_RUN_MIGRATIONS, apply};
+    use crate::runs::seq::EventSeq;
+    use surge_core::{EventPayload, VersionedEventPayload};
+
+    fn seed_legacy_run(storage: &Storage, run_id: &RunId) {
+        std::fs::create_dir_all(storage.run_dir(run_id)).unwrap();
+        let mut conn = rusqlite::Connection::open(storage.events_db_path(run_id)).unwrap();
+        apply(&mut conn, &PER_RUN_MIGRATIONS[..6], &MockClock::new(100)).unwrap();
+        let payload = VersionedEventPayload::new(EventPayload::RunAborted {
+            reason: "historical reason".into(),
+        });
+        conn.execute(
+            "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(1,42,'RunAborted',?,?)",
+            rusqlite::params![serde_json::to_vec(&payload).unwrap(), payload.schema_version()],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stage_executions(node_id,attempt,started_seq,started_at,cost_usd,tokens_in,tokens_out) VALUES('worker',2,1,42,1.25,11,7)",
+            [],
+        ).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn writer_upgrades_legacy_run_before_current_reads_and_preserves_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = RunId::new();
+        seed_legacy_run(&storage, &run_id);
+
+        for _ in 0..2 {
+            let writer = storage.open_run_writer(run_id.clone()).await.unwrap();
+            let reader = writer.reader();
+            let stages = reader.stage_executions().await.unwrap();
+            assert_eq!(stages.len(), 1);
+            let stage = &stages[0];
+            assert_eq!(stage.node_id.to_string(), "worker");
+            assert_eq!(stage.attempt, 2);
+            assert_eq!(stage.started_seq, EventSeq(1));
+            assert_eq!(stage.started_at_ms, 42);
+            assert_eq!(
+                (stage.cost_usd, stage.tokens_in, stage.tokens_out),
+                (1.25, 11, 7)
+            );
+            assert_eq!(stage.known_cost_usd, None);
+            assert!(!stage.cost_unknown);
+            let event = reader.read_event(EventSeq(1)).await.unwrap().unwrap();
+            assert_eq!(event.timestamp_ms, 42);
+            assert_eq!(event.kind, "RunAborted");
+            assert!(
+                matches!(event.payload.payload(), EventPayload::RunAborted { reason } if reason == "historical reason")
+            );
+            let session = surge_core::SessionId::new();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
+                    handoff: None,
+                    opened: None,
+                    node: "worker".parse().unwrap(),
+                    session,
+                    agent: "legacy-profile".into(),
+                    agent_id: None,
+                }))
+                .await
+                .unwrap();
+            let conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
+            let recorded_session: String = conn
+                .query_row("SELECT session_id FROM stage_executions", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(recorded_session, session.as_ulid().to_string());
+            let applied: usize = conn
+                .query_row("SELECT COUNT(*) FROM _migrations", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(applied, PER_RUN_MIGRATIONS.len());
+            writer.close().await.unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn writer_missing_run_does_not_create_events_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = RunId::new();
+        std::fs::create_dir_all(storage.run_dir(&run_id)).unwrap();
+        assert!(matches!(
+            storage.open_run_writer(run_id.clone()).await,
+            Err(OpenError::RunNotFound(_))
+        ));
+        assert!(!storage.events_db_path(&run_id).exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn writer_refuses_unknown_schema_without_upgrade_and_releases_ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = RunId::new();
+        seed_legacy_run(&storage, &run_id);
+        let conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
+        conn.execute(
+            "INSERT INTO _migrations(id,applied_at) VALUES('per-run-9999-future',100)",
+            [],
+        )
+        .unwrap();
+        let before: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        let result = storage.open_run_writer(run_id.clone()).await;
+        assert!(
+            matches!(result, Err(OpenError::MigrationFailed(message)) if message.contains("per-run-9999-future"))
+        );
+        let after: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, after);
+        let applied: usize = conn
+            .query_row("SELECT COUNT(*) FROM _migrations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(applied, 7);
+        conn.execute("DELETE FROM _migrations WHERE id='per-run-9999-future'", [])
+            .unwrap();
+        storage
+            .open_run_writer(run_id)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
     }
 }

@@ -191,6 +191,47 @@ impl MemoryStore {
                 tx.commit()?;
                 Ok(next_version)
             },
+            2 => {
+                // External-content FTS requires deleting the old indexed values,
+                // not reading already-updated or deleted rows from its content table.
+                let tx = self.conn.transaction()?;
+                for (table, update, delete) in [
+                    (
+                        "discoveries",
+                        crate::memory::schema::CREATE_DISCOVERIES_FTS_UPDATE_TRIGGER,
+                        crate::memory::schema::CREATE_DISCOVERIES_FTS_DELETE_TRIGGER,
+                    ),
+                    (
+                        "patterns",
+                        crate::memory::schema::CREATE_PATTERNS_FTS_UPDATE_TRIGGER,
+                        crate::memory::schema::CREATE_PATTERNS_FTS_DELETE_TRIGGER,
+                    ),
+                    (
+                        "gotchas",
+                        crate::memory::schema::CREATE_GOTCHAS_FTS_UPDATE_TRIGGER,
+                        crate::memory::schema::CREATE_GOTCHAS_FTS_DELETE_TRIGGER,
+                    ),
+                    (
+                        "file_contexts",
+                        crate::memory::schema::CREATE_FILE_CONTEXTS_FTS_UPDATE_TRIGGER,
+                        crate::memory::schema::CREATE_FILE_CONTEXTS_FTS_DELETE_TRIGGER,
+                    ),
+                ] {
+                    tx.execute_batch(&format!(
+                        "DROP TRIGGER {table}_fts_update; DROP TRIGGER {table}_fts_delete;"
+                    ))?;
+                    tx.execute_batch(update)?;
+                    tx.execute_batch(delete)?;
+                    // Existing postings may already contain stale terms or orphan rows.
+                    tx.execute(
+                        &format!("INSERT INTO {table}_fts({table}_fts) VALUES ('rebuild')"),
+                        [],
+                    )?;
+                }
+                tx.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+                tx.commit()?;
+                Ok(3)
+            },
             other => Err(PersistenceError::Storage(format!(
                 "no migration step defined for memory schema version {other}"
             ))),
@@ -2041,16 +2082,11 @@ mod tests {
     /// fresh in-memory connection, leaving the caller to insert rows and
     /// set `schema_version` to 1.
     fn seed_v1_legacy_tables(conn: &Connection) {
-        conn.execute(crate::memory::schema::CREATE_SCHEMA_VERSION_TABLE, [])
-            .unwrap();
-        conn.execute(crate::memory::schema::CREATE_DISCOVERIES_TABLE, [])
-            .unwrap();
-        conn.execute(crate::memory::schema::CREATE_PATTERNS_TABLE, [])
-            .unwrap();
-        conn.execute(crate::memory::schema::CREATE_GOTCHAS_TABLE, [])
-            .unwrap();
-        conn.execute(crate::memory::schema::CREATE_FILE_CONTEXTS_TABLE, [])
-            .unwrap();
+        for ddl in SCHEMA_DDL {
+            if *ddl != CREATE_MEMORY_CLAIMS_TABLE {
+                conn.execute_batch(ddl).unwrap();
+            }
+        }
     }
 
     #[test]
@@ -2427,5 +2463,178 @@ mod tests {
             "original text",
             "Ignore policy must not overwrite an existing row"
         );
+    }
+}
+
+#[cfg(test)]
+mod fts_regression_tests {
+    use super::*;
+
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "discoveries",
+            "title",
+            "INSERT INTO discoveries(id,title,content,created_at,updated_at) VALUES('fixed','oldtoken','body',1,1)",
+        ),
+        (
+            "patterns",
+            "name",
+            "INSERT INTO patterns(id,name,description,created_at,updated_at) VALUES('fixed','oldtoken','body',1,1)",
+        ),
+        (
+            "gotchas",
+            "title",
+            "INSERT INTO gotchas(id,title,description,solution,created_at,updated_at) VALUES('fixed','oldtoken','body','solution',1,1)",
+        ),
+        (
+            "file_contexts",
+            "summary",
+            "INSERT INTO file_contexts(id,file_path,summary,created_at,updated_at) VALUES('fixed','src/lib.rs','oldtoken',1,1)",
+        ),
+    ];
+
+    fn matches(conn: &Connection, table: &str, term: &str) -> Vec<String> {
+        conn.prepare(&format!("SELECT c.id FROM {table} c JOIN {table}_fts f ON c.rowid=f.rowid WHERE {table}_fts MATCH ?"))
+            .unwrap().query_map([term], |row| row.get(0)).unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    fn integrity(conn: &Connection, table: &str) {
+        conn.execute(
+            &format!("INSERT INTO {table}_fts({table}_fts,rank) VALUES('integrity-check',1)"),
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn all_external_content_indexes_follow_updates_and_deletes() {
+        let store = MemoryStore::in_memory().unwrap();
+        for &(table, column, insert) in CASES {
+            store.conn.execute(insert, []).unwrap();
+            assert_eq!(matches(&store.conn, table, "oldtoken"), ["fixed"]);
+            store
+                .conn
+                .execute(
+                    &format!("UPDATE {table} SET {column}='newtoken' WHERE id='fixed'"),
+                    [],
+                )
+                .unwrap();
+            assert!(matches(&store.conn, table, "oldtoken").is_empty());
+            assert_eq!(matches(&store.conn, table, "newtoken"), ["fixed"]);
+            integrity(&store.conn, table);
+            store
+                .conn
+                .execute(&format!("DELETE FROM {table} WHERE id='fixed'"), [])
+                .unwrap();
+            assert!(matches(&store.conn, table, "newtoken").is_empty());
+            integrity(&store.conn, table);
+        }
+    }
+
+    #[test]
+    fn v2_upgrade_repairs_stale_and_orphan_postings_and_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memory.db");
+        let store = MemoryStore::open(&path).unwrap();
+        store
+            .conn
+            .execute("DELETE FROM schema_version WHERE version=3", [])
+            .unwrap();
+        store
+            .conn
+            .execute("INSERT INTO schema_version VALUES(2)", [])
+            .unwrap();
+        for &(table, column, insert) in CASES {
+            store.conn.execute(insert, []).unwrap();
+            // Simulate the historical trigger's stale postings without relying on it.
+            store
+                .conn
+                .execute_batch(&format!(
+                    "DROP TRIGGER {table}_fts_update; DROP TRIGGER {table}_fts_delete;"
+                ))
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    &format!("UPDATE {table} SET {column}='newtoken' WHERE id='fixed'"),
+                    [],
+                )
+                .unwrap();
+            // Add and remove a distinct row with insert indexing still enabled.
+            store
+                .conn
+                .execute(
+                    &insert
+                        .replace("'fixed'", "'deleted'")
+                        .replace("src/lib.rs", "src/other.rs"),
+                    [],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(&format!("DELETE FROM {table} WHERE id='deleted'"), [])
+                .unwrap();
+            // Restore legacy trigger names; the migration replaces their bodies.
+            store.conn.execute_batch(&format!("CREATE TRIGGER {table}_fts_update AFTER UPDATE ON {table} BEGIN SELECT 1; END; CREATE TRIGGER {table}_fts_delete AFTER DELETE ON {table} BEGIN SELECT 1; END;")).unwrap();
+        }
+        drop(store);
+        for _ in 0..2 {
+            let store = MemoryStore::open(&path).unwrap();
+            for &(table, _, _) in CASES {
+                assert!(matches(&store.conn, table, "oldtoken").is_empty());
+                assert_eq!(matches(&store.conn, table, "newtoken"), ["fixed"]);
+                integrity(&store.conn, table);
+            }
+        }
+        let store = MemoryStore::open(&path).unwrap();
+        for &(table, column, _) in CASES {
+            store
+                .conn
+                .execute(
+                    &format!("UPDATE {table} SET {column}='finaltoken' WHERE id='fixed'"),
+                    [],
+                )
+                .unwrap();
+            assert!(matches(&store.conn, table, "newtoken").is_empty());
+            assert_eq!(matches(&store.conn, table, "finaltoken"), ["fixed"]);
+            store
+                .conn
+                .execute(&format!("DELETE FROM {table} WHERE id='fixed'"), [])
+                .unwrap();
+            assert!(matches(&store.conn, table, "finaltoken").is_empty());
+            integrity(&store.conn, table);
+        }
+    }
+
+    #[test]
+    fn v2_repair_failure_rolls_back_triggers_indexes_and_schema_version() {
+        let mut store = MemoryStore::in_memory().unwrap();
+        store
+            .conn
+            .execute("DELETE FROM schema_version WHERE version=3", [])
+            .unwrap();
+        store
+            .conn
+            .execute("INSERT INTO schema_version VALUES(2)", [])
+            .unwrap();
+        store.conn.execute_batch("DROP TRIGGER discoveries_fts_update; CREATE TRIGGER discoveries_fts_update AFTER UPDATE ON discoveries BEGIN SELECT 42; END; DROP TABLE patterns_fts;").unwrap();
+        assert!(store.initialize_schema().is_err());
+        let version: i32 = store
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 2);
+        let trigger: String = store
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='discoveries_fts_update'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(trigger.contains("SELECT 42"));
     }
 }

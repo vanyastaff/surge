@@ -468,11 +468,11 @@ mod work_item_upgrade_tests {
     #[test]
     fn adding_persistent_tasks_preserves_existing_registry_rows_without_association() {
         let mut conn = Connection::open_in_memory().unwrap();
-        let previous: MigrationSet = Box::leak(
-            REGISTRY_MIGRATIONS[..REGISTRY_MIGRATIONS.len() - 1]
-                .to_vec()
-                .into_boxed_slice(),
-        );
+        let work_items_migration = REGISTRY_MIGRATIONS
+            .iter()
+            .position(|(id, _)| *id == "registry-0022-work-items")
+            .expect("persistent task migration is registered");
+        let previous: MigrationSet = &REGISTRY_MIGRATIONS[..work_items_migration];
         let clock = MockClock::new(100);
         apply(&mut conn, previous, &clock).unwrap();
         conn.execute("INSERT INTO runs(id,project_path,status,started_at) VALUES ('legacy-run','/repo','completed',1)",[]).unwrap();

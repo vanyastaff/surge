@@ -26,6 +26,8 @@ pub mod lifecycle;
 pub mod pidfile;
 pub mod recovery;
 pub mod server;
+#[cfg(unix)]
+mod socket_security;
 pub mod tracked_run;
 pub mod wake_scheduler;
 

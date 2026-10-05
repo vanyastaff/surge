@@ -772,3 +772,302 @@ async fn failed_run_outcome_does_not_trigger_gate() {
         "failed run must not merge"
     );
 }
+
+/// Durable completion survives a subscriber starting after broadcast delivery,
+/// including tickets already settled by the separate completion consumer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_recovers_completed_terminal_ticket_without_broadcast() {
+    let setup = make_setup().await;
+    let task = "mock:test#restart";
+    seed_l3_task(&setup.src, task).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+    let run_id = RunId::new();
+    seed_completed_journal(&setup, run_id).await;
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task, &run_id.to_string());
+        IntakeRepo::new(&guard)
+            .update_state(task, TicketState::Completed)
+            .unwrap();
+    }
+    let handle = spawn_gate(&setup, setup.tx.subscribe(), false);
+    let comments = wait_for_comments(&setup.src, 1).await;
+    assert_eq!(
+        comments.len(),
+        1,
+        "startup must recover without any RunFinished event"
+    );
+    assert_eq!(setup.src.merge_calls().await.len(), 1);
+    handle.abort();
+    let restarted = spawn_gate(&setup, setup.tx.subscribe(), false);
+    assert_no_new_comments_for(&setup.src, Duration::from_millis(100)).await;
+    assert_eq!(
+        setup.src.merge_calls().await.len(),
+        1,
+        "durable merged receipt suppresses restart"
+    );
+    restarted.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_receipt_storage_failure_never_calls_provider() {
+    let setup = make_setup().await;
+    let task = "mock:test#receipt-failure";
+    seed_l3_task(&setup.src, task).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    let run_id = RunId::new();
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task, &run_id.to_string());
+        guard.execute_batch("DROP TABLE intake_emit_log").unwrap();
+    }
+    let (tx, rx) = broadcast::channel(1);
+    let handle = spawn_gate(&setup, rx, false);
+    tx.send(completed_event(run_id)).unwrap();
+    drop(tx);
+    // Channel closure waits behind the dispatched event, proving it was consumed.
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        setup.src.merge_calls().await.is_empty(),
+        "missing durable receipt must fail closed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_merge_attempt_escalates_without_retrying_provider() {
+    let setup = make_setup().await;
+    let task = "mock:test#uncertain";
+    seed_l3_task(&setup.src, task).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    let run_id = RunId::new();
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task, &run_id.to_string());
+        guard.execute(
+            "INSERT INTO intake_emit_log(source_id,task_id,event_kind,run_id,recorded_at) VALUES (?1,?2,'merge_attempted',?3,?4)",
+            rusqlite::params!["mock:test", task, run_id.to_string(), Utc::now().timestamp_millis()],
+        ).unwrap();
+    }
+    // Removing L3 after publication cannot erase the uncertain external effect.
+    seed_l1_task(&setup.src, task).await;
+    let handle = spawn_gate(&setup, setup.tx.subscribe(), false);
+    setup.tx.send(completed_event(run_id)).unwrap();
+    let notices = wait_for_escalations(&setup.notifier, 1).await;
+    assert_eq!(
+        notices.len(),
+        1,
+        "uncertain external result requires operator visibility"
+    );
+    assert!(notices[0].2.contains("manual"));
+    assert!(
+        setup.src.merge_calls().await.is_empty(),
+        "uncertain published attempt cannot be replayed"
+    );
+    handle.abort();
+    let (tx, rx) = broadcast::channel(1);
+    let restarted = spawn_gate(&setup, rx, false);
+    tx.send(completed_event(run_id)).unwrap();
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(2), restarted)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        setup.notifier.snapshot().await.len(),
+        1,
+        "durable uncertainty classification suppresses repeated warnings"
+    );
+    assert!(setup.src.merge_calls().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_merge_reservation_never_calls_provider() {
+    let setup = make_setup().await;
+    let task = "mock:test#reservation-failure";
+    seed_l3_task(&setup.src, task).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    let run_id = RunId::new();
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task, &run_id.to_string());
+        guard.execute_batch("CREATE TRIGGER reject_merge_attempt BEFORE INSERT ON intake_emit_log WHEN NEW.event_kind = 'merge_attempted' BEGIN SELECT RAISE(ABORT, 'receipt unavailable'); END").unwrap();
+    }
+    let (tx, rx) = broadcast::channel(1);
+    let handle = spawn_gate(&setup, rx, false);
+    tx.send(completed_event(run_id)).unwrap();
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        setup.src.fetch_task_calls().await,
+        1,
+        "normal admission reached provider lookup"
+    );
+    assert!(
+        setup.src.merge_calls().await.is_empty(),
+        "RPC requires a successfully inserted reservation"
+    );
+    assert!(setup.src.posted_comments().await.is_empty());
+}
+
+async fn seed_completed_journal(setup: &Setup, run_id: RunId) {
+    let writer = setup
+        .runs
+        .create_run(run_id, setup._home.path(), None)
+        .await
+        .unwrap();
+    writer
+        .append_event(surge_core::run_event::VersionedEventPayload::new(
+            surge_core::run_event::EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: setup._home.path().into(),
+                initial_prompt: "recovery fixture".into(),
+                config: surge_core::run_event::RunConfig {
+                    bootstrap_edit_loop_cap: None,
+                    sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                    approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                    mcp_servers: Vec::new(),
+                    budget: surge_core::budget::BudgetGuard::default(),
+                },
+            },
+        ))
+        .await
+        .unwrap();
+    writer
+        .append_event(surge_core::run_event::VersionedEventPayload::new(
+            surge_core::run_event::EventPayload::RunCompleted {
+                terminal_node: NodeKey::try_new("end").unwrap(),
+            },
+        ))
+        .await
+        .unwrap();
+    writer.flush().await.unwrap();
+}
+
+/// Storage is opened on its required multi-thread runtime. Only the receiving
+/// gate runs on a dedicated current-thread runtime so the burst cannot interleave.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lag_recovers_dropped_completion_from_journal() {
+    let setup = make_setup().await;
+    let warm = RunId::new();
+    seed_l1_task(&setup.src, "mock:test#warm").await;
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, "mock:test#warm", &warm.to_string());
+    }
+    let run_id = RunId::new();
+    seed_l3_task(&setup.src, "mock:test#lagged").await;
+    seed_completed_journal(&setup, run_id).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+    tokio::task::spawn_blocking(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let (tx, rx) = broadcast::channel(1);
+                let handle = spawn_gate(&setup, rx, false);
+                tx.send(completed_event(warm)).unwrap();
+                wait_for_fetch_task(&setup.src, 1).await;
+                // Insert correlation only after the startup sweep has passed.
+                {
+                    let guard = setup.conn.lock().await;
+                    seed_ticket(&guard, "mock:test#lagged", &run_id.to_string());
+                }
+                tx.send(completed_event(run_id)).unwrap();
+                for _ in 0..8 {
+                    tx.send(GlobalDaemonEvent::DaemonShuttingDown).unwrap();
+                }
+                let comments = wait_for_comments(&setup.src, 1).await;
+                assert_eq!(comments.len(), 1, "lag must recover the durable completion");
+                assert_eq!(setup.src.merge_calls().await.len(), 1);
+                handle.abort();
+            });
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn published_merge_error_is_durable_uncertainty_and_never_replayed() {
+    let setup = make_setup().await;
+    let task = "mock:test#lost-merge-response";
+    seed_l3_task(&setup.src, task).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    // Unarmed mock publishes/counts the merge call, then returns an error.
+    // A transport error cannot prove the provider did not apply the request.
+    let run_id = RunId::new();
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task, &run_id.to_string());
+    }
+    let (tx, rx) = broadcast::channel(1);
+    let handle = spawn_gate(&setup, rx, false);
+    tx.send(completed_event(run_id)).unwrap();
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(setup.src.merge_calls().await.len(), 1);
+    {
+        let guard = setup.conn.lock().await;
+        assert!(
+            surge_persistence::intake_emit_log::has(
+                &guard,
+                surge_persistence::intake_emit_log::EmitKey {
+                    source_id: "mock:test",
+                    task_id: task,
+                    event_kind: surge_persistence::intake_emit_log::EmitEventKind::MergeUncertain,
+                    run_id: &run_id.to_string(),
+                }
+            )
+            .unwrap(),
+            "error after publication must persist unknown external outcome"
+        );
+    }
+    let notices = setup.notifier.snapshot().await;
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].2.contains("unknown external outcome"));
+    assert!(notices[0].2.contains("manual"));
+    let (tx, rx) = broadcast::channel(1);
+    let restarted = spawn_gate(&setup, rx, false);
+    tx.send(completed_event(run_id)).unwrap();
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(2), restarted)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        setup.src.merge_calls().await.len(),
+        1,
+        "uncertain merge cannot be replayed after restart"
+    );
+    assert_eq!(setup.notifier.snapshot().await.len(), 1);
+}

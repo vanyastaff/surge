@@ -176,14 +176,8 @@ async fn run_host(
 
     let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
-    // F2: Unlink any stale socket file from a previous unclean exit.
-    // On Windows, the named pipe doesn't live on the filesystem so this is a no-op.
     #[cfg(unix)]
-    {
-        if cfg.socket_path.exists() {
-            let _ = std::fs::remove_file(&cfg.socket_path);
-        }
-    }
+    let socket_directory = crate::socket_security::SocketDirectory::prepare(&cfg.socket_path)?;
 
     let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&cfg.socket_path)
         .map_err(DaemonError::Io)?;
@@ -196,19 +190,7 @@ async fn run_host(
     // `surge mcp logs` exposes captured MCP stderr only over it, with
     // no per-verb authz. Restrict access to the daemon's OS user.
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&cfg.socket_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            if let Err(e) = std::fs::set_permissions(&cfg.socket_path, perms) {
-                tracing::warn!(
-                    error = %e,
-                    "failed to set 0600 on daemon socket; access may be broader than intended"
-                );
-            }
-        }
-    }
+    let _bound_socket = socket_directory.publish(&cfg.socket_path)?;
     // On Windows the named pipe is not a filesystem object; interprocess
     // creates it with the default DACL (creating user + Administrators),
     // which already excludes other local users (documented in ADR-0014).

@@ -435,13 +435,13 @@ fn main() -> std::process::ExitCode {
             let broadcast = Arc::clone(&broadcast_registry);
             let admission = Arc::clone(&admission);
             async move {
-                if let Err(e) =
-                    run_with_supervisor(server_cfg, facade, tracking, broadcast, admission, shutdown_for_server, bootstrap)
-                        .await
-                {
+                let result = run_with_supervisor(server_cfg, facade, tracking, broadcast, admission, shutdown_for_server, bootstrap)
+                    .await;
+                if let Err(e) = &result {
                     tracing::error!(err = %e, "server exited with error; cancelling shutdown token");
                     shutdown_for_cancel.cancel();
                 }
+                result
             }
         });
 
@@ -453,18 +453,29 @@ fn main() -> std::process::ExitCode {
                 && admission.snapshot().await.active == 0
                 && broadcast_registry.active_count().await == 0
         }).await;
-        server_handle.abort();
+        let server_completed = server_handle.is_finished();
+        if !server_completed {
+            server_handle.abort();
+        }
+        let server_exit = match server_handle.await {
+            Ok(Ok(())) => 0u8,
+            Ok(Err(_)) => 1u8,
+            Err(error) if !server_completed && error.is_cancelled() => 0u8,
+            Err(error) => {
+                tracing::error!(%error, "server task failed");
+                1u8
+            },
+        };
         if !bootstrap_handle.is_finished() {
             tracing::warn!("bootstrap shutdown grace expired; unfinished journal phases remain recoverable");
             bootstrap_handle.abort();
         }
         let _ = bootstrap_handle.await;
-        0u8
+        server_exit
     });
 
     drop(rt);
     let _ = pidfile::release_lock();
-    let _ = std::fs::remove_file(&socket_path);
     std::process::ExitCode::from(exit)
 }
 

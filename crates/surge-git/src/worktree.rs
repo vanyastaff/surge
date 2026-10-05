@@ -177,10 +177,10 @@ impl GitManager {
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(false).include_ignored(false);
         let statuses = repo.statuses(Some(&mut opts))?;
-        Ok(statuses
+        statuses
             .iter()
-            .filter_map(|s| s.path().map(PathBuf::from))
-            .collect())
+            .map(|status| status.path().map(PathBuf::from).map_err(GitError::from))
+            .collect()
     }
 
     // ── Worktree lifecycle ────────────────────────────────────────────────
@@ -205,7 +205,8 @@ impl GitManager {
 
         // Check for duplicate
         let worktrees = repo.worktrees()?;
-        for name in worktrees.iter().flatten() {
+        for name in worktrees.iter() {
+            let Some(name) = name? else { continue };
             if name == spec_id {
                 return Err(GitError::WorktreeAlreadyExists(spec_id.to_string()));
             }
@@ -251,7 +252,7 @@ impl GitManager {
         let mut result = Vec::new();
 
         for name in worktrees.iter() {
-            let Some(name) = name else { continue };
+            let Some(name) = name? else { continue };
             let wt = match repo.find_worktree(name) {
                 Ok(wt) => wt,
                 Err(_) => continue,
@@ -457,9 +458,7 @@ impl GitManager {
             format!("refs/heads/{target}")
         } else {
             let head = repo.head()?;
-            head.name()
-                .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
-                .to_string()
+            head.name()?.to_string()
         };
 
         // Guard: source ≠ target
@@ -601,7 +600,8 @@ impl GitManager {
 
         // Check for duplicate
         let worktrees = repo.worktrees()?;
-        for name in worktrees.iter().flatten() {
+        for name in worktrees.iter() {
+            let Some(name) = name? else { continue };
             if name == short {
                 return Err(GitError::WorktreeAlreadyExists(short));
             }
@@ -770,9 +770,7 @@ impl GitManager {
             format!("refs/heads/{target}")
         } else {
             let head = repo.head()?;
-            head.name()
-                .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
-                .to_string()
+            head.name()?.to_string()
         };
 
         // Guard: source ≠ target
@@ -859,7 +857,8 @@ impl GitManager {
         let repo = self.open_repo()?;
         let worktrees = repo.worktrees()?;
         let mut result = Vec::new();
-        for name in worktrees.iter().flatten() {
+        for name in worktrees.iter() {
+            let Some(name) = name? else { continue };
             let wt = match repo.find_worktree(name) {
                 Ok(wt) => wt,
                 Err(_) => continue,
@@ -1013,6 +1012,31 @@ mod tests {
         assert_eq!(files[0], PathBuf::from("README.md"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn uncommitted_files_reports_non_utf8_path() {
+        let (_dir, path) = init_test_repo();
+        let repo = Repository::open(&path).unwrap();
+        let mut index = repo.index().unwrap();
+        // Git stores raw index paths even on filesystems that reject such names.
+        let mut entry = index.get_path(Path::new("README.md"), 0).unwrap();
+        entry.path = vec![b'f', 0xff];
+        index.add(&entry).unwrap();
+        index.write().unwrap();
+        assert!(
+            repo.index()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.path == [b'f', 0xff])
+        );
+
+        let error = GitManager::new(path)
+            .unwrap()
+            .uncommitted_files()
+            .unwrap_err();
+        assert!(matches!(error, GitError::Git2(_)), "{error}");
+    }
+
     #[test]
     fn test_has_changes_no_changes() {
         let (_dir, path) = init_test_repo();
@@ -1040,8 +1064,8 @@ mod tests {
         assert!(!oid.is_zero());
         let wt_repo = Repository::open(&info.path).unwrap();
         assert_eq!(
-            wt_repo.find_commit(oid).unwrap().message(),
-            Some("add new file")
+            wt_repo.find_commit(oid).unwrap().message().unwrap(),
+            "add new file"
         );
     }
 
@@ -1094,8 +1118,13 @@ mod tests {
         assert!(!oid.is_zero());
         let repo = Repository::open(&path).unwrap();
         assert_eq!(
-            repo.head().unwrap().peel_to_commit().unwrap().message(),
-            Some("add merge file")
+            repo.head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .message()
+                .unwrap(),
+            "add merge file"
         );
     }
 
@@ -1137,7 +1166,7 @@ mod tests {
         let repo = Repository::open(&path).unwrap();
         let tb = repo.find_branch(target_branch, BranchType::Local).unwrap();
         let tb_commit = tb.get().peel_to_commit().unwrap();
-        assert_eq!(tb_commit.message(), Some("background commit"));
+        assert_eq!(tb_commit.message().unwrap(), "background commit");
     }
 
     #[test]

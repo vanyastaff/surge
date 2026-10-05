@@ -67,7 +67,7 @@ impl NotifyDeliverer for TelegramDeliverer {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| NotifyError::Transport(format!("Telegram POST: {e}")))?;
+            .map_err(telegram_transport_error)?;
         if !response.status().is_success() {
             return Err(NotifyError::Transport(format!(
                 "Telegram sendMessage status: {}",
@@ -75,6 +75,41 @@ impl NotifyDeliverer for TelegramDeliverer {
             )));
         }
         Ok(())
+    }
+}
+
+// Telegram embeds its credential in the request URL. Never display that URL
+// when returning transport diagnostics to callers or notification logs.
+fn telegram_transport_error(error: reqwest::Error) -> NotifyError {
+    NotifyError::Transport(format!("Telegram POST: {}", error.without_url()))
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::telegram_transport_error;
+
+    #[tokio::test]
+    async fn transport_diagnostic_omits_bot_token_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let marker = "SYNTHETIC_BOT_CREDENTIAL";
+        let url = format!("http://{address}/bot{marker}/sendMessage");
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .post(&url)
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(marker));
+        let diagnostic = telegram_transport_error(error).to_string();
+        assert!(!diagnostic.contains(marker));
+        assert!(!diagnostic.contains(&url));
+        assert!(diagnostic.contains("Telegram POST:"));
+        assert!(diagnostic.contains("error sending request"));
     }
 }
 

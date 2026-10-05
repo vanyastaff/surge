@@ -95,9 +95,10 @@ pub fn validate_pr_repository(
     }
     let remotes = repository.remotes()?;
     let mut known = false;
-    for name in remotes.iter().flatten() {
+    for name in remotes.iter() {
+        let Some(name) = name? else { continue };
         let remote = repository.find_remote(name)?;
-        if let Some(identity) = remote.url().and_then(github_remote_identity) {
+        if let Some(identity) = github_remote_identity(remote.url()?) {
             known = true;
             if identity.eq_ignore_ascii_case(&pr.repository) {
                 return Ok(());

@@ -288,7 +288,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 │   └── worktree/                # git worktree branch for this run
 ```
 
-- **Append-only event log per run** — SQLite with WAL mode, triggers prevent UPDATE / DELETE on `events`. Payloads serialized as `bincode`.
+- **Append-only event log per run** — SQLite with WAL mode, triggers prevent UPDATE / DELETE on `events`. Payloads serialized as JSON bytes; the legacy `to_bincode` / `from_bincode` method names preserve the existing API.
 - **Materialized views** (`stage_executions`, `pending_approvals`, `cost_summary`, `task_ledger`, …) maintained by the engine in the same transaction as the event append. Rebuildable from events if corrupted. The registry DB additionally holds a cross-run `task_ledger_index` (mirrors each run's ledger for `surge ready` / `surge ledger`, the same pattern as `roadmap_patch_index`).
 - **Concurrency** — only the daemon writes; CLI / UI / bot are readers. WAL mode lets readers proceed without blocking the writer.
 - **Artifacts** — content-addressed files on disk, referenced from events.

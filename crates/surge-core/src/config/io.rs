@@ -173,35 +173,31 @@ impl SurgeConfig {
             ))
         })?;
 
-        // Same-directory temp file + atomic rename. On every platform
-        // we support, a successful `rename` within a single directory
-        // is atomic at the filesystem level: readers see either the
-        // old `path` contents or the new ones, never a partial mix.
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| {
-                crate::SurgeError::Config(format!(
-                    "Cannot save config to {}: path has no file name",
-                    path.display()
-                ))
-            })?
-            .to_string_lossy();
-        let tmp = parent.join(format!(".{file_name}.tmp.{}", std::process::id()));
-        std::fs::write(&tmp, content).map_err(|e| {
+        // Write through an exclusively created descriptor: concurrent saves do not
+        // share a path, and an old predictable-name symlink cannot redirect writes.
+        // The same-directory persist atomically replaces the destination. This does
+        // not promise power-loss durability of the directory entry.
+        use std::io::Write;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
             crate::SurgeError::Config(format!(
-                "Failed to write temp config {}: {e}",
-                tmp.display()
+                "Failed to create temp config in {}: {e}",
+                parent.display()
             ))
         })?;
-        if let Err(e) = std::fs::rename(&tmp, path) {
-            // Best-effort: clean up the temp file on rename failure.
-            let _ = std::fs::remove_file(&tmp);
-            return Err(crate::SurgeError::Config(format!(
-                "Failed to rename {} -> {}: {e}",
-                tmp.display(),
-                path.display()
-            )));
-        }
+        temporary
+            .write_all(content.as_bytes())
+            .map_err(|e| crate::SurgeError::Config(format!("Failed to write temp config: {e}")))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|e| crate::SurgeError::Config(format!("Failed to sync temp config: {e}")))?;
+        temporary.persist(path).map_err(|e| {
+            crate::SurgeError::Config(format!(
+                "Failed to replace config {}: {}",
+                path.display(),
+                e.error
+            ))
+        })?;
         Ok(())
     }
 
@@ -226,5 +222,90 @@ impl SurgeConfig {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn save_ignores_predictable_temporary_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        let victim = directory.path().join("victim");
+        std::fs::write(&victim, "keep me").unwrap();
+        let legacy_temp = directory
+            .path()
+            .join(format!(".surge.toml.tmp.{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &legacy_temp).unwrap();
+        SurgeConfig::default().save(&destination).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+        assert!(
+            std::fs::symlink_metadata(&legacy_temp)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        SurgeConfig::load(&destination).unwrap();
+    }
+
+    #[test]
+    fn concurrent_saves_publish_complete_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            let mut writers = Vec::new();
+            for writer in 0..8 {
+                let destination = &destination;
+                let barrier = &barrier;
+                writers.push(scope.spawn(move || {
+                    let config = SurgeConfig {
+                        default_agent: format!("writer-{writer}"),
+                        ..SurgeConfig::default()
+                    };
+                    barrier.wait();
+                    repeatedly_save_and_read(&config, destination);
+                }));
+            }
+            for writer in writers {
+                writer.join().unwrap();
+            }
+        });
+        let config = SurgeConfig::load(&destination).unwrap();
+        assert!(config.default_agent.starts_with("writer-"));
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    fn repeatedly_save_and_read(config: &SurgeConfig, destination: &Path) {
+        for _ in 0..20 {
+            config.save(destination).unwrap();
+            SurgeConfig::load(destination).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_persist_preserves_destination_and_removes_owned_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        std::fs::create_dir(&destination).unwrap();
+        let marker = destination.join("keep");
+        std::fs::write(&marker, "original").unwrap();
+        assert!(SurgeConfig::default().save(&destination).is_err());
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "original");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_config_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        SurgeConfig::default().save(&destination).unwrap();
+        let permissions = std::fs::metadata(destination).unwrap().permissions().mode();
+        assert_eq!(permissions & 0o777, 0o600);
     }
 }

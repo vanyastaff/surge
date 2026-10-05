@@ -164,11 +164,11 @@ impl Store {
         Ok(store)
     }
 
-    /// Get the path to the default store location (~/.surge/usage.db).
+    /// Get the default store path (`$SURGE_HOME/usage.db`, otherwise `~/.surge/usage.db`).
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = surge_core::home::surge_home_dir()
             .ok_or_else(|| PersistenceError::Storage("Cannot determine home directory".into()))?;
-        Ok(home.join(".surge").join("usage.db"))
+        Ok(home.join("usage.db"))
     }
 
     /// Initialize or verify the database schema.
@@ -889,6 +889,35 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_path_respects_isolated_surge_home() {
+        const CHILD_MARKER: &str = "SURGE_STORE_PATH_TEST_CHILD";
+        if let Some(home) = std::env::var_os(CHILD_MARKER) {
+            let expected = PathBuf::from(home).join("usage.db");
+            assert_eq!(Store::default_path().unwrap(), expected);
+            return;
+        }
+
+        // A subprocess owns its environment: no global mutation races with other tests.
+        let isolated_home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::tests::default_path_respects_isolated_surge_home",
+                "--nocapture",
+            ])
+            .env("SURGE_HOME", isolated_home.path())
+            .env(CHILD_MARKER, isolated_home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated path test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
 
     fn sample_session() -> SessionUsage {
         SessionUsage {

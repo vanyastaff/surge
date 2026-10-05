@@ -1,6 +1,9 @@
 //! Per-server MCP connection state. Wraps an rmcp `RunningService`
 //! and handles spawn / crash detection / reconnect.
 
+#[path = "stderr_capture.rs"]
+mod stderr_capture;
+
 use crate::child_settlement::ObservedTransport;
 use crate::error::McpError;
 use rmcp::ServiceExt;
@@ -808,11 +811,15 @@ impl StderrRecords {
         }
     }
 
-    async fn publish(&self, server: &str, path: &Path) {
+    async fn publish(&self, server: &str, capture: &mut Option<tokio::fs::File>) {
         if let Some(reason) = self.safe.last() {
             tracing::info!(target: "mcp::child::stderr", server = %server, reason);
         }
-        let _ = tokio::fs::write(path, self.safe.join("\n")).await;
+        if let Some(file) = capture
+            && let Err(error) = stderr_capture::publish(file, &self.safe.join("\n")).await
+        {
+            tracing::warn!(%error, "MCP stderr capture write failed");
+        }
     }
 }
 
@@ -859,9 +866,19 @@ pub fn stderr_log_path(cwd: Option<&Path>, server: &str) -> PathBuf {
         .collect();
     let base = match cwd {
         Some(dir) => dir.join(".surge").join("mcp-stderr"),
-        None => std::env::temp_dir().join("surge-mcp-stderr"),
+        None => daemon_stderr_directory(),
     };
     base.join(format!("{safe}.log"))
+}
+
+fn daemon_stderr_directory() -> PathBuf {
+    #[cfg(unix)]
+    let identity = nix::unistd::Uid::effective().as_raw().to_string();
+    #[cfg(not(unix))]
+    let identity = std::process::id().to_string();
+    std::env::temp_dir()
+        .join(format!("surge-mcp-{identity}"))
+        .join("mcp-stderr")
 }
 
 /// Drain raw stderr in fixed memory; publish only bounded opaque records.
@@ -872,45 +889,13 @@ async fn stderr_forwarder(
     owner: Option<Arc<dyn crate::writer_observer::HostWriterObserver>>,
 ) {
     let _owner = owner;
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-        // Owner-only capture dir. Daemon-scoped probes write under
-        // `temp_dir()/surge-mcp-stderr/`, which would otherwise inherit
-        // a world-readable umask default. Public files contain opaque
-        // operational categories only. Run-scoped paths live
-        // under the user-owned worktree, so 0700 is harmless there too.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ =
-                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
-        }
-    }
-    // Capture file must be owner-only for its whole lifetime. Create
-    // it 0600 (atomic for a fresh file), then also tighten an
-    // already-existing one: a prior probe/run may have left it with a
-    // broader umask default, and `mode()` only applies on creation.
-    // Truncate: this call runs once per spawned child (including
-    // restarts), and the path is stable across restarts — without
-    // truncation a restarted child's log would start by showing the
-    // previous (possibly crashed) child's categories until its own
-    // first record arrives, which is exactly the moment `surge mcp logs`
-    // is most likely to be read for a diagnosis.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&path)
-            .await
-            .is_ok()
-        {
-            let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await;
-        }
-    }
+    let mut capture = match stderr_capture::open(&path) {
+        Ok(file) => Some(tokio::fs::File::from_std(file)),
+        Err(error) => {
+            tracing::warn!(%error, "MCP stderr capture disabled: unsafe or unavailable location");
+            None
+        },
+    };
     let mut buffer = [0_u8; 4096];
     let mut records = StderrRecords::default();
     loop {
@@ -919,27 +904,27 @@ async fn stderr_forwarder(
             Ok(count) => {
                 for byte in &buffer[..count] {
                     if records.byte(*byte) {
-                        records.publish(&server, &path).await;
+                        records.publish(&server, &mut capture).await;
                     }
                 }
             },
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
             Err(_error) => {
                 if records.complete("mcp_stderr_read_failed") {
-                    records.publish(&server, &path).await;
+                    records.publish(&server, &mut capture).await;
                 }
                 break;
             },
         }
     }
     if records.bytes != 0 && records.finish() {
-        records.publish(&server, &path).await;
+        records.publish(&server, &mut capture).await;
     }
     if records.suppressed != 0 {
         tracing::info!(target: "mcp::child::stderr", server = %server,
             suppressed = records.suppressed, reason = "mcp_stderr_records_suppressed");
         records.safe.push("mcp_stderr_records_suppressed");
-        let _ = tokio::fs::write(&path, records.safe.join("\n")).await;
+        records.publish(&server, &mut capture).await;
     }
 }
 

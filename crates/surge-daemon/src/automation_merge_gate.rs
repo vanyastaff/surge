@@ -23,6 +23,11 @@
 //! 7. Record the terminal decision into `intake_emit_log` so a re-fired
 //!    completion no-ops — in particular, a recorded `Merged` row prevents a
 //!    double-merge after recovery.
+//!
+//! Durable `Completed` journals are reconciled at startup, every 30 seconds and
+//! after broadcast lag, in bounded keyset pages including terminal tickets.
+//! `MergeAttempted` is reserved before the irreversible RPC. Interrupted attempts
+//! become `MergeUncertain` and require manual inspection; they are never replayed.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -79,6 +84,10 @@ pub fn spawn(
     ))
 }
 
+const RECONCILE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const RECONCILE_PAGE_SIZE: usize = 64;
+
 async fn run(
     mut rx: broadcast::Receiver<GlobalDaemonEvent>,
     source_map: Arc<HashMap<String, Arc<dyn TaskSource>>>,
@@ -87,36 +96,135 @@ async fn run(
     runs: Arc<surge_persistence::runs::Storage>,
     publish_run_report: bool,
 ) {
+    let mut cursor = String::new();
+    let mut interval = tokio::time::interval(RECONCILE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The first interval tick is immediate: reconcile before receiving events.
     loop {
-        let event = match rx.recv().await {
-            Ok(e) => e,
+        let event = tokio::select! {
+            _ = interval.tick() => {
+                reconcile_page(&source_map, &conn, &notifier, &runs, publish_run_report, &mut cursor).await;
+                continue;
+            },
+            event = rx.recv() => event,
+        };
+        match event {
             Err(broadcast::error::RecvError::Closed) => {
                 info!(target: "intake::merge_gate", "broadcast closed; exiting");
                 return;
             },
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                warn!(
-                    target: "intake::merge_gate",
-                    skipped = n,
-                    "merge gate lagged; some RunFinished events dropped"
-                );
+                warn!(target: "intake::merge_gate", skipped = n, "merge gate lagged; reconciling durable completions");
+                reconcile_page(
+                    &source_map,
+                    &conn,
+                    &notifier,
+                    &runs,
+                    publish_run_report,
+                    &mut cursor,
+                )
+                .await;
+            },
+            Ok(GlobalDaemonEvent::RunFinished {
+                run_id,
+                outcome: RunOutcome::Completed { .. },
+            }) => {
+                complete_bounded(
+                    run_id,
+                    &source_map,
+                    &conn,
+                    &notifier,
+                    &runs,
+                    publish_run_report,
+                )
+                .await;
+            },
+            Ok(_) => {},
+        }
+    }
+}
+
+/// Keyset paging includes terminal tickets: the completion consumer may settle
+/// them before this consumer sees the broadcast. The cursor survives ticks, so
+/// a fixed batch ceiling cannot permanently starve older candidates.
+fn reconciliation_candidates(
+    conn: &Connection,
+    cursor: &str,
+) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut statement = conn.prepare(
+        "SELECT task_id, run_id FROM ticket_index AS ticket \
+         WHERE run_id IS NOT NULL AND task_id > ?1 AND NOT EXISTS (\
+             SELECT 1 FROM intake_emit_log AS emitted \
+             WHERE emitted.source_id = ticket.source_id AND emitted.task_id = ticket.task_id \
+               AND emitted.run_id = ticket.run_id \
+               AND emitted.event_kind IN ('merged','merge_blocked','merge_proposed','merge_uncertain')) \
+         ORDER BY task_id LIMIT ?2",
+    )?;
+    statement
+        .query_map(rusqlite::params![cursor, RECONCILE_PAGE_SIZE], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect()
+}
+
+async fn reconcile_page(
+    sources: &Arc<HashMap<String, Arc<dyn TaskSource>>>,
+    conn: &Arc<Mutex<Connection>>,
+    notifier: &Arc<dyn NotifyDeliverer>,
+    runs: &Arc<surge_persistence::runs::Storage>,
+    publish_run_report: bool,
+    cursor: &mut String,
+) {
+    let candidates = {
+        let guard = conn.lock().await;
+        reconciliation_candidates(&guard, cursor)
+    };
+    let candidates = match candidates {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            warn!(target: "intake::merge_gate", %error, "cannot reconcile durable merge completions");
+            return;
+        },
+    };
+    if let Some((task_id, _)) = candidates.last() {
+        cursor.clone_from(task_id);
+    }
+    if candidates.len() < RECONCILE_PAGE_SIZE {
+        cursor.clear();
+    }
+    for (task_id, run_id) in candidates {
+        let parsed = match run_id.parse() {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                warn!(target: "intake::merge_gate", %error, %task_id, %run_id, "invalid correlated merge run");
                 continue;
             },
         };
-
-        if let GlobalDaemonEvent::RunFinished { run_id, outcome } = event
-            && let RunOutcome::Completed { .. } = outcome
-        {
-            handle_completion(
-                run_id,
-                &source_map,
-                &conn,
-                &notifier,
-                &runs,
-                publish_run_report,
-            )
-            .await;
+        if matches!(
+            super::intake_completion::durable_outcome(runs, parsed).await,
+            Some(RunOutcome::Completed { .. })
+        ) {
+            complete_bounded(parsed, sources, conn, notifier, runs, publish_run_report).await;
         }
+    }
+}
+
+async fn complete_bounded(
+    run_id: RunId,
+    sources: &Arc<HashMap<String, Arc<dyn TaskSource>>>,
+    conn: &Arc<Mutex<Connection>>,
+    notifier: &Arc<dyn NotifyDeliverer>,
+    runs: &Arc<surge_persistence::runs::Storage>,
+    publish_run_report: bool,
+) {
+    if tokio::time::timeout(
+        COMPLETION_TIMEOUT,
+        handle_completion(run_id, sources, conn, notifier, runs, publish_run_report),
+    )
+    .await
+    .is_err()
+    {
+        warn!(target: "intake::merge_gate", %run_id, "merge completion timed out; any published merge attempt requires manual inspection on recovery");
     }
 }
 
@@ -142,30 +250,13 @@ async fn handle_completion(
         );
         return;
     };
-    let Some((task_id, policy)) = fetch_policy_for_completion(&row, &source).await else {
-        return;
+    let task_id = match TaskId::try_new(row.task_id.clone()) {
+        Ok(task_id) => task_id,
+        Err(error) => {
+            warn!(target: "intake::merge_gate", %error, task_id = %row.task_id, "invalid merge task identity");
+            return;
+        },
     };
-    if !is_l3_with_merge(&policy) {
-        info!(
-            target: "intake::merge_gate",
-            task_id = %row.task_id,
-            run_id = %run_id_str,
-            tier = policy.tier_code(),
-            "non-L3 (or merge_when_clean=false); merge gate no-op"
-        );
-        return;
-    }
-    if already_emitted(conn, &row.source_id, &row.task_id, run_id_str).await {
-        info!(
-            target: "intake::merge_gate",
-            task_id = %row.task_id,
-            run_id = %run_id_str,
-            "merge gate already emitted for this run; skipping"
-        );
-        return;
-    }
-
-    let readiness = check_merge_readiness(&source, &task_id).await;
     let ctx = MergeCtx {
         source: &source,
         task_id: &task_id,
@@ -178,7 +269,59 @@ async fn handle_completion(
         runs,
         publish_run_report,
     };
+    if already_emitted(conn, &row.source_id, &row.task_id, run_id_str).await
+        || recover_interrupted_merge(&ctx).await
+    {
+        return;
+    }
+    let Some(policy) = fetch_policy_for_completion(&row, &source, &task_id).await else {
+        return;
+    };
+    if !is_l3_with_merge(&policy) {
+        info!(target: "intake::merge_gate", task_id = %row.task_id, %run_id, tier = policy.tier_code(), "non-L3 merge gate no-op");
+        return;
+    }
+    let readiness = check_merge_readiness(&source, &task_id).await;
     apply_merge_decision(&ctx, readiness).await;
+}
+
+/// Classification precedes tracker reads and current policy: a revoked label
+/// cannot erase an already-published request's unknown external outcome.
+async fn recover_interrupted_merge(ctx: &MergeCtx<'_>) -> bool {
+    let attempted = {
+        let guard = ctx.conn.lock().await;
+        has(
+            &guard,
+            EmitKey {
+                source_id: ctx.source_id,
+                task_id: ctx.task_id_str,
+                event_kind: EmitEventKind::MergeAttempted,
+                run_id: ctx.run_id_str,
+            },
+        )
+    };
+    match attempted {
+        Ok(true) => {
+            classify_uncertain_merge(ctx).await;
+            true
+        },
+        Ok(false) => false,
+        Err(error) => {
+            warn!(target: "intake::merge_gate", %error, run_id = %ctx.run_id, "cannot inspect merge attempt receipt; refusing merge");
+            true
+        },
+    }
+}
+
+/// Neither an interrupted request nor a returned transport/protocol error proves
+/// the provider did not apply a published merge. Persist classification before
+/// best-effort delivery, so a failed notification cannot authorize a retry.
+async fn classify_uncertain_merge(ctx: &MergeCtx<'_>) {
+    if reserve_marker(ctx, EmitEventKind::MergeUncertain).await {
+        let reason = "Surge L3 auto-merge: published merge request has unknown external outcome; manual PR inspection required. Merge will not be retried.";
+        warn!(target: "intake::merge_gate", run_id = %ctx.run_id, task_id = %ctx.task_id_str, "merge outcome uncertain; manual PR inspection required");
+        record_blocked(ctx, reason).await;
+    }
 }
 
 /// Bundle of the stable references the decision path threads through its
@@ -227,32 +370,15 @@ async fn lookup_ticket(
 async fn fetch_policy_for_completion(
     row: &surge_persistence::intake::IntakeRow,
     source: &Arc<dyn TaskSource>,
-) -> Option<(TaskId, AutomationPolicy)> {
-    let task_id = match TaskId::try_new(row.task_id.clone()) {
-        Ok(id) => id,
-        Err(e) => {
-            warn!(
-                target: "intake::merge_gate",
-                error = %e,
-                task_id = %row.task_id,
-                "invalid task_id; skipping merge gate"
-            );
-            return None;
+    task_id: &TaskId,
+) -> Option<AutomationPolicy> {
+    match source.fetch_task(task_id).await {
+        Ok(details) => Some(resolve_policy(&details.labels)),
+        Err(error) => {
+            warn!(target: "intake::merge_gate", %error, task_id = %row.task_id, "fetch_task failed; skipping merge gate");
+            None
         },
-    };
-    let details = match source.fetch_task(&task_id).await {
-        Ok(d) => d,
-        Err(e) => {
-            warn!(
-                target: "intake::merge_gate",
-                error = %e,
-                task_id = %row.task_id,
-                "fetch_task failed; skipping merge gate"
-            );
-            return None;
-        },
-    };
-    Some((task_id, resolve_policy(&details.labels)))
+    }
 }
 
 fn is_l3_with_merge(policy: &AutomationPolicy) -> bool {
@@ -279,6 +405,7 @@ async fn already_emitted(
         EmitEventKind::Merged,
         EmitEventKind::MergeBlocked,
         EmitEventKind::MergeProposed,
+        EmitEventKind::MergeUncertain,
     ];
     let guard = conn.lock().await;
     for kind in kinds {
@@ -293,11 +420,35 @@ async fn already_emitted(
             Ok(false) => {},
             Err(e) => {
                 warn!(target: "intake::merge_gate", error = %e, "intake_emit_log has() failed");
-                return false;
+                return true;
             },
         }
     }
     false
+}
+
+/// Only the unique durable reservation winner may publish a merge or recovery
+/// notification. Persistence errors fail closed before any external action.
+async fn reserve_marker(ctx: &MergeCtx<'_>, kind: EmitEventKind) -> bool {
+    let result = {
+        let guard = ctx.conn.lock().await;
+        record(
+            &guard,
+            EmitKey {
+                source_id: ctx.source_id,
+                task_id: ctx.task_id_str,
+                event_kind: kind,
+                run_id: ctx.run_id_str,
+            },
+        )
+    };
+    match result {
+        Ok(inserted) => inserted,
+        Err(error) => {
+            error!(target: "intake::merge_gate", %error, run_id = %ctx.run_id_str, kind = %kind.as_str(), "cannot persist merge reservation; refusing external action");
+            false
+        },
+    }
 }
 
 async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
@@ -317,6 +468,9 @@ async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
 /// Execute the merge for a `Ready` PR and record the outcome. `expected_head`
 /// pins the merge to the revision the readiness verdict approved.
 async fn attempt_merge(ctx: &MergeCtx<'_>, expected_head: Option<&str>) {
+    if !reserve_marker(ctx, EmitEventKind::MergeAttempted).await {
+        return;
+    }
     match ctx.source.merge_pr(ctx.task_id, expected_head).await {
         Ok(MergeOutcome::Merged | MergeOutcome::AlreadyMerged) => {
             // The merge is irreversible. Record the terminal `Merged` dedup
@@ -386,13 +540,7 @@ async fn attempt_merge(ctx: &MergeCtx<'_>, expected_head: Option<&str>) {
             )
             .await;
         },
-        Err(e) => {
-            record_blocked(
-                ctx,
-                &format!("Surge L3 auto-merge: merge attempt errored — {e}"),
-            )
-            .await;
-        },
+        Err(_) => classify_uncertain_merge(ctx).await,
     }
 }
 
@@ -603,8 +751,8 @@ fn shorten_home_prefix(text: &str, home: &str) -> String {
 /// paths so a stalled L3 run is always visible.
 async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
     // Escalate first: "never a silent stall" must hold even if the tracker
-    // comment fails. The `already_emitted` precheck stops re-fires before
-    // reaching here, so this fires at most once per run.
+    // comment fails. Uncertain attempts already carry a terminal classification;
+    // ordinary blocked decisions remain eligible until their receipt is durable.
     escalate(ctx, NotifySeverity::Warn, "L3 auto-merge blocked", body).await;
 
     let comment_ok = match ctx.source.post_comment(ctx.task_id, body).await {
@@ -614,7 +762,7 @@ async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
                 target: "intake::merge_gate",
                 error = %e,
                 task_id = %ctx.task_id_str,
-                "merge gate comment post failed; will retry on next RunFinished"
+                "merge gate comment post failed; recovery eligibility depends on durable receipts"
             );
             false
         },
@@ -631,7 +779,7 @@ async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
                 error = %e,
                 task_id = %ctx.task_id_str,
                 label = labels::MERGE_BLOCKED,
-                "merge gate set_label failed; will retry on next RunFinished"
+                "merge gate set_label failed; recovery eligibility depends on durable receipts"
             );
             false
         },
@@ -644,7 +792,7 @@ async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
             run_id = %ctx.run_id_str,
             comment_ok,
             label_ok,
-            "merge gate emission incomplete — skipping intake_emit_log record so retry can fire"
+            "merge gate emission incomplete; preserving existing receipts without recording successful delivery"
         );
         return;
     }
@@ -663,9 +811,9 @@ async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
 /// Retries a few times on transient `SQLite` failure. A persistent failure on
 /// the [`EmitEventKind::Merged`] row is logged at ERROR: the merge already
 /// happened durably, so a missing dedup row means a re-fired completion could
-/// mislabel the merged PR `merge-blocked`. It can never double-merge — the
-/// readiness recheck on the re-fire returns "already merged" — but the
-/// operator should know the dedup write failed.
+/// require manual inspection. The pre-dispatch `MergeAttempted` receipt prevents
+/// replay even when the success receipt cannot be written; recovery durably
+/// classifies that unknown external outcome as `MergeUncertain`.
 async fn record_dedup(ctx: &MergeCtx<'_>, kind: EmitEventKind) {
     const ATTEMPTS: u8 = 3;
     let key = EmitKey {
@@ -698,8 +846,7 @@ async fn record_dedup(ctx: &MergeCtx<'_>, kind: EmitEventKind) {
                     run_id = %ctx.run_id_str,
                     task_id = %ctx.task_id_str,
                     "CRITICAL: PR merged but `merged` dedup row not persisted after retries; \
-                     a re-fired completion may mislabel the merged PR (cannot double-merge — \
-                     the readiness recheck blocks it). Manual check advised."
+                     durable attempt receipt prevents retry; recovery requires manual PR inspection."
                 );
             },
             Err(e) => {
@@ -759,7 +906,7 @@ async fn escalate(ctx: &MergeCtx<'_>, severity: NotifySeverity, title: &str, bod
 /// approving reviews; see `surge_intake::github::source`.
 ///
 /// Transport failures (network, auth) are converted to a blocked
-/// reason — the gate retries on the next `RunFinished` because the
+/// reason — the gate retries during durable reconciliation because the
 /// `intake_emit_log` row is only written after both side-effects
 /// succeed.
 async fn check_merge_readiness(source: &Arc<dyn TaskSource>, task_id: &TaskId) -> MergeReadiness {
@@ -780,6 +927,44 @@ async fn check_merge_readiness(source: &Arc<dyn TaskSource>, task_id: &TaskId) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconciliation_pages_include_terminal_tickets_and_exclude_receipts() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE ticket_index(task_id TEXT PRIMARY KEY, source_id TEXT, run_id TEXT, state TEXT);").unwrap();
+        conn.execute_batch(include_str!(
+            "../../surge-persistence/src/runs/migrations/registry/0013_intake_emit_log.sql"
+        ))
+        .unwrap();
+        for index in 0..65 {
+            conn.execute(
+                "INSERT INTO ticket_index VALUES (?1,'mock:test','run-fixture','Completed')",
+                [format!("mock:test#{index:03}")],
+            )
+            .unwrap();
+        }
+        let first = reconciliation_candidates(&conn, "").unwrap();
+        assert_eq!(first.len(), 64);
+        assert_eq!(first[0].0, "mock:test#000");
+        assert_eq!(first[63].0, "mock:test#063");
+        let next = reconciliation_candidates(&conn, "mock:test#063").unwrap();
+        assert_eq!(next, [("mock:test#064".into(), "run-fixture".into())]);
+        record(
+            &conn,
+            EmitKey {
+                source_id: "mock:test",
+                task_id: "mock:test#064",
+                event_kind: EmitEventKind::Merged,
+                run_id: "run-fixture",
+            },
+        )
+        .unwrap();
+        assert!(
+            reconciliation_candidates(&conn, "mock:test#063")
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn readiness_variants_compare() {
