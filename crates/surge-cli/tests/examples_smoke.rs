@@ -6,6 +6,9 @@
 //! job of Task 5.1 (`crates/surge-orchestrator/tests/archetypes_mock_test.rs`);
 //! this test guards against regressions in the example shape itself.
 
+#[path = "common/owned_flow.rs"]
+mod owned_flow;
+
 use assert_cmd::Command;
 use predicates::str::contains;
 use std::path::{Path, PathBuf};
@@ -127,7 +130,8 @@ fn bundled_template_names_and_legacy_aliases_resolve_valid_graphs() {
 #[test]
 fn onboarding_smoke_can_init_describe_and_start_example_run() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home_dir = tempfile::tempdir().unwrap();
+    let home = home_dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(temp.path().join("README.md"), "# Smoke\n").unwrap();
     std::fs::write(
@@ -157,15 +161,22 @@ members = []
         .assert()
         .success();
 
-    let example = examples_dir().join("flow_terminal_only.toml");
+    std::fs::copy(
+        examples_dir().join("flow_terminal_only.toml"),
+        temp.path().join("flow.toml"),
+    )
+    .unwrap();
+    owned_flow::commit_project(temp.path());
+    let _daemon = owned_flow::start_daemon(&home.join(".surge"), temp.path(), None);
+    let workspace = home_dir.path().join("workspace");
     let execution = Command::cargo_bin("surge")
         .unwrap()
         .args([
             "engine",
             "run",
-            example.to_str().unwrap(),
+            "flow.toml",
             "--worktree",
-            temp.path().to_str().unwrap(),
+            workspace.to_str().unwrap(),
         ])
         .current_dir(temp.path())
         .env("HOME", &home)
