@@ -10,6 +10,9 @@ in [continuation evidence](continuation/README.md). The sections below describe
 the original `3136b82` checkpoint and its historical artifact; statements about
 later documentation-only changes apply to that original capture interval.
 
+Additional required mock/restart checks and actual native snapshot restoration
+are recorded in [follow-up evidence](followup/README.md).
+
 ## Original revision and native artifact
 
 Frozen Rust source and packaged README/licenses: `3136b8268cb33009305acf114ff6cc075bbc3b8d`.

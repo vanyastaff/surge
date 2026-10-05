@@ -49,7 +49,7 @@ artifact identity. See [continuation evidence](release-evidence/2026-10-05/conti
 | macOS archive OpenSSL | P1 | R19 | Native release build | Static OpenSSL; no non-system dylib path; target15 | ARM64 build/linkage/archive E2E PASS; other runners unverified |
 | Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | Final actual ARM64 source/binary capture PASS; 351 packages / 17,553 published files; other native platforms unverified |
 | Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Final Python 41/41 PASS (75.379s); authenticated native producer/collector/package PASS |
-| Release/rollback docs | P0 | R30/R31 | Schema and packaging | Full quiescent snapshot; restore-only rollback | Complete; synthetic mechanics drill PASS |
+| Release/rollback docs | P0 | R30/R31/R32 | Schema and packaging | Full quiescent snapshot; restore-only rollback | Complete; synthetic and actual same-schema native terminal-only restore drills PASS |
 | Final integrated validation | P0 | Coordinator/R20–24 | Frozen source | Honest build/lint/test/smoke denominators | Frozen clippy/fmt/MSRV/build/smoke PASS; nextest NO-GO |
 | Independent verdict | P0 | R32 | Final evidence | Reviewable GO/NO-GO | Final independent NO-GO; safety/local ARM64 candidate ACCEPTABLE |
 
@@ -151,6 +151,18 @@ replay, daemon restart and clean project Git state. R32 independently validated
 archive bytes, binary/notice/source bindings, authenticated registry archives,
 system dylibs and minimum OS metadata. This is one local target, not the required
 four-platform publication set. The final independent verdict is NO-GO.
+
+The required `test-ignored` allowlist was repeated at documentation checkpoint
+`062008c`, with unchanged Rust/manifest/lock source from `8e3a781`: ACP 2,
+engine 3, MCP stdio 3, controlled daemon 1 and daemon restart 2 passed (11 total).
+This is separate from the default nextest denominator. A native binary
+replacement/full restore drill also passed: `3136b82` → `8e3a781` → restored old
+binary, two completed terminal runs retained, a third post-snapshot run
+quarantined, three database checks and 111 exact snapshot entries before reopening.
+The first failed attempt exposed SQLite sidecar creation during read-only checks;
+validation now uses a separate exact working copy. [Follow-up evidence](release-evidence/2026-10-05/followup/README.md)
+preserves both attempts and independent review. Scope is same-schema terminal-only;
+provider, external-effect and production restoration remain unverified.
 
 Complete MCP containment/settlement and external-effect authority are required for
 productive cold recovery. GroupOnly evidence cannot become complete cleanup merely

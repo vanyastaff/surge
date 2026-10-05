@@ -83,9 +83,14 @@ reader-only access and raw inspection do not migrate old projections.
    project directories, including `.git`, retained worktrees, ignored runtime files
    and private objects. Store the snapshot in an access-restricted destination.
    Do not prune, reset or delete source or worktrees.
-4. Validate copied databases read-only with SQLite `PRAGMA integrity_check` and
-   `PRAGMA foreign_key_check`; record an inventory and hashes. Preserve the original
-   paths and permissions, including private-input restrictions.
+4. Record the retained snapshot inventory and hashes. Make a separate complete
+   disposable validation copy, including WAL/SHM files, and confirm its initial
+   inventory matches the retained snapshot. Validate its databases read-only with
+   SQLite `PRAGMA integrity_check` and `PRAGMA foreign_key_check`. A `mode=ro`
+   connection can create sidecars in a writable directory; do not validate against
+   the retained immutable snapshot directly. Recheck that retained snapshot's
+   inventory afterward. Preserve original paths and permissions, including
+   private-input restrictions.
 
 Registry state is under `<runtime>/db/registry.sqlite`; run state is under
 `<runtime>/runs/<run-id>/events.sqlite`. Copying only SQLite main files while writers
@@ -115,3 +120,12 @@ backup and complete quiescent restore, and checked integrity, foreign keys and
 artifact bytes. This tests backup mechanics with Python SQLite; it does not prove
 Rust daemon restart, provider recovery or a production restore. Test the procedure
 in an isolated copy of your deployment before relying on it.
+
+A subsequent [native rollback drill](release-evidence/2026-10-05/followup/README.md)
+used the actual `3136b82` and `8e3a781` archive binaries in an isolated temporary
+project. Two completed terminal runs survived binary replacement and full
+snapshot restore; a third post-snapshot run remained in quarantine. Exact
+111-entry byte/mode/symlink inventory, three SQLite integrity/foreign-key checks,
+old binary identity, original Git HEAD and daemon restart passed. This checks
+same-schema terminal-only restoration, not schema downgrade, provider recovery,
+external-effect rollback or production restoration.
