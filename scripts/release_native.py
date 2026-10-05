@@ -4,9 +4,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import subprocess
 import sys
+import tarfile
+import tomllib
 
 VENDOR_LIBRARIES = {
     'libgit2-sys': {'git2'}, 'libssh2-sys': {'ssh2'},
@@ -148,11 +151,19 @@ def snapshot_sources(metadata_path, ids_path):
     if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids) or not set(ids) <= packages.keys():
         raise ValueError('Dependency IDs must be a nonempty unique list of metadata package IDs')
     files = {}
+    authenticated = {}
+    locked = tomllib.loads(Path('Cargo.lock').read_text()).get('package', [])
     for package_id in sorted(ids):
-        source = Path(packages[package_id]['manifest_path']).parent.resolve(strict=True)
+        package = packages[package_id]
+        source = Path(package['manifest_path']).parent.resolve(strict=True)
+        registry = (package.get('source') or '').startswith('registry+')
+        if registry:
+            authenticated[package_id] = authenticate_registry_source(package, locked)
         package_files = []
         for base, dirs, names in os.walk(source, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if d not in {'.git', 'target', '.worktrees', '__pycache__'})
+            dirs[:] = sorted(d for d in dirs if registry or d not in {'.git', '.worktrees', '__pycache__'})
+            if not registry and Path(base) == source:
+                dirs[:] = [d for d in dirs if d != 'target']
             if any((Path(base) / d).is_symlink() for d in dirs):
                 raise ValueError(f'Unproven source directory symlink in {base}')
             for name in sorted(names):
@@ -182,7 +193,54 @@ def snapshot_sources(metadata_path, ids_path):
             workspace.append({'path': str(path.resolve()),
                               'sha256': digest(path) if path.stat().st_size else hashlib.sha256(b'').hexdigest()})
     return {'packages': files, 'workspace_context': context, 'workspace_files': workspace,
-            'workspace_identity': source_identity()}
+            'workspace_identity': source_identity(), 'authenticated_registry': authenticated}
+
+
+def authenticate_registry_source(package, locked):
+    matches = [p for p in locked if (p.get('name'), p.get('version'), p.get('source')) ==
+               (package['name'], package['version'], package['source'])]
+    if len(matches) != 1 or not matches[0].get('checksum'):
+        raise ValueError(f'Missing exact locked registry checksum: {package["id"]}')
+    source = Path(package['manifest_path']).parent.resolve(strict=True)
+    archive = source.parent.parent.parent / 'cache' / source.parent.name / f'{package["name"]}-{package["version"]}.crate'
+    if archive.is_symlink() or digest(archive) != matches[0]['checksum']:
+        raise ValueError(f'Registry archive checksum mismatch: {package["id"]}')
+    prefix = f'{package["name"]}-{package["version"]}/'
+    published = {}
+    seen = set()
+    with tarfile.open(archive, 'r:gz') as stream:
+        for member in stream:
+            if member.name in seen:
+                raise ValueError(f'Duplicate published archive member: {member.name}')
+            seen.add(member.name)
+            if not member.name.startswith(prefix) or '\\' in member.name:
+                raise ValueError(f'Unexpected published archive path: {member.name}')
+            relative = member.name[len(prefix):]
+            parts = PurePosixPath(relative).parts
+            if '..' in parts or relative.startswith('/') or any(':' in p for p in parts):
+                raise ValueError(f'Unsafe published archive path: {member.name}')
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise ValueError(f'Unsupported published archive member: {member.name}')
+            path = source.joinpath(*parts)
+            if not path.resolve().is_relative_to(source) or any(p.is_symlink() for p in [path, *path.parents] if p.is_relative_to(source)):
+                raise ValueError(f'Unsafe registry source path: {path}')
+            with stream.extractfile(member) as content:
+                expected = hashlib.sha256(content.read()).hexdigest()
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise ValueError(f'Published registry source differs from authenticated archive: {path}')
+            published[relative] = expected
+    if not published:
+        raise ValueError(f'Empty registry source archive: {archive}')
+    source_paths = list(source.rglob('*'))
+    if any(p.is_symlink() for p in source_paths):
+        raise ValueError(f'Unproven registry source symlink: {source}')
+    extras = {p.relative_to(source).as_posix() for p in source_paths if p.is_file()} - published.keys()
+    if extras - {'.cargo-ok', '.cargo-checksum.json'}:
+        raise ValueError(f'Unknown files outside published registry archive: {sorted(extras)}')
+    return {'archive': evidence(archive), 'source': package['source'],
+            'checksum': matches[0]['checksum'], 'published_files': published}
 
 
 def verify_evidence(record):

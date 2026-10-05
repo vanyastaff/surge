@@ -178,12 +178,21 @@ class NoticeTests(unittest.TestCase):
 
     def test_complete_mini_graph_uses_real_portable_validator(self):
         # Synthetic graph uses a real complete permission text, not a boolean bypass.
-        permission = Path("LICENSE-MIT").read_text()
+        crate_source = next(Path.home().joinpath(".cargo/registry/src").glob("*/itoa-1.0.18"))
+        crate_checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+        package = {"name": "itoa", "version": "1.0.18", "manifest_path": str(crate_source / "Cargo.toml")}
+        archive = notices.registry_archive(package)
+        members = notices.archive_members(archive, crate_checksum, "itoa", "1.0.18")
+        with tarfile.open(archive) as stream:
+            permission = stream.extractfile("itoa-1.0.18/LICENSE-MIT").read().decode()
         review = notices.strict_json((notices.SUPPLEMENTS / "runtime-reviewed.json").read_text())["reviews"][0]
         runtime_text = (notices.SUPPLEMENTS / review["file"]).read_text()
         runtime_version = f"release: {review['release']}\ncommit-hash: {review['commit']}"
         source = notices.source_identity()
-        native = {"source_inputs": {"workspace_identity": source}, "schema": 1, "target": "aarch64-apple-darwin", "cargo_lock": {"sha256": "lock"},
+        native = {"source_inputs": {"workspace_identity": source,
+                    "authenticated_registry": {"registry-demo": {"checksum": crate_checksum,
+                        "source": "registry+https://github.com/rust-lang/crates.io-index", "archive": {"sha256": crate_checksum}, "published_files": members}},
+                    "packages": {"registry-demo": [{"path": str(crate_source / path), "sha256": sha} for path, sha in members.items()]}}, "schema": 1, "target": "aarch64-apple-darwin", "cargo_lock": {"sha256": "lock"},
                   "complete": True, "blockers": [], "components": [],
                   "binaries": [{"name": name, "after": {"path": "/fixture/" + name, "sha256": notices.digest(name.encode())},
                                 "loader": {"libraries": ["system"]}} for name in ("surge", "surge-daemon")],
@@ -191,24 +200,48 @@ class NoticeTests(unittest.TestCase):
                        "profile": {"test": False}, "executable": "/fixture/" + name} for name in ("surge", "surge-daemon")]
                        + [{"reason": "build-finished", "success": True}],
                   "dependency_ids_document": ["registry-demo"],
-                  "metadata_document": {"packages": [{"id": "registry-demo", "source": "registry"}]},
+                  "metadata_document": {"packages": [{"id": "registry-demo", "source": "registry+https://github.com/rust-lang/crates.io-index", "manifest_path": str(crate_source / "Cargo.toml")}]},
                   "runtime": {"toolchain": {"version": runtime_version}, "copyright": {"text": runtime_text, "sha256": notices.digest(runtime_text.encode())}}}
         coverage = {"schema": 1, "target": "aarch64-apple-darwin", "complete": True, "gaps": [],
                     "cargo_lock_sha256": "lock", "source": source,
-                    "packages": [{"id": "registry-demo", "name": "demo", "version": "1",
-                        "crate_sha256": "checksum", "gaps": [], "notice_sources": [{"path": "LICENSE", "text": permission,
+                    "packages": [{"id": "registry-demo", "name": "itoa", "version": "1.0.18",
+                        "crate_sha256": crate_checksum, "published_files": members, "gaps": [], "notice_sources": [{"path": "LICENSE", "text": permission,
                                                                                  "sha256": notices.digest(permission.encode())}]}],
                     "native": {"receipt": native}}
         def receipt():
-            text = (notices.canonical(coverage) + "\n===== demo 1 / LICENSE =====\n" + permission + "\n").encode()
+            text = (notices.canonical(coverage) + "\n===== itoa 1.0.18 / LICENSE =====\n" + permission + "\n").encode()
             return {"coverage": coverage, "notice_sha256": notices.digest(text),
                     "coverage_sha256": notices.digest(notices.canonical(coverage).encode())}, text
         def verify(data, text):
             return notices.verify_embedded_receipt("aarch64-apple-darwin", data, text,
                   expected_lock_sha256="lock", expected_source_sha256=source["sha256"], expected_graph_ids={"registry-demo"},
-                  expected_package_checksums={("demo", "1"): "checksum"})
+                  expected_package_checksums={("itoa", "1.0.18"): crate_checksum}, expected_published_files={"registry-demo": members})
         data, text = receipt()
         self.assertIs(verify(data, text), data)
+        authentic_inputs = json.loads(json.dumps(native["source_inputs"]))
+        published_path = next(iter(members))
+        for mutation in ("absent", "empty", "missing_member", "changed_member", "unknown_package", "missing_captured", "unknown_captured"):
+            with self.subTest(mutation=mutation):
+                native["source_inputs"] = json.loads(json.dumps(authentic_inputs))
+                auth = native["source_inputs"]["authenticated_registry"]
+                if mutation == "absent":
+                    del native["source_inputs"]["authenticated_registry"]
+                elif mutation == "empty":
+                    auth.clear()
+                elif mutation == "missing_member":
+                    del auth["registry-demo"]["published_files"][published_path]
+                elif mutation == "changed_member":
+                    auth["registry-demo"]["published_files"][published_path] = "mutated"
+                elif mutation == "unknown_package":
+                    auth["unselected"] = auth["registry-demo"]
+                elif mutation == "missing_captured":
+                    native["source_inputs"]["packages"]["registry-demo"].pop()
+                else:
+                    native["source_inputs"]["packages"]["registry-demo"].append({"path": str(crate_source / "target/hidden.rs"), "sha256": "unknown"})
+                data, text = receipt()  # Every outer hash regenerated independently.
+                with self.assertRaisesRegex(ValueError, "registry"):
+                    verify(data, text)
+        native["source_inputs"] = authentic_inputs
         stale_files = [["stale.rs", "old"]]
         native["source_inputs"]["workspace_identity"] = {"files": stale_files, "sha256": notices.digest(notices.canonical(stale_files).encode())}
         data, text = receipt()  # Rehash every outer field; source mismatch must still fail.

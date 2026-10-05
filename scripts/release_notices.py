@@ -202,6 +202,68 @@ def verify_reviewed_members(cache, review):
         raise ValueError("Reviewed published source members changed")
 
 
+def archive_members(path, checksum, name, version):
+    """Independent complete member ledger authenticated by locked archive bytes."""
+    if digest(path.read_bytes()) != checksum:
+        raise ValueError("Registry archive checksum mismatch")
+    prefix = f"{name}-{version}/"
+    files = {}
+    seen = set()
+    with tarfile.open(path, "r:gz") as archive:
+        for member in archive:
+            if not member.name.startswith(prefix) or member.name in seen:
+                raise ValueError("Registry archive root/duplicate mismatch")
+            seen.add(member.name)
+            relative = member.name[len(prefix):]
+            if (".." in PurePosixPath(relative).parts or relative.startswith("/")
+                    or "\\" in relative or any(":" in p for p in PurePosixPath(relative).parts)):
+                raise ValueError("Unsafe registry archive path")
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise ValueError("Unsupported registry archive member")
+            files[relative] = digest(archive.extractfile(member).read())
+    if not files:
+        raise ValueError("Empty authenticated registry archive")
+    return files
+
+
+def registry_archive(package):
+    source = Path(package["manifest_path"]).parent
+    return source.parents[2] / "cache" / source.parent.name / f"{package['name']}-{package['version']}.crate"
+
+
+def verify_registry_binding(native, rows, expected_files):
+    metadata = {p["id"]: p for p in native["metadata_document"]["packages"]}
+    selected = {p["id"]: p for p in rows}
+    inputs = native.get("source_inputs", {})
+    authenticated = inputs.get("authenticated_registry")
+    if not isinstance(authenticated, dict) or not authenticated or set(authenticated) != set(selected):
+        raise ValueError("Captured authenticated registry package set mismatch")
+    for key, row in selected.items():
+        record = authenticated[key]
+        expected = expected_files.get(key)
+        if (not expected or row.get("published_files") != expected
+                or record.get("published_files") != expected
+                or record.get("checksum") != row["crate_sha256"]
+                or record.get("archive", {}).get("sha256") != row["crate_sha256"]
+                or record.get("source") != metadata[key]["source"]):
+            raise ValueError("Captured authenticated registry archive/member mismatch")
+        root = PurePosixPath(metadata[key]["manifest_path"]).parent
+        captured = {}
+        for item in inputs.get("packages", {}).get(key, []):
+            path = PurePosixPath(item["path"])
+            if not path.is_relative_to(root):
+                raise ValueError("Captured registry member escapes package source")
+            relative = path.relative_to(root).as_posix()
+            if relative in captured:
+                raise ValueError("Duplicate captured registry member")
+            captured[relative] = item["sha256"]
+        if (set(captured) - set(expected) - {".cargo-ok", ".cargo-checksum.json"}
+                or any(captured.get(path) != sha for path, sha in expected.items())):
+            raise ValueError("Captured registry files differ from authenticated published members")
+
+
 def supplement_notices(package, checksum, root=SUPPLEMENTS, target=None):
     index = strict_json((root / "index.json").read_text())
     matches = [p for p in index if p["name"] == package["name"] and p["version"] == package["version"]]
@@ -381,6 +443,7 @@ def native_coverage(path, target, lock_hash, package_ids, package_rows=()):
         if digest(runtime["copyright"]["text"].encode()) != runtime["copyright"]["sha256"]:
             raise ValueError("Rust runtime notice text differs from source")
     # Do not accept a user-set complete boolean as independent native source review.
+    verify_registry_binding(data, package_rows, {p["id"]: p["published_files"] for p in package_rows})
     gaps = native_mapping_gaps(data, package_rows)
     return {"path": str(path.resolve()), "sha256": digest(path.read_bytes()), "receipt": data}, gaps
 
@@ -416,7 +479,8 @@ def collect(target, output, native=None, inventory=False):
             raise ValueError(f"No complete notice sources: {package['id']}")
         row = {"id": package["id"], "name": package["name"], "version": package["version"],
                "license_expression": package["license"], "features": features, "crate_sha256": checksum,
-               "notice_sources": notices, "gaps": package_gaps}
+               "notice_sources": notices, "gaps": package_gaps,
+               "published_files": archive_members(cache, checksum, package["name"], package["version"])}
         inventory_rows.append(row)
         gaps.extend(f"{package['name']}@{package['version']}: {g}" for g in package_gaps)
         texts.extend(f"\n===== {package['name']} {package['version']} / {n['path']} =====\n{n['text']}\n" for n in notices)
@@ -450,7 +514,7 @@ def collect(target, output, native=None, inventory=False):
 
 
 def verify_embedded_receipt(target, data, text, binary_hashes=None, *, expected_lock_sha256=None,
-                            expected_source_sha256=None, expected_graph_ids=None, expected_package_checksums=None):
+                            expected_source_sha256=None, expected_graph_ids=None, expected_package_checksums=None, expected_published_files=None):
     """Portable validation against independently supplied frozen checkout identities."""
     coverage = data["coverage"]
     expected_lock_sha256 = expected_lock_sha256 or digest(Path("Cargo.lock").read_bytes())
@@ -492,6 +556,7 @@ def verify_embedded_receipt(target, data, text, binary_hashes=None, *, expected_
         if sorted(required) != sorted(n["sha256"] for n in package["notice_sources"]):
             raise ValueError("Reviewed full permission/attribution text coverage mismatch")
     expected_ids = set(native["receipt"]["dependency_ids_document"])
+    graph = None
     if expected_graph_ids is None:
         graph, _, _ = production_graph(target)
         expected_graph_ids = {p["id"] for p, _ in graph}
@@ -508,6 +573,13 @@ def verify_embedded_receipt(target, data, text, binary_hashes=None, *, expected_
     for package in coverage["packages"]:
         if expected_package_checksums.get((package["name"], package["version"])) != package["crate_sha256"]:
             raise ValueError("Production package checksum differs from frozen lock")
+    if expected_published_files is None:
+        if graph is None:
+            graph, _, _ = production_graph(target)
+        expected_published_files = {p["id"]: archive_members(registry_archive(p),
+            expected_package_checksums[(p["name"], p["version"])], p["name"], p["version"])
+            for p, _ in graph if p["source"] is not None}
+    verify_registry_binding(native["receipt"], coverage["packages"], expected_published_files)
     binaries = native["receipt"].get("binaries", [])
     recorded = {b["name"]: b["after"]["sha256"] for b in binaries}
     if len(binaries) != 2 or set(recorded) != {"surge", "surge-daemon"}:

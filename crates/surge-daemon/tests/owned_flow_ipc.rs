@@ -146,17 +146,40 @@ async fn wait_terminal_history(
     storage: &Arc<Storage>,
     run: surge_core::RunId,
 ) -> surge_persistence::runs::inspection::FoldedRunEvidence {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let inspected = storage.inspect_folded_run(run).await.unwrap();
-            if let Some(history) = inspected.database
-                && matches!(history.state, surge_core::RunState::Terminal { .. })
-            {
-                return history;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    use surge_core::work_item::WorkItemAttemptState;
+    // owned_flow_started acknowledges durable acceptance, not asynchronous
+    // launch/schema readiness. Completed is published only after the daemon
+    // strictly validates the terminal journal and its accepted binding.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let attempt = storage.work_items().for_run(run).unwrap().unwrap();
+        if attempt.state == WorkItemAttemptState::Completed {
+            break;
         }
-    })
-    .await
-    .unwrap()
+        assert!(
+            matches!(
+                attempt.state,
+                WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+            ),
+            "owned Flow {run} did not complete: state={:?}, diagnostic={:?}",
+            attempt.state,
+            attempt.diagnostic
+        );
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "owned Flow {run} completion deadline: state={:?}, diagnostic={:?}",
+            attempt.state,
+            attempt.diagnostic
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let inspected = storage.inspect_folded_run(run).await.unwrap();
+    let history = inspected
+        .database
+        .expect("completed attempt must have a strict journal");
+    assert!(matches!(
+        history.state,
+        surge_core::RunState::Terminal { .. }
+    ));
+    history
 }

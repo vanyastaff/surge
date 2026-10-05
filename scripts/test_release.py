@@ -8,10 +8,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import unittest
 import zipfile
 
 import release_notices as notices
+import release_native as native_proof
 
 SCRIPT = Path(__file__).with_name("release.py")
 TARGETS = (
@@ -74,9 +76,17 @@ class ReleaseTest(unittest.TestCase):
         review = notices.strict_json((notices.SUPPLEMENTS / "runtime-reviewed.json").read_text())["reviews"][0]
         runtime_text = (notices.SUPPLEMENTS / review["file"]).read_text()
         runtime_version = f"release: {review['release']}\ncommit-hash: {review['commit']}"
+        locked = tomllib.loads((self.root / "Cargo.lock").read_text())["package"]
+        authenticated = {p["id"]: native_proof.authenticate_registry_source(p, locked)
+                         for p, _ in packages if p["source"] is not None}
+        captured = {p["id"]: [{"path": str(Path(p["manifest_path"]).parent / relative),
+                               "sha256": sha}
+                              for relative, sha in authenticated[p["id"]]["published_files"].items()]
+                    for p, _ in packages if p["source"] is not None}
         native = {"schema": 1, "target": target, "complete": True, "blockers": [],
                   "components": [], "cargo_lock": {"sha256": lock_hash},
-                  "source_inputs": {"workspace_identity": source},
+                  "source_inputs": {"workspace_identity": source,
+                                    "authenticated_registry": authenticated, "packages": captured},
                   "dependency_ids_document": [p["id"] for p, _ in packages],
                   "metadata_document": metadata,
                   "runtime": {"toolchain": {"version": runtime_version},
@@ -100,6 +110,7 @@ class ReleaseTest(unittest.TestCase):
         rows = [{"id": p["id"], "name": p["name"], "version": p["version"],
                  "license_expression": p["license"], "features": features,
                  "crate_sha256": checksum,
+                 "published_files": authenticated[p["id"]]["published_files"],
                  "notice_sources": [{"path": "LICENSE-MIT", "text": permission,
                                       "sha256": hashlib.sha256(permission.encode()).hexdigest(),
                                       "origin": "synthetic-test"}], "gaps": []}

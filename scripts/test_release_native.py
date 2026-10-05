@@ -7,6 +7,8 @@ from pathlib import Path
 import tempfile
 import types
 import sys
+import io
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -157,10 +159,63 @@ class NativeTest(unittest.TestCase):
         self.assertEqual(before['files'], [[str(notice_script), hashlib.sha256(b'before').hexdigest()]])
         self.assertEqual(after['files'], [[str(notice_script), hashlib.sha256(b'after').hexdigest()]])
 
+    def test_registry_authentication_retains_nested_target_and_rejects_mutation(self):
+        crate = 'native-sys-1.0.0'
+        source = self.root / 'registry/src/fixed-index' / crate
+        source.mkdir(parents=True)
+        archive = self.root / 'registry/cache/fixed-index' / (crate + '.crate')
+        archive.parent.mkdir(parents=True)
+        published = {'Cargo.toml': b'[package]\nname="native-sys"\nversion="1.0.0"\n',
+                     'src/target/actual.c': b'original compiled source\n'}
+        with tarfile.open(archive, 'w:gz') as stream:
+            for relative, content in published.items():
+                member = tarfile.TarInfo(crate + '/' + relative)
+                member.size = len(content)
+                stream.addfile(member, io.BytesIO(content))
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        package = dict(id='registry-fixed', name='native-sys', version='1.0.0',
+                       source='registry+https://fixed.example/index', manifest_path=str(source / 'Cargo.toml'))
+        locked = [dict(name=package['name'], version=package['version'], source=package['source'],
+                       checksum=hashlib.sha256(archive.read_bytes()).hexdigest())]
+        authenticated = native.authenticate_registry_source(package, locked)
+        self.assertEqual(authenticated['published_files']['src/target/actual.c'], hashlib.sha256(published['src/target/actual.c']).hexdigest())
+        metadata = self.file('metadata.json', json.dumps({'packages': [package]}))
+        ids = self.file('ids.json', '["registry-fixed"]')
+        self.file('Cargo.lock', 'version=4\n[[package]]\nname="native-sys"\nversion="1.0.0"\nsource="registry+https://fixed.example/index"\nchecksum="' + locked[0]['checksum'] + '"\n')
+        previous = Path.cwd()
+        os.chdir(self.root)
+        try:
+            with patch.object(native.subprocess, 'run', return_value=types.SimpleNamespace(stdout=b'')):
+                snapshot = native.snapshot_sources(metadata, ids)
+            self.assertIn(str((source / 'src/target/actual.c').resolve()), [p['path'] for p in snapshot['packages'][package['id']]])
+        finally:
+            os.chdir(previous)
+        (source / 'src/target/actual.c').write_bytes(b'mutated native source\n')
+        self.assertEqual(hashlib.sha256(archive.read_bytes()).hexdigest(), locked[0]['checksum'])
+        with self.assertRaisesRegex(ValueError, 'source differs from authenticated archive'):
+            native.authenticate_registry_source(package, locked)
+
     def test_producer_collector_integration_binds_strip_and_keeps_native_gaps_open(self):
         import release_notices
         target = 'aarch64-apple-darwin'
         m, vendor, _ = self.component()
+        # Self-contained authenticated registry fixture: CI does not need an ambient Cargo cache.
+        published = {'Cargo.toml': b'[package]\nname="libgit2-sys"\nversion="1.0.0"\n',
+                     'build.rs': b'reviewed build source'}
+        registry_source = self.root / 'registry/src/fixed-index/libgit2-sys-1.0.0'
+        registry_source.mkdir(parents=True)
+        archive = self.root / 'registry/cache/fixed-index/libgit2-sys-1.0.0.crate'
+        archive.parent.mkdir(parents=True)
+        with tarfile.open(archive, 'w:gz') as stream:
+            for relative, content in published.items():
+                member = tarfile.TarInfo('libgit2-sys-1.0.0/' + relative)
+                member.size = len(content)
+                stream.addfile(member, io.BytesIO(content))
+                (registry_source / relative).write_bytes(content)
+        archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        vendor['manifest_path'] = str((registry_source / 'Cargo.toml').resolve())
         packages = [vendor]
         for name in ('surge-cli', 'surge-daemon'):
             manifest = self.file(f'{name}/Cargo.toml', 'source manifest')
@@ -176,7 +231,7 @@ class NativeTest(unittest.TestCase):
         events.append(dict(reason='build-finished', success=True))
         messages = self.messages(events)
         self.file('Cargo.toml', 'workspace fixture')
-        lock_text = 'version = 4\n\n[[package]]\nname = "libgit2-sys"\nversion = "1.0.0"\n'
+        lock_text = 'version = 4\n\n[[package]]\nname = "libgit2-sys"\nversion = "1.0.0"\nsource="registry+fixed"\nchecksum="' + archive_hash + '"\n'
         lock = self.file('Cargo.lock', lock_text)
         runtime_root = self.root / 'runtime'
         self.file('runtime/share/doc/rust/COPYRIGHT-library.html', 'Copyright notices for The Rust Standard Library\nExact fixture terms')
@@ -214,7 +269,11 @@ class NativeTest(unittest.TestCase):
         self.assertTrue(record['complete'])
         self.assertEqual(record['binaries'][0]['before']['sha256'], hashlib.sha256(b'before-cli').hexdigest())
         self.assertEqual(record['binaries'][0]['after']['sha256'], hashlib.sha256(b'stripped-before-cli').hexdigest())
-        accepted, gaps = release_notices.native_coverage(output, target, hashlib.sha256(lock_text.encode()).hexdigest(), set(p['id'] for p in packages))
+        registry_rows = [{'id': vendor['id'], 'name': vendor['name'], 'version': vendor['version'],
+                          'crate_sha256': archive_hash,
+                          'published_files': {p: hashlib.sha256(b).hexdigest() for p, b in published.items()},
+                          'notices': []}]
+        accepted, gaps = release_notices.native_coverage(output, target, hashlib.sha256(lock_text.encode()).hexdigest(), set(p['id'] for p in packages), registry_rows)
         self.assertEqual(accepted['receipt']['binaries'][0]['transformation']['kind'], 'strip')
         self.assertTrue(any('source/header notice mapping' in g for g in gaps))
 

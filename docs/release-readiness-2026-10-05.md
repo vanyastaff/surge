@@ -13,8 +13,8 @@ macOS candidates target 15.0 and must have no Homebrew runtime dylib dependency.
 Existing competitive-waves accepted requirements remain open; no manifest row was
 retired. Source checkpoints so far: `e4797a2` runtime/dependency closure and
 `f1bb266` CI/documentation, `0e06bf1` macOS packaging, `cd86349` MCP safety,
-`8c4b45a` CLI outcomes and `3136b82` owned fixture closure. Native candidate source
-is `3136b82`; the historical candidate precedes the new notice/provenance packaging
+`8c4b45a` CLI outcomes and `3136b82` owned fixture closure. Historical native candidate source
+is `3136b82`; that candidate precedes the new notice/provenance packaging
 contract. Artifact identity is recorded in
 [the evidence index](release-evidence/2026-10-05/README.md).
 
@@ -42,14 +42,14 @@ contract. Artifact identity is recorded in
 | Release workflow gates | P0 | R28/R19 | Same revision CI | Strict features/security/tests; native archive linkage | actionlint PASS; remote native execution unverified |
 | macOS archive OpenSSL | P1 | R19 | Native release build | Static OpenSSL; no non-system dylib path; target15 | ARM64 build/linkage/archive E2E PASS; other runners unverified |
 | Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | Local exact source mappings accepted; final source/binary capture pending; other native platforms unverified |
-| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Python 40/40 PASS including correspondence/source binding (73.207s); final native capture and workspace rerun pending |
+| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Python 41/41 PASS including authenticated registry source binding (75.714s); final native capture and workspace rerun pending |
 | Release/rollback docs | P0 | R30/R31 | Schema and packaging | Full quiescent snapshot; restore-only rollback | Complete; synthetic mechanics drill PASS |
 | Final integrated validation | P0 | Coordinator/R20–24 | Frozen source | Honest build/lint/test/smoke denominators | Frozen clippy/fmt/MSRV/build/smoke PASS; nextest NO-GO |
 | Independent verdict | P0 | R32 | Final evidence | Reviewable GO/NO-GO | Final independent NO-GO; safety/local ARM64 candidate ACCEPTABLE |
 
 ## Verification
 
-Final frozen full workspace nextest (four threads): **3,840 executed: 3,830 passed,
+Original frozen `3136b82` full workspace nextest (four threads): **3,840 executed: 3,830 passed,
 10 failed, 37 skipped**. Every failure belongs to `owned_flow_mcp_recovery`.
 The new negative safety test passes: actual journal `RunRecoveryRequired`, attempt
 `Attention`, no cleanup-confirmed fence and no new MCP/provider effect after
@@ -69,6 +69,27 @@ Benchmark enforced p95 ≤5ms on 64 samples and passed; Criterion interval was
 zero advisory findings. Synthetic Python SQLite recovery applied actual 30 registry
 and 8 run migrations, checked WAL backup, integrity/FKs and restored artifact bytes;
 it does not prove production/provider recovery.
+
+## Continuation: authenticated source closure
+
+Notice provenance stages `dda2a1d`, `68c6943` and `22d3bf9` added reviewed
+full upstream/runtime texts, exact correspondence maps and immutable build input
+capture. Independent review then found missing registry archive authentication
+and an incorrectly pruned real `cc/src/target` directory. The producer now checks
+all published registry file bytes against Cargo.lock-authenticated archives before
+and after build; the collector and portable consumer independently verify the
+complete member ledger. Actual inventory checks 351 packages and 17,553 files.
+Python release tests: 41/41 PASS (75.714s); independent corruption checks PASS.
+The provisional `22d3bf9` archive is retained as intermediate evidence and must
+not be substituted for the new authenticated-source candidate.
+
+The first continuation workspace repeat executed 3,840 tests: 3,828 passed,
+12 failed, 37 skipped. Besides the ten known MCP failures, it exposed an IPC
+fixture reading before schema creation and an OS35 thread-creation failure in a
+skill test. The IPC fixture now waits for durable Completed before one strict
+journal inspection; errors are not swallowed. Both targeted tests pass (2/2).
+Final frozen workspace repeat and native capture remain pending at this checkpoint.
+These pending checks are not covered by earlier passing receipts.
 
 ## Blocking work and limits
 
