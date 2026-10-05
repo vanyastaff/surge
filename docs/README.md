@@ -17,6 +17,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Archetypes](archetypes.md) | Bundled `flow.toml` archetypes with mermaid diagrams |
 | [Tracker automation](tracker-automation.md) | Tier labels (L0/L1/L2/L3), idempotency, `surge intake list`, external state reflection |
 | [Telegram cockpit](telegram.md) | Setup, pairing, command reference, card lifecycle, snooze re-emission, recovery |
+| [Managed MCP decision](adr/0020-managed-mcp-recovery.md) | Accepted opt-in direction, independent domain/effect proofs and unresolved backend prerequisites |
 | [MCP server lifecycle](mcp.md) | `[[mcp_servers]]` config, connection/restart/health lifecycle, stderr redaction, sandbox boundary, `surge mcp` |
 | [Product strategy](product-strategy.md) | Positioning, research-backed bets (completion machinery, fleet interaction), build-don't-bridge principle, sequencing, metrics |
 | [Developer Vibe Coding Harness](vibe-coding-harness.md) | Agentlas source audit, Factory documentation comparison, application-creation journey and measurable completion criteria |

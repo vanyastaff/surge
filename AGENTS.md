@@ -138,6 +138,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Bootstrap | `docs/bootstrap.md` | Adaptive prompt → description → roadmap → flow generation, approvals, archetypes, template skip. |
 | Workflow | `docs/workflow.md` | AFK workflow, flow model, intake sources, run lifecycle. |
 | Architecture | `docs/ARCHITECTURE.md` | Canonical architecture document: positioning, principles, flow model, engine, ACP bridge, intake, storage, crate layout, non-goals. |
+| Managed MCP decision | `docs/adr/0020-managed-mcp-recovery.md` | Accepted opt-in direction; backend and broker implementation remain open. |
 | Decisions (ADRs) | `docs/adr/` | Architectural decision records with rationale, alternatives rejected, and revisit triggers. |
 | Artifact Conventions | `docs/conventions/README.md` | Canonical generated artifact names, schemas, validators, minimal examples, and profile author guidance. |
 | Agent OS Landscape | `docs/agent-os-landscape.md` | Research note on adjacent agent tools, Agent OS patterns, and Surge product direction. |

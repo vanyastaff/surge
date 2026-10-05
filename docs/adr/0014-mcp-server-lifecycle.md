@@ -8,7 +8,8 @@ date = "2026-05-17"
 
 ## Status
 
-Accepted.
+Accepted. Decision 4 is superseded for the future managed opt-in path by
+[ADR-0020](0020-managed-mcp-recovery.md); the native implementation remains unchanged.
 
 ## Context
 

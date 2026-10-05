@@ -54,3 +54,7 @@ Multi-crate workspace. See `docs/ARCHITECTURE.md` for vision and design notes (i
 - ACP spec: https://agentclientprotocol.com
 - ACP Rust SDK: https://docs.rs/agent-client-protocol
 - Project docs: docs/
+
+Managed MCP opt-in is an accepted, unimplemented exception to host MCP sandbox
+delegation; see [ADR-0020](docs/adr/0020-managed-mcp-recovery.md). Do not infer
+complete writer coverage from configuration or direct-child termination.

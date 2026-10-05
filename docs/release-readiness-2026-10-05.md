@@ -203,3 +203,23 @@ supersedes earlier pending states. No synthetic claim of parallel work.
 Use [release and rollback procedure](release-procedure.md) and
 [draft release notes](release-notes-v0.1.md). The candidate is for review and isolated
 testing; release publication requires separate authorization after blockers close.
+
+
+## Managed MCP decision — 2026-10-05 follow-up
+
+The user accepted managed opt-in execution. [ADR-0020](adr/0020-managed-mcp-recovery.md)
+records the decision, independent domain/effect proof requirements and exact
+transport constraints. This stage changes documentation only; Rust remains at
+the previously tested revision. No backend, broker or new passing MCP receipt
+is claimed. NO-GO and all original acceptance requirements remain open.
+
+Read-only discovery found no installed managed VM backend, guest or configured
+local Linux/Windows runner. Current macOS 27 ARM has virtualization support but
+approximately 6.1 GiB free disk. A compatible provisioned macOS VM is necessary
+for unchanged macOS transport acceptance; an actual delegated Linux host could
+start a separately accepted Linux backend contract. Provisioning details have
+been requested; no install, remote mutation or publication was performed.
+
+Source-supported reviews: [security design](release-evidence/2026-10-05/managed-discovery/security-design.md),
+[integration map](release-evidence/2026-10-05/managed-discovery/integration-map.md),
+and [backend discovery](release-evidence/2026-10-05/managed-discovery/backend-discovery.md).

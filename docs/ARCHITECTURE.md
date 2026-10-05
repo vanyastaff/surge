@@ -348,3 +348,11 @@ Open questions still unresolved:
 - [Workflow](workflow.md) — user-facing AFK workflow, flow model, run lifecycle diagrams
 - [CLI](cli.md) — concrete commands that exercise the engine today
 - [Development](development.md) — running tests and lints across the workspace
+
+## Accepted managed MCP direction (not implemented)
+
+[ADR-0020](adr/0020-managed-mcp-recovery.md) adds a future opt-in host-owned MCP
+execution domain and external-effect broker. This is an exception to the general
+runtime-delegation principle for host-launched MCP only. ACP enforcement remains
+delegated. Implementation requires a demonstrated backend and independent domain
+closure and effect settlement; the current native path retains safe refusal.
