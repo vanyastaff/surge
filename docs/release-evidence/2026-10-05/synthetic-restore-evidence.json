@@ -1,0 +1,20 @@
+{
+  "registry": {
+    "migrations": 30,
+    "wal_bytes": 1174232,
+    "online_backup_marker": "committed-in-live-wal",
+    "restored_integrity": "ok",
+    "foreign_keys": [],
+    "restored_marker": "committed-in-live-wal"
+  },
+  "per_run": {
+    "migrations": 8,
+    "wal_bytes": 329632,
+    "online_backup_marker": "committed-in-live-wal",
+    "restored_integrity": "ok",
+    "foreign_keys": [],
+    "restored_marker": "committed-in-live-wal"
+  },
+  "artifact_equal": true,
+  "root": "/var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/surge-r30-restore-13d8rpon"
+}

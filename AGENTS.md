@@ -149,6 +149,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | Release Procedure | `docs/release-procedure.md` | Revision-bound release gates, complete runtime backups and restore-only rollback. |
 | Release Readiness | `docs/release-readiness-2026-10-05.md` | Current release preparation task ledger and executed evidence. |
+| Release Evidence | `docs/release-evidence/2026-10-05/README.md` | Command receipts, 32 role reports and native candidate identity. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
 
 ## AI Context Files

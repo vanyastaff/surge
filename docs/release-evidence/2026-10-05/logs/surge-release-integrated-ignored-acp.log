@@ -1,0 +1,16 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.24s
+     Running tests/bridge_rate_limit_classification.rs (target/debug/deps/bridge_rate_limit_classification-96410cf4fac617ba)
+
+running 1 test
+test real_429_with_retry_after_survives_the_acp_wire_as_rate_limited ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/reconnect_integration_test.rs (target/debug/deps/reconnect_integration_test-5389907910a5d01b)
+
+running 1 test
+test test_realistic_reconnect_delays ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 9.04s

@@ -1,0 +1,56 @@
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.24s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/cli_run_lifecycle.rs (target/debug/deps/cli_run_lifecycle-2cd825f0ddda4905)
+
+running 6 tests
+test daemon_gate_remains_pending_until_explicit_cancellation ... FAILED
+test foreground_failure_is_nonzero_and_durable ... ok
+test foreground_success_is_durable ... ok
+test user_template_executes_to_completion ... ok
+test watched_failure_is_nonzero_and_durable ... ok
+test watched_success_is_durable ... ok
+
+failures:
+
+---- daemon_gate_remains_pending_until_explicit_cancellation stdout ----
+
+thread 'daemon_gate_remains_pending_until_explicit_cancellation' (33591151) panicked at crates/surge-cli/tests/cli_run_lifecycle.rs:187:21:
+assertion `left == right` failed
+  left: Null
+ right: "gate"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    daemon_gate_remains_pending_until_explicit_cancellation
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.25s
+
+error: test failed, to rerun pass `-p surge-cli --test cli_run_lifecycle`
+     Running tests/examples_smoke.rs (target/debug/deps/examples_smoke-d4c17460c91b244c)
+
+running 10 tests
+test bundled_template_names_and_legacy_aliases_resolve_valid_graphs ... ok
+test flow_bug_fix_validates ... ok
+test flow_linear_3_validates ... ok
+test flow_minimal_agent_validates ... ok
+test flow_multi_milestone_validates ... ok
+test flow_refactor_validates ... ok
+test flow_single_loop_validates ... ok
+test flow_spike_validates ... ok
+test flow_terminal_only_validates ... ok
+test onboarding_smoke_can_init_describe_and_start_example_run ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s
+
+     Running tests/fault_injection.rs (target/debug/deps/fault_injection-b8e0ba067ba9f83a)
+
+running 1 test
+test unclean_exit_mid_run_preserves_and_folds_event_log ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+error: 1 target failed:
+    `-p surge-cli --test cli_run_lifecycle`

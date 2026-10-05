@@ -1,0 +1,86 @@
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running unittests src/lib.rs (target/debug/deps/surge_git-b22623ef1d7d59f0)
+
+running 79 tests
+test audit::tests::test_create_audit ... ok
+test audit::tests::test_read_empty_log ... ok
+test audit::tests::test_log_branch_deleted ... ok
+test audit::tests::test_log_multiple_events ... ok
+test audit::tests::test_create_nested_directory ... ok
+test audit::tests::test_log_worktree_removed ... ok
+test checkpoint::tests::ordinary_directory_has_no_git_checkpoint ... ok
+test checkpoint::tests::checkpoint_preserves_executable_mode_and_symlink_target ... ok
+test cleanup::tests::test_cleanup_orphaned ... ok
+test cleanup::tests::test_full_cleanup_with_audit ... ignored, macOS /var/folders symlink confuses libgit2 worktree gitdir resolution; tracked separately
+test cleanup::tests::windows::test_remove_dir_with_retry_empty_dir ... ok
+test cleanup::tests::windows::test_remove_dir_with_retry_nested ... ok
+test cleanup::tests::windows::test_remove_dir_with_retry_nonexistent ... ok
+test cleanup::tests::test_cleanup_merged_branches ... ok
+test cleanup::tests::windows::test_remove_dir_with_retry_success ... ok
+test orphan::tests::test_active_worktree_not_orphaned ... ignored, macOS /var/folders symlink confuses libgit2 worktree gitdir resolution; tracked separately
+test checkpoint::tests::captures_files_and_deletions_without_mutating_head_or_index ... ok
+test cleanup::tests::test_cleanup_merged_branches_with_audit ... ok
+test checkpoint::tests::restored_checkpoint_is_independent_of_later_parent_edits ... ok
+test cleanup::tests::test_discard_with_audit ... ok
+test cleanup::tests::test_cleanup_orphaned_with_audit ... ok
+test fingerprint::tests::git_oracle_and_dirty_tree_without_any_repository_writes ... ok
+test cleanup::tests::test_full_cleanup_no_orphans ... ok
+test run_worktree::location_tests::different_windows_directories_stay_different ... ok
+test run_worktree::location_tests::every_windows_spelling_of_a_directory_normalizes_the_same ... ok
+test run_worktree::location_tests::off_windows_the_comparison_stays_exact ... ok
+test run_worktree::location_tests::roots_and_unc_paths_keep_their_shape ... ok
+test orphan::tests::test_non_surge_branch_ignored ... ok
+test orphan::tests::test_scan_no_orphans ... ok
+test orphan::tests::test_scan_branches_only ... ok
+test orphan::tests::test_scan_both_types ... ok
+test orphan::tests::test_scan_orphaned_branch ... ok
+test orphan::tests::test_scan_orphaned_worktree ... ok
+test run_worktree::pinned_tests::absent_reflog_setting_uses_nonbare_default ... ok
+test run_worktree::pinned_tests::disabled_reflog_rejects_before_creating_an_unrecoverable_branch ... ok
+test run_worktree::pinned_tests::branch_creation_crash_recovers_from_creation_evidence ... ok
+test run_worktree::pinned_tests::exact_path_and_registration_are_reused_without_duplicates ... ok
+test run_worktree::pinned_tests::expired_creation_evidence_and_missing_executed_checkout_fail_closed ... ok
+test run_worktree::pinned_tests::changed_recorded_path_and_repository_cannot_adopt_an_existing_checkout ... ok
+test run_worktree::pinned_tests::occupied_path_is_preserved_before_any_branch_creation ... ok
+test run_worktree::tests::branch_name_format ... ok
+test run_worktree::tests::central_path_under_home ... ok
+test run_worktree::tests::custom_path_appends_short_id ... ok
+test run_worktree::tests::sibling_path_is_under_repo_parent ... ok
+test run_worktree::pinned_tests::foreign_branch_at_the_same_oid_is_not_adopted ... ok
+test run_worktree::pinned_tests::executed_checkout_preserves_edits_and_advanced_head ... ok
+test run_worktree::pinned_tests::symlink_target_is_never_adopted ... ok
+test run_worktree::pinned_tests::preflight_requires_a_committed_clean_repository_including_untracked ... ok
+test run_worktree::pinned_tests::preparation_uses_frozen_base_after_source_head_moves ... ok
+test orphan::tests::test_scan_worktrees_only ... ok
+test task_workspace::tests::persistent_workspace_keeps_original_owner_and_dirty_files_across_attempts ... ok
+test task_workspace::tests::dirty_source_and_missing_or_substituted_workspace_fail_without_cleanup ... ok
+test run_worktree::pinned_tests::unsupported_reflog_values_reject_before_branch_creation ... ok
+test worktree::tests::discard_run_worktree_removes_branch ... ok
+test worktree::tests::create_run_worktree_basic ... ok
+test worktree::tests::find_orphaned_worktrees_detects_missing_dir ... ok
+test worktree::tests::find_run_worktree_path_returns_registered_path ... ok
+test worktree::tests::run_diff_empty_when_no_changes ... ok
+test worktree::tests::run_diff_shows_uncommitted_worktree_changes ... ok
+test worktree::tests::test_from_git_error_for_surge_error ... ok
+test worktree::tests::test_commit_in_worktree ... ok
+test worktree::tests::test_commit_nothing_to_commit ... ok
+test worktree::tests::test_create_worktree ... ok
+test worktree::tests::test_create_worktree_from_base_branch ... ok
+test worktree::tests::test_create_worktree_duplicate ... ok
+test worktree::tests::test_diff ... ok
+test worktree::tests::test_discard ... ok
+test worktree::tests::test_has_changes_no_changes ... ok
+test worktree::tests::test_has_uncommitted_changes_clean ... ok
+test worktree::tests::test_has_changes_with_changes ... ok
+test worktree::tests::test_has_uncommitted_changes_dirty ... ok
+test worktree::tests::test_list_empty ... ok
+test worktree::tests::test_list_worktrees ... ok
+test worktree::tests::test_uncommitted_files ... ok
+test worktree::tests::test_merge_fast_forward ... ok
+test worktree::tests::test_merge_same_branch_error ... ok
+test worktree::tests::test_worktree_path_is_public ... ok
+test worktree::tests::test_merge_no_checkout ... ok
+test worktree::tests::uncommitted_files_reports_non_utf8_path ... ok
+
+test result: ok. 77 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.82s

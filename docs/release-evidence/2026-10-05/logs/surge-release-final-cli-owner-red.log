@@ -1,0 +1,63 @@
+   Compiling darling_core v0.23.0
+   Compiling serde_json v1.0.151
+   Compiling float-cmp v0.10.0
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+   Compiling which v6.0.3
+   Compiling bstr v1.12.1
+   Compiling insta v1.47.2
+   Compiling predicates v3.1.4
+   Compiling assert_cmd v2.2.1
+   Compiling darling_macro v0.23.0
+   Compiling darling v0.23.0
+   Compiling rmcp-macros v1.6.0
+   Compiling rmcp v1.6.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.89s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/cli_run_lifecycle.rs (target/debug/deps/cli_run_lifecycle-2cd825f0ddda4905)
+
+running 6 tests
+test daemon_gate_remains_pending_until_explicit_cancellation ... FAILED
+test foreground_failure_is_nonzero_and_durable ... FAILED
+test foreground_success_is_durable ... ok
+test user_template_executes_to_completion ... ok
+test watched_failure_is_nonzero_and_durable ... FAILED
+test watched_success_is_durable ... ok
+
+failures:
+
+---- daemon_gate_remains_pending_until_explicit_cancellation stdout ----
+
+thread 'daemon_gate_remains_pending_until_explicit_cancellation' (33561774) panicked at crates/surge-cli/tests/cli_run_lifecycle.rs:178:21:
+assertion `left == right` failed
+  left: Null
+ right: "gate"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- foreground_failure_is_nonzero_and_durable stdout ----
+
+thread 'foreground_failure_is_nonzero_and_durable' (33562008) panicked at crates/surge-cli/tests/cli_run_lifecycle.rs:34:5:
+assertion `left == right` failed: Output { status: ExitStatus(unix_wait_status(0)), stdout: "run-01M45YJGAQ9V9YTJHYB3ZS3TCS\n", stderr: "run run-01M45YJGAQ9V9YTJHYB3ZS3TCS is not currently active in the daemon; attempting to read event history from disk.\n[1] RunStarted\n[2] PipelineMaterialized\n[3] OwnedFlowInputsBound\n[4] ArtifactProduced\n[5] ArtifactProduced\n[6] WorkItemAttemptBound\n[7] StageEntered\n[8] RunFailed\n" }
+  left: true
+ right: false
+
+---- watched_failure_is_nonzero_and_durable stdout ----
+
+thread 'watched_failure_is_nonzero_and_durable' (33562263) panicked at crates/surge-cli/tests/cli_run_lifecycle.rs:34:5:
+assertion `left == right` failed: Output { status: ExitStatus(unix_wait_status(0)), stdout: "run-01M45YJHC6FAEKCECE1H30X6SY\n", stderr: "run run-01M45YJHC6FAEKCECE1H30X6SY is not currently active in the daemon; attempting to read event history from disk.\n[1] RunStarted\n[2] PipelineMaterialized\n[3] OwnedFlowInputsBound\n[4] ArtifactProduced\n[5] ArtifactProduced\n[6] WorkItemAttemptBound\n[7] StageEntered\n[8] RunFailed\n" }
+  left: true
+ right: false
+
+
+failures:
+    daemon_gate_remains_pending_until_explicit_cancellation
+    foreground_failure_is_nonzero_and_durable
+    watched_failure_is_nonzero_and_durable
+
+test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.55s
+
+error: test failed, to rerun pass `-p surge-cli --test cli_run_lifecycle`

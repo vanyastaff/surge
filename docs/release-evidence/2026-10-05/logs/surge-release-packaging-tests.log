@@ -1,0 +1,426 @@
+test_archives_and_independent_checksums (test_release.ReleaseTest) ... FAIL
+test_invalid_collections (test_release.ReleaseTest) ... test_malformed_archives_rejected_before_output (test_release.ReleaseTest) ... test_missing_or_empty_daemon_rejected (test_release.ReleaseTest) ... FAIL
+test_tag_validation_and_prerelease (test_release.ReleaseTest) ... FAIL
+
+======================================================================
+FAIL: test_archives_and_independent_checksums (test_release.ReleaseTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 49, in test_archives_and_independent_checksums
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 49, in <listcomp>
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_invalid_collections (test_release.ReleaseTest) (problem='missing')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in test_invalid_collections
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in <listcomp>
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_invalid_collections (test_release.ReleaseTest) (problem='duplicate')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in test_invalid_collections
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in <listcomp>
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_invalid_collections (test_release.ReleaseTest) (problem='unexpected')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in test_invalid_collections
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in <listcomp>
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_invalid_collections (test_release.ReleaseTest) (problem='empty')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in test_invalid_collections
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 81, in <listcomp>
+    archives = [self.package(target) for target in TARGETS]
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='garbage')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='truncated')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='corrupt-checksum')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='wrong-member')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='duplicate')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='empty-member')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='not-executable')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='symlink')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-unknown-linux-gnu', problem='traversal')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='garbage')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='truncated')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='corrupt-checksum')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='wrong-member')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='duplicate')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='empty-member')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='symlink')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_malformed_archives_rejected_before_output (test_release.ReleaseTest) (target='x86_64-pc-windows-msvc', problem='traversal')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in test_malformed_archives_rejected_before_output
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 119, in <dictcomp>
+    archives = {t: self.package(t) for t in TARGETS}
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 43, in package
+    self.run_script("package", "--target", target, "--bin-dir", self.bins,
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+======================================================================
+FAIL: test_missing_or_empty_daemon_rejected (test_release.ReleaseTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 107, in test_missing_or_empty_daemon_rejected
+    self.assertIn("Missing or empty package input", result.stderr)
+AssertionError: 'Missing or empty package input' not found in 'Traceback (most recent call last):\n  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>\n    import tomllib\nModuleNotFoundError: No module named \'tomllib\'\n'
+
+======================================================================
+FAIL: test_tag_validation_and_prerelease (test_release.ReleaseTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 169, in test_tag_validation_and_prerelease
+    output = self.run_script("metadata", "--ref", f"refs/tags/v{version}").stdout
+  File "/Users/vanyastafford/Develop/surge/scripts/test_release.py", line 36, in run_script
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/Users/vanyastafford/Develop/surge/scripts/release.py", line 10, in <module>
+    import tomllib
+ModuleNotFoundError: No module named 'tomllib'
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 2.219s
+
+FAILED (failures=24)

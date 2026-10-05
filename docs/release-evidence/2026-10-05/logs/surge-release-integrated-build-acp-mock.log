@@ -1,0 +1,8 @@
+   Compiling chrono v0.4.44
+   Compiling schemars v1.2.1
+   Compiling serde_with v3.24.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling agent-client-protocol v2.2.0
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 26.65s

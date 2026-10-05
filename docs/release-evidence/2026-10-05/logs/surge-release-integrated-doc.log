@@ -1,0 +1,84 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.41s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+   Doc-tests surge_acp
+
+running 5 tests
+test crates/surge-acp/src/discovery.rs - discovery (line 21) ... ignored
+test crates/surge-acp/src/discovery.rs - discovery::AgentDiscovery::discover_all (line 314) ... ignored
+test crates/surge-acp/src/registry.rs - registry::Registry::discover_with_merged_registry (line 281) ... ignored
+test crates/surge-acp/src/registry.rs - registry::Registry::from_config (line 413) ... ignored
+test crates/surge-acp/src/transport.rs - transport::AgentTransport (line 47) ... ignored
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.99s; merged doctests compilation took 0.77s
+   Doc-tests surge_core
+
+running 1 test
+test crates/surge-core/src/skill.rs - skill (line 12) - compile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.93s; merged doctests compilation took 0.82s
+   Doc-tests surge_daemon
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests surge_git
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests surge_intake
+
+running 1 test
+test crates/surge-intake/src/linear/source.rs - linear::source::LinearTaskSource::set_base_url (line 77) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.57s; merged doctests compilation took 0.46s
+   Doc-tests surge_mcp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests surge_notify
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests surge_orchestrator
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests surge_persistence
+
+running 5 tests
+test crates/surge-persistence/src/runs/macros.rs - runs::macros::delegate_to_reader (line 10) ... ignored
+test crates/surge-persistence/src/memory/store.rs - memory::store::MemoryStore::search_all (line 496) - compile ... ok
+test crates/surge-persistence/src/memory/store.rs - memory::store::MemoryStore::list_recent (line 604) - compile ... ok
+test crates/surge-persistence/src/memory/store.rs - memory::store::MemoryStore::search_by_category (line 547) - compile ... ok
+test crates/surge-persistence/src/budget.rs - budget::BudgetTracker::new (line 93) ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+all doctests ran in 0.97s; merged doctests compilation took 0.81s
+   Doc-tests surge_process
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests surge_telegram
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

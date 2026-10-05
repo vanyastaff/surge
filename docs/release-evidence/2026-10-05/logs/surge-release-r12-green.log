@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on build directory
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.47s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-4e809714c96ec25c)
+
+running 3 tests
+test runs::storage::existing_run_upgrade_tests::writer_missing_run_does_not_create_events_database ... ok
+test runs::storage::existing_run_upgrade_tests::writer_refuses_unknown_schema_without_upgrade_and_releases_ownership ... ok
+test runs::storage::existing_run_upgrade_tests::writer_upgrades_legacy_run_before_current_reads_and_preserves_history ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 492 filtered out; finished in 0.14s

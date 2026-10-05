@@ -28,6 +28,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Release and rollback](release-procedure.md) | Exact-revision evidence, complete runtime snapshots and restore-only rollback |
 | [Schema versioning](schema-versioning.md) | Config, graph, event payload and memory database versions |
 | [Release notes (draft)](release-notes-v0.1.md) | v0.1 archive scope and known limitations |
+| [Release evidence](release-evidence/2026-10-05/README.md) | Actual command outputs, role reports and native candidate identity |
 | [Development](development.md) | `cargo` checks, ignored long-running tests, local runtime state |
 
 > **Documentation convention.** **Current** means implemented enough to try from the repository. **Target** means product direction; command names may still change while the CLI is being aligned.

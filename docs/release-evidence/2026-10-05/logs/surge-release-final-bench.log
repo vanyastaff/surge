@@ -1,0 +1,97 @@
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.47
+   Compiling zerocopy-derive v0.8.47
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustls v0.23.45
+   Compiling rustls-webpki v0.103.15
+   Compiling tokio-util v0.7.18
+   Compiling security-framework-sys v2.17.0
+   Compiling security-framework v3.7.0
+   Compiling either v1.15.0
+   Compiling anyhow v1.0.103
+   Compiling concurrent-queue v2.5.0
+   Compiling event-listener v5.4.1
+   Compiling tower v0.5.3
+   Compiling chrono v0.4.44
+   Compiling rustls-native-certs v0.8.3
+   Compiling tower-http v0.6.8
+   Compiling event-listener-strategy v0.5.4
+   Compiling num-integer v0.1.46
+   Compiling heck v0.4.1
+   Compiling schemars v1.2.1
+   Compiling num-bigint v0.4.6
+   Compiling crossbeam-epoch v0.9.20
+   Compiling snafu-derive v0.8.9
+   Compiling async-io v2.6.0
+   Compiling libgit2-sys v0.18.8+1.9.7
+   Compiling ppv-lite86 v0.2.21
+   Compiling tokio-rustls v0.26.4
+   Compiling ahash v0.8.12
+   Compiling rand_chacha v0.9.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hashbrown v0.14.5
+   Compiling simple_asn1 v0.6.4
+   Compiling rand v0.9.3
+   Compiling hashlink v0.9.1
+   Compiling ulid v1.2.1
+   Compiling rusqlite v0.32.1
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling reqwest v0.12.28
+   Compiling jsonwebtoken v9.3.1
+   Compiling snafu v0.8.9
+   Compiling r2d2_sqlite v0.25.0
+   Compiling serde_with v3.24.0
+   Compiling async-signal v0.2.13
+   Compiling async-channel v2.5.0
+   Compiling async-lock v3.4.2
+   Compiling rayon-core v1.13.0
+   Compiling rmcp v1.6.0
+   Compiling octocrab v0.42.1
+   Compiling blocking v1.6.2
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling async-process v2.5.0
+   Compiling lineark-sdk v3.0.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling half v2.7.1
+   Compiling ciborium-io v0.2.2
+   Compiling plotters-backend v0.3.7
+   Compiling clap_builder v4.6.0
+   Compiling agent-client-protocol v2.2.0
+   Compiling plotters-svg v0.3.7
+   Compiling lettre v0.11.22
+   Compiling ciborium-ll v0.2.2
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling itertools v0.10.5
+   Compiling cast v0.3.0
+   Compiling same-file v1.0.6
+   Compiling walkdir v2.5.0
+   Compiling criterion-plot v0.5.0
+   Compiling rayon v1.11.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling ciborium v0.2.2
+   Compiling plotters v0.3.7
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling clap v4.6.0
+   Compiling tinytemplate v1.2.1
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling git2 v0.21.0
+   Compiling console v0.16.3
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling similar v2.7.0
+   Compiling ascii v1.1.0
+   Compiling chunked_transfer v1.5.0
+   Compiling tiny_http v0.12.0
+   Compiling insta v1.47.2
+   Compiling which v6.0.3
+   Compiling criterion v0.5.1
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Finished `bench` profile [optimized] target(s) in 5m 40s
+     Running benches/stage_transition.rs (target/release/deps/stage_transition-17b02b7190410335)
+Gnuplot not found, using plotters backend
+Benchmarking engine.stage_transition/branch_node_one_transition
+Benchmarking engine.stage_transition/branch_node_one_transition: Analyzing
+engine.stage_transition/branch_node_one_transition
+                        time:   [276.18 µs 279.10 µs 290.76 µs]

@@ -1,0 +1,27 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 53.52s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-8b1eaa767c938271)
+
+running 9 tests
+test wake_scheduler::tests::tick_fails_honestly_when_no_worktree_was_ever_recorded ... ok
+test wake_scheduler::tests::tick_does_not_resume_a_not_yet_due_run ... ok
+test wake_scheduler::tests::due_parked_task_in_attention_never_falls_through_to_generic_resume ... ok
+test wake_scheduler::tests::tick_resumes_a_due_run_using_its_recorded_worktree ... ok
+test wake_scheduler::tests::tick_does_not_escalate_below_the_blind_park_limit ... ok
+test wake_scheduler::tests::tick_fails_honestly_when_the_recorded_worktree_is_gone ... ok
+test wake_scheduler::tests::tick_escalates_once_when_the_blind_park_limit_is_crossed ... ok
+test wake_scheduler::tests::tick_does_not_re_escalate_the_same_streak_on_a_later_tick ... ok
+test wake_scheduler::tests::tick_resumes_every_due_run_and_skips_every_not_yet_due_one ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 118 filtered out; finished in 0.78s

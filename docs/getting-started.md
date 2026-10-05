@@ -161,6 +161,12 @@ surge project describe
 
 `surge project describe` scans high-signal files such as `AGENTS.md`, `README.md`, `Cargo.toml`, `justfile`, formatter/lint config, and git state, then writes `project.md`. In `--author-mode auto` (the default), it uses the Project Context Author ACP profile when the configured runtime is installed and otherwise falls back to deterministic local rendering. This file is separate from `.ai-factory/` agent context: it is the stable project summary captured into new runs at start time. Use `--dry-run` to preview whether it would change, and `--refresh` to rewrite after meaningful project changes.
 
+Owned Flow execution requires a Git repository with a committed base and a clean
+source checkout, including untracked files. After initialization, review and commit
+`project.md` and your workflow. Keep local `surge.toml` and `.surge/` out of Git
+through project ignore rules; never commit secrets just to satisfy the clean-base
+check. Check `git status --porcelain` before starting a run.
+
 ## Run the Smallest Flow
 
 Create `flow-terminal.toml` in your project with the following contents. This smoke
@@ -190,6 +196,9 @@ node_kind = "terminal"
 type = "success"
 ```
 
+Review and commit `flow-terminal.toml` first, then confirm the source checkout is
+clean.
+
 ```bash
 surge engine run flow-terminal.toml --watch
 ```
@@ -202,6 +211,9 @@ surge engine run flow-terminal.toml --daemon --watch
 surge engine ls --daemon
 surge daemon stop
 ```
+
+`surge daemon stop` acknowledges a shutdown request. Wait for the owned daemon
+to exit before starting it again; `surge daemon restart` performs that wait.
 
 Detached startup redirects daemon output to `~/.surge/daemon/daemon.log`
 (or `$SURGE_HOME/daemon/daemon.log` when `SURGE_HOME` is set). The start

@@ -1,5 +1,9 @@
 # Release and rollback procedure
 
+The 2026-10-05 candidate is NO-GO while productive MCP cold recovery lacks
+complete cleanup evidence and the four-platform native gates remain unverified.
+See [readiness](release-readiness-2026-10-05.md).
+
 The release delivers the CLI and sibling daemon. The optional desktop shell is not
 in the archives. Publication requires separate authorization; preparing local
 artifacts or running the branch workflow does not authorize a tag or release.
@@ -14,15 +18,37 @@ artifacts or running the branch workflow does not authorize a tag or release.
    `python3.12 -m unittest discover -s scripts -p test_release.py`.
 3. Build both executables and test the extracted archive with isolated `SURGE_HOME`
    and a temporary project: both `--version`, initialization, project description,
-   terminal-only flow and daemon start/run/stop. Keep the binaries together.
+   terminal-only flow and daemon start/run/stop. Use a clean committed temporary
+   Git source, ignore local config/runtime state, and commit generated context
+   before Flow admission. `daemon stop` acknowledges the request: wait for owned
+   shutdown before starting again. Keep the binaries together.
 4. Require successful native workflow evidence for all four configured archive
    targets before claiming four-platform binary readiness. Platform workflow smoke
    is not evidence of Windows workflow parity; see
    [runtime limitations](getting-started.md#windows-runtime-limitations).
 5. Retain logs, archive checksums and exact revision identity. The release workflow
    calls reusable CI for its triggering revision and gates archive builds/publication
-   on validation. A manual branch run produces artifacts without publishing.
+   on validation. A manual branch run can produce artifacts only after validation
+   passes and never publishes.
    Finalize draft release notes only after evidence review and publication approval.
+
+## Local macOS candidate
+
+For an Apple Silicon candidate, use the same linkage and minimum OS policy as CI:
+
+```sh
+OPENSSL_STATIC=1 MACOSX_DEPLOYMENT_TARGET=15.0 cargo build --locked --release -p surge-cli -p surge-daemon
+otool -L target/release/surge
+otool -L target/release/surge-daemon
+python3.12 scripts/release.py package --target aarch64-apple-darwin --bin-dir target/release --output target/release-readiness
+```
+
+Each dependency path must begin with `/usr/lib/` or `/System/Library/`. Confirm
+minimum OS 15.0 in `otool -l` for both binaries. A source build without these
+settings can link Homebrew OpenSSL and is not a self-contained archive candidate.
+Use the appropriate native target on other platforms; no cross-platform claim
+follows from these local commands. Run the isolated extracted-archive scenario
+recorded in the [evidence index](release-evidence/2026-10-05/README.md).
 
 ## Back up before upgrading
 

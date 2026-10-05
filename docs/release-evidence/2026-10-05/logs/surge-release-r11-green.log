@@ -1,0 +1,47 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.49s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-4e809714c96ec25c)
+
+running 40 tests
+test memory::store::tests::delete_claim_returns_false_for_an_unknown_id ... ok
+test memory::store::tests::add_claim_fails_on_duplicate_id ... ok
+test memory::store::tests::delete_claim_removes_only_the_named_claim_and_leaves_others_intact ... ok
+test memory::store::tests::backfill_legacy_claims_is_a_noop_when_run_again_over_the_same_rows ... ok
+test memory::store::tests::add_claim_then_get_claim_roundtrips_every_field ... ok
+test memory::store::fts_regression_tests::v2_repair_failure_rolls_back_triggers_indexes_and_schema_version ... ok
+test memory::store::fts_regression_tests::all_external_content_indexes_follow_updates_and_deletes ... ok
+test memory::store::tests::list_claims_includes_every_added_claim ... ok
+test memory::store::tests::get_claim_returns_none_for_unknown_id ... ok
+test memory::store::tests::insert_claim_with_ignore_policy_silently_keeps_the_first_write_on_conflict ... ok
+test memory::store::tests::list_recent_breaks_created_at_ties_by_insertion_order ... ok
+test memory::store::tests::list_recent_honors_limit_per_category ... ok
+test memory::store::tests::list_recent_orders_newest_created_at_first ... ok
+test memory::store::tests::filtered_search_limit_counts_matching_rows_not_fetched_ones ... ok
+test memory::store::tests::migration_v1_to_v2_step_rolls_back_atomically_when_backfill_fails_partway ... ok
+test memory::store::tests::list_recent_returns_empty_for_empty_store ... ok
+test memory::store::tests::list_recent_returns_rows_of_every_kind_without_a_query ... ok
+test memory::store::fts_regression_tests::v2_upgrade_repairs_stale_and_orphan_postings_and_reopens ... ok
+test memory::store::tests::migration_v1_to_v2_disambiguates_a_cross_table_ulid_collision_without_losing_text ... ok
+test memory::store::tests::migration_v1_to_v2_backfills_all_four_legacy_tables_with_and_without_optional_fields ... ok
+test memory::store::tests::test_add_discovery ... ok
+test memory::store::tests::test_add_file_context ... ok
+test memory::store::tests::migration_v1_to_v2_reuses_legacy_ulid_and_records_legacy_source ... ok
+test memory::store::tests::test_add_pattern ... ok
+test memory::store::tests::test_add_gotcha ... ok
+test memory::store::tests::test_open_in_memory ... ok
+test memory::store::tests::test_schema_initialization ... ok
+test memory::store::tests::test_multiple_entries ... ok
+test memory::store::tests::test_search_by_category_discoveries ... ok
+test memory::store::tests::test_search_by_category_patterns ... ok
+test memory::store::tests::test_search_all_empty ... ok
+test memory::store::tests::test_search_file_contexts ... ok
+test memory::store::tests::test_search_discoveries ... ok
+test memory::store::tests::test_search_multiple_categories ... ok
+test memory::store::tests::test_search_gotchas ... ok
+test memory::store::tests::update_unverified_claim_never_overwrites_a_verified_row ... ok
+test memory::store::tests::test_search_limit ... ok
+test memory::store::tests::test_search_phrase_query ... ok
+test memory::store::tests::test_search_patterns ... ok
+test memory::store::tests::update_unverified_claim_refreshes_in_place_and_preserves_identity ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 455 filtered out; finished in 0.31s

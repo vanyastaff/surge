@@ -1,0 +1,29 @@
+RETAINED_ROOT /tmp/surge-controlled-retained-w6iuvkbl
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/live_provider_smoke.rs (target/debug/deps/live_provider_smoke-dc80de5660546e86)
+
+running 1 test
+smoke durable SessionOpened: 0
+smoke durable HumanInputRequested: 0
+smoke durable HumanInputResolved: 0
+smoke durable StageToolReceipt: 0
+smoke durable OutcomeReported: 0
+smoke durable RunCompleted: 0
+smoke durable RunFailed: 1
+
+thread 'controlled_daemon_mcp_smoke' (33795305) panicked at crates/surge-daemon/tests/live_provider_smoke.rs:52:9:
+smoke failed: checkout integrity failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test controlled_daemon_mcp_smoke ... FAILED
+
+failures:
+
+failures:
+    controlled_daemon_mcp_smoke
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.43s
+
+error: test failed, to rerun pass `-p surge-daemon --test live_provider_smoke`
+EXIT 101

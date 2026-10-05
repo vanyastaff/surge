@@ -1,0 +1,11 @@
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.77s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/daemon_restart.rs (target/debug/deps/daemon_restart-354cec1906983bf3)
+
+running 2 tests
+test idle_restart_does_not_wait_for_full_grace ... ok
+test restart_waits_beyond_old_deadline_for_delayed_owner ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.82s

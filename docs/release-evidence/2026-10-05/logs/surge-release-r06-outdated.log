@@ -1,0 +1,68 @@
+Update for wry could not be found!
+surge-acp
+================
+Name         Project  Compat  Latest   Kind    Platform
+----         -------  ------  ------   ----    --------
+async-trait  0.1.89   ---     0.1.92   Normal  ---
+libc         0.2.183  ---     0.2.190  Normal  cfg(unix)
+tokio-util   0.7.18   ---     0.7.19   Normal  ---
+which        8.0.2    ---     8.0.6    Normal  ---
+
+surge-orchestrator
+================
+Name         Project  Compat  Latest   Kind         Platform
+----         -------  ------  ------   ----         --------
+async-trait  0.1.89   ---     0.1.92   Normal       ---
+base64       0.22.1   ---     0.23.1   Normal       ---
+libc         0.2.183  ---     0.2.190  Normal       ---
+tokio-util   0.7.18   ---     0.7.19   Normal       ---
+which        6.0.3    ---     8.0.6    Development  ---
+
+surge-intake
+================
+Name         Project  Compat  Latest  Kind    Platform
+----         -------  ------  ------  ----    --------
+async-trait  0.1.89   ---     0.1.92  Normal  ---
+
+surge-mcp
+================
+Name         Project  Compat  Latest  Kind    Platform
+----         -------  ------  ------  ----    --------
+async-trait  0.1.89   ---     0.1.92  Normal  ---
+tokio-util   0.7.18   ---     0.7.19  Normal  ---
+
+surge-notify
+================
+Name         Project  Compat  Latest  Kind    Platform
+----         -------  ------  ------  ----    --------
+async-trait  0.1.89   ---     0.1.92  Normal  ---
+
+surge-cli
+================
+Name        Project  Compat  Latest  Kind         Platform
+----        -------  ------  ------  ----         --------
+assert_cmd  2.2.1    ---     2.2.2   Development  ---
+tokio-util  0.7.18   ---     0.7.19  Development  ---
+which       6.0.3    ---     8.0.6   Normal       ---
+
+surge-daemon
+================
+Name         Project  Compat  Latest  Kind    Platform
+----         -------  ------  ------  ----    --------
+async-trait  0.1.89   ---     0.1.92  Normal  ---
+humantime    2.3.0    ---     2.4.0   Normal  ---
+tokio-util   0.7.18   ---     0.7.19  Normal  ---
+
+surge-telegram
+================
+Name         Project  Compat  Latest  Kind    Platform
+----         -------  ------  ------  ----    --------
+async-trait  0.1.89   ---     0.1.92  Normal  ---
+tokio-util   0.7.18   ---     0.7.19  Normal  ---
+
+surge-ui
+================
+Name            Project  Compat  Latest   Kind    Platform
+----            -------  ------  ------   ----    --------
+libc            0.2.183  ---     0.2.190  Normal  cfg(unix)
+pulldown-cmark  0.12.2   ---     0.13.4   Normal  ---

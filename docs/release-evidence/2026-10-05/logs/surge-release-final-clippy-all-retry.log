@@ -1,0 +1,435 @@
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking criterion v0.5.1
+    Checking bytemuck v1.25.0
+    Checking ascii v1.1.0
+    Checking chunked_transfer v1.5.0
+   Compiling convert_case v0.11.0
+    Checking quick-error v1.2.3
+    Checking bit-vec v0.8.0
+    Checking rusty-fork v0.3.1
+    Checking tiny_http v0.12.0
+    Checking rgb v0.8.53
+    Checking rand_xorshift v0.4.0
+    Checking bit-set v0.8.0
+   Compiling proptest-macro v0.5.0
+    Checking unarray v0.1.4
+    Checking psm v0.1.32
+    Checking erasable v1.3.0
+   Compiling derive_more-impl v1.0.0
+   Compiling proc-macro-error-attr2 v2.0.0
+   Compiling include_dir_macros v0.7.4
+    Checking rc-box v1.3.0
+    Checking stacker v0.1.25
+   Compiling proc-macro-error2 v2.0.1
+    Checking takecell v0.1.1
+    Checking proptest v1.11.0
+   Compiling include_dir v0.7.4
+    Checking take_mut v0.2.2
+   Compiling teloxide-macros v0.9.0
+    Checking dptree v0.3.0
+   Compiling typeid v1.0.3
+   Compiling serde_fmt v1.1.0
+   Compiling aquamarine v0.6.0
+   Compiling erased-serde v0.4.10
+    Checking bstr v1.12.1
+    Checking is_ci v1.2.0
+    Checking simd-adler32 v0.3.8
+   Compiling aho-corasick v1.1.4
+   Compiling value-bag-serde1 v1.12.0
+    Checking predicates-core v1.0.10
+   Compiling owo-colors v4.3.0
+   Compiling value-bag v1.12.0
+    Checking supports-color v2.1.0
+    Checking supports-color v3.0.2
+    Checking float-cmp v0.10.0
+   Compiling serde v1.0.228
+    Checking adler2 v2.0.1
+   Compiling log v0.4.29
+    Checking termtree v0.5.1
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking difflib v0.4.0
+    Checking normalize-line-endings v0.3.0
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+   Compiling assert_cmd v2.2.1
+    Checking derive_more v1.0.0
+    Checking predicates v3.1.4
+   Compiling regex-automata v0.4.14
+    Checking teloxide-core v0.11.2
+    Checking predicates-tree v1.0.13
+    Checking miniz_oxide v0.8.9
+   Compiling crc32fast v1.5.0
+    Checking num_cpus v1.17.0
+    Checking siphasher v1.0.2
+    Checking arrayvec v0.7.6
+   Compiling winnow v1.0.0
+   Compiling semver v1.0.27
+    Checking core-graphics-types v0.2.0
+   Compiling foreign-types-macros v0.2.3
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking flate2 v1.1.9
+   Compiling rustc_version v0.4.1
+    Checking foreign-types-shared v0.3.1
+   Compiling clang-sys v1.8.1
+    Checking euclid v0.22.14
+    Checking foreign-types v0.5.0
+   Compiling slotmap v1.1.1
+   Compiling prettyplease v0.2.37
+    Checking fdeflate v0.3.7
+    Checking objc2-core-video v0.3.2
+   Compiling toml_parser v1.0.10+spec-1.1.0
+    Checking core_maths v0.1.1
+   Compiling regex v1.12.3
+    Checking malloc_buf v0.0.6
+    Checking float-cmp v0.9.0
+    Checking bitflags v1.3.2
+   Compiling minimal-lexical v0.2.1
+    Checking block v0.1.6
+    Checking strict-num v0.1.1
+   Compiling globset v0.4.18
+   Compiling nom v7.1.3
+    Checking objc v0.2.7
+    Checking ttf-parser v0.25.1
+    Checking lyon_geom v1.0.19
+   Compiling pathfinder_simd v0.5.5
+    Checking polycool v0.4.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling libloading v0.8.9
+    Checking gpui-pre-util v0.3.7
+   Compiling serde_spanned v1.0.4
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+    Checking zune-core v0.5.1
+    Checking tinyvec_macros v0.1.1
+    Checking arrayref v0.3.9
+    Checking libbz2-rs-sys v0.2.5
+   Compiling object v0.37.3
+    Checking byteorder v1.5.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling rand_core v0.6.4
+   Compiling toml_datetime v1.0.1+spec-1.1.0
+   Compiling bindgen v0.72.1
+   Compiling paste v1.0.15
+   Compiling toml_writer v1.0.7+spec-1.1.0
+    Checking weezl v0.1.12
+    Checking quick-error v2.0.1
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling cexpr v0.6.0
+   Compiling toml_edit v0.25.5+spec-1.1.0
+   Compiling rand v0.8.5
+    Checking bzip2 v0.6.1
+    Checking zune-jpeg v0.5.14
+    Checking tiny-skia-path v0.11.4
+    Checking tinyvec v1.11.0
+    Checking gpui-pre-collections v0.3.7
+    Checking kurbo v0.13.1
+    Checking lyon_path v1.0.19
+    Checking core-graphics v0.24.0
+   Compiling phf_shared v0.11.3
+   Compiling itertools v0.13.0
+   Compiling fax_derive v0.2.0
+   Compiling enumn v0.1.14
+    Checking memmap2 v0.9.10
+   Compiling thiserror v1.0.69
+    Checking leak v0.1.2
+    Checking unicode-ccc v0.4.0
+    Checking compression-core v0.4.31
+    Checking byteorder-lite v0.1.0
+    Checking unicode-bidi-mirroring v0.4.0
+   Compiling heapless v0.9.3
+    Checking gimli v0.32.3
+    Checking unicode-script v0.5.8
+    Checking unicode-properties v0.1.4
+   Compiling gpui-pre-ztracing v0.3.7
+    Checking color_quant v1.1.0
+    Checking rustybuzz v0.20.1
+    Checking gif v0.14.1
+    Checking image-webp v0.2.4
+    Checking compression-codecs v0.4.37
+    Checking leaky-cow v0.1.1
+    Checking fontdb v0.23.0
+    Checking fax v0.2.6
+    Checking accesskit v0.24.1
+    Checking addr2line v0.25.1
+    Checking svgtypes v0.16.1
+   Compiling phf_generator v0.11.3
+   Compiling toml v0.8.23
+    Checking gpui-pre-zlog v0.3.7
+   Compiling embed-resource v3.0.7
+   Compiling proc-macro-crate v3.5.0
+    Checking hash32 v0.3.1
+    Checking png v0.17.16
+    Checking zune-inflate v0.2.54
+    Checking spin v0.9.8
+    Checking simplecss v0.2.2
+   Compiling thiserror-impl v1.0.69
+    Checking cgl v0.3.2
+    Checking roxmltree v0.21.1
+    Checking data-url v0.3.2
+    Checking lebe v0.5.3
+    Checking pxfm v0.1.28
+   Compiling zed-font-kit v0.14.1-zed
+    Checking bit_field v0.10.3
+    Checking pico-args v0.5.0
+   Compiling gpui-pre-ztracing-macro v0.3.7
+    Checking unicode-bidi v0.3.18
+    Checking float_next_after v1.0.0
+    Checking unicode-vo v0.1.0
+    Checking xmlwriter v0.1.0
+    Checking rustc-demangle v0.1.28
+    Checking imagesize v0.14.0
+    Checking lyon_tessellation v1.0.20
+    Checking usvg v0.46.0
+    Checking exr v1.74.0
+    Checking tiny-skia v0.11.4
+    Checking teloxide v0.14.0
+    Checking backtrace v0.3.76
+    Checking moxcms v0.8.1
+    Checking io-surface v0.16.1
+    Checking flume v0.12.0
+    Checking metal v0.33.0
+   Compiling crossbeam-epoch v0.9.20
+    Checking pathfinder_geometry v0.5.1
+   Compiling gpui-pre-perf v0.3.7
+    Checking tiff v0.11.3
+    Checking async-compression v0.4.41
+   Compiling gpui-pre v0.3.7
+    Checking core-text v21.0.0
+    Checking lyon_algorithms v1.0.19
+    Checking core-graphics2 v0.5.2
+    Checking png v0.18.1
+    Checking qoi v0.4.1
+    Checking objc2-core-graphics v0.3.2
+    Checking crossbeam-queue v0.3.12
+   Compiling profiling-procmacros v1.0.17
+   Compiling gpui-pre-derive-refineable v0.3.7
+    Checking pollster v0.2.5
+    Checking new_debug_unreachable v1.0.6
+    Checking link-section v0.19.3
+    Checking smol_str v0.3.6
+    Checking raw-window-handle v0.6.2
+   Compiling linktime-proc-macro v0.2.3
+    Checking atomic v0.5.3
+    Checking float-ord v0.3.2
+    Checking static_assertions v1.1.0
+    Checking svg_fmt v0.4.5
+    Checking postage v0.5.0
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking gpui-pre-refineable v0.3.7
+    Checking etagere v0.2.15
+    Checking gpui-pre-shared-string v0.3.7
+    Checking profiling v1.0.17
+    Checking lyon v1.0.19
+    Checking gpui-pre-http-client v0.3.7
+    Checking gpui-pre-sum-tree v0.3.7
+   Compiling gpui-pre-util-macros v0.3.7
+    Checking ctor v1.0.13
+   Compiling crossbeam-deque v0.8.6
+    Checking gpui-pre-scheduler v0.3.7
+    Checking resvg v0.46.0
+    Checking image v0.25.10
+   Compiling gpui-pre-macros v0.3.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling phf_codegen v0.11.3
+    Checking taffy v0.13.0
+    Checking core-video v0.5.2
+    Checking objc2-core-data v0.3.2
+    Checking objc2-cloud-kit v0.3.2
+    Checking objc2-core-image v0.3.2
+    Checking objc2-quartz-core v0.3.2
+    Checking objc2-core-text v0.3.2
+    Checking itertools v0.14.0
+    Checking spin v0.10.1
+    Checking seahash v4.1.0
+    Checking waker-fn v1.2.0
+    Checking mac v0.1.1
+   Compiling objc-sys v0.3.5
+    Checking inventory v0.3.22
+    Checking pollster v0.4.0
+    Checking deadpool-runtime v0.1.4
+    Checking futf v0.1.5
+    Checking deadpool v0.12.3
+    Checking objc2-app-kit v0.3.2
+   Compiling markup5ever v0.12.1
+   Compiling ignore v0.4.25
+    Checking assert-json-diff v2.0.2
+    Checking precomputed-hash v0.1.1
+    Checking utf-8 v0.7.6
+   Compiling once_cell v1.21.4
+   Compiling cbindgen v0.28.0
+   Compiling dirs-sys v0.5.0
+    Checking tendril v0.4.3
+   Compiling tempfile v3.27.0
+   Compiling globwalk v0.8.1
+    Checking string_cache v0.8.9
+    Checking wiremock v0.6.5
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Checking phf v0.11.3
+   Compiling encoding_rs v0.8.35
+   Compiling anstyle v1.0.14
+   Compiling arraydeque v0.5.1
+   Compiling unicode-width v0.2.2
+   Compiling granit-parser v1.3.0
+    Checking objc2 v0.5.2
+   Compiling annotate-snippets v0.12.16
+   Compiling dirs v6.0.0
+   Compiling encoding_rs_io v0.1.8
+   Compiling html5ever v0.27.0
+   Compiling base64 v0.23.1
+   Compiling nohash-hasher v0.2.0
+   Compiling io-lifetimes v2.0.4
+   Compiling serde-saphyr v1.3.0
+   Compiling triomphe v0.1.15
+   Compiling shellexpand v3.1.2
+    Checking objc2-foundation v0.2.2
+   Compiling rust-embed-utils v8.11.0
+    Checking cocoa-foundation v0.2.0
+   Compiling itertools v0.11.0
+    Checking instant v0.1.13
+   Compiling normpath v1.5.0
+   Compiling foldhash v0.2.0
+   Compiling gpui-kit-assets v0.7.0
+   Compiling base62 v2.2.4
+    Checking objc2-app-kit v0.2.2
+    Checking cocoa v0.26.0
+   Compiling rust-i18n-support v4.2.3
+   Compiling rust-embed-impl v8.11.0
+    Checking xml5ever v0.18.1
+error: doc list item without indentation
+  --> crates/surge-daemon/src/automation_merge_gate.rs:26:5
+   |
+26 | //! Durable Completed journals are reconciled at startup, every 30 seconds and
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_lazy_continuation
+   = note: `-D clippy::doc-lazy-continuation` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::doc_lazy_continuation)]`
+help: indent this line
+   |
+26 | //!    Durable Completed journals are reconciled at startup, every 30 seconds and
+   |     +++
+
+error: doc list item without indentation
+  --> crates/surge-daemon/src/automation_merge_gate.rs:27:5
+   |
+27 | //! after broadcast lag, in bounded keyset pages including terminal tickets.
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_lazy_continuation
+help: indent this line
+   |
+27 | //!    after broadcast lag, in bounded keyset pages including terminal tickets.
+   |     +++
+
+error: doc list item without indentation
+  --> crates/surge-daemon/src/automation_merge_gate.rs:28:5
+   |
+28 | //! MergeAttempted is reserved before the irreversible RPC. Interrupted attempts
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_lazy_continuation
+help: indent this line
+   |
+28 | //!    MergeAttempted is reserved before the irreversible RPC. Interrupted attempts
+   |     +++
+
+error: doc list item without indentation
+  --> crates/surge-daemon/src/automation_merge_gate.rs:29:5
+   |
+29 | //! become MergeUncertain and require manual inspection; they are never replayed.
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_lazy_continuation
+help: indent this line
+   |
+29 | //!    become MergeUncertain and require manual inspection; they are never replayed.
+   |     +++
+
+error: item in documentation is missing backticks
+  --> crates/surge-daemon/src/automation_merge_gate.rs:28:5
+   |
+28 | //! MergeAttempted is reserved before the irreversible RPC. Interrupted attempts
+   |     ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+   = note: `-D clippy::doc-markdown` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+   |
+28 - //! MergeAttempted is reserved before the irreversible RPC. Interrupted attempts
+28 + //! `MergeAttempted` is reserved before the irreversible RPC. Interrupted attempts
+   |
+
+error: item in documentation is missing backticks
+  --> crates/surge-daemon/src/automation_merge_gate.rs:29:12
+   |
+29 | //! become MergeUncertain and require manual inspection; they are never replayed.
+   |            ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+   |
+29 - //! become MergeUncertain and require manual inspection; they are never replayed.
+29 + //! become `MergeUncertain` and require manual inspection; they are never replayed.
+   |
+
+error: item in documentation is missing backticks
+   --> crates/surge-daemon/src/automation_merge_gate.rs:813:49
+    |
+813 | /// require manual inspection. The pre-dispatch MergeAttempted receipt prevents
+    |                                                 ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+813 - /// require manual inspection. The pre-dispatch MergeAttempted receipt prevents
+813 + /// require manual inspection. The pre-dispatch `MergeAttempted` receipt prevents
+    |
+
+error: item in documentation is missing backticks
+   --> crates/surge-daemon/src/automation_merge_gate.rs:815:49
+    |
+815 | /// classifies that unknown external outcome as MergeUncertain.
+    |                                                 ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+815 - /// classifies that unknown external outcome as MergeUncertain.
+815 + /// classifies that unknown external outcome as `MergeUncertain`.
+    |
+
+   Compiling gpui-pre-apple v0.3.7
+   Compiling rust-i18n v4.2.3
+    Checking accesskit_consumer v0.38.0
+    Checking fluent-uri v0.1.4
+error: this `if` statement can be collapsed
+   --> crates/surge-daemon/src/socket_security.rs:125:9
+    |
+125 | /         if self.directory.validate().is_ok()
+126 | |             && std::fs::symlink_metadata(&self.path).is_ok_and(|current| {
+127 | |                 same_file(&self.identity, &current) && current.file_type().is_socket()
+128 | |             })
+...   |
+133 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+128 ~             })
+129 ~             && let Err(error) = std::fs::remove_file(&self.path) {
+130 |                 tracing::warn!(%error, "failed to remove owned daemon socket");
+131 ~             }
+    |
+
+    Checking objc2-core-media v0.3.2
+error: could not compile `surge-daemon` (lib) due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...

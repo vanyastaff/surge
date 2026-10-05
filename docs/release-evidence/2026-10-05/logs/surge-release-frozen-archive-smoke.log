@@ -1,0 +1,20 @@
+/tmp/surge-release-r22-smoke.py:6: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+  with tarfile.open(archive) as t: t.extractall(extract)
+# R22 End-to-end release smoke
+
+FAIL: $ /tmp/surge-r22-rmgaarb4/archive/surge engine run flow.toml --watch
+exit=1
+started surge-daemon (pid 46296)
+daemon log: /tmp/surge-r22-rmgaarb4/home/daemon/daemon.log
+daemon ready: /tmp/surge-r22-rmgaarb4/home/daemon/daemon.sock
+note: daemon not running; auto-spawning…
+Error: task operation rejected: invalid task input: owned Flow source or workspace intent refused
+
+
+Archive: /Users/vanyastafford/Develop/surge/target/release-readiness/surge-aarch64-apple-darwin.tar.gz
+Extracted CLI: /tmp/surge-r22-rmgaarb4/archive/surge
+Temporary project: /tmp/surge-r22-rmgaarb4/project
+Isolated SURGE_HOME: /tmp/surge-r22-rmgaarb4/home
+Exact command outputs: /tmp/surge-r22-rmgaarb4/commands.log
+
+No real accounts or user runtime data used. No source edits or cargo builds. Terminal-only flows validate durable owner submission, daemon auto-start, storage completion, replay, and restart where commands reached. Agent/approval/external-service scenarios are unverified by this smoke.

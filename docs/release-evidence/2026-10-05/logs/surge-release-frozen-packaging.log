@@ -1,0 +1,12 @@
+test_archives_and_independent_checksums (test_release.ReleaseTest.test_archives_and_independent_checksums) ... ok
+test_invalid_collections (test_release.ReleaseTest.test_invalid_collections) ... ok
+test_malformed_archives_rejected_before_output (test_release.ReleaseTest.test_malformed_archives_rejected_before_output) ... /opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/lib/python3.12/zipfile/__init__.py:1625: UserWarning: Duplicate name: 'surge-daemon.exe'
+  return self._open_to_write(zinfo, force_zip64=force_zip64)
+ok
+test_missing_or_empty_daemon_rejected (test_release.ReleaseTest.test_missing_or_empty_daemon_rejected) ... ok
+test_tag_validation_and_prerelease (test_release.ReleaseTest.test_tag_validation_and_prerelease) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 11.840s
+
+OK

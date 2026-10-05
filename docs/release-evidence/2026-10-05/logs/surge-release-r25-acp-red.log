@@ -1,0 +1,53 @@
+   Compiling ring v0.17.14
+   Compiling futures-util v0.3.34
+   Compiling getrandom v0.4.2
+   Compiling tracing v0.1.44
+   Compiling chrono v0.4.44
+   Compiling rustls v0.23.45
+   Compiling idna v1.1.0
+   Compiling sha2 v0.10.9
+   Compiling tempfile v3.27.0
+   Compiling uuid v1.22.0
+   Compiling tokio-util v0.7.18
+   Compiling url v2.5.8
+   Compiling rusty-fork v0.3.1
+   Compiling insta v1.47.2
+   Compiling proptest v1.11.0
+   Compiling schemars v1.2.1
+   Compiling serde_with v3.24.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling tower v0.5.3
+   Compiling hyper-util v0.1.20
+   Compiling futures-executor v0.3.34
+   Compiling futures v0.3.34
+   Compiling tower-http v0.6.8
+   Compiling rustls-webpki v0.103.15
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.7
+   Compiling reqwest v0.12.28
+   Compiling agent-client-protocol v2.2.0
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.11s
+     Running tests/bridge_control_lifecycle.rs (target/debug/deps/bridge_control_lifecycle-2ac38344cc64b377)
+
+running 2 tests
+
+thread 'dropped_option_caller_settles_child_and_shutdown_promptly' (33309212) panicked at crates/surge-acp/tests/bridge_control_lifecycle.rs:578:5:
+dropped option caller wedged shutdown: 4.006146041s
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test dropped_option_caller_settles_child_and_shutdown_promptly ... FAILED
+
+thread 'config_option_phase_shares_deadline_reaps_and_allows_next_open' (33309211) panicked at crates/surge-acp/tests/bridge_control_lifecycle.rs:551:5:
+option request must use the shared handshake deadline
+test config_option_phase_shares_deadline_reaps_and_allows_next_open ... FAILED
+
+failures:
+
+failures:
+    config_option_phase_shares_deadline_reaps_and_allows_next_open
+    dropped_option_caller_settles_child_and_shutdown_promptly
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 13 filtered out; finished in 4.30s
+
+error: test failed, to rerun pass `-p surge-acp --test bridge_control_lifecycle`

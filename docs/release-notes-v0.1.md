@@ -6,16 +6,17 @@
 > **describe → approve roadmap/flow → walk away → return to a PR.**
 > Agent-agnostic (ACP), source-agnostic, sandbox-delegated.
 
-Status: **draft** — finalize the date and verify native release builds at tag time.
+Status: **draft / NO-GO** — productive MCP cold recovery and native release gates
+remain open. See [current readiness](release-readiness-2026-10-05.md).
 
 ## Highlights
 
 - **Agent-agnostic via ACP.** One protocol (Agent Client Protocol) connects
-  to any coding agent — Claude Code, Copilot CLI, Zed Agent — with no
+  to compatible coding agents through their ACP runtimes, with no
   per-CLI stdout parsing ([ADR-0006](adr/0006-acp-only-transport.md)).
-- **Graph engine.** Every `NodeKind` (`Agent`, `HumanGate`, `Branch`,
-  `Loop`, `Subgraph`, `Notify`, `Terminal`) executes end-to-end from a
-  typed `flow.toml`, with replay-deterministic event folding.
+- **Graph engine.** Typed `flow.toml` supports `Agent`, `HumanGate`, `Branch`,
+  `Loop`, `Subgraph`, `Notify` and `Terminal`, with deterministic event folding.
+  Loop Replan and complex nested-loop recovery remain incomplete or unverified.
 - **Adaptive bootstrap.** `describe → roadmap → flow` with a HumanGate after
   each stage; archetype detection picks the right pipeline shape.
 - **Profile registry.** Bundled bootstrap + execution roles, versioned
@@ -28,15 +29,15 @@ Status: **draft** — finalize the date and verify native release builds at tag 
   progress, completion/failure cards, `/status` `/abort` `/runs`.
   `/run` still returns an explicit deferred response; start workflows through the CLI.
 - **Tracker automation tiers L0–L3** on GitHub Issues + Linear, label-driven.
-- **Crash recovery (this release's v0.1 blocker).** The daemon survives an
-  unclean exit and resumes in-flight runs from the event log
-  ([docs/crash-recovery.md](crash-recovery.md)). Inspect with
-  `surge daemon recover --dry-run`.
+- **Event-sourced recovery.** Supported restart paths use the event log and
+  authenticated writer ownership ([crash recovery](crash-recovery.md)).
+  Unresolved MCP cleanup requires `Attention` and blocks productive cold resume.
+  Inspect with `surge daemon recover --dry-run`.
 
 ## Install
 
 Release archives contain the CLI **and** its sibling daemon, README, and both
-licenses. Four targets are packaged: GNU Linux x86_64, macOS Intel, macOS
+licenses. The configured four-target archive set is: GNU Linux x86_64, macOS Intel, macOS
 Apple Silicon (`.tar.gz`), and Windows x86_64 (`.zip`). Download an archive and
 `SHA256SUMS` from [GitHub Releases](https://github.com/vanyastaff/surge/releases)
 once the tag is published. Follow the
@@ -47,8 +48,10 @@ The release workflow builds the Linux archive on Ubuntu 24.04; it requires compa
 native libraries, including OpenSSL; it is not a static musl binary. macOS
 archive smoke tests are configured on macOS 15. All four native archive smoke
 tests must pass in the release workflow before publication; a successful native
-release run has not yet been verified for this draft. A manual branch run produces workflow artifacts
-without publishing a release.
+release run has not yet been verified for this draft. A manual branch run can
+produce artifacts after validation passes and never publishes a release. macOS
+archives target 15.0 and statically link OpenSSL; see the
+[local candidate procedure](release-procedure.md#local-macos-candidate).
 
 crates.io, Homebrew, and Scoop distribution remain pending.
 
@@ -104,7 +107,7 @@ the backtrace; re-run with `RUST_BACKTRACE=1` for full detail. Please file:
 ## License
 
 Dual-licensed [MIT](../LICENSE-MIT) OR [Apache-2.0](../LICENSE-APACHE).
-Third-party license compliance is CI-enforced via `cargo deny`
+Third-party license selection is checked in CI via `cargo deny`
 ([THIRD_PARTY.md](../THIRD_PARTY.md)).
 
 ## Known limitations / deferred
@@ -130,5 +133,21 @@ Third-party license compliance is CI-enforced via `cargo deny`
 > roadmap, and walk away. It drives *your* coding agent (Claude Code,
 > Copilot CLI, Zed) over ACP, runs each task in an isolated git worktree,
 > checkpoints everything to an append-only event log, and pings your phone
-> (Telegram) only when it needs a decision. Crash the daemon? It resumes
-> from the log on restart. Pure Rust, local-first, zero telemetry.
+> (Telegram) when it needs a decision. It retains run history for recovery;
+> uncertain writer ownership requires attention. Pure Rust, local-first,
+> zero telemetry.
+
+### Release preparation blocker (2026-10-05)
+
+Productive MCP cold recovery is not ready. Existing MCP process evidence covers a
+process group without complete descendant/external-effect containment. Ordinary
+cold resume now refuses unresolved MCP writers before fresh effects; suspension
+cleanup uncertainty records `RunRecoveryRequired` and leaves the task in
+`Attention`. Direct child exit never creates a complete cleanup receipt. The
+productive recovery acceptance test remains enabled and the requirement remains
+open. Do not publish this candidate as a completed recovery implementation.
+
+CLI foreground/watch commands now reject failed, aborted, missing and conflicting
+terminal outcomes, including disk-history fallback. Owned `engine stop` preserves
+a durable suspension rather than implying an abort. Aborted run projections now
+mark their terminal flag consistently.

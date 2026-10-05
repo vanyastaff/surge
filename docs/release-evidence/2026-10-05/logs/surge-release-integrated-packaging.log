@@ -1,0 +1,7 @@
+../opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/lib/python3.12/zipfile/__init__.py:1625: UserWarning: Duplicate name: 'surge-daemon.exe'
+  return self._open_to_write(zinfo, force_zip64=force_zip64)
+...
+----------------------------------------------------------------------
+Ran 5 tests in 9.124s
+
+OK

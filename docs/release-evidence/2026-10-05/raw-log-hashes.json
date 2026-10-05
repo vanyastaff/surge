@@ -1,0 +1,637 @@
+[
+  {
+    "name": "surge-release-build.log",
+    "sha256": "54f5b28d488d7a0de565a1896ab1c79e7ff12ac2401bba1966bd056fb540aac3",
+    "bytes": 12850
+  },
+  {
+    "name": "surge-release-controlled-green.log",
+    "sha256": "04f6eb27cb7c4ab5546136f3fe4c9ec2ef0d877c6e03b069ccdadb8dad9619dc",
+    "bytes": 1049
+  },
+  {
+    "name": "surge-release-controlled-retained.log",
+    "sha256": "e56fe8b2d4cb5799f7db5e2600d43aeecbebf6c2326397717a2385b8c626a2ce",
+    "bytes": 1245
+  },
+  {
+    "name": "surge-release-final-abort-projection-red.log",
+    "sha256": "30a166fb9a140bb0f9418e9c9060a7e2f14a5926899841557ddf2f83b18c1935",
+    "bytes": 464
+  },
+  {
+    "name": "surge-release-final-abort-projection-red2.log",
+    "sha256": "01d3fc251c611f42a20c40975099511ca8ba262122520a319453591043176932",
+    "bytes": 925
+  },
+  {
+    "name": "surge-release-final-actionlint.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-final-audit.log",
+    "sha256": "ff330e04a50d45906bf909e696493a92c023dbf07c0760ef6d3860688d88c9e9",
+    "bytes": 3635
+  },
+  {
+    "name": "surge-release-final-bench.log",
+    "sha256": "11fb0d727a04970a8295193ee51c286b1b0958a107186f8d51408e8c6d463633",
+    "bytes": 3770
+  },
+  {
+    "name": "surge-release-final-cli-disk-watch-red-confirmed.log",
+    "sha256": "2beb02067e05a1a76e7e87edb838127a4c1259b009321f94e8191f9e01055c9d",
+    "bytes": 163
+  },
+  {
+    "name": "surge-release-final-cli-disk-watch-red.log",
+    "sha256": "9414d367a936fbb16c15a42ba3c8367527cb62b8f92dfcac054f5100c7750e91",
+    "bytes": 1819
+  },
+  {
+    "name": "surge-release-final-cli-owner-green.log",
+    "sha256": "6b21e89863897e8840275fe28378ee42591a925620e5d36a77b4b5b0f438bd35",
+    "bytes": 2428
+  },
+  {
+    "name": "surge-release-final-cli-owner-red.log",
+    "sha256": "96c39b9e7ca3c2fafd496fe408633e3753a391f9ffad742ff3cd4f1ba8c61620",
+    "bytes": 3550
+  },
+  {
+    "name": "surge-release-final-cli-watch-green.log",
+    "sha256": "d0a56ce6b604a8a78b20ca864dfc38fa38af4226ea35274066ab5e8427d95bad",
+    "bytes": 1221
+  },
+  {
+    "name": "surge-release-final-cli-watch-red.log",
+    "sha256": "3269106b47a58ee2dc428e44bf5f410e31eb1a9752916df3506039e7594043ce",
+    "bytes": 2161
+  },
+  {
+    "name": "surge-release-final-clippy-all-pass3.log",
+    "sha256": "e14364b373029d5ea40b0683b507c3b548c5baa5f603f868e9ea1ef48b35e3bb",
+    "bytes": 3430
+  },
+  {
+    "name": "surge-release-final-clippy-all-pass4.log",
+    "sha256": "c3715ea2ccb254e2e8fd758b29122df2c5cc37d0928574c09f4fd1b863f46520",
+    "bytes": 2157
+  },
+  {
+    "name": "surge-release-final-clippy-all-pass5.log",
+    "sha256": "a1c850209639dd2570f4e42299cb4c9bde87d3961e198fbac0248af0373e7cb6",
+    "bytes": 1305
+  },
+  {
+    "name": "surge-release-final-clippy-all-pass6.log",
+    "sha256": "586c421b95f68389c95db00d606a46f83d6580950b9d526dea9a80402286757d",
+    "bytes": 1328
+  },
+  {
+    "name": "surge-release-final-clippy-all-retry.log",
+    "sha256": "fa10f67f22712a03f022d3f4d06b072a08e42edff27acae451063965cd1e17c6",
+    "bytes": 15848
+  },
+  {
+    "name": "surge-release-final-clippy-all.log",
+    "sha256": "309c1fc2b1cfeef33f3fb4a7759f467c3266830597b1812f0295ff712eda124d",
+    "bytes": 11493
+  },
+  {
+    "name": "surge-release-final-clippy-default.log",
+    "sha256": "291ed351dfae287725b4fe41035e5628138c294c15ddacf5cf7da2e9f74511d9",
+    "bytes": 962
+  },
+  {
+    "name": "surge-release-final-clippy-integrated.log",
+    "sha256": "7118e35c13a699609fc08dfec96638f7ffb21e62aa534488d83c49531d66322b",
+    "bytes": 1425
+  },
+  {
+    "name": "surge-release-final-deny.log",
+    "sha256": "9975753e1740d3eeed1652176f278afedfc48be74838a79db2d8e5b32484645a",
+    "bytes": 32885
+  },
+  {
+    "name": "surge-release-final-doctests.log",
+    "sha256": "cd6a4fcc78f6c54ac75f33524cf5e48edb56ce3314ea2a791d19d90fac2b895a",
+    "bytes": 3436
+  },
+  {
+    "name": "surge-release-final-fmt.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-final-just.log",
+    "sha256": "401c58291588493bc07c055d41bff499d51644d093f3ed4a6191883ab4f47482",
+    "bytes": 3247
+  },
+  {
+    "name": "surge-release-final-mcp-domain-green.log",
+    "sha256": "c2c6e9edb808e3fb25b2d99580035d1a1995191d2c6d1fa1de063a2acdd03613",
+    "bytes": 659
+  },
+  {
+    "name": "surge-release-final-mcp-domain-green2.log",
+    "sha256": "4d9c989af0e8aa43206038932f80c0150823a77b5c185b29b0e3e351c8977542",
+    "bytes": 1726
+  },
+  {
+    "name": "surge-release-final-mcp-domain-green3.log",
+    "sha256": "7945bc590a05f5d84d9543b9917c8dc5bee35497d5f32b7d33de8b8159d39fc1",
+    "bytes": 1200
+  },
+  {
+    "name": "surge-release-final-mcp-domain-red.log",
+    "sha256": "e05b3a05693650778dddc84824a1346fad026925ed3670d2e8f0ffb8c3889d83",
+    "bytes": 1313
+  },
+  {
+    "name": "surge-release-final-msrv.log",
+    "sha256": "c512229c91e57d6dbb800cf593bc81d9c9d6c46d06cc56da29e260b8f2b1ba3c",
+    "bytes": 13829
+  },
+  {
+    "name": "surge-release-final-nextest-integrated.log",
+    "sha256": "8069489342aa76a07bf311456cdb55b62b088587a5a32845e2037e343010b48c",
+    "bytes": 145731
+  },
+  {
+    "name": "surge-release-final-nextest-integrated2.log",
+    "sha256": "9acd2ab177080f54c87efa1e081d9997a768522d1eb8a57e92e131db3e0f0adc",
+    "bytes": 128372
+  },
+  {
+    "name": "surge-release-final-nextest-integrated3.log",
+    "sha256": "242b8a5a1ce0edb8323b49856f2150e0604504d700cd41edf09a50232adc75dc",
+    "bytes": 479205
+  },
+  {
+    "name": "surge-release-final-nextest.log",
+    "sha256": "2d6c8de31cbb2c788c476552a201dc0e38ee2c29aeeb28bc49dc89f61428ce2d",
+    "bytes": 499967
+  },
+  {
+    "name": "surge-release-final-packaging-tests.log",
+    "sha256": "57cc239888784cec6c2d060f8ceaae1dfdcb619742475d578d19f34159fc6d5d",
+    "bytes": 337
+  },
+  {
+    "name": "surge-release-final-wake-green.log",
+    "sha256": "b50c34e8f82cb18c252f2882968ff6aeb0f92c442959eda4cd414ec11a440233",
+    "bytes": 2238
+  },
+  {
+    "name": "surge-release-frozen-actionlint.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-frozen-archive-check.log",
+    "sha256": "4311b6381d1a7a726f8d9a26ba2e1b15297bb11ff0368ea37eabd9295e833821",
+    "bytes": 728
+  },
+  {
+    "name": "surge-release-frozen-archive-commands.log",
+    "sha256": "9e39ab1b93069cb9715791b0ae28420e0ac7ddf265da905097024b55259c5e09",
+    "bytes": 7815
+  },
+  {
+    "name": "surge-release-frozen-archive-smoke-green.log",
+    "sha256": "e210028c74871ad8b809d38272861ca30676b7d75c0f51215c01e98a35f748db",
+    "bytes": 1024
+  },
+  {
+    "name": "surge-release-frozen-archive-smoke-green2.log",
+    "sha256": "014eba2fd6cacf392fbfb1c47221878b7523ad124bbb8609e12ffb560f56ea14",
+    "bytes": 909
+  },
+  {
+    "name": "surge-release-frozen-archive-smoke.log",
+    "sha256": "e4aa874f13937d7d75f4db0818c12295c432a7a9550fdf843d6710c7c0d5d59d",
+    "bytes": 1282
+  },
+  {
+    "name": "surge-release-frozen-bench.log",
+    "sha256": "caac1f37ea69d44200e8847fd2810fbd73e27065fddccfac4565ea5bc1d67f00",
+    "bytes": 3601
+  },
+  {
+    "name": "surge-release-frozen-clippy-all.log",
+    "sha256": "9e6657aa0b40c336d1282def8919321c484bd5a407576169e50b1d1091ea46ad",
+    "bytes": 516
+  },
+  {
+    "name": "surge-release-frozen-clippy-default.log",
+    "sha256": "30a5192e5477f740fdfb52673359c80137078f1cc25fefebe884c6c930f06a07",
+    "bytes": 515
+  },
+  {
+    "name": "surge-release-frozen-environment.log",
+    "sha256": "7e7aa491a7aeec711d02521aeff03ee73bf93e89cfaa53fd05a0fec132c052de",
+    "bytes": 510
+  },
+  {
+    "name": "surge-release-frozen-extracted-linkage.log",
+    "sha256": "a36044fbf347b80779ed2a23fb0d4b910ee17f56b8adbca0acc191589ab13139",
+    "bytes": 27549
+  },
+  {
+    "name": "surge-release-frozen-fmt.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-frozen-linkage.log",
+    "sha256": "a6786436f1e9b4a6faf293f6f4ed8df6e57fd0d36bccd74f71991e245e73b533",
+    "bytes": 27801
+  },
+  {
+    "name": "surge-release-frozen-msrv-retry.log",
+    "sha256": "dac0527732dfa7b0e38fd593c9d4613d642691051e2bf99188aca84cc6393c17",
+    "bytes": 246
+  },
+  {
+    "name": "surge-release-frozen-msrv.log",
+    "sha256": "ef8e1ebbd7feb5af4946627793ff4de4457fc1ea49427df17370aa933c84878b",
+    "bytes": 1916
+  },
+  {
+    "name": "surge-release-frozen-native-build.log",
+    "sha256": "f4230bd3954e11bbbba05cf402535c09e6f73ddb9b7c45e5a5feccdc8bd87560",
+    "bytes": 12519
+  },
+  {
+    "name": "surge-release-frozen-nextest.log",
+    "sha256": "42965c1bb07d722dd262bfa7bd4bbfa8805b1de86327ff24eeecabdbece7fa23",
+    "bytes": 478927
+  },
+  {
+    "name": "surge-release-frozen-package.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-frozen-packaging.log",
+    "sha256": "ecc29a8c614b60a8d1d18457c89f1d905628d4f14648113507dcdaebdf0adae2",
+    "bytes": 872
+  },
+  {
+    "name": "surge-release-frozen-restart.log",
+    "sha256": "43dc5caa75d7daebc4cdd2adf8c144f811dda2f3324af3083bac1a18f74477e1",
+    "bytes": 734
+  },
+  {
+    "name": "surge-release-frozen-strip.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-integrated-actionlint.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-integrated-audit.log",
+    "sha256": "81e5df56263fa491b115797bdf13840907a6c84e0a01aaa766c52d24fb7f5022",
+    "bytes": 3762
+  },
+  {
+    "name": "surge-release-integrated-build-acp-mock.log",
+    "sha256": "b32aa1c0f05454b1726d50310e476eba5a392dd56e323b6f10de77111ef8ef42",
+    "bytes": 423
+  },
+  {
+    "name": "surge-release-integrated-build-mcp-mock.log",
+    "sha256": "fa5a4febbce874a385bff32d49b30682365a25f094c242d65ae19ad385b94e8c",
+    "bytes": 243
+  },
+  {
+    "name": "surge-release-integrated-build-owner.log",
+    "sha256": "e98675139f240a073a358ed8acca89516fb77a87ed8bbc590a8ca9d7b94191d9",
+    "bytes": 978
+  },
+  {
+    "name": "surge-release-integrated-clippy-all-attempt1.log",
+    "sha256": "e4f1bd43529623b00f26aadf535360253d578edce25d2cb02bf71dff53c989bf",
+    "bytes": 2570
+  },
+  {
+    "name": "surge-release-integrated-clippy-all-attempt2.log",
+    "sha256": "2ea453ea64b53a8fb5e13c6b09fc305111486c891dded5e81c847900109717dc",
+    "bytes": 1588
+  },
+  {
+    "name": "surge-release-integrated-clippy-all.log",
+    "sha256": "b2a9dfe14ec483f04b48a41aad769e0026a5525b1af1f9e72715650e77d9fb7f",
+    "bytes": 617
+  },
+  {
+    "name": "surge-release-integrated-clippy-default.log",
+    "sha256": "105927ea7f0b84898c374a8eb4f1af8a527fcefe9e21cbac236758bb7d928508",
+    "bytes": 794
+  },
+  {
+    "name": "surge-release-integrated-deny.log",
+    "sha256": "9975753e1740d3eeed1652176f278afedfc48be74838a79db2d8e5b32484645a",
+    "bytes": 32885
+  },
+  {
+    "name": "surge-release-integrated-doc.log",
+    "sha256": "722096c5aa828d47ef409dd1dc64f2b447d94cccc1b9327e794a5bc911cf02f6",
+    "bytes": 3346
+  },
+  {
+    "name": "surge-release-integrated-fmt.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "name": "surge-release-integrated-ignored-acp.log",
+    "sha256": "dde07295ad08b1fa0187add7e401c09d13d809a25e5b5bbefe1c3f49f42ffcff",
+    "bytes": 826
+  },
+  {
+    "name": "surge-release-integrated-ignored-daemon.log",
+    "sha256": "6782958393d40f5fb4792ad28e017deb288f74bbb1b69c929762f0f30b7d260a",
+    "bytes": 1980
+  },
+  {
+    "name": "surge-release-integrated-ignored-engine.log",
+    "sha256": "9e13e80a1fbe5f181ce8fcbe1f6c55235be38f2b613d9feef29cc44d17a27b4f",
+    "bytes": 2859
+  },
+  {
+    "name": "surge-release-integrated-ignored-mcp.log",
+    "sha256": "a97dd83e53e914b6433969a5b2cb3c3d24993f70768e850cf57f747a57968a87",
+    "bytes": 514
+  },
+  {
+    "name": "surge-release-integrated-ignored-restart.log",
+    "sha256": "3c50ddf36e61338fc5799c9d61364157cfcde7bc43ee4c0c88da631c74b13df1",
+    "bytes": 1154
+  },
+  {
+    "name": "surge-release-integrated-msrv.log",
+    "sha256": "16bb461c1296ca9e1ea5c8a3b80468a1d1ad413f26bad590615c02c85f0a17a8",
+    "bytes": 723
+  },
+  {
+    "name": "surge-release-integrated-packaging.log",
+    "sha256": "9d3afced372982e3e04318ac4fe6971cf3b91b18492811e60e5d558dd4c0b6fe",
+    "bytes": 336
+  },
+  {
+    "name": "surge-release-integrated-restart-green.log",
+    "sha256": "dd49ae2ce217c926e17ec32f95dca469691b02c665e50e99bf7cded5872d7d7c",
+    "bytes": 733
+  },
+  {
+    "name": "surge-release-packaging-tests-py312.log",
+    "sha256": "8e9dceb7047ff12a5b7c17fa5b2f3276613b5b54c7208d93488e0212d506b32b",
+    "bytes": 872
+  },
+  {
+    "name": "surge-release-packaging-tests.log",
+    "sha256": "e9649c73ea89621a6c45647a433938e5a9c70c5fd4c1af84198b2d6cd54f97fe",
+    "bytes": 27364
+  },
+  {
+    "name": "surge-release-r05-gate-aborted-daemon.log",
+    "sha256": "a367947315c2e36e2845dd116fc4ba7d8a9f1f70dbe975b02b972434f72a14f0",
+    "bytes": 536
+  },
+  {
+    "name": "surge-release-r05-gate-aborted-events.log",
+    "sha256": "9dfec347ece88c05519ef25026e336fe42173b063c7af9ae3126aa1dee3289b2",
+    "bytes": 190
+  },
+  {
+    "name": "surge-release-r05-gate-events.log",
+    "sha256": "163d29ce5dd9e6ec1d8e4b6506b4a31085570795cedb9fec9ecc13ec441a7a90",
+    "bytes": 173
+  },
+  {
+    "name": "surge-release-r06-audit-after.log",
+    "sha256": "ff330e04a50d45906bf909e696493a92c023dbf07c0760ef6d3860688d88c9e9",
+    "bytes": 3635
+  },
+  {
+    "name": "surge-release-r06-deny-after.log",
+    "sha256": "9975753e1740d3eeed1652176f278afedfc48be74838a79db2d8e5b32484645a",
+    "bytes": 32885
+  },
+  {
+    "name": "surge-release-r06-deny.log",
+    "sha256": "06087d57ab10a8473321bb59e540106ae2b2196d4dbd7676642567b1ace81ca7",
+    "bytes": 85795
+  },
+  {
+    "name": "surge-release-r06-git-check.log",
+    "sha256": "d0eb72ea82cc0b4ffc200712ed1d6e050e62f3081459730396a396388bc38f77",
+    "bytes": 2888
+  },
+  {
+    "name": "surge-release-r06-git-nonutf8-green.log",
+    "sha256": "f4689e4b6e666ef3133cefad25109eb6dfc9b65b88402d6569874fa9f70360ab",
+    "bytes": 336
+  },
+  {
+    "name": "surge-release-r06-git-tests-green.log",
+    "sha256": "ee1a21653e62d05a8876cbeee57155e06db8d63eb71670a69ad104e4a55d15c6",
+    "bytes": 5947
+  },
+  {
+    "name": "surge-release-r06-git-tests.log",
+    "sha256": "1fad5092c7a43847ddc8cd1b5eb2f0624c40043a0cbe90ca2f6c8cec2f060b9a",
+    "bytes": 7135
+  },
+  {
+    "name": "surge-release-r06-git-utf8.log",
+    "sha256": "e0379be5ed844fb76e23439d1e4d47afe41dddce9ff3801121def1066df4c7a9",
+    "bytes": 420
+  },
+  {
+    "name": "surge-release-r06-license-final.log",
+    "sha256": "a2478631377ac6777936a7a7beb5e63cff25356593acd987ec19f80019d335d9",
+    "bytes": 214
+  },
+  {
+    "name": "surge-release-r06-license-packaging-tests.log",
+    "sha256": "4a93d6c85e3e0cb09b5cccc9f4538bbe48055b02808d8d3a6bbf638a0b63280c",
+    "bytes": 336
+  },
+  {
+    "name": "surge-release-r06-outdated.log",
+    "sha256": "044f80e08659f75b42f9e6a2d6114acf206c14275ac335367fefcedba6ca6b6a",
+    "bytes": 2544
+  },
+  {
+    "name": "surge-release-r06-shear.log",
+    "sha256": "71ba7312aa5972eb848a5d4ddfcedf6d1131b66eb367ce18f3e3db74d191a288",
+    "bytes": 6179
+  },
+  {
+    "name": "surge-release-r11-defaultpath-green.log",
+    "sha256": "29b7a962bbc79e511364e1ff4c209280c8c4daf83caee8eaf727128bc3ecf25c",
+    "bytes": 517
+  },
+  {
+    "name": "surge-release-r11-green.log",
+    "sha256": "a83dd3523981b6810a2e9b3e48d3d6c7255024e2dedeed2953ad33ed9d1f672f",
+    "bytes": 3492
+  },
+  {
+    "name": "surge-release-r12-green.log",
+    "sha256": "693dd35452b5e3665c29ad23366b5313d08c99bc71cf019e5d06eb9b4834d2a3",
+    "bytes": 873
+  },
+  {
+    "name": "surge-release-r12-red.log",
+    "sha256": "9db899b14111f4c968353b3c11bcc9ccb2356f056c023c3e74aa1519e136f1fb",
+    "bytes": 3374
+  },
+  {
+    "name": "surge-release-r12-registry-green.log",
+    "sha256": "3a23ea2450fd0caeb7687854721275105450a549e5aa4e18f49357b005059e7b",
+    "bytes": 408
+  },
+  {
+    "name": "surge-release-r15-green.log",
+    "sha256": "12c43649b98ac6714d2190f355b5f666f5ddef2ffe80911af34de29fee69a819",
+    "bytes": 973
+  },
+  {
+    "name": "surge-release-r15-mcp-green.log",
+    "sha256": "4c6e6d32f07ac71a4fb22e7fe83613072fb44238e17c4839bb7ae33bc5d9e634",
+    "bytes": 1785
+  },
+  {
+    "name": "surge-release-r15-red-behavior.log",
+    "sha256": "e3397ef4be1a1a99947b524e61761fee47aafd6578ca6352d33d74c4b733716b",
+    "bytes": 3366
+  },
+  {
+    "name": "surge-release-r15-red-retry.log",
+    "sha256": "8bbb01a115586d44d0f830497a66a565debee708670d7730d851926278ed0367",
+    "bytes": 3465
+  },
+  {
+    "name": "surge-release-r15-red.log",
+    "sha256": "85c45d9ca204c3e2e559a83edb6ccfb73e9317eae3512b09f3a5d7ad0ef506b8",
+    "bytes": 12708
+  },
+  {
+    "name": "surge-release-r15-reply-green-final.log",
+    "sha256": "bc1794f9d85b763629ac6612ce6446923c9b4ce882c34791d9fdea727b98c6ea",
+    "bytes": 836
+  },
+  {
+    "name": "surge-release-r15-reply-green.log",
+    "sha256": "99591c21a47cb62279ed92b770857ac632b51962fb47feff2bd10d501a4c406d",
+    "bytes": 836
+  },
+  {
+    "name": "surge-release-r15-reply-red.log",
+    "sha256": "11497ce8332a8ed354b3c819572b663f3cb56d5477b4e4256dce3b05555f6082",
+    "bytes": 1763
+  },
+  {
+    "name": "surge-release-r16-green.log",
+    "sha256": "946aeea515c73c1416c08af8cd15e42be6c1bfa2ea3962b166849f904919ace7",
+    "bytes": 2018
+  },
+  {
+    "name": "surge-release-r25-acp-green.log",
+    "sha256": "88d0ded711fa34885ba91d27e4870b14ec74907799ff19ac69ebe11600cedc3c",
+    "bytes": 525
+  },
+  {
+    "name": "surge-release-r25-acp-red.log",
+    "sha256": "875ccc63ec1f3bf3af28f80a37d91c656d4eeb74c1d402e5f0f509e59d9ac17f",
+    "bytes": 2214
+  },
+  {
+    "name": "surge-release-r25-acp-regression.log",
+    "sha256": "57ceacf8aaa3e19aac122323b418689cadbda2cdd5e79f7fd18e7950349f1b28",
+    "bytes": 1809
+  },
+  {
+    "name": "surge-release-r25-emit-green.log",
+    "sha256": "7d516a01ab746873cf3d7a5c338d1e3bf8b10783d4c09393864c4236e29c9082",
+    "bytes": 340
+  },
+  {
+    "name": "surge-release-r25-green-retry.log",
+    "sha256": "32bbcbf4c25b7d4a864f93bad1c7716587d10a63df581c2fc231459beb07f483",
+    "bytes": 1856
+  },
+  {
+    "name": "surge-release-r25-green.log",
+    "sha256": "4591903b15a4d6741b36e428ac69ad9e21390b3fce38e59b745715d1f621632b",
+    "bytes": 2112
+  },
+  {
+    "name": "surge-release-r25-red.log",
+    "sha256": "4d287a99e7ab5b6ca69562c27f54fe22e10c22e0c91be9b8fa513a13204d32a0",
+    "bytes": 3562
+  },
+  {
+    "name": "surge-release-r25-repair1-green.log",
+    "sha256": "e367313247a672ab29dad00567f29c7d3f373b73ee094c962630f43335f6de89",
+    "bytes": 1651
+  },
+  {
+    "name": "surge-release-r25-repair1-red.log",
+    "sha256": "3a362a87646b3c5162e2d6a4265ed3e65d33fdabfb208995564669d66dad76f6",
+    "bytes": 1549
+  },
+  {
+    "name": "surge-release-r25-unit-green.log",
+    "sha256": "dffae0dd270f1474e7967cd4add812c1daa5b84d0ca17beb2bd6f119a8765943",
+    "bytes": 1502
+  },
+  {
+    "name": "surge-release-r26-admission-green.log",
+    "sha256": "2539bee75eb1881f91f62823f4db6e6c34d3b64fd0946064d83bae13443b491c",
+    "bytes": 1349
+  },
+  {
+    "name": "surge-release-r26-admission-red-retry.log",
+    "sha256": "471eeb3c679afc81967a66983c2686eeb1b21dfe9993d233661b4d465ae73dfe",
+    "bytes": 3394
+  },
+  {
+    "name": "surge-release-r26-admission-red.log",
+    "sha256": "bb3a6e02a4357292edc4685d09a15b5bf237d0c27ab6047c5110a25f345a6e9c",
+    "bytes": 21263
+  },
+  {
+    "name": "surge-release-r26-config-green-final.log",
+    "sha256": "1a14315c567c8f2b3b0207483d9d842f395aed015d8034c559afe37294fc1922",
+    "bytes": 679
+  },
+  {
+    "name": "surge-release-r26-config-green.log",
+    "sha256": "22f7323d6e04aa4899d7a9d227e23f377708a43f0efad96eb626faf40f256cde",
+    "bytes": 679
+  },
+  {
+    "name": "surge-release-r26-config-red.log",
+    "sha256": "a0fedac09d435408e3383dec2cbf1b5ac8d2d1d7a3ae7e99c205584b567b7aaf",
+    "bytes": 9434
+  },
+  {
+    "name": "surge-release-r29-green.log",
+    "sha256": "8d91e70ffa01f231ddb75e944a6d2636102e88b8c46d6e38c0894d4e73057cd8",
+    "bytes": 1506
+  },
+  {
+    "name": "surge-release-r29-socket-green.log",
+    "sha256": "95199e2ba44687f5f62c2640d764079984566e2e81c1297f52a6165bb8b168d8",
+    "bytes": 1518
+  }
+]

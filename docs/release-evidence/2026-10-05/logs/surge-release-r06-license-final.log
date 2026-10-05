@@ -1,0 +1,7 @@
+warning[license-not-encountered]: license was not encountered
+   ┌─ /Users/vanyastafford/Develop/surge/deny.toml:29:6
+   │
+29 │     "NCSA",
+   │      ━━━━ unmatched license allowance
+
+licenses ok
