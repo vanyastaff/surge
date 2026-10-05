@@ -699,6 +699,7 @@ impl RunReport {
                 | EventPayload::ExecutionWriterIntent { .. }
                 | EventPayload::ExecutionWriterEstablished { .. }
                 | EventPayload::ExecutionWriterClosed { .. }
+                | EventPayload::ExecutionWriterGroupStopped { .. }
                 | EventPayload::QuotaStagePlanned { .. }
                 | EventPayload::SessionEstablishmentRequested { .. }
                 | EventPayload::RunSuspended { .. }

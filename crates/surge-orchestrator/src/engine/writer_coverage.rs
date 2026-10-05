@@ -98,48 +98,109 @@ pub(crate) async fn begin(
     Ok(writer)
 }
 
-/// A transport shutdown cannot authorize unresolved MCP descendant/external effects.
-/// The journal is authoritative; no process exit is converted into a closure event.
-pub(crate) fn mcp_cleanup_refusal(memory: &surge_core::run_state::RunMemory) -> Option<String> {
-    use surge_core::execution_recovery::process::WriterLiveness;
+fn is_mcp_writer(kind: &ExecutionWriterKind) -> bool {
+    matches!(kind, ExecutionWriterKind::HostTool { call_id } if call_id.starts_with("mcp-child:"))
+}
+
+/// Assess prior MCP writers under ADR-0021.
+///
+/// Returns the writers whose recorded process group is now observed empty and
+/// still lacks a best-effort cleanup record, or the reason resume must refuse:
+/// conflicting ownership, no established identity, or a group that is still
+/// occupied. An empty `GroupOnly` group is best-effort cleanup, never confirmed
+/// closure; escaped descendants are an accepted residual risk.
+pub(crate) fn assess_mcp_cleanup(
+    memory: &surge_core::run_state::RunMemory,
+) -> Result<Vec<ExecutionWriterId>, String> {
+    use surge_acp::process_evidence::GroupState;
+    let mut stopped = Vec::new();
     for record in memory.execution_writers.values() {
-        if !matches!(&record.intent.kind, ExecutionWriterKind::HostTool { call_id } if call_id.starts_with("mcp-child:"))
-        {
+        if !is_mcp_writer(&record.intent.kind) {
             continue;
         }
         let writer = record.intent.writer;
         if record.conflicting_observation {
-            return Some(format!(
+            return Err(format!(
                 "MCP writer {writer} has conflicting ownership evidence"
             ));
         }
         let Some(container) = record.container.as_ref() else {
-            return Some(format!(
+            return Err(format!(
                 "MCP writer {writer} has no established process identity"
             ));
         };
-        if record.cleanup_confirmed {
+        if record.cleanup_confirmed || record.group_stopped {
             continue;
         }
-        let liveness = surge_acp::process_evidence::probe(container);
-        if !record.intent.local_effects || !matches!(liveness, WriterLiveness::Gone) {
-            return Some(format!(
-                "MCP writer {writer} has unconfirmed descendant or external-effect cleanup"
-            ));
+        match surge_acp::process_evidence::group_state(container) {
+            GroupState::Empty => stopped.push(writer),
+            state => {
+                return Err(format!(
+                    "MCP writer {writer} process group is not stopped ({state:?})"
+                ));
+            },
         }
     }
-    None
+    Ok(stopped)
 }
 
-/// Fresh evidence includes observer events appended outside the stage's memory.
-pub(crate) async fn inspect_mcp_cleanup(
+/// Grace per signal when stopping a prior MCP group on recovery.
+const MCP_GROUP_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Stop prior MCP groups whose recorded leader is still running, then assess.
+///
+/// Reads fresh journal evidence (observer events are appended outside a stage's
+/// memory). Signals only groups whose leader identity still matches.
+pub(crate) async fn stop_and_assess_mcp_cleanup(
     storage: &std::sync::Arc<surge_persistence::runs::Storage>,
     run: surge_core::id::RunId,
-) -> Result<Option<String>, crate::engine::error::EngineError> {
+) -> Result<Result<Vec<ExecutionWriterId>, String>, crate::engine::error::EngineError> {
+    use surge_acp::process_evidence::GroupState;
     let reader = storage
         .open_run_reader(run)
         .await
         .map_err(|error| crate::engine::error::EngineError::Storage(error.to_string()))?;
-    let replayed = super::replay::replay(&reader).await?;
-    Ok(mcp_cleanup_refusal(&replayed.memory))
+    let memory = super::replay::replay(&reader).await?.memory;
+    for record in memory.execution_writers.values() {
+        if !is_mcp_writer(&record.intent.kind)
+            || record.cleanup_confirmed
+            || record.group_stopped
+            || record.conflicting_observation
+        {
+            continue;
+        }
+        let Some(container) = record.container.clone() else {
+            continue;
+        };
+        if surge_acp::process_evidence::group_state(&container) != GroupState::LeaderAlive {
+            continue;
+        }
+        let writer = record.intent.writer;
+        let state = tokio::task::spawn_blocking(move || {
+            surge_acp::process_evidence::stop_group(&container, MCP_GROUP_STOP_GRACE)
+        })
+        .await
+        .map_err(|error| {
+            crate::engine::error::EngineError::Storage(format!("join MCP group stop: {error}"))
+        })?;
+        tracing::info!(target: "mcp::recovery", %run, %writer, ?state, "stopped prior MCP process group");
+    }
+    Ok(assess_mcp_cleanup(&memory))
+}
+
+/// Durably record best-effort cleanup for each writer (ADR-0021).
+pub(crate) async fn record_mcp_groups_stopped(
+    writer: &surge_persistence::runs::run_writer::RunWriter,
+    stopped: &[ExecutionWriterId],
+) -> Result<(), String> {
+    for id in stopped {
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::ExecutionWriterGroupStopped { writer: *id },
+            ))
+            .await
+            .map_err(|error| format!("record MCP group cleanup for {id}: {error}"))?;
+        tracing::info!(target: "mcp::recovery", writer = %id, "recorded best-effort MCP group cleanup");
+    }
+    Ok(())
 }

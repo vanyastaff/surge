@@ -8,7 +8,8 @@ date = "2026-10-05"
 
 ## Status
 
-Accepted direction; implementation and rewritten acceptance remain open.
+Accepted and implemented on 2026-10-05 (group stop, best-effort record,
+restart); the interrupted-call notice of decision 4 remains open.
 Supersedes [ADR-0020](0020-managed-mcp-recovery.md) in full. ADR-0014 (per-run,
 supervised, sandbox-delegated MCP) is unchanged.
 

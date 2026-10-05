@@ -1,7 +1,7 @@
 ---
 title: "feat: MCP cold recovery by group cleanup and restart (ADR-0021)"
 type: feat
-status: draft
+status: in-progress
 date: 2026-10-05
 ---
 
@@ -100,6 +100,29 @@ New cases:
 - an interrupted `tools/call` is recorded as outcome-unknown, not replayed, and
   appears in the resumed prompt;
 - reports and the desktop never render the best-effort record as "confirmed".
+
+## Implementation status — 2026-10-05
+
+Done: `surge_acp::process_evidence::{group_state, stop_group}`, the
+`ExecutionWriterGroupStopped` event (schema v17) with its fold, and
+`writer_coverage::{assess_mcp_cleanup, stop_and_assess_mcp_cleanup,
+record_mcp_groups_stopped}` wired into the park check, the resume check and
+the resumed run's start. The record is written on resume, not at park:
+appending before `seal_suspension` would move the log past the fence's
+snapshot. Owned-flow MCP suite 23/23 locally.
+
+Open: the interrupted-call notice (design step 5) and its new tests.
+
+Oracle changes beyond the mapping table, with reasons:
+
+- `populated_cold_valid_twin_keeps_original_transport_and_writer_history` now
+  requires a cleanup record (closure or group stopped) for writers before the
+  suspension. The resumed phase's own writers end with the run, and no record
+  is appended after `RunCompleted`.
+- `unresolved_mcp_domain_requires_attention_and_blocks_actual_cold_dispatch`
+  keeps every assertion. Its fixture now leaves a descendant in the MCP
+  child's process group, which is the case ADR-0021 still refuses; an empty
+  group is no longer an unresolved domain.
 
 ## Verification
 

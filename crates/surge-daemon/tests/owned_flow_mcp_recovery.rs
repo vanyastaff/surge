@@ -450,9 +450,43 @@ fn child_owned_flow_mcp_probe() {
     }
 }
 
+/// The MCP child leaves a descendant in its own process group (ADR-0021 refusal case).
+const LINGERING_DESCENDANT: &str = r#"
+if os.fork() == 0:
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    with open(os.environ['RECORDER'] + '.descendant', 'a') as f:
+        f.write(str(os.getpid()) + '\n')
+    import time
+    time.sleep(600)
+    os._exit(0)
+for line in sys.stdin:"#;
+
+/// Kills lingering descendants recorded by [`LINGERING_DESCENDANT`], even on panic.
+#[cfg(unix)]
+struct DescendantReaper(PathBuf);
+#[cfg(unix)]
+impl Drop for DescendantReaper {
+    fn drop(&mut self) {
+        for pid in std::fs::read_to_string(&self.0).unwrap_or_default().lines() {
+            if let Ok(pid) = pid.trim().parse::<i32>() {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+        }
+    }
+}
+
 async fn host_probe(root: &Path, phase: &str) {
     let home = root.join("home");
     let project = root.join("project");
+    if phase == "populated-unconfirmed" {
+        let script = CHILD.replacen("for line in sys.stdin:", LINGERING_DESCENDANT, 1);
+        std::fs::write(root.join("mcp.py"), script).unwrap();
+    }
     if phase.starts_with("legacy-deadline") {
         let delay = if phase == "legacy-deadline-positive" {
             "0.1"
@@ -1214,11 +1248,20 @@ async fn populated_cold_valid_twin_keeps_original_transport_and_writer_history()
     else {
         panic!("original writer journal")
     };
-    for event in &events {
+    // ADR-0021 records cleanup for writers of the phase before the suspension
+    // when the run resumes; the resumed phase's own writers end with the run.
+    let suspended_at = events
+        .iter()
+        .find(|row| matches!(row.payload.payload, EventPayload::RunSuspended { .. }))
+        .map(|row| row.seq)
+        .expect("populated park must suspend");
+    for event in events.iter().filter(|row| row.seq < suspended_at) {
         if let EventPayload::ExecutionWriterIntent { intent } = &event.payload.payload
             && matches!(&intent.kind,surge_core::execution_recovery::process::ExecutionWriterKind::HostTool { call_id } if call_id.starts_with("mcp-child:"))
         {
-            assert!(events.iter().any(|row|matches!(row.payload.payload,EventPayload::ExecutionWriterClosed { writer } if writer==intent.writer)),"MCP cold twin has no genuine persisted cleanup proof");
+            // ADR-0021: an empty group is recorded as best-effort cleanup, never as closure.
+            assert!(events.iter().any(|row|matches!(row.payload.payload,
+                EventPayload::ExecutionWriterClosed { writer } | EventPayload::ExecutionWriterGroupStopped { writer } if writer==intent.writer)),"MCP cold twin has no persisted cleanup record");
         }
     }
 }
@@ -1277,6 +1320,7 @@ fn assert_manifest_update_rejected(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unresolved_mcp_domain_requires_attention_and_blocks_actual_cold_dispatch() {
     let root = fixture();
+    let _reaper = DescendantReaper(root.path().join("original.jsonl.descendant"));
     let accepted = start_park(root.path(), "populated-unconfirmed").await;
     verify_actual_transport(root.path(), &accepted);
     let receipt: OwnedFlowReceipt = serde_json::from_value(accepted["receipt"].clone()).unwrap();

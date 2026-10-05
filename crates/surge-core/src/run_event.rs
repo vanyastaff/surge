@@ -281,6 +281,12 @@ pub enum EventPayload {
         /// Exact writer whose cleanup completed.
         writer: crate::id::ExecutionWriterId,
     },
+    /// Best-effort cleanup (ADR-0021): the writer's recorded process group was
+    /// observed empty. Coverage stays `GroupOnly`; this is never confirmed closure.
+    ExecutionWriterGroupStopped {
+        /// Exact writer whose recorded group was observed empty.
+        writer: crate::id::ExecutionWriterId,
+    },
     SessionEstablishmentRequested {
         node: NodeKey,
         invocation: crate::id::StageInvocationId,
@@ -760,6 +766,7 @@ impl EventPayload {
             Self::ExecutionWriterIntent { .. } => "execution_writer_intent",
             Self::ExecutionWriterEstablished { .. } => "execution_writer_established",
             Self::ExecutionWriterClosed { .. } => "execution_writer_closed",
+            Self::ExecutionWriterGroupStopped { .. } => "execution_writer_group_stopped",
             Self::SessionEstablishmentRequested { .. } => "SessionEstablishmentRequested",
             Self::RunSuspended { .. } => "RunSuspended",
             Self::RunRecoveryRequired { .. } => "run_recovery_required",

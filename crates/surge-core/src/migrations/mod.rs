@@ -101,7 +101,11 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// (a selected MCP server's catalog failed at stage open). Same nested-enum
 /// reasoning as v8: a v15-max reader cannot decode the new cause tag, so it
 /// must reject v16 with [`SurgeError::SchemaTooNew`].
-pub const MAX_SUPPORTED_VERSION: u32 = 16;
+/// **v17:** adds [`EventPayload::ExecutionWriterGroupStopped`], ADR-0021
+/// best-effort MCP group cleanup. A v16-max reader has no variant to decode it
+/// into, so it rejects v17 with [`SurgeError::SchemaTooNew`] instead of
+/// misreading best-effort cleanup as confirmed closure.
+pub const MAX_SUPPORTED_VERSION: u32 = 17;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -391,6 +395,20 @@ impl Migration for IdentityV16 {
     }
 }
 
+/// Identity decoder for best-effort MCP group cleanup records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV17;
+impl Migration for IdentityV17 {
+    fn version(&self) -> u32 {
+        17
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v17 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -400,8 +418,8 @@ impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
-    /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`], and
-    /// [`IdentityV16`].
+    /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
+    /// [`IdentityV16`], and [`IdentityV17`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -422,6 +440,7 @@ impl MigrationChain {
                 Box::new(IdentityV14),
                 Box::new(IdentityV15),
                 Box::new(IdentityV16),
+                Box::new(IdentityV17),
             ],
         }
     }
@@ -600,6 +619,25 @@ mod tests {
     }
 
     #[test]
+    fn v17_group_stopped_round_trips_and_v16_readers_reject_it() {
+        let payload = EventPayload::ExecutionWriterGroupStopped {
+            writer: crate::id::ExecutionWriterId::new(),
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, 17);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("execution_writer_group_stopped"),
+            "variant tag must be stable snake_case"
+        );
+        assert_eq!(migrate_payload(17, &bytes).unwrap(), payload);
+        assert!(
+            serde_json::from_slice::<VersionedEventPayload>(br#"{"schema_version":16,"payload":{"type":"execution_writer_group_stopped_typo"}}"#).is_err(),
+            "unknown variant tags never decode"
+        );
+    }
+
+    #[test]
     fn v16_selected_mcp_catalog_escalation_round_trips_and_v15_readers_stay_clean() {
         use crate::run_event::EscalationCause;
 
@@ -609,7 +647,7 @@ mod tests {
             cause: EscalationCause::McpSelectedCatalogUnavailable,
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 16);
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert!(
             String::from_utf8_lossy(&bytes).contains("mcp_selected_catalog_unavailable"),
@@ -829,8 +867,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(17, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 17, max: 16 })
+            migrate_payload(18, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 18, max: 17 })
         ));
     }
 

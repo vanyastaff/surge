@@ -1393,6 +1393,7 @@ impl RunMemory {
                             container: None,
                             cleanup_confirmed: false,
                             conflicting_observation: false,
+                            group_stopped: false,
                         },
                     );
                 if record.intent != *intent {
@@ -1415,6 +1416,11 @@ impl RunMemory {
             EventPayload::ExecutionWriterClosed { writer } => {
                 if let Some(record) = self.execution_writers.get_mut(writer) {
                     record.cleanup_confirmed = true;
+                }
+            },
+            EventPayload::ExecutionWriterGroupStopped { writer } => {
+                if let Some(record) = self.execution_writers.get_mut(writer) {
+                    record.group_stopped = true;
                 }
             },
             EventPayload::SessionClosed { session, .. } => {

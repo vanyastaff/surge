@@ -1013,10 +1013,12 @@ impl Engine {
 
         // Historical suspension fences may predate complete MCP ownership checks.
         // Validate current evidence before changing registry state or admitting effects.
-        if let Some(diagnostic) =
-            super::writer_coverage::inspect_mcp_cleanup(&self.storage, run_id).await?
+        // ADR-0021: stop prior MCP groups still led by their recorded process;
+        // refuse only when a group cannot be stopped or ownership is unclear.
+        if let Err(diagnostic) =
+            super::writer_coverage::stop_and_assess_mcp_cleanup(&self.storage, run_id).await?
         {
-            tracing::warn!(%run_id, %diagnostic, "resume refused: prior MCP writer cleanup is unconfirmed");
+            tracing::warn!(%run_id, %diagnostic, "resume refused: prior MCP process group is not stopped");
             return Err(EngineError::WorkItemRejected(diagnostic));
         }
 

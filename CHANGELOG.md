@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — MCP cold recovery by group cleanup and restart (ADR-0021)
+
+- Resuming a run with a prior host-launched MCP server no longer refuses when
+  that server's process group is gone. On recovery the daemon stops a group
+  whose recorded leader still runs (SIGTERM, grace, SIGKILL; never a group
+  whose leader identity does not match), accepts an empty group as
+  best-effort cleanup, records it as the new `ExecutionWriterGroupStopped`
+  event when the run resumes, and restarts the server from the frozen
+  manifest. An occupied group (for example an escaped descendant), conflicting
+  ownership or a missing identity still refuses with attention. Coverage stays
+  `GroupOnly`; the record never means confirmed closure.
+- **Event payload schema v17**: v16 readers reject v17 logs with
+  `SchemaTooNew` instead of misreading best-effort cleanup as closure.
+
 ### Changed — MCP startup deadline and selected-catalog escalation
 
 - `McpServerRef::startup_timeout` (optional) bounds child spawn plus the MCP

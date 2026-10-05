@@ -188,6 +188,9 @@ pub struct ExecutionWriterRecord {
     pub container: Option<WriterContainer>,
     pub cleanup_confirmed: bool,
     pub conflicting_observation: bool,
+    /// Best-effort group cleanup (ADR-0021); never implies `cleanup_confirmed`.
+    #[serde(default)]
+    pub group_stopped: bool,
 }
 
 #[cfg(test)]

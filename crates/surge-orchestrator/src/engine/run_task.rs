@@ -192,14 +192,19 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
         }
     }
     if let Some((fence, blob)) = params.pending_suspension.take() {
-        // Direct-child transport settlement does not cover escaped writers or
-        // external effects. Read fresh observer evidence after registry shutdown.
-        let refusal =
-            match super::writer_coverage::inspect_mcp_cleanup(&params.storage, params.run_id).await
-            {
-                Ok(refusal) => refusal,
-                Err(error) => Some(format!("MCP cleanup evidence unavailable: {error}")),
-            };
+        // ADR-0021: stop any MCP group still led by its recorded process and accept
+        // empty groups as best-effort cleanup. The record is written when the run
+        // resumes: appending here would move the log past the fence's snapshot.
+        let refusal = match super::writer_coverage::stop_and_assess_mcp_cleanup(
+            &params.storage,
+            params.run_id,
+        )
+        .await
+        {
+            Ok(Ok(_)) => None,
+            Ok(Err(diagnostic)) => Some(diagnostic),
+            Err(error) => Some(format!("MCP cleanup evidence unavailable: {error}")),
+        };
         if let Some(diagnostic) = refusal {
             tracing::warn!(run_id = %params.run_id, %diagnostic, "suspension requires recovery attention");
             outcome = recovery_required(&params, diagnostic).await;
@@ -235,6 +240,19 @@ async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
         Ok(state) => state,
         Err(error) => return failed(params, error).await,
     };
+
+    // ADR-0021: a resumed run records best-effort cleanup for prior MCP groups
+    // that the resume check observed empty.
+    match super::writer_coverage::assess_mcp_cleanup(&state.memory) {
+        Ok(stopped) => {
+            if let Err(error) =
+                super::writer_coverage::record_mcp_groups_stopped(&params.writer, &stopped).await
+            {
+                return failed(params, error).await;
+            }
+        },
+        Err(diagnostic) => return recovery_required(params, diagnostic).await,
+    }
 
     let had_suspended_phase = state.memory.suspension.is_some();
     if let Err(outcome) = Box::pin(restore_suspended_phase(params, &mut state)).await {
