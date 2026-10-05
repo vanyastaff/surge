@@ -1,0 +1,21 @@
+   Compiling rmcp v1.6.0
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.78s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/cli_run_lifecycle.rs (target/debug/deps/cli_run_lifecycle-b029e7642fdf0391)
+
+running 6 tests
+test user_template_executes_to_completion ... ok
+test watched_success_is_durable ... ok
+test foreground_failure_is_nonzero_and_durable ... ok
+test watched_failure_is_nonzero_and_durable ... ok
+test foreground_success_is_durable ... ok
+test daemon_gate_remains_pending_until_explicit_suspension ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s
+

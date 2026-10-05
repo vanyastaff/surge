@@ -234,3 +234,14 @@ macOS readiness still requires the actual managed VM backend, host-effect broker
 and original MCP acceptance. A fresh disk check confirmed 6.1 GiB available;
 backend provisioning remains unresolved. This scope update changes documentation
 only and does not claim any new executable evidence.
+
+
+## PR #89 CI repair follow-up
+
+[CI repair evidence](release-evidence/2026-10-05/pr89-ci.md) records the Rust 1.99
+async-trait update, equivalent test-assertion modernization, CLI schema-publication
+race fix, actual mock-agent build ordering and MCP startup-readiness fixture.
+The final local strict Clippy gates pass in both feature configurations. These
+source changes require a new compiled release candidate and provenance capture;
+the prior archive remains historical. Original MCP acceptance and managed macOS
+backend/effect-broker requirements remain open. NO-GO is unchanged.

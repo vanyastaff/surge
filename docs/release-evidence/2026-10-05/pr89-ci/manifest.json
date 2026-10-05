@@ -1,0 +1,82 @@
+[
+  {
+    "file": "cli-schema-red.log",
+    "bytes": 1669,
+    "sha256": "7e7855061171e873b97aa1f24b22cd62712dbf62741545227fa141e037f9137a"
+  },
+  {
+    "file": "cli-schema-final.log",
+    "bytes": 706,
+    "sha256": "4a57938f02300f8c1783f8fdb78c756b65803aa34591ec01faff41382a298e5b"
+  },
+  {
+    "file": "cli-lifecycle-final.log",
+    "bytes": 1317,
+    "sha256": "7a350ca545c72932499d7f60b0c02696af378dd73c747d4990f2318c421e5736"
+  },
+  {
+    "file": "catalog-red.log",
+    "bytes": 1913,
+    "sha256": "be9c4ddfea3d0b931c77e8eb3b6a551234cae832b30b2e77e69cd675f808b8d9"
+  },
+  {
+    "file": "catalog-final.log",
+    "bytes": 1596,
+    "sha256": "dc6454c1791b0df15e099014a14893de9a699c64e6b00bd64138df435fb3a57a"
+  },
+  {
+    "file": "macos-extra-cases.log",
+    "bytes": 3874,
+    "sha256": "4604e7c124ebf014846dd5a62edaf061133caafa7d87113ab8b5918156589142"
+  },
+  {
+    "file": "clippy-all-features.log",
+    "bytes": 598,
+    "sha256": "a45afec26ea1d988c3c066997c6921198f69d960b3c79f1de430737ccfd4390d"
+  },
+  {
+    "file": "clippy-default-features.log",
+    "bytes": 962,
+    "sha256": "3fd0b37b0c6e3afe2e0cd5efc0ff61bd48afb22ca195149aafa3d936b68c4b59"
+  },
+  {
+    "file": "clippy-macro-failure.log",
+    "bytes": 10763,
+    "sha256": "2b3690825c394ea060b5d3afdd96308248f0d415310a9e792c3bdd041c4c46da"
+  },
+  {
+    "file": "clippy-assert-failure.log",
+    "bytes": 19134,
+    "sha256": "f94e500bf9ff02b8d437f8f3fe39a3ce305f5fc8c41549f735760b7d5f3b9dd6"
+  },
+  {
+    "file": "clippy-downstream-assert-failure.log",
+    "bytes": 10070,
+    "sha256": "cae5e555614d1b9fd41ada58013a9491d220d0bbb5dbb5f3f534f000a6d6f3e9"
+  },
+  {
+    "file": "clippy-disk-failure.log",
+    "bytes": 14988,
+    "sha256": "6b839f55fffc2f9647e137f75628952e32c7064abef95160752330bf37fa4a6f"
+  },
+  {
+    "file": "dependency-review.md",
+    "bytes": 4565,
+    "sha256": "39fc82e8daf50c5d6b96f8d9e339678582fda1ee24fa6291694f8f0e12af7d6f"
+  },
+  {
+    "file": "assertion-review.md",
+    "bytes": 1584,
+    "sha256": "d58c23c2d22ff24ddfbeecf20842d19d711f4672c823be9731bfff5a4f067a46"
+  },
+  {
+    "file": "msrv-final.log",
+    "bytes": 5407,
+    "sha256": "041e70c683b5539eeb7f3f76f1176f316a65c7853f44d2286e72ee3877cb8b78"
+  },
+  {
+    "file": "daemon-critical-final.log",
+    "bytes": 21608,
+    "sha256": "79c0f4f89b7050fdd8189a2ae7f1a7640fd93ab1fc4247c7e0df1ca55f4782e6"
+  }
+]
