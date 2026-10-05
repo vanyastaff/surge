@@ -108,6 +108,24 @@ and thread-local destruction, scoped to its unique test home. This fixes expired
 pool retention; initial executor creation can still fail under OS exhaustion.
 Final integrated checks and the authenticated native candidate remain pending.
 
+The `7cd5ea5` full repeat executed 3,841 tests: 3,830 passed, 11 failed,
+37 skipped. The pool lifecycle regression and both previously failing skill
+tests passed. The additional failure came from a version-cache test executing
+the installed rustup. Inspection found that canonicalizing a launcher before
+execution changes its argv[0] and collapses distinct multicall aliases. The cache
+now retains absolute invocation paths and shares initialization per key without
+holding its map lock during process execution. Cancellation before completion
+permits retry; the one-second deadline remains unchanged. Owned alias and
+concurrent-counter regressions failed before the fix; all 12 version-probe tests
+pass afterward. Strict scoped clippy passes after moving the existing locked
+which dependency into the production workspace declaration. Final workspace
+validation and authenticated native capture still require the new source checkpoint.
+
+At `7cd5ea5`, both workspace clippy profiles and the non-desktop MSRV check passed;
+the latter required `RUSTFLAGS='-C strip=none'` on macOS 27 as documented in
+[development](development.md). Cargo-deny passed; cargo-audit found zero known
+vulnerabilities and retained the 17 previously disclosed warnings.
+
 ## Blocking work and limits
 
 Complete MCP containment/settlement and external-effect authority are required for

@@ -28,6 +28,7 @@ repository = "https://github.com/vanyastaff/surge"
 rust-version = "1.96"
 
 [workspace.dependencies]
+which = "6"
 gpui-kit = "=0.7.0"
 gpui-wry = "=0.7.0"
 wry = { package = "lb-wry", version = "=0.53.3" }

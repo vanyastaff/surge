@@ -34,6 +34,7 @@ ulid = { workspace = true }
 handlebars = { workspace = true }
 semver = { workspace = true }
 dirs = { workspace = true }
+which = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -43,7 +44,6 @@ tiny_http = { workspace = true }
 surge-notify = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
-which = "6"
 tracing-subscriber = { workspace = true }
 
 [[example]]

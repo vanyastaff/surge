@@ -70,6 +70,17 @@ The test uses a temporary `SURGE_HOME` and cleans up its own processes.
 
 ## Desktop UI checks
 
+On macOS 27, Rust 1.96 can produce an unloadable proc-macro dylib when stripping
+debug information (misaligned LINKEDIT string pool; see
+[Rust issue 157750](https://github.com/rust-lang/rust/issues/157750)). For the
+release MSRV check on this host, retain symbols explicitly:
+
+```bash
+RUSTFLAGS='-C strip=none' CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 OPENSSL_STATIC=1 MACOSX_DEPLOYMENT_TARGET=15.0 cargo +1.96.0 check --locked --workspace --exclude surge-ui
+```
+
+This checks the non-desktop workspace; desktop MSRV verification remains separate.
+
 The desktop uses the workspace-pinned `gpui-kit` 0.7.0 facade and its
 `gpui-pre` 0.3.7 type family. Import GPUI and widgets through `gpui_kit`;
 adding the older `gpui` package creates incompatible entity/window types.
