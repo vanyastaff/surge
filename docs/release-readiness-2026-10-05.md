@@ -223,3 +223,14 @@ been requested; no install, remote mutation or publication was performed.
 Source-supported reviews: [security design](release-evidence/2026-10-05/managed-discovery/security-design.md),
 [integration map](release-evidence/2026-10-05/managed-discovery/integration-map.md),
 and [backend discovery](release-evidence/2026-10-05/managed-discovery/backend-discovery.md).
+
+
+## Active scope narrowed to macOS
+
+The user explicitly deferred other platforms on 2026-10-05. Further implementation
+and verification target macOS only; no Linux/Windows backend or runner work is
+currently requested. Historical multi-platform results above remain unchanged.
+macOS readiness still requires the actual managed VM backend, host-effect broker
+and original MCP acceptance. A fresh disk check confirmed 6.1 GiB available;
+backend provisioning remains unresolved. This scope update changes documentation
+only and does not claim any new executable evidence.

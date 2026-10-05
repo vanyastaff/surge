@@ -65,6 +65,14 @@ not complete the external-effect broker or retire the original acceptance
 requirements. MCP Tasks may help reconcile cooperating services; protocol
 cancellation and task responses are not domain or effect settlement proofs.
 
+## Current implementation scope
+
+The user narrowed active work to macOS on 2026-10-05. Implement and verify
+the supported macOS VM backend and host-effect broker first. Linux and Windows
+backend work and runner checks are deferred; their missing receipts do not block
+this macOS development stage. Existing cross-platform release evidence remains
+historical, and this scope change grants no unverified platform support claim.
+
 ## Ownership and implementation gates
 
 Reuse existing IDs, frozen input authentication, run event recording, launch
@@ -76,10 +84,9 @@ managed domain identities. A backend trait without a backend is not delivery.
 
 Before production code, demonstrate a runnable backend and review its concrete
 syscall, descriptor, mount, IPC and privilege policy plus broker crash windows.
-The current host cannot execute this gate. Required infrastructure is a
-provisioned compatible macOS VM for unchanged macOS transport acceptance, or
-an explicitly accepted Linux launch contract and delegated Linux test host.
-A Linux-only result cannot claim the existing macOS contract passed.
+The current host cannot execute this gate. Required infrastructure for the
+active scope is a provisioned compatible macOS VM with enough storage and a
+supported signed/entitled manager for unchanged macOS transport acceptance.
 
 Required independent acceptance evidence includes: zero target execution on
 journal/admission failure; containment of setsid/double-fork descendants;
