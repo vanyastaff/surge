@@ -27,7 +27,9 @@ The release workflow builds and smoke-tests the GNU Linux archive on Ubuntu 24.0
 static musl build: compatible glibc and native libraries (including OpenSSL)
 are required. Older Linux distributions and Alpine are not validated release
 targets; build from source on your system if necessary. The workflow builds and
-smoke-tests macOS archives on macOS 15; older macOS versions are not validated. Windows
+smoke-tests macOS archives on macOS 15, with deployment target 15.0 and statically
+linked OpenSSL; Homebrew OpenSSL is not required at runtime. Older macOS versions
+are not supported by these archives. Windows
 archives use the MSVC target. Git and an ACP agent remain separate installs.
 These are configured workflow checks; confirm a successful native release run
 for the version you install. Local packaging tests do not validate native builds.

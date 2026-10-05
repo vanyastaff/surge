@@ -68,8 +68,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      - name: Configure self-contained macOS OpenSSL linkage
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo 'OPENSSL_STATIC=1' >> "$GITHUB_ENV"
+          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
       - name: Build both release binaries
         run: cargo build --locked --release --target ${{ matrix.target }} --package surge-cli --package surge-daemon
+      - name: Reject external macOS runtime libraries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for binary in surge surge-daemon; do
+            dependencies=$(otool -L "target/${{ matrix.target }}/release/$binary")
+            printf '%s\n' "$dependencies"
+            unexpected=$(printf '%s\n' "$dependencies" | tail -n +2 | awk '{print $1}' | awk '!/^\/usr\/lib\// && !/^\/System\/Library\//')
+            if [ -n "$unexpected" ]; then
+              printf 'Unbundled runtime libraries in %s:\n%s\n' "$binary" "$unexpected" >&2
+              exit 1
+            fi
+          done
       - name: Strip Unix binaries
         if: runner.os != 'Windows'
         run: strip target/${{ matrix.target }}/release/surge target/${{ matrix.target }}/release/surge-daemon

@@ -115,3 +115,9 @@ Licensed under either of:
 - MIT License ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
+
+macOS release binaries statically link OpenSSL 3, distributed under the Apache
+License, Version 2.0 included in `LICENSE-APACHE`. OpenSSL is developed by the
+[OpenSSL Project](https://github.com/openssl/openssl); its
+[license terms](https://github.com/openssl/openssl/blob/openssl-3.6.4/LICENSE.txt)
+are included with the archives.
