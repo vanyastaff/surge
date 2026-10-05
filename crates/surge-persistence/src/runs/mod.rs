@@ -43,6 +43,7 @@
 )]
 
 pub mod bootstrap_operations;
+pub mod busy;
 pub mod capacity;
 pub mod clock;
 pub mod config;
@@ -54,15 +55,14 @@ pub mod inspection;
 mod inspection_route;
 mod macros;
 pub mod migrations;
-pub mod busy;
 mod pool;
-mod registry_exec;
 pub mod pragmas;
 pub mod process;
 pub mod query;
 pub mod reader;
 mod reader_views;
 pub mod registry;
+mod registry_exec;
 pub mod run_writer;
 pub mod seq;
 pub mod storage;
