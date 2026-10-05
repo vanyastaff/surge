@@ -5,7 +5,12 @@
 All 32 requested agents actually ran in waves. Role reports are historical
 snapshots; final receipts supersede intermediate pending states.
 
-## Revision and native artifact
+Latest source `8e3a781` and authenticated six-member native candidate are recorded
+in [continuation evidence](continuation/README.md). The sections below describe
+the original `3136b82` checkpoint and its historical artifact; statements about
+later documentation-only changes apply to that original capture interval.
+
+## Original revision and native artifact
 
 Frozen Rust source and packaged README/licenses: `3136b8268cb33009305acf114ff6cc075bbc3b8d`.
 The frozen workspace checks ran before stage commits on this identical source

@@ -1,0 +1,62 @@
+{
+  "compiled_source_commit": "8e3a781cb26666933a314c2e0d3361810ef1a21d",
+  "source_identity_sha256": "e4e8e04e3c5eeacec4dbd78992197298727733f1802246b78a3bea0b27631f53",
+  "verdict": "NO-GO",
+  "target": "aarch64-apple-darwin",
+  "authenticated_registry_packages": 351,
+  "authenticated_published_files": 17553,
+  "nextest": {
+    "executed": 3843,
+    "passed": 3833,
+    "failed": 10,
+    "skipped": 37,
+    "seconds": 159.449
+  },
+  "python": {
+    "passed": 41,
+    "seconds": 75.379
+  },
+  "doctests": {
+    "passed": 5,
+    "ignored": 7
+  },
+  "known_vulnerabilities": 0,
+  "advisory_warnings": 17,
+  "files": [
+    {
+      "path": "/Users/vanyastafford/Develop/surge/target/release-proof-settled/native-provenance.json",
+      "bytes": 8943891,
+      "sha256": "ca7064e37e20d96eb86016fd4920fd4c7c07b9afc8df9da5f1c615ff35bd66cd"
+    },
+    {
+      "path": "/Users/vanyastafford/Develop/surge/target/release-proof-settled/notices/THIRD_PARTY_NOTICES.provenance.json",
+      "bytes": 30924218,
+      "sha256": "aeb081985dc20f55530e695c0d290cb3855e5c3ad38b5583dbb3210551de5d72"
+    },
+    {
+      "path": "/Users/vanyastafford/Develop/surge/target/release-proof-settled/build-messages.jsonl",
+      "bytes": 371295,
+      "sha256": "b33cd5e2a4fa916ce263c398760b53319652dd298757da02eb44fdc209de62bc"
+    },
+    {
+      "path": "/Users/vanyastafford/Develop/surge/target/release-candidate-settled/surge-aarch64-apple-darwin.tar.gz",
+      "bytes": 48349577,
+      "sha256": "7670f8e9b161609a4632b2203a3021eb976aac4dbac3fba1daa3240d4c994e4c"
+    },
+    {
+      "path": "/Users/vanyastafford/Develop/surge/target/release-candidate-settled/surge-aarch64-apple-darwin.notices.json",
+      "bytes": 31922573,
+      "sha256": "915465d51e150e637317e2a226f57edf58d353bf6e92f8bfb142d1a99159f87d"
+    },
+    {
+      "path": "/private/tmp/surge-release-settled-evidence/raw-logs.tar.gz",
+      "bytes": 234341,
+      "sha256": "5de51c2f8f40c7a7e170769b8b537fbcb06f3aa564ef5a2673cf533b2633f8ef"
+    },
+    {
+      "path": "/private/tmp/surge-r22-f371adww/commands.log",
+      "bytes": 7809,
+      "sha256": "589f9cadf1b8f390cfff9cf5c88ef4b57f1b562455454ba3aebba3ed45022178"
+    }
+  ]
+}

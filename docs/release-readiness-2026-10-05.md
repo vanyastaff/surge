@@ -18,6 +18,10 @@ is `3136b82`; that candidate precedes the new notice/provenance packaging
 contract. Artifact identity is recorded in
 [the evidence index](release-evidence/2026-10-05/README.md).
 
+Latest compiled source: `8e3a781cb26666933a314c2e0d3361810ef1a21d`.
+The subsequent evidence-only commit records results without changing that
+artifact identity. See [continuation evidence](release-evidence/2026-10-05/continuation/README.md).
+
 ## Task ledger
 
 | Task | Priority | Owner | Dependencies | Acceptance | State |
@@ -38,12 +42,13 @@ contract. Artifact identity is recorded in
 | CLI outcome and abort projection | P1 | R05/R26 | Durable owner/history | Failed/aborted/missing/conflicting outcome is nonzero | Watch units 7/7; lifecycle 6/6; final projection PASS |
 | Fixture ownership/readiness | P1 | R26/R25/R15 | Actual owner settlement | Await writer close; stale socket/partial JSONL cannot signal readiness | Scheduler 9/9; route/JSONL final PASS |
 | MCP cleanup authority safety | P0 | R15/R32 | Fresh journal | Unknown evidence refuses seal/resume before fresh effects | Actual RED→GREEN 1/1; independent ACCEPTABLE |
-| SQLite maintenance settlement | P1 | R25/R26/R32 | Actual DB owner lifetime | Dropped reader workers exit promptly; live pool policies and owners preserved | RED 0/390 exits → GREEN 390/390 (524 connections, 0.24s); final workspace repeat pending |
+| SQLite maintenance settlement | P1 | R25/R26/R32 | Actual DB owner lifetime | Dropped reader workers exit promptly; live pool policies and owners preserved | RED 0/390 exits → GREEN 390/390 (524 connections); final full workspace regression PASS |
+| Version launcher cache | P1 | R10/R26/R32 | Invocation identity | Aliases preserve argv[0]; concurrent requests share a probe | Genuine RED 2 failures → GREEN 12/12; full workspace PASS |
 | Productive MCP cold recovery | P0 | R15/R32 | Complete containment/effect proof | Original accepted productive and downstream recovery tests pass | OPEN; NO-GO; ten acceptance failures retained |
 | Release workflow gates | P0 | R28/R19 | Same revision CI | Strict features/security/tests; native archive linkage | actionlint PASS; remote native execution unverified |
 | macOS archive OpenSSL | P1 | R19 | Native release build | Static OpenSSL; no non-system dylib path; target15 | ARM64 build/linkage/archive E2E PASS; other runners unverified |
-| Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | Local exact source mappings accepted; final source/binary capture pending; other native platforms unverified |
-| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Python 41/41 PASS including authenticated registry source binding (75.714s); final native capture and workspace rerun pending |
+| Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | Final actual ARM64 source/binary capture PASS; 351 packages / 17,553 published files; other native platforms unverified |
+| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Final Python 41/41 PASS (75.379s); authenticated native producer/collector/package PASS |
 | Release/rollback docs | P0 | R30/R31 | Schema and packaging | Full quiescent snapshot; restore-only rollback | Complete; synthetic mechanics drill PASS |
 | Final integrated validation | P0 | Coordinator/R20–24 | Frozen source | Honest build/lint/test/smoke denominators | Frozen clippy/fmt/MSRV/build/smoke PASS; nextest NO-GO |
 | Independent verdict | P0 | R32 | Final evidence | Reviewable GO/NO-GO | Final independent NO-GO; safety/local ARM64 candidate ACCEPTABLE |
@@ -127,6 +132,25 @@ the latter required `RUSTFLAGS='-C strip=none'` on macOS 27 as documented in
 vulnerabilities and retained the 17 previously disclosed warnings.
 
 ## Blocking work and limits
+
+Final `8e3a781` integrated validation: fmt, actionlint, both strict workspace
+clippy profiles, non-desktop MSRV, native release build (4m 46s), notices and
+archive packaging passed. Nextest executed 3,843: **3,833 passed, 10 failed,
+37 skipped** (159.449s); all ten failures are the retained MCP requirements.
+The first attempt stopped before listing tests after disk exhaustion damaged a
+generated binary. Old test-cache files and that corrupt binary were removed with
+hash ledgers; the full rebuild/retry above is the valid test receipt. Doctests:
+5 passed, 7 ignored. Cargo-deny passed; audit: zero known vulnerabilities and
+17 warnings. Existing linker/future-incompatibility warnings are preserved.
+
+The final six-member macOS ARM64 archive and paired receipt are under
+`target/release-candidate-settled/`; local checksums are recorded in
+[SHA256SUMS.local](release-evidence/2026-10-05/continuation/SHA256SUMS.local).
+Actual extracted-archive E2E passed: two terminal workflows, completed journal
+replay, daemon restart and clean project Git state. R32 independently validated
+archive bytes, binary/notice/source bindings, authenticated registry archives,
+system dylibs and minimum OS metadata. This is one local target, not the required
+four-platform publication set. The final independent verdict is NO-GO.
 
 Complete MCP containment/settlement and external-effect authority are required for
 productive cold recovery. GroupOnly evidence cannot become complete cleanup merely
