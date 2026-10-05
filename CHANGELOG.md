@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — MCP startup deadline and selected-catalog escalation
+
+- `McpServerRef::startup_timeout` (optional) bounds child spawn plus the MCP
+  `initialize` handshake. `call_timeout` now bounds only RPCs. Unset resolves
+  to max(30s, `call_timeout`), which is never shorter than before. A missed
+  handshake is the new `McpError::StartupTimeout`. Unset values are omitted
+  from the owned-flow manifest, so existing snapshots and their HMACs are
+  unchanged. Older binaries reject a manifest that sets the field.
+- A stage's selected MCP server whose catalog fails at session open no longer
+  silently drops all MCP tools. Other selected servers keep their tools, and
+  the engine appends `EscalationRequested` with the new cause
+  `mcp_selected_catalog_unavailable`. **Event payload schema v16**: v15
+  readers reject v16 logs with `SchemaTooNew`. See ADR-0014 decisions 7–8.
+
 ### Added — roadmap release stages, priority and parallel groups
 
 - `RoadmapArtifact::stages` (`RoadmapStage`, `StageKind` mvp/beta/prod): an

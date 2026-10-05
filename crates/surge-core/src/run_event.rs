@@ -662,10 +662,11 @@ pub enum EventPayload {
         /// and the failure mode).
         reason: String,
         /// Typed origin of this escalation (`.autopilot/competitive-waves/spec.md`
-        /// §15, History 45). Five independent paths raise this event today —
-        /// a `LoopGuard` trip (two kinds), MCP restart-exhaustion, and two
-        /// distinct edit-loop caps (bootstrap flow validation, roadmap
-        /// amendment approval) — and `reason` alone does not let a consumer
+        /// §15, History 45). Several independent paths raise this event —
+        /// a `LoopGuard` trip (two kinds), MCP restart-exhaustion, an
+        /// unavailable selected MCP catalog, a capacity blind-park streak,
+        /// and two distinct edit-loop caps (bootstrap flow validation,
+        /// roadmap amendment approval) — and `reason` alone does not let a consumer
         /// tell them apart without parsing prose back apart, which is
         /// exactly what a durable, queryable trace must not require.
         /// `#[serde(default)]` keeps every pre-existing `EscalationRequested`
@@ -871,6 +872,12 @@ pub enum EscalationCause {
     /// once per streak (cleared by the next `StageCompleted`), not on every
     /// tick past the limit.
     CapacityBlindParkLimitExceeded,
+    /// An MCP server a stage explicitly selected (`tool_overrides.mcp_add`,
+    /// allowed by the sandbox policy) could not produce its tool catalog at
+    /// session open — startup timeout, `tools/list` timeout, spawn or
+    /// transport failure. The stage proceeds without that server's tools;
+    /// this records that the degradation happened (schema v16).
+    McpSelectedCatalogUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1708,6 +1715,7 @@ mod tests {
                 },
                 allowed_tools: None,
                 call_timeout: Duration::from_secs(60),
+                startup_timeout: None,
                 restart_on_crash: true,
                 sandbox: None,
             }],

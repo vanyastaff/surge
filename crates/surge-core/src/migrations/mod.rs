@@ -97,7 +97,11 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v13:** host-owned human-decision effect and route commitments.
 /// **v14:** immutable public owned-flow startup input snapshots.
 /// **v15:** informational permanent owned-flow quota-wake refusal.
-pub const MAX_SUPPORTED_VERSION: u32 = 15;
+/// **v16:** adds [`crate::run_event::EscalationCause::McpSelectedCatalogUnavailable`]
+/// (a selected MCP server's catalog failed at stage open). Same nested-enum
+/// reasoning as v8: a v15-max reader cannot decode the new cause tag, so it
+/// must reject v16 with [`SurgeError::SchemaTooNew`].
+pub const MAX_SUPPORTED_VERSION: u32 = 16;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -373,6 +377,20 @@ impl Migration for IdentityV15 {
     }
 }
 
+/// Identity decoder for the selected-MCP-catalog escalation cause.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV16;
+impl Migration for IdentityV16 {
+    fn version(&self) -> u32 {
+        16
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v16 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -382,7 +400,8 @@ impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
-    /// [`IdentityV12`], [`IdentityV13`], and [`IdentityV14`].
+    /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`], and
+    /// [`IdentityV16`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -402,6 +421,7 @@ impl MigrationChain {
                 Box::new(IdentityV13),
                 Box::new(IdentityV14),
                 Box::new(IdentityV15),
+                Box::new(IdentityV16),
             ],
         }
     }
@@ -577,6 +597,34 @@ mod tests {
         let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v16_selected_mcp_catalog_escalation_round_trips_and_v15_readers_stay_clean() {
+        use crate::run_event::EscalationCause;
+
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "selected MCP server 'slow' catalog unavailable".into(),
+            cause: EscalationCause::McpSelectedCatalogUnavailable,
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, 16);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("mcp_selected_catalog_unavailable"),
+            "cause tag must be stable snake_case"
+        );
+        assert_eq!(migrate_payload(16, &bytes).unwrap(), payload);
+        let historical = br#"{"schema_version":15,"payload":{"type":"escalation_requested","reason":"old","cause":"mcp_restarts_exhausted"}}"#;
+        assert_eq!(
+            migrate_payload(15, historical).unwrap(),
+            EventPayload::EscalationRequested {
+                stage: None,
+                reason: "old".into(),
+                cause: EscalationCause::McpRestartsExhausted,
+            }
+        );
     }
 
     #[test]
@@ -769,7 +817,7 @@ mod owned_flow_manifest_version_tests {
             manifest: Box::new(manifest),
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 15);
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
         assert_eq!(payload.discriminant_str(), "OwnedFlowInputsBound");
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert_eq!(migrate_payload(14, &bytes).unwrap(), payload);
@@ -781,8 +829,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(16, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 16, max: 15 })
+            migrate_payload(17, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 17, max: 16 })
         ));
     }
 

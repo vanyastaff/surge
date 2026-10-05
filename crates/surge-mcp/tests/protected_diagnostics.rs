@@ -71,11 +71,12 @@ fn delayed_catalog_fixture() -> Fixture {
 
 async fn assert_cold_start_is_not_catalog_evidence() {
     let mut fixture = delayed_catalog_fixture();
-    fixture.config.call_timeout = Duration::from_millis(120);
+    fixture.config.call_timeout = Duration::from_secs(10);
+    fixture.config.startup_timeout = Some(Duration::from_millis(120));
     let connection =
         McpServerConnection::new(fixture.config.clone(), Some(fixture.dir.path().to_owned()));
     assert!(matches!(connection.list_tools().await,
-        Err(surge_mcp::McpError::Timeout(timeout)) if timeout == Duration::from_millis(120)));
+        Err(surge_mcp::McpError::StartupTimeout { timeout, .. }) if timeout == Duration::from_millis(120)));
     assert!(
         !fixture
             .dir
@@ -85,6 +86,114 @@ async fn assert_cold_start_is_not_catalog_evidence() {
         "cold initialization timeout must not stand in for the two-page catalog oracle"
     );
     connection.shutdown().await.unwrap();
+}
+
+/// A cold start slower than `call_timeout` but inside the startup deadline must
+/// still expose its catalog: the handshake (spawn + interpreter startup + MCP
+/// `initialize`) is not an RPC and must not be judged by the per-call budget.
+#[tokio::test]
+async fn slow_start_within_startup_deadline_exposes_catalog_despite_short_call_timeout() {
+    // The child sleeps 250 ms before reading stdin; `call_timeout` is 120 ms.
+    for startup_timeout in [None, Some(Duration::from_secs(20))] {
+        let mut fixture = delayed_catalog_fixture();
+        fixture.config.call_timeout = Duration::from_millis(120);
+        fixture.config.startup_timeout = startup_timeout;
+        let connection =
+            McpServerConnection::new(fixture.config.clone(), Some(fixture.dir.path().to_owned()));
+        let names = connection
+            .list_tools()
+            .await
+            .expect("startup deadline, not call_timeout, bounds the handshake")
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["echo"]);
+        // The RPC budget still applies once the server is running.
+        let call = connection.call_tool("success", serde_json::json!({})).await;
+        assert_eq!(
+            serde_json::to_value(call.unwrap()).unwrap()["structuredContent"]["value"],
+            7
+        );
+        connection.shutdown().await.unwrap();
+    }
+}
+
+/// A slow `tools/list` on a server that started in time still hits
+/// `call_timeout`: the separate startup deadline does not widen RPCs.
+#[tokio::test]
+async fn slow_catalog_after_successful_startup_still_hits_call_timeout() {
+    let mut fixture = delayed_catalog_fixture();
+    let script = fixture.dir.path().join("child.py");
+    let original = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(
+        &script,
+        original.replace(
+            "    if method == 'initialize':",
+            "    if method == 'tools/list':\n        import time; time.sleep(1.5)\n    if method == 'initialize':",
+        ),
+    )
+    .unwrap();
+    fixture.config.call_timeout = Duration::from_millis(150);
+    fixture.config.startup_timeout = Some(Duration::from_secs(20));
+    let connection =
+        McpServerConnection::new(fixture.config.clone(), Some(fixture.dir.path().to_owned()));
+    assert!(
+        matches!(
+            connection.list_tools().await,
+            Err(surge_mcp::McpError::Timeout(timeout)) if timeout == Duration::from_millis(150)
+        ),
+        "slow tools/list must fail with the per-RPC call_timeout"
+    );
+    let requests =
+        std::fs::read_to_string(fixture.dir.path().join("private-recorder.json.requests")).unwrap();
+    assert_eq!(
+        requests.lines().collect::<Vec<_>>(),
+        ["initialize", "tools/list"],
+        "the handshake completed; only the catalog RPC timed out"
+    );
+    connection.shutdown().await.unwrap();
+}
+
+/// Per-server catalog outcomes: a server that misses its startup deadline is
+/// reported by name, and a healthy slow-starting server keeps its tools.
+#[tokio::test]
+async fn per_server_catalog_isolates_a_server_that_misses_its_startup_deadline() {
+    let mut healthy = delayed_catalog_fixture();
+    healthy.config.name = "a-healthy".into();
+    healthy.config.call_timeout = Duration::from_millis(120);
+    let mut stalled = delayed_catalog_fixture();
+    stalled.config.name = "b-stalled".into();
+    stalled.config.startup_timeout = Some(Duration::from_millis(50));
+    let registry = McpRegistry::from_config(
+        &[healthy.config.clone(), stalled.config.clone()],
+        Some(healthy.dir.path()),
+    );
+    let catalogs = registry
+        .list_tools_per_server(&["b-stalled".into(), "a-healthy".into()])
+        .await
+        .expect("both names are configured");
+    assert_eq!(
+        catalogs
+            .iter()
+            .map(|c| c.server.as_str())
+            .collect::<Vec<_>>(),
+        ["a-healthy", "b-stalled"]
+    );
+    let tools = catalogs[0].tools.as_ref().expect("healthy catalog");
+    assert_eq!(
+        tools.iter().map(|t| t.tool.as_str()).collect::<Vec<_>>(),
+        ["echo"]
+    );
+    assert!(matches!(
+        &catalogs[1].tools,
+        Err(surge_mcp::McpError::StartupTimeout { server, timeout })
+            if server == "b-stalled" && *timeout == Duration::from_millis(50)
+    ));
+    assert!(matches!(
+        registry.list_tools_per_server(&["missing".into()]).await,
+        Err(surge_mcp::McpError::ServerNotConfigured(name)) if name == "missing"
+    ));
+    registry.shutdown().await.unwrap();
 }
 
 #[tokio::test]

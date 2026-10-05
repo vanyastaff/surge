@@ -788,16 +788,56 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             .filter(|server| !mcp_denied_servers.contains(server.name.as_str()))
             .map(|server| server.name.clone())
             .collect();
-        let all_mcp_tools = match reg.list_tools_for_servers(&permitted_servers).await {
-            Ok(tools) => tools,
-            Err(error) => {
-                tracing::warn!(
-                    err = %error,
-                    "MCP selected catalog failed; proceeding with engine tools only"
-                );
-                Vec::new()
+        // Per-server outcomes: one failing server must not hide the other
+        // selected servers' tools, and its failure must reach the operator.
+        let mut all_mcp_tools = Vec::new();
+        let mut unavailable: Vec<(String, String)> = Vec::new();
+        match reg.list_tools_per_server(&permitted_servers).await {
+            Ok(catalogs) => {
+                for catalog in catalogs {
+                    match catalog.tools {
+                        Ok(tools) => all_mcp_tools.extend(tools),
+                        Err(error) => unavailable.push((catalog.server, error.to_string())),
+                    }
+                }
             },
-        };
+            Err(error) => {
+                let error = error.to_string();
+                unavailable.extend(
+                    permitted_servers
+                        .iter()
+                        .map(|server| (server.clone(), error.clone())),
+                );
+            },
+        }
+        // The stage still runs (its engine tools and any healthy servers
+        // remain useful), but a server the node explicitly selected going
+        // missing is an operator-visible degradation, not a log line:
+        // record it as a replay-safe `EscalationRequested`. `McpError`
+        // displays carry only fixed reason codes and durations, never
+        // child output.
+        for (server, error) in unavailable {
+            tracing::warn!(
+                node = %p.node,
+                server = %server,
+                err = %error,
+                "MCP selected catalog failed; stage proceeds without this server's tools"
+            );
+            p.writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: format!(
+                            "stage '{}' selected MCP server '{server}', but its tool catalog \
+                             is unavailable ({error}); the stage proceeds without its tools",
+                            p.node
+                        ),
+                        cause: EscalationCause::McpSelectedCatalogUnavailable,
+                    },
+                ))
+                .await
+                .map_err(|e| StageError::Storage(e.to_string()))?;
+        }
 
         let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
             .into_iter()

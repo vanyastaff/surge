@@ -7,7 +7,7 @@ the memory database version independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **15** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **16** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **3** (see below) |
 
 ## `surge.toml` (config)
@@ -106,7 +106,12 @@ it forward on the strength of the *last* format's guarantee.
 
 Versions 12–15 add recoverable execution fences, human-decision effect and route
 commitments, immutable owned-flow startup snapshots, and informational owned-flow
-wake refusals respectively. The current maximum supported payload version is 15.
+wake refusals respectively. Version 16 adds the nested
+`EscalationCause::McpSelectedCatalogUnavailable` (an MCP server a stage selected
+could not produce its tool catalog; see ADR-0014 decision 8). This is the same
+nested-enum rule as v8: v15 readers reject v16 envelopes with `SchemaTooNew`, and
+every earlier payload still decodes through the existing identity migrations. The
+current maximum supported payload version is 16.
 Older binaries may reject these envelopes before decoding; forward readability does
 not provide downgrade support. SQLite storage migrations are separate from payload
 versions. See [Release and rollback procedure](release-procedure.md).
@@ -164,7 +169,7 @@ When a breaking change to any format is unavoidable:
    ambiguous cases.
 4. **Document** the change here and in the release notes; keep the previous
    version's reader for at least one minor release (deprecation window).
-5. **CI** asserts the version constants (config/graph 1, event payload 15, memory DB 3 today) so an
+5. **CI** asserts the version constants (config/graph 1, event payload 16, memory DB 3 today) so an
    accidental bump cannot land without updating this document and the
    migration tests.
 

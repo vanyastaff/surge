@@ -152,8 +152,9 @@ fn server(root: &Path, name: &str, recorder: &str) -> McpServerRef {
             ]),
         ),
         Some(vec!["echo".into()]),
-        // The handshake shares this deadline and includes interpreter startup,
-        // which hosted macOS runners can stretch past a few hundred ms.
+        // Per-RPC deadline only: the handshake (with interpreter startup) has
+        // its own startup deadline (unset here, so max(30s, call_timeout)).
+        // 1s keeps the positive (0.1s) catalog page well inside on hosted runners.
         Duration::from_secs(1),
         false,
     )

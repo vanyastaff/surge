@@ -429,13 +429,22 @@ impl McpServerConnection {
             return Err(error);
         }
 
+        self.handshake(transport).await
+    }
+
+    /// Complete the rmcp `initialize` handshake within the startup deadline.
+    async fn handshake(
+        &self,
+        transport: ObservedTransport,
+    ) -> Result<RunningService<RoleClient, ()>, McpError> {
         // `()` implements `ClientHandler` (all methods defaulted), and
         // the blanket `impl<H: ClientHandler> Service<RoleClient> for H`
-        // gives it `ServiceExt::serve`. Bound the handshake with the
-        // same call_timeout used for individual tool calls — if the
-        // child starts but never completes MCP init we don't hang.
-        let call_timeout = self.config.call_timeout;
-        let service = match tokio::time::timeout(call_timeout, ().serve(transport)).await {
+        // gives it `ServiceExt::serve`. The handshake wait includes the
+        // child's own process and interpreter startup, so it is bounded by
+        // the startup deadline rather than the per-RPC `call_timeout` — a
+        // child that never completes MCP init still cannot hang us.
+        let startup_timeout = self.config.effective_startup_timeout();
+        let service = match tokio::time::timeout(startup_timeout, ().serve(transport)).await {
             Ok(Ok(svc)) => svc,
             Ok(Err(_error)) => {
                 return Err(McpError::StartFailed {
@@ -444,7 +453,16 @@ impl McpServerConnection {
                 });
             },
             Err(_elapsed) => {
-                return Err(McpError::Timeout(call_timeout));
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    server = %self.config.name,
+                    timeout_ms = u64::try_from(startup_timeout.as_millis()).unwrap_or(u64::MAX),
+                    "mcp_startup_timed_out"
+                );
+                return Err(McpError::StartupTimeout {
+                    server: self.config.name.clone(),
+                    timeout: startup_timeout,
+                });
             },
         };
 
@@ -453,12 +471,14 @@ impl McpServerConnection {
 
     /// List all tools the server reports via the MCP `tools/list` verb.
     ///
-    /// Triggers a lazy connect on first call. On failure, classifies
+    /// Triggers a lazy connect on first call; that connect is bounded by
+    /// the startup deadline, not `call_timeout`. On failure, classifies
     /// the error structurally: transport failures mark the connection
     /// crashed (so the next call reconnects); service-level errors
-    /// leave the connection alive. The RPC is bounded by `call_timeout`
-    /// (mirroring [`call_tool`](Self::call_tool)) so a slow `tools/list`
-    /// cannot hang the session-open catalog build or a health probe.
+    /// leave the connection alive. The RPC itself is bounded by
+    /// `call_timeout` (mirroring [`call_tool`](Self::call_tool)), one
+    /// deadline across all pages, so a slow `tools/list` cannot hang the
+    /// session-open catalog build or a health probe.
     /// (No `#[must_use]`: the `async fn` future is already `#[must_use]`,
     /// so the result cannot be silently dropped — adding the attribute
     /// trips `clippy::double_must_use`.)
@@ -496,6 +516,8 @@ impl McpServerConnection {
     /// Call a named tool with the supplied JSON arguments, honouring
     /// the configured `call_timeout`.
     ///
+    /// - A lazy (re)connect is bounded by the startup deadline →
+    ///   [`McpError::StartupTimeout`].
     /// - Timeout elapses → [`McpError::Timeout`] (not marked crashed —
     ///   a slow server is not necessarily dead).
     /// - Transport-class error → connection marked crashed,
@@ -507,8 +529,22 @@ impl McpServerConnection {
         tool: &str,
         arguments: serde_json::Value,
     ) -> Result<rmcp::model::CallToolResult, McpError> {
+        self.call_tool_within(tool, arguments, self.config.call_timeout)
+            .await
+    }
+
+    /// [`call_tool`](Self::call_tool) with a caller RPC budget. The RPC
+    /// deadline is `min(rpc_timeout, call_timeout)`; it starts after the
+    /// connection is running, so a caller budget never truncates a
+    /// (re)connect, which keeps its own startup deadline.
+    pub async fn call_tool_within(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        rpc_timeout: Duration,
+    ) -> Result<rmcp::model::CallToolResult, McpError> {
         let rs = self.ensure_connected().await?;
-        let timeout = self.config.call_timeout;
+        let timeout = rpc_timeout.min(self.config.call_timeout);
 
         let mut params = rmcp::model::CallToolRequestParams::new(tool.to_string());
         if let Some(map) = match arguments {
