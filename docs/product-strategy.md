@@ -149,6 +149,21 @@ older text below disagree, this section wins.
   cross-project priorities (equal share until then), Telegram in onboarding,
   budget UI, Windows and Linux.
 
+- **Context inside a task is the runtime's job.** Surge's defense against context
+  rot is task sizing at planning time and a fresh session per task; within a
+  session the agent runtime's own compaction is used. A compaction is recorded
+  and fed back to the planner as a signal to size similar tasks smaller.
+- **Disagreement between viewpoint agents is settled by a judge agent**, on a
+  different model or vendor than both sides where possible; its decision and
+  rationale go into the stage report. Viewpoints are ordinary role profiles.
+- **A Hub for skills and MCP servers.** The user installs from it; the planner
+  picks per node only from what is installed; the user confirms in the wizard.
+  Installs are hash-pinned, never silently updated, and MCP servers run under
+  the delegated sandbox. Provisionally the Hub is a client over existing
+  official catalogs (such as the official MCP registry and skill catalogs) plus
+  the user's own skills and servers from a folder or git; Surge hosts and
+  moderates nothing, and every entry shows its source.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
@@ -165,7 +180,9 @@ notifications; the wizard lengthens time to first result; stop-and-restart spend
 an attempt on a small correction; three customization paths are three surfaces
 to test; "no context loss" stays a differentiator only while vendors leave
 context management to the user, so back it with Surge's own measurements on
-large projects; the v1 cut is sizable new code (`Escalate` and `Rotate` are
+large projects; trusting runtime compaction means a rare oversized task can
+still degrade, so sizing quality must be measured; the judge is one more model
+call and failure point; Hub quality depends on third-party catalogs; the v1 cut is sizable new code (`Escalate` and `Rotate` are
 reserved today), so it, not MCP alone, sets the release date; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
