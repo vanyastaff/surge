@@ -2526,9 +2526,9 @@ async fn cold_committed_fixture(after_route: bool, checkpoint_damage: Option<&st
             events_conn.execute_batch("CREATE TRIGGER fixture_no_terminal BEFORE INSERT ON events WHEN NEW.kind IN ('RunCompleted','RunFailed','RunAborted') BEGIN SELECT RAISE(ABORT,'fixture crash boundary before terminal'); END;").unwrap();
         }
         std::fs::write(&barrier, b"release").unwrap();
-        // The route commit follows the best-effort capacity clear, which spends the
-        // full 5 s registry busy_timeout against this fixture lock before failing.
-        tokio::time::timeout(Duration::from_secs(20), async {
+        // The route commit must not wait on this lock: the best-effort capacity
+        // clear runs after it, and registry SQLite runs off the async workers.
+        tokio::time::timeout(Duration::from_secs(8), async {
             loop {
                 let inspected = storage.inspect_run(attempt.run).await.unwrap();
                 let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =

@@ -63,12 +63,17 @@ pub fn open_registry_pool(
     // Apply migrations on a dedicated connection.
     let mut conn = rusqlite::Connection::open(&db_path)?;
     apply_pragmas(&conn, REGISTRY_PRAGMAS)?;
+    crate::runs::busy::install(&conn)?;
     apply_migrations(&mut conn, REGISTRY_MIGRATIONS, clock)
         .map_err(|e| OpenError::MigrationFailed(e.to_string()))?;
     drop(conn);
 
-    let manager =
-        SqliteConnectionManager::file(&db_path).with_init(|c| apply_pragmas(c, REGISTRY_PRAGMAS));
+    // Every registry store shares this pool, and most of them are called
+    // synchronously from async code; see `runs::busy`.
+    let manager = SqliteConnectionManager::file(&db_path).with_init(|c| {
+        apply_pragmas(c, REGISTRY_PRAGMAS)?;
+        crate::runs::busy::install(c)
+    });
     let pool = super::pool::sqlite_pool_builder()
         .max_size(8)
         .build(manager)
@@ -83,6 +88,13 @@ pub fn insert_run(
     summary: &RunSummary,
 ) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    insert_run_connection(&conn, summary)
+}
+
+pub(crate) fn insert_run_connection(
+    conn: &rusqlite::Connection,
+    summary: &RunSummary,
+) -> Result<(), StorageError> {
     conn.execute(
         "INSERT INTO runs (id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid, wake_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -178,6 +190,14 @@ pub fn find_ids_by_suffix(
     limit: usize,
 ) -> Result<Vec<RunId>, StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    find_ids_by_suffix_connection(&conn, suffix, limit)
+}
+
+pub(crate) fn find_ids_by_suffix_connection(
+    conn: &rusqlite::Connection,
+    suffix: &str,
+    limit: usize,
+) -> Result<Vec<RunId>, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT id FROM runs \
          WHERE length(?1) > 0 AND substr(id, -length(?1)) = ?1 \
@@ -204,6 +224,13 @@ pub fn delete_run(
     run_id: &RunId,
 ) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    delete_run_connection(&conn, run_id)
+}
+
+pub(crate) fn delete_run_connection(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+) -> Result<(), StorageError> {
     conn.execute("DELETE FROM runs WHERE id = ?", params![run_id.to_string()])?;
     Ok(())
 }
@@ -216,11 +243,47 @@ pub fn update_status(
     ended_at_ms: Option<i64>,
 ) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    update_status_connection(&conn, run_id, status, ended_at_ms)
+}
+
+pub(crate) fn update_status_connection(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+    status: RunStatus,
+    ended_at_ms: Option<i64>,
+) -> Result<(), StorageError> {
     conn.execute(
         "UPDATE runs SET status = ?, ended_at = ? WHERE id = ?",
         params![status.as_str(), ended_at_ms, run_id.to_string()],
     )?;
     Ok(())
+}
+
+/// Rewrite a run to [`RunStatus::Crashed`] only while it is still
+/// `Running`/`Bootstrapping` under `daemon_pid`. Returns whether a row changed.
+///
+/// Compare-and-set rather than [`update_status`]: the stale-pid sweep reads
+/// and writes in separate statements, so a run resumed by another daemon in
+/// between (new pid, or a non-active status) must not be overwritten.
+pub(crate) fn mark_crashed_if_stale_connection(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+    daemon_pid: i32,
+    ended_at_ms: i64,
+) -> Result<bool, StorageError> {
+    let changed = conn.execute(
+        "UPDATE runs SET status = ?, ended_at = ?
+         WHERE id = ? AND daemon_pid = ? AND status IN (?, ?)",
+        params![
+            RunStatus::Crashed.as_str(),
+            ended_at_ms,
+            run_id.to_string(),
+            daemon_pid,
+            RunStatus::Running.as_str(),
+            RunStatus::Bootstrapping.as_str(),
+        ],
+    )?;
+    Ok(changed > 0)
 }
 
 /// Park a run: transition its status to [`RunStatus::Parked`] and record
@@ -238,6 +301,14 @@ pub fn set_run_parked(
     wake_at_ms: i64,
 ) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    set_run_parked_connection(&conn, run_id, wake_at_ms)
+}
+
+pub(crate) fn set_run_parked_connection(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+    wake_at_ms: i64,
+) -> Result<(), StorageError> {
     conn.execute(
         "UPDATE runs SET status = ?, wake_at = ? WHERE id = ?",
         params![RunStatus::Parked.as_str(), wake_at_ms, run_id.to_string()],
@@ -268,6 +339,14 @@ pub fn clear_parked(
     resumed_status: RunStatus,
 ) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    clear_parked_connection(&conn, run_id, resumed_status)
+}
+
+pub(crate) fn clear_parked_connection(
+    conn: &rusqlite::Connection,
+    run_id: &RunId,
+    resumed_status: RunStatus,
+) -> Result<(), StorageError> {
     conn.execute(
         "UPDATE runs SET status = ?, wake_at = NULL WHERE id = ?",
         params![resumed_status.as_str(), run_id.to_string()],
@@ -302,6 +381,13 @@ pub fn due_parked(
     now_ms: i64,
 ) -> Result<Vec<RunSummary>, StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    due_parked_connection(&conn, now_ms)
+}
+
+pub(crate) fn due_parked_connection(
+    conn: &rusqlite::Connection,
+    now_ms: i64,
+) -> Result<Vec<RunSummary>, StorageError> {
     let mut stmt = conn.prepare(
         "SELECT id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid, wake_at
          FROM runs
@@ -457,6 +543,33 @@ mod tests {
         let got = get_run(&pool, &s.id).unwrap().unwrap();
         assert_eq!(got.status, RunStatus::Crashed);
         assert_eq!(got.ended_at_ms, Some(1_700_000_000_500));
+    }
+
+    /// The stale-pid sweep reads and writes separately; a run re-owned by
+    /// another daemon (or no longer active) in between must not be rewritten.
+    #[test]
+    fn stale_crash_rewrite_requires_same_owner_and_active_status() {
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let mut s = fixture_summary(RunId::new(), Some(41));
+        s.status = RunStatus::Running;
+        insert_run(&pool, &s).unwrap();
+        let conn = pool.get().unwrap();
+
+        assert!(!mark_crashed_if_stale_connection(&conn, &s.id, 40, 1).unwrap());
+        set_run_parked(&pool, &s.id, 5).unwrap();
+        assert!(!mark_crashed_if_stale_connection(&conn, &s.id, 41, 1).unwrap());
+        assert_eq!(
+            get_run(&pool, &s.id).unwrap().unwrap().status,
+            RunStatus::Parked
+        );
+
+        update_status(&pool, &s.id, RunStatus::Running, None).unwrap();
+        assert!(mark_crashed_if_stale_connection(&conn, &s.id, 41, 7).unwrap());
+        let got = get_run(&pool, &s.id).unwrap().unwrap();
+        assert_eq!(got.status, RunStatus::Crashed);
+        assert_eq!(got.ended_at_ms, Some(7));
     }
 
     #[test]

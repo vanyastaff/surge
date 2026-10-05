@@ -45,6 +45,7 @@ surge-notify = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
+rusqlite = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"

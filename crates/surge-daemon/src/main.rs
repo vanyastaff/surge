@@ -367,7 +367,11 @@ fn main() -> std::process::ExitCode {
         tokio::spawn(wake_scheduler.run(shutdown_for_wake));
 
         // Completion reconciliation also serves inbox-only and previously configured sources.
-        match rusqlite::Connection::open(storage.registry_db_path()) {
+        // Used synchronously from async code; keep lock waits off the worker.
+        match rusqlite::Connection::open(storage.registry_db_path()).and_then(|conn| {
+            surge_persistence::runs::busy::install(&conn)?;
+            Ok(conn)
+        }) {
             Ok(conn) => {
                 intake_completion::spawn(
                     completion_rx,
@@ -1392,6 +1396,12 @@ async fn spawn_task_router(
             return None;
         },
     };
+
+    // Used synchronously from async code; keep lock waits off the worker.
+    if let Err(e) = surge_persistence::runs::busy::install(&conn) {
+        tracing::error!(error = %e, "failed to install registry busy handler on dedup connection; intake disabled");
+        return None;
+    }
 
     // Enable foreign keys for consistency with the registry pool's pragmas.
     if let Err(e) = conn.execute("PRAGMA foreign_keys = ON;", []) {

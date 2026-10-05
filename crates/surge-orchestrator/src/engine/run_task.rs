@@ -552,7 +552,12 @@ async fn execute_stage_step(
         );
     };
     let node = node.clone();
-    match execute_current_stage(params, state, &node).await {
+    let step = execute_current_stage(params, state, &node).await;
+    // The registry clear is best-effort and can wait out registry contention;
+    // it must not delay the durable route commit. It still precedes the next
+    // stage's capacity precheck, so that precheck observes the recovery.
+    clear_proven_capacity_recovery(params, state, &node).await;
+    match step {
         StageLoopStep::Continue => StageLoopStep::Continue,
         StageLoopStep::Done(outcome) => StageLoopStep::Done(outcome),
     }
@@ -1164,6 +1169,10 @@ struct RunExecutionState {
     skill_catalog: Option<std::sync::Arc<surge_core::skill::SkillCatalog>>,
     /// Inspected original unadmitted occurrence, without effect authority.
     restored_quota_entry: Option<u64>,
+    /// Runtime whose exhaustion the current stage's successful dispatch
+    /// refuted, resolved from that dispatch's own events. Cleared from the
+    /// capacity ledger only after the stage's route commit.
+    proven_capacity_recovery: Option<crate::engine::capacity::CanonicalRuntimeId>,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -1209,6 +1218,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         budget_exceeded_noted,
         skill_catalog: None,
         restored_quota_entry: None,
+        proven_capacity_recovery: None,
     })
 }
 
@@ -1593,7 +1603,8 @@ async fn dispatch_agent_node_with_capacity_gate(
         if result.is_ok()
             && let Some(prefix) = dispatch_prefix
         {
-            clear_successful_dispatch_capacity(params, &state.cursor.node, prefix).await;
+            state.proven_capacity_recovery =
+                successful_dispatch_runtime(params, &state.cursor.node, prefix).await;
         }
         return StageDispatch::StageResult(result);
     };
@@ -1614,18 +1625,20 @@ async fn dispatch_agent_node_with_capacity_gate(
 }
 
 /// A successful stage proves recovery only for its last actual provider opening.
-/// Read strictly after the dispatch prefix so previous attempts cannot supply it.
-async fn clear_successful_dispatch_capacity(
+/// Read strictly after the dispatch prefix so previous attempts cannot supply it,
+/// and immediately on dispatch return so later route, hook or stage events cannot
+/// either. The resulting ledger clear is deferred past the route commit.
+async fn successful_dispatch_runtime(
     params: &RunTaskParams,
     node: &surge_core::keys::NodeKey,
     prefix: surge_persistence::runs::EventSeq,
-) {
+) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
     let events = match read_stage_events(params, prefix.next(), "capacity dispatch").await {
         Ok(events) => events,
         Err((_, error)) => {
             tracing::warn!(target: "engine::capacity", %node, %error,
                 "cannot establish successful provider identity; retaining capacity observations");
-            return;
+            return None;
         },
     };
     let runtime = events
@@ -1639,14 +1652,24 @@ async fn clear_successful_dispatch_capacity(
             } if opened_node == node => Some(agent_id.as_deref()),
             _ => None,
         })
-        .flatten();
-    let Some(runtime) = runtime else {
-        return;
-    };
-    let runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
+        .flatten()?;
+    Some(crate::engine::capacity::CanonicalRuntimeId::resolve(
         &surge_acp::Registry::builtin(),
         runtime,
-    );
+    ))
+}
+
+/// Apply the recovery proven by this stage's successful dispatch. Losing it to
+/// cancellation only retains a stale exhaustion row until the next success.
+async fn clear_proven_capacity_recovery(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+) {
+    let Some(runtime) = state.proven_capacity_recovery.take() else {
+        return;
+    };
+    let node = &node.id;
     if let Err(error) = params.capacity_ledger.clear(&runtime).await {
         tracing::warn!(target: "engine::capacity", %node, %runtime, %error,
             "capacity ledger clear failed; stale exhaustion may persist");

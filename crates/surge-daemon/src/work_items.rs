@@ -840,11 +840,23 @@ pub(crate) async fn reconcile_page(
                 .map_err(|error| WorkItemError::Invalid(error.to_string()))
         })
         .transpose()?;
-    let page = store.scan_attempts(cursor, 20)?;
-    for attempt in page.entries {
-        if let Err(error) = store.sync_usage(attempt.run) {
-            tracing::warn!(run_id=%attempt.run,%error,"task usage pending");
+    // The page scan and up to twenty usage writes each wait in SQLite's busy
+    // handler under registry contention; keep them off the async workers.
+    // An abandoned sync is harmless: the usage cursor CAS prevents repeat
+    // charging when it completes late or runs again on the next tick.
+    let usage_store = store.clone();
+    let page = tokio::task::spawn_blocking(move || {
+        let page = usage_store.scan_attempts(cursor, 20)?;
+        for attempt in &page.entries {
+            if let Err(error) = usage_store.sync_usage(attempt.run) {
+                tracing::warn!(run_id=%attempt.run,%error,"task usage pending");
+            }
         }
+        Ok::<_, WorkItemError>(page)
+    })
+    .await
+    .map_err(|error| WorkItemError::Invalid(format!("task reconciliation page task: {error}")))??;
+    for attempt in page.entries {
         if !matches!(
             attempt.state,
             WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched

@@ -59,6 +59,13 @@ pub fn observe(
     window: &CapacityWindow,
 ) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    observe_connection(&conn, window)
+}
+
+pub(crate) fn observe_connection(
+    conn: &rusqlite::Connection,
+    window: &CapacityWindow,
+) -> Result<(), StorageError> {
     conn.execute(
         "INSERT INTO runtime_capacity
             (runtime, remaining, resets_at_ms, window_secs, source)
@@ -119,11 +126,30 @@ pub fn observe(
 /// Returns [`StorageError`] when the registry DB cannot be reached.
 pub fn clear(pool: &Pool<SqliteConnectionManager>, runtime: &str) -> Result<(), StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    clear_connection(&conn, runtime)
+}
+
+pub(crate) fn clear_connection(
+    conn: &rusqlite::Connection,
+    runtime: &str,
+) -> Result<(), StorageError> {
     conn.execute(
         "DELETE FROM runtime_capacity WHERE runtime = ?",
         params![runtime],
     )?;
     Ok(())
+}
+
+/// Whether any capacity row exists for `runtime`, decodable or not.
+pub(crate) fn exists_connection(
+    conn: &rusqlite::Connection,
+    runtime: &str,
+) -> Result<bool, StorageError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM runtime_capacity WHERE runtime = ?)",
+        params![runtime],
+        |row| row.get(0),
+    )?)
 }
 
 /// Point-read the durable capacity status for one canonical agent-runtime
@@ -160,6 +186,13 @@ pub fn status(
     runtime: &str,
 ) -> Result<CapacityStatus, StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    status_connection(&conn, runtime)
+}
+
+pub(crate) fn status_connection(
+    conn: &rusqlite::Connection,
+    runtime: &str,
+) -> Result<CapacityStatus, StorageError> {
     // Read every column as the untyped `rusqlite::types::Value` rather than
     // `Option<f64>`/`Option<i64>`/`String` directly: SQLite's column types
     // are affinities, not constraints, so a hand-corrupted (or

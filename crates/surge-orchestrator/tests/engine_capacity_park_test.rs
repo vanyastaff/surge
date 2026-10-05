@@ -1346,3 +1346,131 @@ async fn binding_failure_before_provider_open_preserves_exhaustion() {
         "pre-provider failure cannot prove quota recovery"
     );
 }
+
+/// The successful-dispatch capacity clear is a best-effort registry write.
+/// Registry connections wait up to 5 s in SQLite's busy handler, so when it
+/// ran before the route commit, contention on the registry delayed every
+/// stage's durable route by that long. Holding the registry write lock across
+/// the stage's completion, the route must commit well inside that timeout,
+/// and the clear (still keyed on this dispatch's own provider opening) must
+/// land once the lock is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registry_contention_does_not_delay_route_commit_behind_capacity_clear() {
+    let profiles_dir = tempfile::tempdir().unwrap();
+    drop_profile(
+        profiles_dir.path(),
+        "contended-role",
+        "claude-code",
+        &["done"],
+    );
+    let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
+    let registry = Arc::new(ProfileRegistry::new(disk));
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    // Not exhausted, so the precheck dispatches; the success must clear it.
+    storage
+        .observe_capacity(&surge_core::capacity::CapacityWindow::from_parts(
+            "claude-acp",
+            None,
+            Some(surge_core::capacity::RemainingShare::new(0.9).unwrap()),
+            None,
+            surge_core::capacity::CapacitySource::Observed429,
+        ))
+        .await
+        .unwrap();
+    let mock = Arc::new(MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::try_from("done").unwrap(),
+        summary: "ok".into(),
+        artifacts_produced: vec![],
+
+        verification_report: None,
+    })
+    .await;
+
+    let engine = Engine::new_full(
+        bridge,
+        storage.clone(),
+        dispatcher,
+        Arc::new(surge_notify::MultiplexingNotifier::new()),
+        None,
+        Some(registry),
+        EngineConfig::default(),
+    );
+
+    let run_id = RunId::new();
+    let g = graph(
+        "capacity-clear-after-route",
+        "agent_1",
+        vec![
+            agent_node("agent_1", "contended-role@1.0", vec![], &["done"]),
+            terminal_node("end"),
+        ],
+        vec![edge("agent_to_end", "agent_1", "done", "end")],
+    );
+    let handle = engine
+        .start_run(
+            run_id,
+            g,
+            dir.path().to_path_buf(),
+            EngineRunConfig::default(),
+        )
+        .await
+        .expect("start_run");
+
+    // The stage is mid-turn: its precheck read is done and the provider
+    // session is subscribed. Take the registry write lock before it reports.
+    mock.wait_for_subscribe_count(1).await;
+    let holder = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let locked_at = std::time::Instant::now();
+    mock.pump_scripted_events().await;
+
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    tokio::time::timeout(Duration::from_millis(2_500), async {
+        loop {
+            let last = reader.current_seq().await.unwrap();
+            let events = reader
+                .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+                .await
+                .unwrap();
+            if events
+                .iter()
+                .any(|ev| matches!(ev.payload.payload, EventPayload::StageRouteCommitted { .. }))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "route commit waited on the registry lock for {:?}; the 5 s busy timeout gates it",
+            locked_at.elapsed()
+        )
+    });
+
+    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+        .await
+        .expect("run timed out")
+        .expect("run handle join");
+    assert!(
+        matches!(outcome, RunOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    assert_eq!(
+        storage.capacity_status("claude-acp").await.unwrap(),
+        surge_core::capacity::CapacityStatus::NeverObserved,
+        "the deferred clear must still apply the recovery this dispatch proved"
+    );
+}
