@@ -83,13 +83,26 @@ older text below disagree, this section wins.
 - **Git is always visible** (branches, commits, diffs), with short hover hints
   for key terms instead of renamed concepts.
 
+- **Subscription limit mid-stage:** the task moves to another allowed agent;
+  if none fits, the run parks until the reset and wakes itself (ADR-0016). The
+  user is notified; no decision is required. Allowed models, effort and
+  thinking limits apply to the switch, and the verifier stays on a different
+  vendor than the implementer where possible, with a warning otherwise.
+- **Spend visibility: actuals only, no forecasts.** Show what the agent actually
+  reports (share of a subscription limit where available, otherwise tokens);
+  never invent dollar figures while ACP reports no cost.
+- **Budgets are off by default** and can be enabled per project or stage in
+  settings.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
 project (local per-run history can complement them later, with no telemetry);
 default network access lets an agent fetch anything (accepted for unattended
 runs); command-only agent onboarding may be hard for people without a terminal
-and should be tested with a real user; first-party vendor tools may absorb "finishing projects", which would erode the
+and should be tested with a real user; a switched agent finishes a task in a
+different style; without a default budget an API-key user can overspend, so
+loop protection must not depend on budgets; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
 ## What the research established
