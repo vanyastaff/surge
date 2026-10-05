@@ -279,12 +279,52 @@ async fn request(socket: &Path, body: Value) -> Value {
     serde_json::from_str(&line).unwrap()
 }
 
+fn initial_mcp_evidence_ready(
+    phase: &str,
+    events: &[surge_persistence::runs::ReadEvent],
+    storage: &Storage,
+    run: RunId,
+    has_cycle: bool,
+) -> bool {
+    if phase == "populated-unconfirmed" {
+        events.iter().any(|event| {
+            matches!(
+                event.payload.payload,
+                EventPayload::RunRecoveryRequired { .. }
+            )
+        }) && storage.work_items().for_run(run).unwrap().unwrap().state
+            == surge_core::work_item::WorkItemAttemptState::Attention
+    } else {
+        has_cycle
+            && events.iter().any(|event| {
+                matches!(event.payload.payload,
+            EventPayload::RunSuspended { ref fence } if fence.cleanup_confirmed)
+            })
+    }
+}
+
 fn records(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
-        .lines()
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+#[test]
+fn records_only_reads_committed_newline_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("record.jsonl");
+    std::fs::write(&path, b"{\"kind\":\"spawn\"}\n{\"kind\":\"requ").unwrap();
+    assert_eq!(records(&path), vec![json!({"kind":"spawn"})]);
+    std::fs::write(&path, b"{\"kind\":\"spawn\"}\n{\"kind\":\"request\"}\n").unwrap();
+    assert_eq!(
+        records(&path),
+        vec![json!({"kind":"spawn"}), json!({"kind":"request"})]
+    );
+    std::fs::write(&path, b"{\"kind\":\"corrupt}\n").unwrap();
+    assert!(std::panic::catch_unwind(|| records(&path)).is_err());
 }
 
 fn assert_private_absent(public: &str) {
@@ -636,7 +676,7 @@ async fn host_probe(root: &Path, phase: &str) {
         let mcp = match phase {
             "explicit-empty" => McpSelection::Explicit(Vec::new()),
             "default-empty" => McpSelection::HostDefault,
-            "populated" => McpSelection::Explicit(vec![
+            "populated" | "populated-unconfirmed" => McpSelection::Explicit(vec![
                 server(root, "oracle", "original.jsonl"),
                 server(root, "denied", "denied.jsonl")
                     .with_sandbox(Some(surge_core::sandbox::SandboxMode::ReadOnly)),
@@ -666,7 +706,10 @@ async fn host_probe(root: &Path, phase: &str) {
             serde_json::from_value(response["receipt"].clone()).unwrap();
         let cycle = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
-                let cycles = storage.work_items().due_recovery_wakes_for_run(receipt.run,i64::MAX,10).unwrap();
+                let cycles = storage
+                    .work_items()
+                    .due_recovery_wakes_for_run(receipt.run, i64::MAX, 10)
+                    .unwrap();
                 let history = match storage.inspect_run(receipt.run).await {
                     Ok(history) => history,
                     Err(surge_persistence::runs::StorageError::Sqlite(
@@ -678,14 +721,24 @@ async fn host_probe(root: &Path, phase: &str) {
                     },
                     Err(_) => panic!("unexpected initial journal inspection error"),
                 };
-                if let Some(cycle) = cycles.into_iter().next()
-                    && let RunDatabaseInspection::Present { events } = history.database
-                    && events.iter().any(|event| matches!(event.payload.payload,EventPayload::RunSuspended { ref fence } if fence.cleanup_confirmed)) {
-                    break cycle;
+                if let RunDatabaseInspection::Present { events } = history.database
+                    && initial_mcp_evidence_ready(
+                        phase,
+                        &events,
+                        &storage,
+                        receipt.run,
+                        !cycles.is_empty(),
+                    )
+                {
+                    break (phase != "populated-unconfirmed")
+                        .then_some(cycles.into_iter().next())
+                        .flatten();
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         publish(
             &root.join("park.ready"),
             &json!({"receipt":receipt,
@@ -693,7 +746,7 @@ async fn host_probe(root: &Path, phase: &str) {
             "control":storage.work_items().execution_control(receipt.run).unwrap(),
             "workspace":storage.work_items().show(receipt.item).unwrap().item.workspace,
             "manifest":storage.work_items().owned_flow_manifest(receipt.run).unwrap().unwrap(),
-            "due":cycle.wake.unwrap().due_at_ms()}),
+            "due":cycle.map_or(i64::MAX, |cycle| cycle.wake.unwrap().due_at_ms())}),
         );
         wait_file(&root.join("park.release")).await;
     }
@@ -1215,6 +1268,60 @@ fn assert_manifest_update_rejected(
         "rejected update changed immutable raw snapshot"
     );
     original
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unresolved_mcp_domain_requires_attention_and_blocks_actual_cold_dispatch() {
+    let root = fixture();
+    let accepted = start_park(root.path(), "populated-unconfirmed").await;
+    verify_actual_transport(root.path(), &accepted);
+    let receipt: OwnedFlowReceipt = serde_json::from_value(accepted["receipt"].clone()).unwrap();
+    let storage = Storage::open(root.path().join("home")).await.unwrap();
+    let RunDatabaseInspection::Present { events } =
+        storage.inspect_run(receipt.run).await.unwrap().database
+    else {
+        panic!("actual MCP journal is missing");
+    };
+    assert!(events.iter().any(|event| matches!(&event.payload.payload,
+        EventPayload::ExecutionWriterEstablished { container, .. }
+        if container.coverage() == surge_core::execution_recovery::process::WriterCoverage::GroupOnly)));
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.payload.payload,
+            EventPayload::RunRecoveryRequired { .. }
+        )),
+        "direct MCP settlement falsely authorized the whole writer domain"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(&event.payload.payload,
+        EventPayload::RunSuspended { fence } if fence.cleanup_confirmed)),
+        "unconfirmed MCP effects received a confirmed cleanup fence"
+    );
+    drop(storage);
+    let before = records(&root.path().join("original.jsonl"));
+    let provider_before = records(&root.path().join("home/quota-a-wire.jsonl"));
+    cold_wake(root.path(), &accepted, "refuse").await;
+    assert_eq!(
+        records(&root.path().join("original.jsonl")),
+        before,
+        "unresolved prior MCP domain dispatched another child"
+    );
+    assert_eq!(
+        records(&root.path().join("home/quota-a-wire.jsonl")),
+        provider_before,
+        "unresolved prior MCP domain opened or prompted another provider session"
+    );
+    let storage = Storage::open(root.path().join("home")).await.unwrap();
+    assert_eq!(
+        storage
+            .work_items()
+            .for_run(receipt.run)
+            .unwrap()
+            .unwrap()
+            .state,
+        surge_core::work_item::WorkItemAttemptState::Attention
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -97,3 +97,49 @@ pub(crate) async fn begin(
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     Ok(writer)
 }
+
+/// A transport shutdown cannot authorize unresolved MCP descendant/external effects.
+/// The journal is authoritative; no process exit is converted into a closure event.
+pub(crate) fn mcp_cleanup_refusal(memory: &surge_core::run_state::RunMemory) -> Option<String> {
+    use surge_core::execution_recovery::process::WriterLiveness;
+    for record in memory.execution_writers.values() {
+        if !matches!(&record.intent.kind, ExecutionWriterKind::HostTool { call_id } if call_id.starts_with("mcp-child:"))
+        {
+            continue;
+        }
+        let writer = record.intent.writer;
+        if record.conflicting_observation {
+            return Some(format!(
+                "MCP writer {writer} has conflicting ownership evidence"
+            ));
+        }
+        let Some(container) = record.container.as_ref() else {
+            return Some(format!(
+                "MCP writer {writer} has no established process identity"
+            ));
+        };
+        if record.cleanup_confirmed {
+            continue;
+        }
+        let liveness = surge_acp::process_evidence::probe(container);
+        if !record.intent.local_effects || !matches!(liveness, WriterLiveness::Gone) {
+            return Some(format!(
+                "MCP writer {writer} has unconfirmed descendant or external-effect cleanup"
+            ));
+        }
+    }
+    None
+}
+
+/// Fresh evidence includes observer events appended outside the stage's memory.
+pub(crate) async fn inspect_mcp_cleanup(
+    storage: &std::sync::Arc<surge_persistence::runs::Storage>,
+    run: surge_core::id::RunId,
+) -> Result<Option<String>, crate::engine::error::EngineError> {
+    let reader = storage
+        .open_run_reader(run)
+        .await
+        .map_err(|error| crate::engine::error::EngineError::Storage(error.to_string()))?;
+    let replayed = super::replay::replay(&reader).await?;
+    Ok(mcp_cleanup_refusal(&replayed.memory))
+}

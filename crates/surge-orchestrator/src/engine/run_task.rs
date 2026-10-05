@@ -192,23 +192,36 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
         }
     }
     if let Some((fence, blob)) = params.pending_suspension.take() {
-        match params.writer.seal_suspension(fence.clone(), blob).await {
-            Ok(seq) => {
-                let _ = params.event_tx.send(EngineRunEvent::Persisted {
-                    seq: seq.as_u64(),
-                    payload: Box::new(EventPayload::RunSuspended {
-                        fence: fence.clone(),
-                    }),
-                });
-                outcome = RunOutcome::Suspended {
-                    fence: Box::new(fence),
-                };
-            },
-            Err(error) => {
-                let _ = params.event_tx.send(EngineRunEvent::StreamError {
-                    message: format!("suspension fence was not committed: {error}"),
-                });
-            },
+        // Direct-child transport settlement does not cover escaped writers or
+        // external effects. Read fresh observer evidence after registry shutdown.
+        let refusal =
+            match super::writer_coverage::inspect_mcp_cleanup(&params.storage, params.run_id).await
+            {
+                Ok(refusal) => refusal,
+                Err(error) => Some(format!("MCP cleanup evidence unavailable: {error}")),
+            };
+        if let Some(diagnostic) = refusal {
+            tracing::warn!(run_id = %params.run_id, %diagnostic, "suspension requires recovery attention");
+            outcome = recovery_required(&params, diagnostic).await;
+        } else {
+            match params.writer.seal_suspension(fence.clone(), blob).await {
+                Ok(seq) => {
+                    let _ = params.event_tx.send(EngineRunEvent::Persisted {
+                        seq: seq.as_u64(),
+                        payload: Box::new(EventPayload::RunSuspended {
+                            fence: fence.clone(),
+                        }),
+                    });
+                    outcome = RunOutcome::Suspended {
+                        fence: Box::new(fence),
+                    };
+                },
+                Err(error) => {
+                    let _ = params.event_tx.send(EngineRunEvent::StreamError {
+                        message: format!("suspension fence was not committed: {error}"),
+                    });
+                },
+            }
         }
     }
     if let Err(error) = params.writer.close().await {

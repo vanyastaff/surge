@@ -1011,6 +1011,15 @@ impl Engine {
             return Err(EngineError::RunAlreadyActive(run_id));
         }
 
+        // Historical suspension fences may predate complete MCP ownership checks.
+        // Validate current evidence before changing registry state or admitting effects.
+        if let Some(diagnostic) =
+            super::writer_coverage::inspect_mcp_cleanup(&self.storage, run_id).await?
+        {
+            tracing::warn!(%run_id, %diagnostic, "resume refused: prior MCP writer cleanup is unconfirmed");
+            return Err(EngineError::WorkItemRejected(diagnostic));
+        }
+
         // Task 12 M3 review, BLOCKING #3: a parked run's registry row
         // (`status = 'parked'`, `wake_at` = the original park time) must
         // not survive unchanged into this resumed execution — otherwise it
