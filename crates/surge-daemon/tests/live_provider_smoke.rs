@@ -180,7 +180,7 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     let registry = Arc::new(ProfileRegistry::new(
         DiskProfileSet::scan(&profiles).unwrap(),
     ));
-    seed_catalog_baseline(&worktree, &registry);
+    seed_catalog_baseline(&worktree, &registry, &config);
     git(&repo, &["add", "surge.toml"]);
     git(
         &repo,
@@ -197,13 +197,26 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     (worktree, config, registry)
 }
 
-fn seed_catalog_baseline(worktree: &Path, registry: &ProfileRegistry) {
+fn seed_catalog_baseline(
+    worktree: &Path,
+    registry: &ProfileRegistry,
+    config: &surge_core::SurgeConfig,
+) {
+    let agents = surge_acp::Registry::for_run(config);
+    let mut unavailable = std::collections::BTreeMap::new();
+    for runtime in surge_orchestrator::profile_loader::catalog_runtimes(registry) {
+        if let Some(entry) = agents.find_normalized(&runtime)
+            && let Err(error) = surge_acp::agent_env::resolve(&entry.id, &entry.env)
+        {
+            unavailable.insert(runtime, format!("not configured: {error}"));
+        }
+    }
     // Engine always seeds this catalog; commit its exact deterministic contents
     // before the provider starts so the checkout oracle allows no new files.
     std::fs::create_dir(worktree.join(".surge")).unwrap();
     std::fs::write(
         worktree.join(".surge/profile_catalog.md"),
-        surge_orchestrator::profile_loader::render_profile_catalog(registry),
+        surge_orchestrator::profile_loader::render_profile_catalog_with(registry, &unavailable),
     )
     .unwrap();
     git(worktree, &["add", ".surge/profile_catalog.md"]);
@@ -234,6 +247,9 @@ fn graph() -> Graph {
         unreachable!()
     };
     agent.profile = "live-smoke@1.0".parse().unwrap();
+    // The transport smoke is fully specified by its system prompt, without
+    // the example workflow's required initial-prompt artifact.
+    agent.bindings.clear();
     agent.approvals_override = Some(
         serde_json::from_value(serde_json::json!({
             "policy":"on-request", "elevation":true,

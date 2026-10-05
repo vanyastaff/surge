@@ -532,6 +532,22 @@ mod tests {
         }
     }
 
+    async fn create_fixture_run(
+        storage: &Arc<Storage>,
+        run_id: RunId,
+        project: impl AsRef<std::path::Path>,
+    ) {
+        storage
+            .create_run(run_id, project, None)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+    }
+
+    /// The initial writer returned by `create_run` must be closed before parking;
+    /// dropping it only requests actor shutdown and retains ownership until exit.
     /// Write a `RunParked` event to `run_id`'s own log and, mirroring the
     /// real `run_task.rs::parked` writer, set the matching registry status
     /// and `wake_at` — the two writes `due_parked` and `parked_worktree`
@@ -565,7 +581,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         let real_worktree = tmp.path().join("actual-worktree");
         std::fs::create_dir_all(&real_worktree).unwrap();
         park(&storage, run_id, &real_worktree, NOW - 1_000).await;
@@ -594,7 +610,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         let real_worktree = tmp.path().join("actual-worktree");
         std::fs::create_dir_all(&real_worktree).unwrap();
         park(&storage, run_id, &real_worktree, NOW + 3_600_000).await;
@@ -672,10 +688,7 @@ mod tests {
         else {
             panic!("task start did not reserve an attempt")
         };
-        storage
-            .create_run(attempt.run, project.path(), None)
-            .await
-            .unwrap();
+        create_fixture_run(&storage, attempt.run, project.path()).await;
         storage
             .work_items()
             .settle(
@@ -726,7 +739,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         let gone_worktree = tmp.path().join("never-created");
         park(&storage, run_id, &gone_worktree, NOW - 1_000).await;
 
@@ -754,7 +767,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         // Registry says Parked and due, but the run's own log never wrote a
         // RunParked event at all (e.g. a corrupted/truncated log) — the
         // legacy-path equivalent of "we have nowhere to resume into".
@@ -780,17 +793,14 @@ mod tests {
         let mut due_ids = Vec::new();
         for i in 0..3 {
             let run_id = RunId::new();
-            storage.create_run(run_id, "/proj", None).await.unwrap();
+            create_fixture_run(&storage, run_id, "/proj").await;
             let wt = tmp.path().join(format!("due-{i}"));
             std::fs::create_dir_all(&wt).unwrap();
             park(&storage, run_id, &wt, NOW - 1_000).await;
             due_ids.push(run_id);
         }
         let not_due_run = RunId::new();
-        storage
-            .create_run(not_due_run, "/proj", None)
-            .await
-            .unwrap();
+        create_fixture_run(&storage, not_due_run, "/proj").await;
         let not_due_wt = tmp.path().join("not-due");
         std::fs::create_dir_all(&not_due_wt).unwrap();
         park(&storage, not_due_run, &not_due_wt, NOW + 60_000).await;
@@ -840,7 +850,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         let wt = tmp.path().join("actual-worktree");
         std::fs::create_dir_all(&wt).unwrap();
 
@@ -875,7 +885,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         let wt = tmp.path().join("actual-worktree");
         std::fs::create_dir_all(&wt).unwrap();
         park(&storage, run_id, &wt, NOW - 1_000).await;
@@ -900,7 +910,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = Storage::open(tmp.path()).await.unwrap();
         let run_id = RunId::new();
-        storage.create_run(run_id, "/proj", None).await.unwrap();
+        create_fixture_run(&storage, run_id, "/proj").await;
         let wt = tmp.path().join("actual-worktree");
         std::fs::create_dir_all(&wt).unwrap();
         park(&storage, run_id, &wt, NOW - 2_000).await;

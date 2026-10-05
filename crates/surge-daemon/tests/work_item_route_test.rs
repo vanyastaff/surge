@@ -2309,6 +2309,12 @@ async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: boo
         return;
     }
     conn.execute_batch("CREATE TRIGGER fixture_no_continue BEFORE INSERT ON events WHEN NEW.kind='RunContinued' BEGIN SELECT RAISE(ABORT,'fixture rejected control acknowledgement'); END;").unwrap();
+    // The original child was killed and reaped above. Its stale socket must
+    // not satisfy the new host's filesystem readiness check before it binds.
+    let stale_socket = home.path().join("cold.sock");
+    if stale_socket.exists() {
+        std::fs::remove_file(&stale_socket).unwrap();
+    }
     let bridge = Arc::new(wire_bridge::WireBridge {
         bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
         flags: commit_wire_flags(home.path()),
