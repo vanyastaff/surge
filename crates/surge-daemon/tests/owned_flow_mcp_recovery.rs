@@ -152,7 +152,9 @@ fn server(root: &Path, name: &str, recorder: &str) -> McpServerRef {
             ]),
         ),
         Some(vec!["echo".into()]),
-        Duration::from_millis(275),
+        // The handshake shares this deadline and includes interpreter startup,
+        // which hosted macOS runners can stretch past a few hundred ms.
+        Duration::from_secs(1),
         false,
     )
     .with_sandbox(Some(surge_core::sandbox::SandboxMode::WorkspaceWrite))
@@ -454,7 +456,7 @@ async fn host_probe(root: &Path, phase: &str) {
         let delay = if phase == "legacy-deadline-positive" {
             "0.1"
         } else {
-            "0.4"
+            "1.5"
         };
         let script = CHILD.replace(
             "    elif method=='tools/list':",
@@ -1075,7 +1077,7 @@ async fn legacy_global_policy_references_survive_actual_start_and_resume() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_engine_catalog_enforces_actual_configured_275ms_deadline() {
+async fn legacy_engine_catalog_enforces_actual_configured_deadline() {
     for (mode, succeeds) in [
         ("legacy-deadline-positive", true),
         ("legacy-deadline-negative", false),
@@ -1161,7 +1163,7 @@ fn verify_actual_transport(root: &Path, accepted: &Value) {
     );
     assert_eq!(
         accepted["manifest"]["mcp"]["entries"][0]["call_timeout"],
-        "275ms"
+        "1s"
     );
     assert_eq!(
         accepted["manifest"]["mcp"]["entries"][0]["restart_on_crash"],

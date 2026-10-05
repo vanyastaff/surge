@@ -90,13 +90,15 @@ async fn assert_cold_start_is_not_catalog_evidence() {
 #[tokio::test]
 async fn actual_catalog_deadline_spans_pages_and_call_timeout_remains_exact() {
     assert_cold_start_is_not_catalog_evidence().await;
-    for (budget, succeeds) in [(120, false), (500, true)] {
+    // Each page takes 250 ms: separate per-page deadlines would fit 400 ms, the
+    // shared one cannot, and page two still arrives ~150 ms before it expires.
+    for (budget, succeeds) in [(400, false), (1000, true)] {
         let mut fixture = delayed_catalog_fixture();
         let script = fixture.dir.path().join("child.py");
         let original = std::fs::read_to_string(&script).unwrap();
         std::fs::write(&script, original.replace(
             "    if method == 'initialize':",
-            "    if method == 'tools/list':\n        import time; time.sleep(0.08)\n    elif method == 'tools/call':\n        import time; time.sleep(0.2)\n    if method == 'initialize':",
+            "    if method == 'tools/list':\n        import time; time.sleep(0.25)\n    elif method == 'tools/call':\n        import time; time.sleep(0.6)\n    if method == 'initialize':",
         )).unwrap();
         let McpTransportConfig::Stdio { env, .. } = &mut fixture.config.transport else {
             panic!("stdio fixture");
