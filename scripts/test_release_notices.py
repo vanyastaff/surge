@@ -33,6 +33,37 @@ class NoticeTests(unittest.TestCase):
         self.assertEqual([n["path"] for n in result], ["LICENSE", "vendor/lib/COPYING"])
         self.assertEqual(result[0]["text"].encode(), source)
 
+    def test_literal_native_copyright_preserves_full_adjacent_context(self):
+        source = b'/* permission and disclaimer */\nconst char *s = "Copyright 1995-2024 Authors";\n'
+        result = notices.native_source_comments(source, "vendor/deflate.c")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"].encode(), source)
+        self.assertEqual((result[0]["byte_start"], result[0]["byte_end"]), (0, len(source)))
+        for path in ["vendor/version.rc", "cmake/CMakeLists.txt", "cmake/rules.cmake"]:
+            with self.subTest(path=path):
+                result = notices.native_source_comments(b'LegalCopyright "Authors"\n', path)
+                self.assertEqual(result[0]["text"], 'LegalCopyright "Authors"\n')
+
+    def test_vendor_mapping_requires_exact_inventory_recipe_and_linkage(self):
+        row = {"id": "demo", "crate_sha256": "crate", "notice_sources": [{"path": "LICENSE", "sha256": "text", "text": "terms"}]}
+        inventory = [{k: v for k, v in n.items() if k != "text"} for n in row["notice_sources"]]
+        review = {"package_name": "demo", "package_version": "1", "target": "target", "origin_kind": "crate-vendor",
+                  "crate_sha256": "crate", "notice_inventory_sha256": notices.digest(notices.canonical(inventory).encode()),
+                  "build_recipe_sha256": "recipe", "libraries": ["native"]}
+        (self.root / "native-reviewed.json").write_text(json.dumps({"reviews": [review]}))
+        data = {"target": "target", "metadata_document": {"packages": [{"id": "demo", "name": "demo", "version": "1", "manifest_path": "/src/demo/Cargo.toml"}]},
+                "components": [{"package_id": "demo", "linked_libs": ["static=native"], "origin": {"kind": "crate-vendor", "version": "1", "source": "registry+https://github.com/rust-lang/crates.io-index", "root": "/src/demo", "build_recipe": {"path": "/src/demo/build.rs", "sha256": "recipe"}}}]}
+        with patch.object(notices, "SUPPLEMENTS", self.root), patch.object(notices, "runtime_mapping_gap", return_value=None):
+            self.assertEqual(notices.native_mapping_gaps(data, [row]), [])
+            for key in ["sha256", "path"]:
+                with self.subTest(key=key):
+                    original = data["components"][0]["origin"]["build_recipe"][key]
+                    data["components"][0]["origin"]["build_recipe"][key] = "tampered"
+                    self.assertTrue(notices.native_mapping_gaps(data, [row]))
+                    data["components"][0]["origin"]["build_recipe"][key] = original
+            row["notice_sources"][0]["sha256"] = "tampered"
+            self.assertTrue(notices.native_mapping_gaps(data, [row]))
+
     def test_mutated_crate_fails_before_source_selection(self):
         path, checksum = self.crate([("LICENSE", b"terms")])
         path.write_bytes(path.read_bytes() + b"tampered")

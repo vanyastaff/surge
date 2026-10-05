@@ -73,7 +73,7 @@ NATIVE_PACKAGES = {"libgit2-sys", "libssh2-sys", "ring", "psm", "libsqlite3-sys"
 
 def native_source_comments(data, path):
     """Preserve complete comment runs; offsets refer to authenticated original bytes."""
-    if PurePosixPath(path).suffix not in (".c", ".h", ".S", ".s", ".asm", ".m", ".rs", ".pl"):
+    if PurePosixPath(path).suffix not in (".c", ".h", ".S", ".s", ".asm", ".m", ".rs", ".pl", ".cc", ".cpp", ".inc", ".rc", ".cmake") and PurePosixPath(path).name != "CMakeLists.txt":
         return []
     marker = re.compile(rb"/\*|(?m:^[ \t]*(?://|#|@|;))")
     line_marker = re.compile(rb"[ \t]*(?://|#|@|;)")
@@ -104,6 +104,12 @@ def native_source_comments(data, path):
             groups.append((start, end))
     ranges = [(start, end) for start, end in groups
               if re.search(rb"(?i)copyright|public domain|permission is hereby|redistribution|licen[cs]e|SPDX", data[start:end])]
+    # Literal declarations outside comments may carry redistributable notices.
+    # Preserve the entire authenticated file to retain every adjacent clause.
+    unmatched = [m for m in re.finditer(rb"(?i)copyright|LegalCopyright", data)
+                 if not any(start <= m.start() < end for start, end in ranges)]
+    if unmatched:
+        ranges = [(0, len(data))]
     result = []
     member_hash = digest(data)
     for start, end in ranges:
@@ -224,13 +230,14 @@ def runtime_mapping_gap(runtime):
     return "Rust runtime notice/toolchain commit lacks exact reviewed source mapping"
 
 
-def native_mapping_gaps(data):
+def native_mapping_gaps(data, package_rows=()):
     """Report exact selected origins not independently reviewed, never blanket completion."""
     gaps = []
     reviews = strict_json((SUPPLEMENTS / "native-reviewed.json").read_text())["reviews"]
     metadata = {p["id"]: p for p in data.get("metadata_document", {}).get("packages", [])}
     lock = tomllib.loads(Path("Cargo.lock").read_text())
     checksums = {(p["name"], p["version"]): p.get("checksum") for p in lock["package"]}
+    rows = {p["id"]: p for p in package_rows}
     for component in data.get("components", []):
         static = [lib for lib in component.get("linked_libs", []) if lib.startswith("static=")]
         if not static:
@@ -242,13 +249,26 @@ def native_mapping_gaps(data):
         approved = False
         if len(candidates) == 1:
             review = candidates[0]
-            approved = (checksums.get((review["package_name"], review["package_version"])) == review["crate_sha256"]
+            if review["origin_kind"] == "crate-vendor":
+                row = rows.get(component["package_id"], {})
+                inventory = [{k: v for k, v in n.items() if k != "text"} for n in row.get("notice_sources", [])]
+                approved = (row.get("crate_sha256") == review["crate_sha256"]
+                            and digest(canonical(inventory).encode()) == review["notice_inventory_sha256"]
+                            and origin.get("kind") == "crate-vendor"
+                            and origin.get("version") == review["package_version"]
+                            and origin.get("source") == "registry+https://github.com/rust-lang/crates.io-index"
+                            and origin.get("build_recipe", {}).get("sha256") == review["build_recipe_sha256"]
+                            and {lib.split("=", 1)[1] for lib in static} == set(review["libraries"])
+                            and origin.get("root") == str(PurePosixPath(package.get("manifest_path", "")).parent)
+                            and origin.get("build_recipe", {}).get("path") == str(PurePosixPath(origin["root"]) / "build.rs"))
+            else:
+                approved = (checksums.get((review["package_name"], review["package_version"])) == review["crate_sha256"]
                         and origin.get("kind") == review["origin_kind"] and origin.get("version") == review["origin_version"]
                         and {lib.split("=", 1)[1] for lib in static} == set(review["libraries"])
                         and set(review["proof_sha256"]) <= {f["sha256"] for f in origin.get("proof_files", [])}
                         and set(review["license_sha256"]) == {f["sha256"] for f in origin.get("licenses", [])}
                         and {a["library"]: a["sha256"] for a in component.get("archives", [])} == review["archive_sha256"])
-            if approved:
+            if approved and review["origin_kind"] == "system-package":
                 for record in origin.get("proof_files", []) + origin.get("licenses", []) + component.get("archives", []):
                     if not PurePosixPath(record["path"]).is_relative_to(PurePosixPath(origin["root"])):
                         raise ValueError("Reviewed native source evidence escapes its root")
@@ -264,7 +284,7 @@ def native_mapping_gaps(data):
     return gaps
 
 
-def native_coverage(path, target, lock_hash, package_ids):
+def native_coverage(path, target, lock_hash, package_ids, package_rows=()):
     """Native receipts require independent reviewed mappings; hashes alone are not provenance."""
     if path is None:
         return None, ["native production linkage receipt missing"]
@@ -284,6 +304,8 @@ def native_coverage(path, target, lock_hash, package_ids):
         if key not in builds or component["linked_libs"] != builds[key].get("linked_libs", []):
             raise ValueError("Native component does not match actual selected build event")
         verify_file(component["build_output"])
+        if component.get("origin", {}).get("kind") == "crate-vendor":
+            verify_file(component["origin"]["build_recipe"])
         for record in component.get("archives", []):
             verify_file(record)
             covered.add((key, record["library"]))
@@ -311,7 +333,7 @@ def native_coverage(path, target, lock_hash, package_ids):
         if digest(runtime["copyright"]["text"].encode()) != runtime["copyright"]["sha256"]:
             raise ValueError("Rust runtime notice text differs from source")
     # Do not accept a user-set complete boolean as independent native source review.
-    gaps = native_mapping_gaps(data)
+    gaps = native_mapping_gaps(data, package_rows)
     return {"path": str(path.resolve()), "sha256": digest(path.read_bytes()), "receipt": data}, gaps
 
 
@@ -347,7 +369,7 @@ def collect(target, output, native=None, inventory=False):
         inventory_rows.append(row)
         gaps.extend(f"{package['name']}@{package['version']}: {g}" for g in package_gaps)
         texts.extend(f"\n===== {package['name']} {package['version']} / {n['path']} =====\n{n['text']}\n" for n in notices)
-    native_record, native_gaps = native_coverage(native, target, digest(lock_bytes), {p["id"] for p, _ in packages})
+    native_record, native_gaps = native_coverage(native, target, digest(lock_bytes), {p["id"] for p, _ in packages}, inventory_rows)
     gaps.extend(native_gaps)
     if native_record:
         for component in native_record["receipt"].get("components", []):
@@ -459,7 +481,7 @@ def verify_embedded_receipt(target, data, text, binary_hashes=None, *, expected_
         covered.update((key, archive["library"]) for archive in component.get("archives", []))
     if observed != covered:
         raise ValueError("Portable native static coverage mismatch")
-    mapping_gaps = native_mapping_gaps(native["receipt"])
+    mapping_gaps = native_mapping_gaps(native["receipt"], coverage["packages"])
     if mapping_gaps:
         raise ValueError("Unresolved native mappings: " + "; ".join(mapping_gaps))
     return data
