@@ -63,7 +63,8 @@ impl ColdHost {
         let started = tokio::time::Instant::now();
         loop {
             if started.elapsed() >= timeout {
-                return Err(self.cleanup_failure("cold host readiness timeout"));
+                let failure = self.cleanup_failure("cold host readiness timeout");
+                return Err(format!("{failure}{}", self.stderr_excerpt()));
             }
             match read_readiness(&self.ready_file) {
                 Ok(Some(marker)) => return Ok(marker),
@@ -76,7 +77,10 @@ impl ColdHost {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     self.child.take(); // try_wait has already reaped this exact child.
-                    return Err(format!("cold host exited before readiness: {status}"));
+                    return Err(format!(
+                        "cold host exited before readiness: {status}{}",
+                        self.stderr_excerpt()
+                    ));
                 },
                 Ok(None) => {},
                 Err(_) => return Err(self.cleanup_failure("cold host status inspection failed")),
@@ -104,6 +108,38 @@ impl ColdHost {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+    /// Bounded excerpt of the child's panic block and WARN/ERROR lines.
+    /// CI logs otherwise show only the capture path, which is gone with the runner.
+    fn stderr_excerpt(&self) -> String {
+        const TAIL: usize = 256 * 1024;
+        const PANIC_CONTEXT: usize = 6;
+        const MAX_LINES: usize = 24;
+        let Ok(bytes) = std::fs::read(&self.stderr_path) else {
+            return "; stderr capture unreadable".into();
+        };
+        let text = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(TAIL)..]);
+        let mut excerpt = Vec::new();
+        let mut panic_lines = 0;
+        for line in text.lines() {
+            if line.contains(" panicked at ") {
+                panic_lines = PANIC_CONTEXT + 1;
+            }
+            if panic_lines > 0 || line.contains(" WARN ") || line.contains(" ERROR ") {
+                excerpt.push(line);
+            }
+            panic_lines = panic_lines.saturating_sub(1);
+        }
+        let skipped = excerpt.len().saturating_sub(MAX_LINES);
+        let mut rendered = String::from("; stderr excerpt:");
+        if skipped > 0 {
+            rendered.push_str(&format!("\n    ... {skipped} earlier lines"));
+        }
+        for line in &excerpt[skipped..] {
+            rendered.push_str("\n    ");
+            rendered.push_str(line);
+        }
+        rendered
     }
     fn cleanup_failure(&mut self, reason: &str) -> String {
         if self.stop_and_wait().is_err() {
@@ -258,6 +294,7 @@ mod tests {
         match std::env::var("SURGE_COLD_HELPER_MODE").unwrap().as_str() {
             "ready" => std::fs::write(ready, b"{\"verification\":\"owned-child\"}").unwrap(),
             "exit" => std::process::exit(23),
+            "panic" => panic!("probe-visible child failure"),
             "exit99" => std::process::exit(99),
             _ => {},
         }
@@ -384,5 +421,17 @@ mod tests {
                 .contains("23")
         );
         assert_eq!(exited.pid(), None);
+    }
+    #[tokio::test]
+    async fn early_exit_error_carries_the_child_panic_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut panicked = spawn(directory.path(), "panic");
+        let error = panicked
+            .wait_ready(Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(error.contains("stderr excerpt"), "{error}");
+        assert!(error.contains("probe-visible child failure"), "{error}");
+        assert_eq!(panicked.pid(), None);
     }
 }

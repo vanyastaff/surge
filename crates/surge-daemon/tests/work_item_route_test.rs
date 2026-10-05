@@ -2476,7 +2476,8 @@ async fn cold_committed_fixture(after_route: bool, checkpoint_damage: Option<&st
         .env("SURGE_TEST_COMMIT_PROJECT", project.path())
         .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        // Inherited so nextest shows a child panic; the probe emits no tracing output.
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .unwrap();
     let ready = tokio::time::timeout(Duration::from_secs(8), async {
