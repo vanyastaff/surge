@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "reviews": [
+    {
+      "package_name": "openssl-sys",
+      "package_version": "0.9.112",
+      "crate_sha256": "57d55af3b3e226502be1526dfdba67ab0e9c96fc293004e79576b2b9edb0dbdb",
+      "origin_kind": "system-package",
+      "origin_version": "3.6.4",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "crypto",
+        "ssl"
+      ],
+      "proof_sha256": [
+        "2dd65a99ef6eb39ada27244df6b90bf2aaae68fb1198a9b80b499b5dcf40465c",
+        "c1941c5dbb9aabf9c02105918290918c1ba457f7c50e89ff7defa11431b58575"
+      ],
+      "license_sha256": [
+        "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+      ],
+      "archive_sha256": {
+        "ssl": "eaf963fdbd83356365fb4de2dc2eeb586d31948638fc2adf57a3234556d052bf",
+        "crypto": "6e6288edfc69717ab49b490ffc9584fe8f539175ec674ef86c00e1a694f9910f"
+      },
+      "evidence": "docs/release-evidence/2026-10-05/agents/surge-release-r06-openssl-license.md",
+      "scope": "Actual OpenSSL3.6.4 Homebrew arm64 package; complete official Apache terms match, upstream no NOTICE; no generic version allowance."
+    }
+  ]
+}

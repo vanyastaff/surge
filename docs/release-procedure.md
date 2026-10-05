@@ -1,7 +1,8 @@
 # Release and rollback procedure
 
 The 2026-10-05 candidate is NO-GO while productive MCP cold recovery lacks
-complete cleanup evidence and the four-platform native gates remain unverified.
+complete cleanup evidence, redistribution notices remain incomplete, and the
+four-platform native gates remain unverified.
 See [readiness](release-readiness-2026-10-05.md).
 
 The release delivers the CLI and sibling daemon. The optional desktop shell is not
@@ -15,7 +16,7 @@ artifacts or running the branch workflow does not authorize a tag or release.
 2. Run locked build, format, strict lint, nextest, doctests, deterministic ignored
    integration and dependency checks described in [Development](development.md).
    Packaging scripts require Python 3.11+. Run
-   `python3.12 -m unittest discover -s scripts -p test_release.py`.
+   `python3.12 -m unittest discover -s scripts -p 'test_release*.py'`.
 3. Build both executables and test the extracted archive with isolated `SURGE_HOME`
    and a temporary project: both `--version`, initialization, project description,
    terminal-only flow and daemon start/run/stop. Use a clean committed temporary
@@ -37,18 +38,33 @@ artifacts or running the branch workflow does not authorize a tag or release.
 For an Apple Silicon candidate, use the same linkage and minimum OS policy as CI:
 
 ```sh
-OPENSSL_STATIC=1 MACOSX_DEPLOYMENT_TARGET=15.0 cargo build --locked --release -p surge-cli -p surge-daemon
-otool -L target/release/surge
-otool -L target/release/surge-daemon
-python3.12 scripts/release.py package --target aarch64-apple-darwin --bin-dir target/release --output target/release-readiness
+python3.12 scripts/release_notices.py --target aarch64-apple-darwin --output-dir target/release-proof --graph-only
+OPENSSL_STATIC=1 MACOSX_DEPLOYMENT_TARGET=15.0 python3.12 scripts/release_native.py build --native-host --target aarch64-apple-darwin --metadata target/release-proof/production-metadata.json --dependency-ids target/release-proof/production-dependency-ids.json --output target/release-proof/build-messages.jsonl
+python3.12 scripts/release_native.py produce --target aarch64-apple-darwin --metadata target/release-proof/production-metadata.json --dependency-ids target/release-proof/production-dependency-ids.json --build-messages target/release-proof/build-messages.jsonl --bin-dir target/release --output target/release-proof/native-provenance.json --strip-tool strip
+python3.12 scripts/release_notices.py --target aarch64-apple-darwin --output-dir target/release-proof/notices --native-provenance target/release-proof/native-provenance.json
+python3.12 scripts/release.py package --target aarch64-apple-darwin --bin-dir target/release --notices-dir target/release-proof/notices --output target/release-candidate
 ```
 
-Each dependency path must begin with `/usr/lib/` or `/System/Library/`. Confirm
+Use the release toolchain Rust 1.98.1, whose standard-library notices are pinned
+in `scripts/notice-sources/runtime-reviewed.json`; the workspace MSRV remains 1.96.
+A toolchain upgrade requires reviewing its runtime notice inventory.
+Run these steps from committed source, without edits during the build. The native
+producer records the Cargo stream, selected inputs, linkage and binary hashes
+before and after stripping. Each macOS dependency path must begin with `/usr/lib/`
+or `/System/Library/`. Confirm
 minimum OS 15.0 in `otool -l` for both binaries. A source build without these
 settings can link Homebrew OpenSSL and is not a self-contained archive candidate.
 Use the appropriate native target on other platforms; no cross-platform claim
 follows from these local commands. Run the isolated extracted-archive scenario
 recorded in the [evidence index](release-evidence/2026-10-05/README.md).
+
+The complete-notice check currently refuses unresolved source obligations. To
+inspect them, add `--inventory-only` to the notice command and use a separate
+output directory; diagnostic receipts are never packageable. New archives require
+a sixth member, `THIRD_PARTY_NOTICES.txt`, and a paired target provenance JSON.
+Collection requires all four archive/receipt pairs and hashes all eight assets.
+The historical five-member ARM64 archive remains review evidence; it does not
+satisfy the new notice contract and must not be overwritten.
 
 ## Back up before upgrading
 

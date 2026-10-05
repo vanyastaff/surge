@@ -14,7 +14,8 @@ Existing competitive-waves accepted requirements remain open; no manifest row wa
 retired. Source checkpoints so far: `e4797a2` runtime/dependency closure and
 `f1bb266` CI/documentation, `0e06bf1` macOS packaging, `cd86349` MCP safety,
 `8c4b45a` CLI outcomes and `3136b82` owned fixture closure. Native candidate source
-is `3136b82`; later commits contain only report/evidence documents. Artifact identity is recorded in
+is `3136b82`; the historical candidate precedes the new notice/provenance packaging
+contract. Artifact identity is recorded in
 [the evidence index](release-evidence/2026-10-05/README.md).
 
 ## Task ledger
@@ -40,7 +41,8 @@ is `3136b82`; later commits contain only report/evidence documents. Artifact ide
 | Productive MCP cold recovery | P0 | R15/R32 | Complete containment/effect proof | Original accepted productive and downstream recovery tests pass | OPEN; NO-GO; ten acceptance failures retained |
 | Release workflow gates | P0 | R28/R19 | Same revision CI | Strict features/security/tests; native archive linkage | actionlint PASS; remote native execution unverified |
 | macOS archive OpenSSL | P1 | R19 | Native release build | Static OpenSSL; no non-system dylib path; target15 | ARM64 build/linkage/archive E2E PASS; other runners unverified |
-| Distribution notices | P1 | R06 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | OPEN; OpenSSL terms included, full bundle unverified |
+| Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | OPEN; checksum-bound inventory and native capture implemented; upstream correspondence and native mappings unresolved |
+| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Python 34/34 PASS; real native capture pending |
 | Release/rollback docs | P0 | R30/R31 | Schema and packaging | Full quiescent snapshot; restore-only rollback | Complete; synthetic mechanics drill PASS |
 | Final integrated validation | P0 | Coordinator/R20–24 | Frozen source | Honest build/lint/test/smoke denominators | Frozen clippy/fmt/MSRV/build/smoke PASS; nextest NO-GO |
 | Independent verdict | P0 | R32 | Final evidence | Reviewable GO/NO-GO | Final independent NO-GO; safety/local ARM64 candidate ACCEPTABLE |

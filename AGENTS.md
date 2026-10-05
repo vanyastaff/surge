@@ -64,7 +64,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │   └── rules/
 │       └── base.md
 │
-├── scripts/                        # Release archive packaging and validation
+├── scripts/                        # Release packaging, native provenance and notice validation
 ├── .github/                         # CI workflows
 ├── .worktrees/                      # Local convention for in-progress branches (gitignored)
 └── target/                          # cargo build output (gitignored)

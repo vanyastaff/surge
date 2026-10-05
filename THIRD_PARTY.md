@@ -25,12 +25,28 @@ upstream NOTICE file. This evidence is specific to OpenSSL 3.6.4; a
 changed native-library version requires another source check.
 
 A complete redistribution-notice inventory for the remaining linked Rust
-and native dependencies has not been verified. The archives do not yet
-include a collected per-dependency copyright/license/NOTICE bundle.
+and native dependencies has not been verified. The historical local archive
+does not include a collected per-dependency copyright/license/NOTICE bundle.
 A passing Cargo license-selection gate must not be reported as proof that
 all archive redistribution notices are complete. Before publishing, match
 the actual linked dependency set to its source license and notice files
 and include the required text in each archive.
+
+The release collector reads license and notice bytes from Cargo archives whose
+SHA256 matches `Cargo.lock`. Missing published texts use reviewed immutable
+upstream supplements under `scripts/notice-sources/`. Native capture records the
+successful Cargo JSON stream, selected source inputs, link origins, Rust runtime
+copyright inventory and binary hashes before and after strip. New packaging
+requires complete evidence, a `THIRD_PARTY_NOTICES.txt` archive member and paired
+provenance JSON; diagnostic inventories cannot satisfy that gate.
+Vendored notice files preserve upstream bytes, including whitespace, so their
+recorded hashes can be verified without normalizing source evidence.
+
+The actual macOS ARM64 inventory currently selects 351 registry packages. Published
+`lineark` sources marked dirty, `objc2` licensing explanations and unreviewed
+native source/header mappings remain explicit gaps. Including their available
+texts does not establish completeness. See the
+[release procedure](docs/release-procedure.md) for collection and diagnostics.
 
 ## Accepted licenses
 

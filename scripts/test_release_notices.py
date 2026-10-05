@@ -1,0 +1,159 @@
+"""Independent invalid-input checks for the notice collector."""
+import hashlib
+import io
+import json
+from pathlib import Path
+import tarfile
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import release_notices as notices
+
+
+class NoticeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    def crate(self, entries):
+        path = self.root / "demo-1.0.0.crate"
+        with tarfile.open(path, "w:gz") as archive:
+            for name, data in entries:
+                member = tarfile.TarInfo("demo-1.0.0/" + name)
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_exact_text_and_nested_native_notice_are_preserved(self):
+        source = b"Copyright Example\nMIT permission text  \n"
+        path, checksum = self.crate([("LICENSE", source), ("vendor/lib/COPYING", b"Native terms\n"), ("src/lib.rs", b"code")])
+        result = notices.archive_notices(path, checksum, "demo", "1.0.0")
+        self.assertEqual([n["path"] for n in result], ["LICENSE", "vendor/lib/COPYING"])
+        self.assertEqual(result[0]["text"].encode(), source)
+
+    def test_mutated_crate_fails_before_source_selection(self):
+        path, checksum = self.crate([("LICENSE", b"terms")])
+        path.write_bytes(path.read_bytes() + b"tampered")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            notices.archive_notices(path, checksum, "demo", "1.0.0")
+
+    def test_empty_duplicate_and_traversal_members_fail(self):
+        for entries in [[("LICENSE", b"")], [("LICENSE", b"a"), ("LICENSE", b"b")], [("../LICENSE", b"a")]]:
+            with self.subTest(entries=entries):
+                path, checksum = self.crate(entries)
+                with self.assertRaises(ValueError):
+                    notices.archive_notices(path, checksum, "demo", "1.0.0")
+
+    def test_dirty_supplement_is_authentic_evidence_but_incomplete(self):
+        data = b"Copyright publisher\npermission\n"
+        (self.root / "LICENSE").write_bytes(data)
+        mapping = {"name": "demo", "version": "1", "crate_sha256": "locked", "git_sha": "abc",
+                   "published_vcs_dirty": True, "texts": [{"file": "LICENSE", "upstream_path": "LICENSE",
+                   "url": "https://raw.githubusercontent.com/p/r/abc/LICENSE", "sha256": notices.digest(data)}]}
+        (self.root / "index.json").write_text(json.dumps([mapping]))
+        texts, gaps = notices.supplement_notices({"name": "demo", "version": "1"}, "locked", self.root)
+        self.assertEqual(texts[0]["text"].encode(), data)
+        self.assertEqual(len(gaps), 1)
+        (self.root / "LICENSE").write_text("changed")
+        with self.assertRaisesRegex(ValueError, "Supplement checksum"):
+            notices.supplement_notices({"name": "demo", "version": "1"}, "locked", self.root)
+
+    def test_native_comments_keep_unicode_byte_offsets_and_adjacent_clauses(self):
+        source = "/* Copyright © Owner */\n/* permission paragraph */\n/* THE SOFTWARE IS PROVIDED AS IS */\nint x;".encode()
+        result = notices.native_source_comments(source, "native/file.c")
+        self.assertEqual(len(result), 1)
+        for block in result:
+            self.assertEqual(block["text"].encode(), source[block["byte_start"]:block["byte_end"]])
+        self.assertIn("THE SOFTWARE", result[-1]["text"])
+
+    def test_title_only_runtime_source_cannot_prove_complete_terms(self):
+        source = "Copyright notices for The Rust Standard Library: synthetic fixture"
+        gap = notices.runtime_mapping_gap({"toolchain": {"version": "release: 1.98.1\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985"},
+                    "copyright": {"text": source, "sha256": notices.digest(source.encode())}})
+        self.assertIsNotNone(gap)
+
+    def test_source_file_named_copying_is_not_license_evidence(self):
+        self.assertFalse(notices.is_notice("src/copying.rs"))
+        self.assertTrue(notices.is_notice("LICENSE/APACHE"))
+
+    def test_duplicate_json_keys_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Duplicate JSON"):
+            notices.strict_json('{"complete":false,"complete":true}')
+
+    def test_forged_empty_complete_receipt_is_rejected(self):
+        coverage = {"schema": 1, "target": "aarch64-apple-darwin", "complete": True, "gaps": [],
+                    "cargo_lock_sha256": "lock", "source": {"sha256": "source"}, "packages": []}
+        text = notices.canonical(coverage).encode()
+        data = {"coverage": coverage, "notice_sha256": notices.digest(text), "coverage_sha256": notices.digest(text)}
+        with self.assertRaisesRegex(ValueError, "package coverage"):
+            notices.verify_embedded_receipt("aarch64-apple-darwin", data, text,
+                                            expected_lock_sha256="lock", expected_source_sha256="source")
+
+    def test_unknown_supplement_cannot_be_invented(self):
+        (self.root / "index.json").write_text("[]")
+        with self.assertRaisesRegex(ValueError, "Unknown supplemental"):
+            notices.supplement_notices({"name": "missing", "version": "1"}, "checksum", self.root)
+
+    def test_incomplete_diagnostic_receipt_cannot_be_packaged(self):
+        (self.root / notices.TEXT).write_text("diagnostic")
+        (self.root / notices.RECEIPT).write_text(json.dumps({"coverage": {
+            "schema": 1, "target": "aarch64-apple-darwin", "complete": False, "gaps": ["native missing"]}}))
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            notices.verify_receipt("aarch64-apple-darwin", self.root)
+
+    def test_complete_mini_graph_uses_real_portable_validator(self):
+        # Synthetic graph uses a real complete permission text, not a boolean bypass.
+        permission = Path("LICENSE-MIT").read_text()
+        review = notices.strict_json((notices.SUPPLEMENTS / "runtime-reviewed.json").read_text())["reviews"][0]
+        runtime_text = (notices.SUPPLEMENTS / review["file"]).read_text()
+        runtime_version = f"release: {review['release']}\ncommit-hash: {review['commit']}"
+        native = {"schema": 1, "target": "aarch64-apple-darwin", "cargo_lock": {"sha256": "lock"},
+                  "complete": True, "blockers": [], "components": [],
+                  "binaries": [{"name": name, "after": {"path": "/fixture/" + name, "sha256": notices.digest(name.encode())},
+                                "loader": {"libraries": ["system"]}} for name in ("surge", "surge-daemon")],
+                  "build_messages_document": [{"reason": "compiler-artifact", "target": {"name": name},
+                       "profile": {"test": False}, "executable": "/fixture/" + name} for name in ("surge", "surge-daemon")]
+                       + [{"reason": "build-finished", "success": True}],
+                  "dependency_ids_document": ["registry-demo"],
+                  "metadata_document": {"packages": [{"id": "registry-demo", "source": "registry"}]},
+                  "runtime": {"toolchain": {"version": runtime_version}, "copyright": {"text": runtime_text, "sha256": notices.digest(runtime_text.encode())}}}
+        coverage = {"schema": 1, "target": "aarch64-apple-darwin", "complete": True, "gaps": [],
+                    "cargo_lock_sha256": "lock", "source": {"sha256": "source"},
+                    "packages": [{"id": "registry-demo", "name": "demo", "version": "1",
+                        "crate_sha256": "checksum", "gaps": [], "notice_sources": [{"path": "LICENSE", "text": permission,
+                                                                                 "sha256": notices.digest(permission.encode())}]}],
+                    "native": {"receipt": native}}
+        def receipt():
+            text = (notices.canonical(coverage) + "\n===== demo 1 / LICENSE =====\n" + permission + "\n").encode()
+            return {"coverage": coverage, "notice_sha256": notices.digest(text),
+                    "coverage_sha256": notices.digest(notices.canonical(coverage).encode())}, text
+        def verify(data, text):
+            return notices.verify_embedded_receipt("aarch64-apple-darwin", data, text,
+                  expected_lock_sha256="lock", expected_source_sha256="source", expected_graph_ids={"registry-demo"},
+                  expected_package_checksums={("demo", "1"): "checksum"})
+        data, text = receipt()
+        self.assertIs(verify(data, text), data)
+        native["build_messages_document"].insert(0, {"reason": "build-script-executed", "package_id": "registry-demo", "linked_libs": ["static=undispositioned"]})
+        native["components"] = [{"package_id": "registry-demo", "linked_libs": ["static=undispositioned"],
+                                 "archives": [{"library": "undispositioned"}],
+                                 "origin": {"kind": "crate-vendor", "root": "/fixture"}}]
+        data, text = receipt()
+        with self.assertRaisesRegex(ValueError, "registry-demo / static=undispositioned"):
+            verify(data, text)
+
+    def test_native_unknown_static_library_fails(self):
+        events = [{"reason": "build-script-executed", "package_id": "pkg", "linked_libs": ["static=unknown"]},
+                  {"reason": "build-finished", "success": True}]
+        stream = self.root / "messages.jsonl"
+        stream.write_text("\n".join(json.dumps(e) for e in events))
+        native = self.root / "native.json"
+        native.write_text(json.dumps({"schema": 1, "target": "aarch64-apple-darwin", "cargo_lock": {"sha256": "lock"},
+              "build_messages": {"path": str(stream), "sha256": notices.digest(stream.read_bytes())}, "components": []}))
+        with self.assertRaisesRegex(ValueError, "static-library coverage"):
+            notices.native_coverage(native, "aarch64-apple-darwin", "lock", {"pkg"})
+
+
+if __name__ == "__main__":
+    unittest.main()

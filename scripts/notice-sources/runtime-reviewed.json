@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "reviews": [
+    {
+      "release": "1.98.1",
+      "commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+      "file": "rust-1.98.1-COPYRIGHT-library.html",
+      "sha256": "68129500b616d5838629e68f55ff3aed5e096dacf60ce9eb41bbe599a563afa6",
+      "origin": "installed rustup stable toolchain COPYRIGHT-library.html verified with rustc -vV",
+      "scope": "Full Rust std in-tree and out-of-tree notice inventory for exact compiler release/commit"
+    }
+  ]
+}
