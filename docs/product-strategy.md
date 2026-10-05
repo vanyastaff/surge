@@ -42,14 +42,38 @@ older text below disagree, this section wins.
   desktop keeps the Mac awake and shows it.
 - **Fully open source.** MIT/Apache-2.0, no telemetry, no paid tier; everything
   valuable lives in the open core.
-- **First priority once the release is unblocked: prove the promise.** Run a real
-  multi-milestone project from idea to working app through the desktop, fix
-  every failure it finds, and make that recording the main demo (replacing the
-  single-binary pomodoro run in the README).
+- **First priority once the release is unblocked: prove the promise.** Run real
+  multi-stage projects through the desktop and fix every failure they find. No
+  curated demo recording is kept in the repository.
+- **A project has no finale; it has stages.** Every stage the user asked for is
+  driven to completion. New ideas can be added at any time and are completed the
+  same way.
+- **New idea during a stage:** the planner proposes where it goes in the roadmap
+  (a task in a stage or a new stage); the user approves with one action and the
+  current stage keeps running. An urgent bug takes the same path but may be
+  proposed first in the current stage. Feedback on a finished stage is a new
+  idea too.
+- **End of a stage:** Surge continues to the next stage and notifies the user
+  with a short report and a "run it" action. No acceptance gate by default.
+- **A project opens on a dashboard:** "needs your decision" first, then stages
+  with progress, recent activity, "add an idea" and "run the app". The
+  conversation is reached from the dashboard.
+- **Agent selection is automatic within user limits.** Surge detects installed
+  agents and, where available, their models, limits and quality ratings, then
+  assigns stages itself. Before approving a flow the user can change the
+  assignment or ask for a revision. Providers or individual models can be
+  disabled entirely, and allowed models, effort levels and thinking modes
+  restricted. These limits constrain the planner and are validated at flow
+  load, not only displayed. Ratings ship as registry data
+  ([ADR-0019](adr/0019-providers-are-registry-data.md)) refreshed on the user's
+  request; Surge never silently fetches third-party sites.
 
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
-the notice; first-party vendor tools may absorb "finishing projects", which
-would erode the differentiation (see revisit triggers below).
+the notice; without stage gates a defect in one stage can surface after the
+next stage builds on it; benchmark ratings age and may not reflect a given
+project (local per-run history can complement them later, with no telemetry);
+first-party vendor tools may absorb "finishing projects", which would erode the
+differentiation (see revisit triggers below).
 
 ## What the research established
 
