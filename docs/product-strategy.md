@@ -28,7 +28,8 @@ Recorded from a product interview with the maintainer. Where this section and
 older text below disagree, this section wins.
 
 - **Audience: people and developers.** Plain language by default, technical
-  detail on request. Developers keep a complete CLI.
+  detail on request. The desktop is the primary interface; the CLI serves
+  automation and debugging.
 - **First contact: the macOS desktop app** with the daemon inside. The CLI and
   Telegram stay first-class, but the release is judged by the desktop path.
 - **The promise: large projects get finished.** Verification, the task ledger
@@ -187,6 +188,14 @@ older text below disagree, this section wins.
   writes the tests. The method is one question in the wizard's agents-and-flow
   step, with a default proposed per project type.
 
+- **The CLI is for automation and debugging** (start, status, diagnostics,
+  traces, replay); the desktop is the primary interface.
+- **Run history is a desktop timeline** with "go back here" on each step and a
+  revised requirement, the same mechanism as stop-and-restart.
+- **Surge's MCP surface grows with the desktop.** Every v1 feature (ideas,
+  approvals, merges, Hub) is also available through `surge mcp serve`; writes
+  stay behind `--allow-write`.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
@@ -210,7 +219,9 @@ stacks where a fix at the bottom shakes everything above; an agent can
 misread a human change while resolving a conflict; dozens of PRs per stage add
 noise to a team's GitHub; test-only verification can pass a feature that does
 not work, especially UI; without TDD the implementer writes tests for its own
-code and protection rests on the verifier's coverage check; the v1 cut is sizable new code (`Escalate` and `Rotate` are
+code and protection rests on the verifier's coverage check; terminal-first
+developers may miss a CLI command (partly covered by MCP); the MCP surface is
+one more surface per v1 feature; the v1 cut is sizable new code (`Escalate` and `Rotate` are
 reserved today), so it, not MCP alone, sets the release date; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
