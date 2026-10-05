@@ -94,6 +94,19 @@ older text below disagree, this section wins.
 - **Budgets are off by default** and can be enabled per project or stage in
   settings.
 
+- **Repeated verifier rejection follows a ladder:** retry with a different or
+  stronger allowed model, then the planner splits the task using the
+  verifier's findings, then ask the user. Tasks that do not depend on it keep
+  running. This implements the reserved `ExceededAction::Escalate` behind edge
+  `max_traversals`.
+- **The user can override a rejection** either by accepting as is or by revising
+  the requirement and re-verifying. Accept-as-is is always shown as "accepted by
+  a human", never "verified", and keeps the verifier's findings in the report.
+- **Loop protection is independent of budgets:** a session with no progress
+  (no new events, repeated identical tool calls, or a turn cap) counts as a
+  failed attempt and enters the same ladder. Thresholds default sensibly and
+  are configurable in `surge.toml`.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
@@ -102,7 +115,9 @@ default network access lets an agent fetch anything (accepted for unattended
 runs); command-only agent onboarding may be hard for people without a terminal
 and should be tested with a real user; a switched agent finishes a task in a
 different style; without a default budget an API-key user can overspend, so
-loop protection must not depend on budgets; first-party vendor tools may absorb "finishing projects", which would erode the
+loop protection must not depend on budgets; the
+rejection ladder spends limits on a task that may be badly specified; "accept
+as is" can become a habit; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
 ## What the research established
