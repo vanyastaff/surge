@@ -107,6 +107,15 @@ older text below disagree, this section wins.
   failed attempt and enters the same ladder. Thresholds default sensibly and
   are configurable in `surge.toml`.
 
+- **Several projects run in parallel by priority.** When limits are short, the
+  project higher in a user-ordered list gets the agent; waiting work ages up so
+  lower projects are not starved, and a project blocked on the user holds no
+  agent share.
+- **Each project is its own space.** There is no combined cross-project view;
+  the user switches between projects. The app opens the last project, the
+  switcher badges projects that need a decision, and native notifications come
+  from every project. Fleet is scoped to the current project.
+
 Accepted risks: an agent can repeat a non-idempotent call after a crash despite
 the notice; without stage gates a defect in one stage can surface after the
 next stage builds on it; benchmark ratings age and may not reflect a given
@@ -117,7 +126,9 @@ and should be tested with a real user; a switched agent finishes a task in a
 different style; without a default budget an API-key user can overspend, so
 loop protection must not depend on budgets; the
 rejection ladder spends limits on a task that may be badly specified; "accept
-as is" can become a habit; first-party vendor tools may absorb "finishing projects", which would erode the
+as is" can become a habit; a low-priority project advances slowly until aging
+lifts it; without a combined view, users with many projects rely on badges and
+notifications; first-party vendor tools may absorb "finishing projects", which would erode the
 differentiation (see revisit triggers below).
 
 ## What the research established
