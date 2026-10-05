@@ -1,8 +1,8 @@
 # Release and rollback procedure
 
 The 2026-10-05 candidate is NO-GO while productive MCP cold recovery lacks
-complete cleanup evidence, redistribution notices remain incomplete, and the
-four-platform native gates remain unverified.
+complete cleanup evidence and the four-platform native gates remain unverified.
+Local notice source mappings are reviewed; matching build receipts remain required.
 See [readiness](release-readiness-2026-10-05.md).
 
 The release delivers the CLI and sibling daemon. The optional desktop shell is not
@@ -58,8 +58,8 @@ Use the appropriate native target on other platforms; no cross-platform claim
 follows from these local commands. Run the isolated extracted-archive scenario
 recorded in the [evidence index](release-evidence/2026-10-05/README.md).
 
-The complete-notice check currently refuses unresolved source obligations. To
-inspect them, add `--inventory-only` to the notice command and use a separate
+The complete-notice check refuses missing, stale or unresolved evidence. To
+inspect gaps, add `--inventory-only` to the notice command and use a separate
 output directory; diagnostic receipts are never packageable. New archives require
 a sixth member, `THIRD_PARTY_NOTICES.txt`, and a paired target provenance JSON.
 Collection requires all four archive/receipt pairs and hashes all eight assets.

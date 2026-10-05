@@ -41,8 +41,8 @@ contract. Artifact identity is recorded in
 | Productive MCP cold recovery | P0 | R15/R32 | Complete containment/effect proof | Original accepted productive and downstream recovery tests pass | OPEN; NO-GO; ten acceptance failures retained |
 | Release workflow gates | P0 | R28/R19 | Same revision CI | Strict features/security/tests; native archive linkage | actionlint PASS; remote native execution unverified |
 | macOS archive OpenSSL | P1 | R19 | Native release build | Static OpenSSL; no non-system dylib path; target15 | ARM64 build/linkage/archive E2E PASS; other runners unverified |
-| Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | OPEN; checksum-bound inventory and native capture implemented; upstream correspondence and native mappings unresolved |
-| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Python 34/34 PASS; real native capture pending |
+| Distribution notices | P1 | R06/R19/R32 | Linked dependency inventory | Complete required attribution/NOTICE bundle, not just license selection | Local exact source mappings accepted; final source/binary capture pending; other native platforms unverified |
+| Notice/provenance tooling | P1 | R05/R06/R19/R20/R28 | Exact graph, runtime terms and source inputs | Six-member archives, paired receipts, corruption refusal and immutable source capture | Python 40/40 PASS including correspondence/source binding (73.207s); final native capture and workspace rerun pending |
 | Release/rollback docs | P0 | R30/R31 | Schema and packaging | Full quiescent snapshot; restore-only rollback | Complete; synthetic mechanics drill PASS |
 | Final integrated validation | P0 | Coordinator/R20–24 | Frozen source | Honest build/lint/test/smoke denominators | Frozen clippy/fmt/MSRV/build/smoke PASS; nextest NO-GO |
 | Independent verdict | P0 | R32 | Final evidence | Reviewable GO/NO-GO | Final independent NO-GO; safety/local ARM64 candidate ACCEPTABLE |
@@ -87,9 +87,12 @@ remain unavailable/fail closed; Windows archive smoke does not establish parity.
 Telegram `/run` is not wired; CLI start is documented. Loop Replan and complex
 nested-loop recovery placeholders remain excluded from readiness claims. Desktop
 creation/accessibility issues in role reports are future work outside these archives.
-License selection passes cargo-deny, but full linked dependency attribution/NOTICE
-inventory and archive notice bundle remain unverified; OpenSSL 3.6.4 complete Apache
-terms and attribution were checked in the local archive. Config mode0600 was verified; inherited macOS ACL privacy and directory-entry
+License selection passes cargo-deny. Exact local source notice mappings and
+conservative native header/declaration inventories have independent review;
+matching final build/binary receipts and new archive checks remain required.
+This is scoped compiled-macOS notice coverage, not general SDK/source redistribution
+assurance or four-platform closure. OpenSSL 3.6.4 complete Apache terms and
+attribution were checked in the historical local archive. Config mode0600 was verified; inherited macOS ACL privacy and directory-entry
 power-loss durability were not. Same-UID hostile namespace races are outside the
 socket/capture ownership guarantees. Notifications after an uncertain merge are
 best effort; durable receipt prevents replay even if delivery fails.

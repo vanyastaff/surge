@@ -143,6 +143,20 @@ class NativeTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'actual locked production graph'):
                 native.verify_graph(metadata, ids, 'fixed')
 
+    def test_snapshot_workspace_identity_changes_with_notice_source(self):
+        manifest = self.file('source/Cargo.toml', 'manifest')
+        notice_script = self.file('scripts/release_notices.py', 'before')
+        metadata = self.file('metadata.json', json.dumps({'packages': [dict(id='fixed', manifest_path=str(manifest))]}))
+        ids = self.file('ids.json', '["fixed"]')
+        git = types.SimpleNamespace(stdout=(str(notice_script) + '\0').encode())
+        with patch.object(native.subprocess, 'run', return_value=git):
+            before = native.snapshot_sources(metadata, ids)['workspace_identity']
+            notice_script.write_text('after')
+            after = native.snapshot_sources(metadata, ids)['workspace_identity']
+        self.assertNotEqual(before['sha256'], after['sha256'])
+        self.assertEqual(before['files'], [[str(notice_script), hashlib.sha256(b'before').hexdigest()]])
+        self.assertEqual(after['files'], [[str(notice_script), hashlib.sha256(b'after').hexdigest()]])
+
     def test_producer_collector_integration_binds_strip_and_keeps_native_gaps_open(self):
         import release_notices
         target = 'aarch64-apple-darwin'

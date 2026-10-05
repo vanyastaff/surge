@@ -42,10 +42,16 @@ provenance JSON; diagnostic inventories cannot satisfy that gate.
 Vendored notice files preserve upstream bytes, including whitespace, so their
 recorded hashes can be verified without normalizing source evidence.
 
-The actual macOS ARM64 inventory currently selects 351 registry packages. Published
-`lineark` sources marked dirty, `objc2` licensing explanations and unreviewed
-native source/header mappings remain explicit gaps. Including their available
-texts does not establish completeness. See the
+The actual macOS ARM64 inventory selects 351 registry packages. Exact reviewed
+checksums and complete member inventories establish `lineark` correspondence
+despite its published dirty flag. The scoped compiled-macOS `objc2` mappings retain
+full canonical MIT terms, the entire upstream declaration and SDK caveat, and
+factual author metadata without inventing copyright holders or years. Six vendor
+native notice inventories, the checked local OpenSSL inputs and Rust 1.98.1 runtime
+notices have independent review. The gate still requires actual matching native
+build/source/binary receipts; another version, target or source origin needs its
+own evidence. These mappings do not establish general SDK/source redistribution
+assurance. See the
 [release procedure](docs/release-procedure.md) for collection and diagnostics.
 
 ## Accepted licenses

@@ -64,6 +64,48 @@ class NoticeTests(unittest.TestCase):
             row["notice_sources"][0]["sha256"] = "tampered"
             self.assertTrue(notices.native_mapping_gaps(data, [row]))
 
+    def test_exact_reviewed_correspondence_scope_and_text_tamper(self):
+        reviews = json.loads((notices.SUPPLEMENTS / "reviewed-correspondence.json").read_text())["reviews"]
+        for review in reviews:
+            package = {"name": review["name"], "version": review["version"]}
+            accepted, extras = notices.reviewed_correspondence(package, review["crate_sha256"], "aarch64-apple-darwin")
+            self.assertIsNotNone(accepted)
+            self.assertEqual(bool(extras), not review["name"].startswith("lineark"))
+            self.assertIsNone(notices.reviewed_correspondence(package, "wrong", "aarch64-apple-darwin")[0])
+            windows, _ = notices.reviewed_correspondence(package, review["crate_sha256"], "x86_64-pc-windows-msvc")
+            self.assertEqual(windows is not None, review["name"].startswith("lineark"))
+        for source in notices.SUPPLEMENTS.iterdir():
+            if source.is_file():
+                (self.root / source.name).write_bytes(source.read_bytes())
+        (self.root / "canonical-MIT.txt").write_text("truncated permission")
+        review = next(r for r in reviews if r["name"] == "objc2")
+        with self.assertRaisesRegex(ValueError, "supplement changed"):
+            notices.reviewed_correspondence({"name": "objc2", "version": review["version"]}, review["crate_sha256"], "aarch64-apple-darwin", self.root)
+
+    def test_published_source_member_disposition_rejects_changed_source(self):
+        source = b"original compiled source"
+        archive, _ = self.crate([("src/lib.rs", source)])
+        review = {"published_members_sha256": {"src/lib.rs": notices.digest(source)}}
+        notices.verify_reviewed_members(archive, review)
+        archive, _ = self.crate([("src/lib.rs", b"changed source")])
+        with self.assertRaisesRegex(ValueError, "source members changed"):
+            notices.verify_reviewed_members(archive, review)
+
+    def test_stale_native_workspace_cannot_be_rebound_to_new_notice_source(self):
+        old_files = [["src/lib.rs", "old"]]
+        old = {"files": old_files, "sha256": notices.digest(notices.canonical(old_files).encode())}
+        native = {"source_inputs": {"workspace_identity": old}}
+        notices.verify_workspace_binding(native, old)
+        new_files = [["src/lib.rs", "new"]]
+        new = {"files": new_files, "sha256": notices.digest(notices.canonical(new_files).encode())}
+        with self.assertRaisesRegex(ValueError, "workspace identity"):
+            notices.verify_workspace_binding(native, new)
+        with self.assertRaisesRegex(ValueError, "workspace identity"):
+            notices.verify_workspace_binding({}, old)
+        forged = {"files": new_files, "sha256": old["sha256"]}
+        with self.assertRaisesRegex(ValueError, "workspace identity"):
+            notices.verify_workspace_binding({"source_inputs": {"workspace_identity": forged}}, forged)
+
     def test_mutated_crate_fails_before_source_selection(self):
         path, checksum = self.crate([("LICENSE", b"terms")])
         path.write_bytes(path.read_bytes() + b"tampered")
@@ -140,7 +182,8 @@ class NoticeTests(unittest.TestCase):
         review = notices.strict_json((notices.SUPPLEMENTS / "runtime-reviewed.json").read_text())["reviews"][0]
         runtime_text = (notices.SUPPLEMENTS / review["file"]).read_text()
         runtime_version = f"release: {review['release']}\ncommit-hash: {review['commit']}"
-        native = {"schema": 1, "target": "aarch64-apple-darwin", "cargo_lock": {"sha256": "lock"},
+        source = notices.source_identity()
+        native = {"source_inputs": {"workspace_identity": source}, "schema": 1, "target": "aarch64-apple-darwin", "cargo_lock": {"sha256": "lock"},
                   "complete": True, "blockers": [], "components": [],
                   "binaries": [{"name": name, "after": {"path": "/fixture/" + name, "sha256": notices.digest(name.encode())},
                                 "loader": {"libraries": ["system"]}} for name in ("surge", "surge-daemon")],
@@ -151,7 +194,7 @@ class NoticeTests(unittest.TestCase):
                   "metadata_document": {"packages": [{"id": "registry-demo", "source": "registry"}]},
                   "runtime": {"toolchain": {"version": runtime_version}, "copyright": {"text": runtime_text, "sha256": notices.digest(runtime_text.encode())}}}
         coverage = {"schema": 1, "target": "aarch64-apple-darwin", "complete": True, "gaps": [],
-                    "cargo_lock_sha256": "lock", "source": {"sha256": "source"},
+                    "cargo_lock_sha256": "lock", "source": source,
                     "packages": [{"id": "registry-demo", "name": "demo", "version": "1",
                         "crate_sha256": "checksum", "gaps": [], "notice_sources": [{"path": "LICENSE", "text": permission,
                                                                                  "sha256": notices.digest(permission.encode())}]}],
@@ -162,10 +205,16 @@ class NoticeTests(unittest.TestCase):
                     "coverage_sha256": notices.digest(notices.canonical(coverage).encode())}, text
         def verify(data, text):
             return notices.verify_embedded_receipt("aarch64-apple-darwin", data, text,
-                  expected_lock_sha256="lock", expected_source_sha256="source", expected_graph_ids={"registry-demo"},
+                  expected_lock_sha256="lock", expected_source_sha256=source["sha256"], expected_graph_ids={"registry-demo"},
                   expected_package_checksums={("demo", "1"): "checksum"})
         data, text = receipt()
         self.assertIs(verify(data, text), data)
+        stale_files = [["stale.rs", "old"]]
+        native["source_inputs"]["workspace_identity"] = {"files": stale_files, "sha256": notices.digest(notices.canonical(stale_files).encode())}
+        data, text = receipt()  # Rehash every outer field; source mismatch must still fail.
+        with self.assertRaisesRegex(ValueError, "workspace identity"):
+            verify(data, text)
+        native["source_inputs"]["workspace_identity"] = source
         native["build_messages_document"].insert(0, {"reason": "build-script-executed", "package_id": "registry-demo", "linked_libs": ["static=undispositioned"]})
         native["components"] = [{"package_id": "registry-demo", "linked_libs": ["static=undispositioned"],
                                  "archives": [{"library": "undispositioned"}],

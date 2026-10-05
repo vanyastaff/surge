@@ -76,6 +76,7 @@ class ReleaseTest(unittest.TestCase):
         runtime_version = f"release: {review['release']}\ncommit-hash: {review['commit']}"
         native = {"schema": 1, "target": target, "complete": True, "blockers": [],
                   "components": [], "cargo_lock": {"sha256": lock_hash},
+                  "source_inputs": {"workspace_identity": source},
                   "dependency_ids_document": [p["id"] for p, _ in packages],
                   "metadata_document": metadata,
                   "runtime": {"toolchain": {"version": runtime_version},

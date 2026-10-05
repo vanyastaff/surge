@@ -1,0 +1,4 @@
+Factual package authors metadata (not a copyright attribution):
+[]
+
+Canonical MIT text below preserves generic template holder/year placeholders; no upstream holder/date is invented. Exact compiled macOS CLI/daemon notice reproduction mapping only. Preserve accompanying upstream licensing declaration and Apple SDK caveat; no broader SDK/source redistribution or legal assurance.

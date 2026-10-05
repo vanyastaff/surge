@@ -45,6 +45,15 @@ def source_identity():
     return {"sha256": digest(canonical(entries).encode()), "files": entries}
 
 
+def verify_workspace_binding(native, source):
+    """The captured build source must be the exact source claimed by notices."""
+    if (not isinstance(source, dict) or set(source) != {"sha256", "files"}
+            or not isinstance(source["files"], list)
+            or digest(canonical(source["files"]).encode()) != source["sha256"]
+            or native.get("source_inputs", {}).get("workspace_identity") != source):
+        raise ValueError("Native build workspace identity differs from notice source")
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -156,7 +165,44 @@ def archive_notices(path, checksum, name, version):
     return sorted(notices, key=lambda n: n["path"])
 
 
-def supplement_notices(package, checksum, root=SUPPLEMENTS):
+def reviewed_correspondence(package, checksum, target, root=SUPPLEMENTS):
+    path = root / "reviewed-correspondence.json"
+    if not path.exists():
+        return None, []
+    reviews = strict_json(path.read_text())["reviews"]
+    found = [r for r in reviews if (r["name"], r["version"], r["crate_sha256"]) ==
+             (package["name"], package["version"], checksum)]
+    if len(found) != 1 or ("*" not in found[0]["targets"] and target not in found[0]["targets"]):
+        return None, []
+    review = found[0]
+    index = strict_json((root / "index.json").read_text())
+    upstream = [m for m in index if (m["name"], m["version"], m["crate_sha256"], m["git_sha"]) ==
+                (review["name"], review["version"], review["crate_sha256"], review["git_sha"])]
+    if len(upstream) != 1 or [n["sha256"] for n in upstream[0]["texts"]] != review["upstream_notice_sha256"]:
+        raise ValueError("Reviewed upstream notice mapping changed")
+    extras = []
+    for key in ("canonical_mit", "authors"):
+        item = review.get(key)
+        if item is None:
+            continue
+        source = (root / item["file"]).resolve()
+        if not source.is_relative_to(root.resolve()) or digest(source.read_bytes()) != item["sha256"]:
+            raise ValueError("Reviewed permission/author supplement changed")
+        extras.append({"path": item["file"], "sha256": item["sha256"],
+                       "text": checked_text(source.read_bytes(), source),
+                       "origin": item.get("url", "factual published package authors metadata; not copyright")})
+    return review, extras
+
+
+def verify_reviewed_members(cache, review):
+    with tarfile.open(cache, "r:gz") as archive:
+        members = {m.name.split("/", 1)[1]: digest(archive.extractfile(m).read())
+                   for m in archive if m.isfile()}
+    if members != review["published_members_sha256"]:
+        raise ValueError("Reviewed published source members changed")
+
+
+def supplement_notices(package, checksum, root=SUPPLEMENTS, target=None):
     index = strict_json((root / "index.json").read_text())
     matches = [p for p in index if p["name"] == package["name"] and p["version"] == package["version"]]
     if len(matches) != 1 or matches[0]["crate_sha256"] != checksum:
@@ -175,9 +221,11 @@ def supplement_notices(package, checksum, root=SUPPLEMENTS):
         notices.append({"path": item["upstream_path"], "sha256": digest(data),
                         "text": checked_text(data, path), "origin": item["url"]})
     gaps = []
-    if mapping.get("published_vcs_dirty"):
+    review, extras = reviewed_correspondence(package, checksum, target, root)
+    notices.extend(extras)
+    if mapping.get("published_vcs_dirty") and review is None:
         gaps.append("published source marked dirty; upstream notice correspondence unverified")
-    if package["name"] in ("objc2", "objc2-encode", "objc2-foundation", "objc2-core-foundation", "block2"):
+    if package["name"] in ("objc2", "objc2-encode", "objc2-foundation", "objc2-core-foundation", "block2") and review is None:
         gaps.append("upstream licensing explanation is not complete permission/attribution evidence; SDK-derived obligations unverified")
     return notices, gaps
 
@@ -360,7 +408,10 @@ def collect(target, output, native=None, inventory=False):
         notices = archive_notices(cache, checksum, package["name"], package["version"])
         package_gaps = []
         if not notices:
-            notices, package_gaps = supplement_notices(package, checksum)
+            notices, package_gaps = supplement_notices(package, checksum, target=target)
+            review, _ = reviewed_correspondence(package, checksum, target)
+            if review is not None:
+                verify_reviewed_members(cache, review)
         if not notices:
             raise ValueError(f"No complete notice sources: {package['id']}")
         row = {"id": package["id"], "name": package["name"], "version": package["version"],
@@ -381,10 +432,13 @@ def collect(target, output, native=None, inventory=False):
         texts.append("\n===== Rust standard library and runtime notices =====\n" + native_record["receipt"]["runtime"]["copyright"]["text"])
     else:
         gaps.append("Rust standard-library/sysroot copyright inventory missing")
+    source = source_identity()
+    if native_record:
+        verify_workspace_binding(native_record["receipt"], source)
     coverage = {"schema": 1, "target": target, "cargo_lock_sha256": digest(lock_bytes),
                 "graph_command": command, "scope": "CLI/daemon default features, normal and build dependencies",
                 "complete": not gaps, "gaps": gaps, "packages": inventory_rows, "native": native_record,
-                "source": source_identity()}
+                "source": source}
     body = "Surge production dependency notice inventory\nCoverage receipt (canonical JSON):\n" + canonical(coverage) + "\n" + "".join(texts)
     receipt = {"coverage": coverage, "notice_sha256": digest(body.encode()), "coverage_sha256": digest(canonical(coverage).encode())}
     if gaps and not inventory:
@@ -423,12 +477,20 @@ def verify_embedded_receipt(target, data, text, binary_hashes=None, *, expected_
     native = coverage["native"]
     if native is None or native["receipt"].get("complete") is not True:
         raise ValueError("Incomplete native source coverage")
+    verify_workspace_binding(native["receipt"], coverage["source"])
     if (native["receipt"].get("schema") != 1 or native["receipt"].get("target") != target
             or native["receipt"].get("cargo_lock", {}).get("sha256") != expected_lock_sha256):
         raise ValueError("Portable native target/schema/lock mismatch")
     blocked_names = {"lineark-sdk", "lineark-derive", "objc2", "objc2-encode", "objc2-foundation", "objc2-core-foundation", "block2"}
-    if any(p["name"] in blocked_names for p in coverage["packages"]):
-        raise ValueError("Independently unresolved source-license correspondence")
+    for package in coverage["packages"]:
+        if package["name"] not in blocked_names:
+            continue
+        review, extras = reviewed_correspondence(package, package["crate_sha256"], target)
+        if review is None:
+            raise ValueError("Independently unresolved source-license correspondence")
+        required = review["upstream_notice_sha256"] + [n["sha256"] for n in extras]
+        if sorted(required) != sorted(n["sha256"] for n in package["notice_sources"]):
+            raise ValueError("Reviewed full permission/attribution text coverage mismatch")
     expected_ids = set(native["receipt"]["dependency_ids_document"])
     if expected_graph_ids is None:
         graph, _, _ = production_graph(target)
@@ -494,6 +556,7 @@ def verify_receipt(target, notices_dir):
                             expected_lock_sha256=digest(Path("Cargo.lock").read_bytes()),
                             expected_source_sha256=source_identity()["sha256"])
     native = data["coverage"]["native"]
+    verify_workspace_binding(native["receipt"], source_identity())
     if digest(Path(native["path"]).read_bytes()) != native["sha256"]:
         raise ValueError("Missing or changed native receipt")
     return data

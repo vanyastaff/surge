@@ -142,6 +142,7 @@ def verify_graph(metadata_path, ids_path, target):
 
 
 def snapshot_sources(metadata_path, ids_path):
+    from release_notices import source_identity
     packages = {p['id']: p for p in strict_json(metadata_path.read_text())['packages']}
     ids = strict_json(ids_path.read_text())
     if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids) or not set(ids) <= packages.keys():
@@ -180,7 +181,8 @@ def snapshot_sources(metadata_path, ids_path):
         if path.is_file():
             workspace.append({'path': str(path.resolve()),
                               'sha256': digest(path) if path.stat().st_size else hashlib.sha256(b'').hexdigest()})
-    return {'packages': files, 'workspace_context': context, 'workspace_files': workspace}
+    return {'packages': files, 'workspace_context': context, 'workspace_files': workspace,
+            'workspace_identity': source_identity()}
 
 
 def verify_evidence(record):
