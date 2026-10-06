@@ -288,6 +288,8 @@ pub async fn on_loop_iteration_done(
             },
             surge_core::loop_config::FailurePolicy::Retry { .. } if lf.attempts_remaining > 0 => {
                 lf.attempts_remaining -= 1;
+                // Each attempt owns its retry budgets (verifier ladder).
+                lf.traversal_counts.clear();
                 let body_start = body_subgraph_start(graph, lf)?;
                 let item = lf.items[lf.current_index as usize].clone();
                 let loop_id = lf.loop_node.clone();
@@ -398,6 +400,9 @@ pub async fn on_loop_iteration_done(
     let loop_id = lf.loop_node.clone();
     let index = lf.current_index;
     lf.attempts_remaining = initial_attempts_remaining(&lf.config.on_iteration_failure);
+    // Each item owns its retry budgets: a task never inherits another task's
+    // spent traversals (verifier ladder). Mirrored by the journal inspector.
+    lf.traversal_counts.clear();
     cursor.node = body_start;
     cursor.attempt = 1;
 
