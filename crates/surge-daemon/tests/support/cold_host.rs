@@ -185,7 +185,7 @@ type ReadinessInterposition = Box<dyn FnOnce(&Path)>;
 std::thread_local! {
     static READINESS_INTERPOSITION: std::cell::RefCell<Option<ReadinessInterposition>> = const { std::cell::RefCell::new(None) };
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn set_readiness_interposition(interposition: Option<ReadinessInterposition>) {
     READINESS_INTERPOSITION.with(|slot| *slot.borrow_mut() = interposition);
 }

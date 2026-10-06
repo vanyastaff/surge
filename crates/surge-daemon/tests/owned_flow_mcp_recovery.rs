@@ -2074,6 +2074,7 @@ async fn wait_actual_refusal_ack(path: &Path) {
     .unwrap();
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn wait_actual_refusal_event(path: &Path) -> (u64, Vec<u8>) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

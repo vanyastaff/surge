@@ -10,12 +10,15 @@ pub enum RoutePinError {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Unsupported,
     #[error("unsafe route key location")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     UnsafeLocation,
     #[error("invalid route key")]
     InvalidKey,
     #[error("route key I/O failed")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     KeyIo,
     #[error("secure random generation failed")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     Random,
     #[error("declared route source unavailable")]
     SourceUnavailable,

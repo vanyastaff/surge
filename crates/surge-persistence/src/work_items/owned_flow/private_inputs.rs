@@ -304,9 +304,7 @@ pub(super) fn hydrate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::{
-        ContentHash, id::WorkItemId, mcp_config::McpTransportConfig, sandbox::SandboxMode,
-    };
+    use surge_core::{ContentHash, id::WorkItemId};
     fn binding(identity: OwnedFlowRequestIdentity) -> InputBinding {
         let checkout = if cfg!(windows) {
             std::path::PathBuf::from(r"C:\repo")
@@ -334,7 +332,9 @@ mod tests {
             },
         )
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn server(name: &str) -> McpServerRef {
+        use surge_core::{mcp_config::McpTransportConfig, sandbox::SandboxMode};
         McpServerRef::new(
             name.into(),
             McpTransportConfig::stdio(
