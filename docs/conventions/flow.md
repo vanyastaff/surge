@@ -48,16 +48,29 @@ verifier's `failed` back to the implementer). When the limit is spent and
 `max_traversals_exceeded` outcome:
 
 - If the flow declares an edge for that outcome, it is used as written.
-- Otherwise the engine adds a default human gate at run time
-  (`surge_core::escalation`): **Retry once more** returns to the loop target
-  for one more attempt, and the counter is not reset, so the next rejection
-  asks again. **Stop** ends the run, or fails the current iteration inside a
+- Otherwise the engine derives a default ladder at run time
+  (`surge_core::escalation`). When the loop target is an agent node, it first
+  gets **one extra automatic attempt** with the latest findings, on the agent
+  set in `surge.toml` (`[escalation] retry_agent`, optional `retry_model`) or,
+  when none is set, on its own agent. If that is sent back too, routing takes
+  `escalation_exhausted` to a human gate: **Retry once more** returns to the
+  loop target for one more attempt, and the counter is not reset, so the next
+  rejection asks again. **Stop** ends the run, or fails the current iteration inside a
   loop so `on_iteration_failure` applies. The gate has no practical deadline.
   It is derived from the persisted graph and never written into it.
 - A stage whose capped edges lead to different targets gets no default gate
   and still fails when exhausted.
 
-A stage re-entered through a backtrack edge receives a "Feedback from the
+```toml
+[escalation]
+retry_agent = "codex-acp"   # registry id; unknown ids are ignored with a warning
+retry_model = "gpt-5"       # optional
+```
+
+A stage that runs under a frozen quota plan keeps its planned runtime for the
+extra attempt.
+
+A stage re-entered through a backtrack edge (or the extra attempt) receives a "Feedback from the
 previous attempt" section with the sending stage's outcome, summary and
 failed checks. A retry through the default gate carries the exhausted stage's
 feedback.

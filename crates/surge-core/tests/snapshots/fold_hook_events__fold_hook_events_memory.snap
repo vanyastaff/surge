@@ -47,6 +47,7 @@ RunMemory {
     node_visits: {},
     backtrack_feedback: {},
     escalations: {},
+    entered_via: {},
     last_edit_feedback_by_stage: {},
     roadmap_patches: {},
     latest_graph_revision: None,

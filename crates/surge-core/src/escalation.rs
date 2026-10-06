@@ -1,12 +1,13 @@
-//! Default human escalation for exhausted retry loops (verifier rejection
-//! ladder, human rung).
+//! Default escalation for exhausted retry loops (verifier rejection ladder:
+//! an extra automatic attempt, then a human).
 //!
 //! An edge with `max_traversals` and `on_max_exceeded = escalate` re-routes
 //! through the source node's `max_traversals_exceeded` outcome once its limit
 //! is spent. Flows rarely declare that edge, and without it the run failed.
 //! [`with_default_escalation_gates`] derives the *effective* graph a run routes
-//! on: for every such source without a declared escalation edge it adds a
-//! `HumanGate` that asks whether to retry once more or stop.
+//! on: for every such source without a declared escalation edge it adds one
+//! extra attempt of the loop's agent (on the configured retry agent when one is
+//! set) and then a `HumanGate` that asks whether to retry once more or stop.
 //!
 //! The derivation is pure, deterministic and idempotent. The persisted graph
 //! (and every hash over it) is unchanged; the engine, the run-state fold and
@@ -30,6 +31,89 @@ pub const EXHAUSTED_OUTCOME: &str = "max_traversals_exceeded";
 pub const RETRY_OUTCOME: &str = "retry";
 /// Gate outcome ending the run, or the current loop iteration inside a loop.
 pub const STOP_OUTCOME: &str = "stop";
+/// Synthetic outcome routing takes when an escalation edge is itself
+/// exhausted: the next rung of the ladder.
+pub const ESCALATION_EXHAUSTED_OUTCOME: &str = "escalation_exhausted";
+/// `EdgePolicy::label` of a derived edge that re-enters the loop's agent for
+/// its one extra attempt. The engine runs that occurrence on the configured
+/// retry agent. Only derived graphs carry it; it is never persisted.
+pub const ALTERNATE_ATTEMPT_LABEL: &str = "surge:escalation:alternate-attempt";
+
+/// Whether `edge` is a derived extra-attempt edge (see
+/// [`ALTERNATE_ATTEMPT_LABEL`]).
+#[must_use]
+pub fn is_alternate_attempt(edge: &Edge) -> bool {
+    edge.kind == EdgeKind::Escalate && edge.policy.label.as_deref() == Some(ALTERNATE_ATTEMPT_LABEL)
+}
+
+/// Whether `node`'s current occurrence is the extra attempt of an exhausted
+/// loop: `via` (its latest entering edge, `RunMemory::entered_via`) is a
+/// derived extra-attempt edge into `node` in the effective `graph`.
+#[must_use]
+pub fn entered_by_alternate_attempt(graph: &Graph, node: &NodeKey, via: Option<&EdgeKey>) -> bool {
+    let Some(via) = via else {
+        return false;
+    };
+    graph
+        .edges
+        .iter()
+        .chain(graph.subgraphs.values().flat_map(|sg| sg.edges.iter()))
+        .any(|edge| &edge.id == via && &edge.to == node && is_alternate_attempt(edge))
+}
+
+/// `[escalation]` in `surge.toml`: where the extra attempt of an exhausted
+/// retry loop runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EscalationConfig {
+    /// Agent (registry id, for example `codex-acp`) for the extra attempt.
+    /// Unset: the extra attempt runs on the stage's own agent, with the
+    /// latest findings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_agent: Option<String>,
+    /// Model for the extra attempt on `retry_agent`. Unset: that agent's
+    /// default model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_model: Option<String>,
+}
+
+impl EscalationConfig {
+    /// The configured retry agent, trimmed; `None` when unset or blank.
+    #[must_use]
+    pub fn retry_agent(&self) -> Option<&str> {
+        self.retry_agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
+    /// `agent` with its runtime moved to the retry agent for one extra
+    /// attempt: `custom_fields["runtime"]` becomes `{ agent_id, model? }`.
+    /// The profile (role and prompts) is kept; the stage's own model and
+    /// effort are dropped because they belong to its original agent.
+    /// `None` when no retry agent is configured.
+    #[must_use]
+    pub fn retry_config(
+        &self,
+        agent: &crate::agent_config::AgentConfig,
+    ) -> Option<crate::agent_config::AgentConfig> {
+        let agent_id = self.retry_agent()?;
+        let mut runtime = toml::map::Map::new();
+        runtime.insert("agent_id".into(), toml::Value::String(agent_id.into()));
+        if let Some(model) = self
+            .retry_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        {
+            runtime.insert("model".into(), toml::Value::String(model.into()));
+        }
+        let mut retry = agent.clone();
+        retry
+            .custom_fields
+            .insert("runtime".into(), toml::Value::Table(runtime));
+        Some(retry)
+    }
+}
 
 /// Waits for the operator: an unattended run must not fail on a decision
 /// deadline. About 136 years, stored in the gate's original schema.
@@ -44,8 +128,13 @@ const NO_PRACTICAL_DEADLINE_SECS: u32 = u32::MAX;
 /// destination), and no edge from it already handles the exhausted outcome.
 /// Each qualifying source gets, in its own scope:
 ///
+/// - when the loop target is an agent node, an extra-attempt `escalate` edge
+///   from the source's exhausted outcome back to that target, capped at one
+///   traversal and labelled [`ALTERNATE_ATTEMPT_LABEL`]; once spent, routing
+///   takes [`ESCALATION_EXHAUSTED_OUTCOME`] to the gate;
 /// - a `HumanGate` with `retry` and `stop` options and no practical deadline;
-/// - an `escalate` edge from the source's exhausted outcome to the gate;
+/// - an `escalate` edge to the gate (from the exhausted outcome when there is
+///   no extra attempt);
 /// - a `backtrack` edge from `retry` to the loop target (one more attempt per
 ///   decision; the exhausted counter is not reset);
 /// - a failure terminal reached by `stop`. Inside a loop body this fails the
@@ -141,7 +230,12 @@ fn add_gates(nodes: &mut BTreeMap<NodeKey, Node>, edges: &mut Vec<Edge>, names: 
             continue;
         };
         let target = target.clone();
-        let Some(addition) = gate_for(&source, &target, &loop_edges, &exhausted, names) else {
+        let alternate = matches!(
+            nodes.get(&target).map(|node| &node.config),
+            Some(NodeConfig::Agent(_))
+        );
+        let Some(addition) = gate_for(&source, &target, &loop_edges, &exhausted, alternate, names)
+        else {
             continue;
         };
         for node in addition.nodes {
@@ -161,10 +255,17 @@ fn gate_for(
     target: &NodeKey,
     loop_edges: &[Edge],
     exhausted: &OutcomeKey,
+    alternate: bool,
     names: &mut Names,
 ) -> Option<Addition> {
     let retry = OutcomeKey::try_from(RETRY_OUTCOME).ok()?;
     let stop = OutcomeKey::try_from(STOP_OUTCOME).ok()?;
+    let escalation_exhausted = OutcomeKey::try_from(ESCALATION_EXHAUSTED_OUTCOME).ok()?;
+    let alternate_edge = if alternate {
+        Some(names.edge(&format!("{source}_alternate"), "escalation_edge")?)
+    } else {
+        None
+    };
     let gate = names.node(&format!("{source}_escalation"), "escalation")?;
     let stopped = names.node(&format!("{source}_stopped"), "escalation_stop")?;
     let to_gate = names.edge(&format!("{source}_exhausted"), "escalation_edge")?;
@@ -181,6 +282,13 @@ fn gate_for(
                 edge.from.outcome, edge.id
             );
         }
+    }
+    if alternate {
+        let _ = writeln!(
+            body,
+            "One extra attempt of `{target}` (on the retry agent, when one is configured) \
+             was also sent back."
+        );
     }
     let _ = write!(
         body,
@@ -252,13 +360,30 @@ fn gate_for(
         kind,
         policy: EdgePolicy::default(),
     };
+    let mut edges = Vec::with_capacity(4);
+    if let Some(id) = alternate_edge {
+        let mut extra = edge(id, source, exhausted, target, EdgeKind::Escalate);
+        extra.policy = EdgePolicy {
+            max_traversals: Some(1),
+            on_max_exceeded: ExceededAction::Escalate,
+            label: Some(ALTERNATE_ATTEMPT_LABEL.into()),
+        };
+        edges.push(extra);
+        edges.push(edge(
+            to_gate,
+            source,
+            &escalation_exhausted,
+            &gate,
+            EdgeKind::Escalate,
+        ));
+    } else {
+        edges.push(edge(to_gate, source, exhausted, &gate, EdgeKind::Escalate));
+    }
+    edges.push(edge(retry_edge, &gate, &retry, target, EdgeKind::Backtrack));
+    edges.push(edge(stop_edge, &gate, &stop, &stopped, EdgeKind::Forward));
     Some(Addition {
         nodes: vec![gate_node, stopped_node],
-        edges: vec![
-            edge(to_gate, source, exhausted, &gate, EdgeKind::Escalate),
-            edge(retry_edge, &gate, &retry, target, EdgeKind::Backtrack),
-            edge(stop_edge, &gate, &stop, &stopped, EdgeKind::Forward),
-        ],
+        edges,
     })
 }
 
@@ -298,10 +423,49 @@ mod tests {
                 .find(|e| e.from.node.as_str() == from && e.from.outcome.as_str() == outcome)
                 .map(|e| (e.to.as_str().to_owned(), e.kind))
         };
+        // The implementer is an agent: one extra attempt first, then the gate.
         assert_eq!(
             edge_to("verify_1", EXHAUSTED_OUTCOME),
+            Some(("implement_1".into(), EdgeKind::Escalate))
+        );
+        let extra = effective
+            .edges
+            .iter()
+            .find(|e| e.id.as_str() == "verify_1_alternate")
+            .unwrap();
+        assert!(is_alternate_attempt(extra));
+        assert_eq!(extra.policy.max_traversals, Some(1));
+        assert_eq!(
+            edge_to("verify_1", ESCALATION_EXHAUSTED_OUTCOME),
             Some(("verify_1_escalation".into(), EdgeKind::Escalate))
         );
+        assert!(
+            config
+                .summary
+                .body
+                .contains("One extra attempt of `implement_1`")
+        );
+        assert!(entered_by_alternate_attempt(
+            &effective,
+            &key("implement_1"),
+            Some(&key("verify_1_alternate"))
+        ));
+        assert!(!entered_by_alternate_attempt(
+            &effective,
+            &key("implement_1"),
+            Some(&key("verify_1_retry"))
+        ));
+        assert!(!entered_by_alternate_attempt(
+            &effective,
+            &key("implement_1"),
+            None
+        ));
+        // The persisted graph never carries the marker.
+        assert!(!entered_by_alternate_attempt(
+            &graph,
+            &key("implement_1"),
+            Some(&key("verify_1_alternate"))
+        ));
         assert_eq!(
             edge_to("verify_1_escalation", "retry"),
             Some(("implement_1".into(), EdgeKind::Backtrack))
@@ -399,9 +563,116 @@ mod tests {
             .iter()
             .find(|e| {
                 e.from.node.as_str() == "implement_1"
-                    && e.from.outcome.as_str() == EXHAUSTED_OUTCOME
+                    && e.from.outcome.as_str() == ESCALATION_EXHAUSTED_OUTCOME
             })
             .expect("implementer still escalates");
         assert_eq!(fallback.to.as_str(), "escalation_1");
+    }
+
+    #[test]
+    fn a_non_agent_loop_target_escalates_straight_to_the_gate() {
+        let mut graph = BundledFlows::by_name_latest("linear-3").unwrap().graph;
+        let implement = graph.nodes.get_mut(&key::<NodeKey>("implement_1")).unwrap();
+        let reference =
+            with_default_escalation_gates(&BundledFlows::by_name_latest("linear-3").unwrap().graph);
+        implement.config =
+            NodeConfig::HumanGate(gate_config(&reference, "verify_1_escalation").clone());
+        let effective = with_default_escalation_gates(&graph);
+        let exhausted = effective
+            .edges
+            .iter()
+            .find(|e| {
+                e.from.node.as_str() == "verify_1" && e.from.outcome.as_str() == EXHAUSTED_OUTCOME
+            })
+            .unwrap();
+        assert_eq!(exhausted.to.as_str(), "verify_1_escalation");
+        assert!(!is_alternate_attempt(exhausted));
+        assert!(
+            effective
+                .edges
+                .iter()
+                .all(|e| e.from.outcome.as_str() != ESCALATION_EXHAUSTED_OUTCOME
+                    || e.from.node.as_str() != "verify_1")
+        );
+    }
+
+    #[test]
+    fn retry_config_moves_only_the_runtime() {
+        let graph = BundledFlows::by_name_latest("linear-3").unwrap().graph;
+        let NodeConfig::Agent(agent) = &graph.find_node(&key("implement_1")).unwrap().config else {
+            panic!("agent");
+        };
+        let mut agent = agent.clone();
+        let mut runtime = toml::map::Map::new();
+        runtime.insert("agent_id".into(), "claude-acp".into());
+        runtime.insert("model".into(), "opus".into());
+        runtime.insert("effort".into(), "high".into());
+        agent
+            .custom_fields
+            .insert("runtime".into(), toml::Value::Table(runtime));
+
+        assert_eq!(EscalationConfig::default().retry_config(&agent), None);
+        let blank = EscalationConfig {
+            retry_agent: Some("  ".into()),
+            retry_model: None,
+        };
+        assert_eq!(blank.retry_config(&agent), None);
+
+        let config = EscalationConfig {
+            retry_agent: Some(" codex-acp ".into()),
+            retry_model: Some("gpt-5".into()),
+        };
+        let retry = config.retry_config(&agent).unwrap();
+        assert_eq!(retry.runtime_override(), Some("codex-acp"));
+        assert_eq!(retry.model_override(), Some("gpt-5"));
+        assert_eq!(retry.effort_override(), None);
+        assert_eq!(retry.profile, agent.profile);
+        let agent_only = EscalationConfig {
+            retry_agent: Some("codex-acp".into()),
+            retry_model: None,
+        };
+        assert_eq!(
+            agent_only.retry_config(&agent).unwrap().model_override(),
+            None
+        );
+    }
+
+    #[test]
+    fn routing_climbs_from_the_extra_attempt_to_the_gate() {
+        let graph =
+            with_default_escalation_gates(&BundledFlows::by_name_latest("linear-3").unwrap().graph);
+        let verify: NodeKey = key("verify_1");
+        let failed: OutcomeKey = key("failed");
+        let mut counts = std::collections::HashMap::new();
+        let mut targets = Vec::new();
+        for _ in 0..6 {
+            let routed = crate::route_selection::resolve_stage_route(
+                &graph.edges,
+                &verify,
+                &failed,
+                &mut counts,
+            )
+            .unwrap();
+            targets.push((
+                routed.target.as_str().to_owned(),
+                routed.edge_id.as_str().to_owned(),
+            ));
+        }
+        let max = graph
+            .edges
+            .iter()
+            .find(|e| e.from.node == verify && e.from.outcome == failed)
+            .and_then(|e| e.policy.max_traversals)
+            .unwrap() as usize;
+        assert!(targets[..max].iter().all(|(to, _)| to == "implement_1"));
+        assert_eq!(
+            targets[max],
+            ("implement_1".into(), "verify_1_alternate".into())
+        );
+        assert!(
+            targets[max + 1..]
+                .iter()
+                .all(|(to, _)| to == "verify_1_escalation")
+        );
     }
 }

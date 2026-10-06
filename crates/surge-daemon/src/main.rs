@@ -179,6 +179,7 @@ fn main() -> std::process::ExitCode {
                 // daemon-dispatched run resolves a custom provider exactly
                 // like a builtin one.
                 agent_registry: Some(agent_registry.clone()),
+                escalation: surge_orchestrator::engine::escalation_config(&config, &agent_registry),
                 ..EngineConfig::default()
             },
         ));

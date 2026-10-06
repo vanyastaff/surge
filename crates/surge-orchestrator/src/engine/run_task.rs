@@ -136,6 +136,8 @@ pub(crate) struct RunTaskParams {
     /// carries `surge_core::capacity_config::CapacityConfig::default`'s
     /// conservative backoff, matching what `surge init` writes.
     pub capacity_policy: surge_core::capacity::CapacityPolicy,
+    /// Engine-level `[escalation]` settings for the extra retry attempt.
+    pub escalation: surge_core::escalation::EscalationConfig,
     /// Registry-level storage handle (Task 12 M3) — the run task's own
     /// door onto `runs.status`/`runs.wake_at`, used only to call
     /// [`surge_persistence::runs::Storage::set_run_parked`] when
@@ -1403,6 +1405,42 @@ enum StageDispatch {
     },
 }
 
+/// The node's config for this occurrence when it is the extra attempt of an
+/// exhausted retry loop (entered through a derived edge marked by
+/// `surge_core::escalation::is_alternate_attempt`): its runtime moved to the
+/// configured retry agent. `None` keeps the node's own config. Derived from
+/// the durable `entered_via` fold, so a restarted host decides the same way.
+fn alternate_attempt_config(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> Option<surge_core::agent_config::AgentConfig> {
+    let node = &state.cursor.node;
+    if !surge_core::escalation::entered_by_alternate_attempt(
+        &state.routing_graph,
+        node,
+        state.memory.entered_via.get(node),
+    ) {
+        return None;
+    }
+    if params.run_config.quota_recovery.stage(node).is_some() {
+        tracing::info!(
+            target: "engine::escalation",
+            %node,
+            "extra attempt keeps the stage's frozen quota runtime"
+        );
+        return None;
+    }
+    let retry = params.escalation.retry_config(cfg);
+    tracing::info!(
+        target: "engine::escalation",
+        %node,
+        retry_agent = params.escalation.retry_agent().unwrap_or("(stage agent)"),
+        "running the extra attempt of an exhausted retry loop"
+    );
+    retry
+}
+
 async fn dispatch_node_stage(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1410,6 +1448,8 @@ async fn dispatch_node_stage(
 ) -> StageDispatch {
     let stage_result = match &node.config {
         NodeConfig::Agent(cfg) => {
+            let retry = alternate_attempt_config(params, state, cfg);
+            let cfg = retry.as_ref().unwrap_or(cfg);
             return dispatch_agent_node_with_capacity_gate(params, state, node, cfg).await;
         },
         NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
@@ -2868,37 +2908,48 @@ fn route_after_max_traversal(
     edge: &surge_core::keys::EdgeKey,
     action: surge_core::edge::ExceededAction,
 ) -> Result<crate::engine::routing::RoutedEdge, String> {
-    match action {
-        surge_core::edge::ExceededAction::Escalate => {
-            let synthetic = OutcomeKey::try_from("max_traversals_exceeded")
-                .map_err(|e| format!("synthetic outcome: {e}"))?;
-            let routed = crate::engine::routing::next_node_after_with_counters(
-                &state.routing_graph,
-                &state.cursor.node,
-                &synthetic,
-                &mut state.frames,
-                &mut state.root_traversal_counts,
-            )
-            .map_err(|_| {
-                format!(
-                    "max_traversals exceeded on edge {edge} and no escalation route exists \
-                     (several capped targets from one stage get no default gate)"
-                )
-            })?;
-            tracing::info!(
-                target: "engine::escalation",
-                node = %state.cursor.node,
-                %edge,
-                to = %routed.target,
-                via = %routed.edge_id,
-                "retry loop exhausted; escalating"
-            );
-            Ok(routed)
-        },
-        surge_core::edge::ExceededAction::Fail => Err(format!(
+    use crate::engine::routing::RoutingError;
+    use surge_core::edge::ExceededAction;
+    if action == ExceededAction::Fail {
+        return Err(format!(
             "max_traversals exceeded on edge {edge} (action: Fail)"
-        )),
+        ));
     }
+    let mut route = |key: &str| -> Result<_, RoutingError> {
+        let synthetic =
+            OutcomeKey::try_from(key).map_err(|_| RoutingError::InvalidEscalationOutcome)?;
+        crate::engine::routing::next_node_after_with_counters(
+            &state.routing_graph,
+            &state.cursor.node,
+            &synthetic,
+            &mut state.frames,
+            &mut state.root_traversal_counts,
+        )
+    };
+    // Mirrors `surge_core::route_selection::resolve_stage_route`, which the
+    // journal inspector replays: an exhausted escalation edge escalates once more.
+    let routed = match route(surge_core::escalation::EXHAUSTED_OUTCOME) {
+        Err(RoutingError::ExceededTraversal {
+            action: ExceededAction::Escalate,
+            ..
+        }) => route(surge_core::escalation::ESCALATION_EXHAUSTED_OUTCOME),
+        result => result,
+    }
+    .map_err(|_| {
+        format!(
+            "max_traversals exceeded on edge {edge} and no escalation route exists \
+             (several capped targets from one stage get no default gate)"
+        )
+    })?;
+    tracing::info!(
+        target: "engine::escalation",
+        node = %state.cursor.node,
+        %edge,
+        to = %routed.target,
+        via = %routed.edge_id,
+        "retry loop exhausted; escalating"
+    );
+    Ok(routed)
 }
 
 fn routing_events(

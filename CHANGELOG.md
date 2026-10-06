@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — an automatic extra attempt before asking a human
+
+- An exhausted retry loop whose target is an agent stage now gets one extra
+  automatic attempt, with the latest findings, before the default human gate.
+  It runs on `[escalation] retry_agent` (optional `retry_model`) from
+  `surge.toml` when set, otherwise on the stage's own agent. Unknown agent ids
+  are ignored with a warning; stages under a frozen quota plan keep their
+  runtime. The extra attempt is recognised from the run log, so it survives a
+  daemon restart. No schema change.
+
 ### Changed — an exhausted retry loop asks instead of failing
 
 - When a capped retry loop (for example verifier `failed` back to the

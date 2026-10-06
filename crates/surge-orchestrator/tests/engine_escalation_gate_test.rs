@@ -214,6 +214,8 @@ async fn a_restarted_host_reissues_the_escalation_gate_and_honours_stop() {
                 ("failed", "unmet"),
                 ("done", "second"),
                 ("failed", "still unmet"),
+                ("done", "extra attempt"),
+                ("failed", "unmet after the extra attempt"),
             ],
         )
         .await;
@@ -279,12 +281,16 @@ async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
 
     // Six agent turns: implement, verify(failed) twice before the first gate,
     // then one retry round before the second gate.
+    // Eight agent turns: two loop rounds, the automatic extra attempt, a
+    // rejection that reaches the gate, then one human retry round.
     let script = [
         ("done", "first implementation"),
         ("failed", "Login criterion unmet."),
         ("done", "second implementation"),
         ("failed", "Login criterion still unmet."),
-        ("done", "third implementation"),
+        ("done", "extra attempt"),
+        ("failed", "Unmet after the extra attempt."),
+        ("done", "human retry"),
         ("failed", "Still unmet after retry."),
     ];
     let driver = drive_agent_turns(mock.clone(), &script).await;
@@ -346,8 +352,10 @@ async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
             "{prompt}"
         );
         assert!(prompt.contains("`verify` reported `failed` more than 1 times"));
+        assert!(prompt.contains("One extra attempt of `implement`"));
     }
-    // The retried implementer sees the verifier's findings, not the gate's.
+    // The extra attempt and the human retry both see the verifier's findings,
+    // not the gate's decision.
     assert!(
         prompts[4].starts_with("## Feedback from the previous attempt"),
         "{}",
@@ -355,6 +363,7 @@ async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
     );
     assert!(prompts[4].contains("Stage `verify` sent this work back with outcome `failed`"));
     assert!(prompts[4].contains("Summary: Login criterion still unmet."));
+    assert!(prompts[6].contains("Summary: Unmet after the extra attempt."));
     assert!(prompts[2].contains("Summary: Login criterion unmet."));
     assert!(!prompts[0].contains("Feedback from the previous attempt"));
 
@@ -381,6 +390,7 @@ async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
             })
             .count()
     };
+    assert_eq!(traversed("verify", "implement", EdgeKind::Escalate), 1);
     assert_eq!(
         traversed("verify", "verify_escalation", EdgeKind::Escalate),
         2

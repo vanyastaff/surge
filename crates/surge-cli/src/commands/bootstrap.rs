@@ -467,6 +467,10 @@ async fn build_local_engine(
             // so it resolves providers through the same unified catalog
             // (user `[agents.*]` over builtins).
             agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::for_run(config))),
+            escalation: surge_orchestrator::engine::escalation_config(
+                config,
+                &surge_acp::Registry::for_run(config),
+            ),
             ..EngineConfig::default()
         },
     ));

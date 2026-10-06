@@ -345,6 +345,10 @@ pub struct RunMemory {
     /// `EdgeTraversed { kind: Escalate }` sequence. A retry backtracking out
     /// of that gate carries the exhausted stage's feedback, not the gate's.
     pub escalations: BTreeMap<NodeKey, BacktrackFeedback>,
+    /// The edge of the latest `EdgeTraversed` into each node. The engine reads
+    /// it to recognise an extra escalation attempt
+    /// (`surge_core::escalation::is_alternate_attempt`) after a restart too.
+    pub entered_via: BTreeMap<NodeKey, crate::keys::EdgeKey>,
     /// Per-bootstrap-stage latest edit feedback. Updated on every
     /// `BootstrapEditRequested { stage, feedback }` event — the newest
     /// feedback overwrites the previous entry for that stage. Read by the
@@ -1577,6 +1581,9 @@ impl RunMemory {
         }
         self.apply_recovery_event(event);
         self.apply_mcp_call_event(event);
+        if let EventPayload::EdgeTraversed { edge, to, .. } = &event.payload {
+            self.entered_via.insert(to.clone(), edge.clone());
+        }
         match self.verification.observe(&event.payload) {
             VerificationInvalidation::All => self
                 .ledger
@@ -1711,13 +1718,15 @@ impl RunMemory {
                 to,
                 ..
             } => {
-                self.escalations.insert(
-                    to.clone(),
-                    BacktrackFeedback {
-                        from: from.clone(),
-                        edge_seq: event.seq,
-                    },
-                );
+                let feedback = BacktrackFeedback {
+                    from: from.clone(),
+                    edge_seq: event.seq,
+                };
+                // An escalation into an agent (the extra attempt) carries the
+                // exhausted stage's feedback like a backtrack does; for a gate
+                // it is cleared by the gate's own outcome.
+                self.backtrack_feedback.insert(to.clone(), feedback.clone());
+                self.escalations.insert(to.clone(), feedback);
             },
             EventPayload::RoadmapPatchDrafted {
                 patch_id,

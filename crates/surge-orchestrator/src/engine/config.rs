@@ -68,6 +68,10 @@ pub struct EngineConfig {
     /// Surge deliberately has no per-vendor branch anywhere: choosing a
     /// provider is choosing a registry entry.
     pub agent_registry: Option<Arc<surge_acp::Registry>>,
+    /// Where the extra attempt of an exhausted retry loop runs
+    /// (`surge_core::escalation`). Engine-level like `capacity`, so a resumed
+    /// run keeps it; production wiring copies `SurgeConfig::escalation`.
+    pub escalation: surge_core::escalation::EscalationConfig,
 }
 
 impl Default for EngineConfig {
@@ -80,8 +84,31 @@ impl Default for EngineConfig {
             ),
             memory_store_path: None,
             agent_registry: None,
+            escalation: surge_core::escalation::EscalationConfig::default(),
         }
     }
+}
+
+/// `SurgeConfig::escalation`, checked against the agent registry: a retry agent
+/// the registry does not know is dropped with a warning, so the extra attempt
+/// runs on the stage's own agent instead of failing at launch.
+#[must_use]
+pub fn escalation_config(
+    config: &surge_core::SurgeConfig,
+    agents: &surge_acp::Registry,
+) -> surge_core::escalation::EscalationConfig {
+    let mut escalation = config.escalation.clone();
+    if let Some(agent) = escalation.retry_agent()
+        && agents.find_normalized(agent).is_none()
+    {
+        tracing::warn!(
+            target: "engine::escalation",
+            retry_agent = agent,
+            "[escalation] retry_agent is not a known agent; extra attempts use the stage's agent"
+        );
+        escalation = surge_core::escalation::EscalationConfig::default();
+    }
+    escalation
 }
 
 /// Controls when the engine writes a snapshot blob to storage.
