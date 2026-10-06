@@ -54,6 +54,11 @@ pub struct TaskLedgerIndexUpsert {
     pub updated_seq: u64,
     /// Observation timestamp in unix epoch milliseconds.
     pub observed_at_ms: i64,
+    /// A human accepted the task after its retry ladder was exhausted; never
+    /// implies `verified`.
+    pub accepted_by_human: bool,
+    /// A human revised the task's requirement.
+    pub requirement_revised: bool,
 }
 
 /// One row from the registry-level task-ledger index.
@@ -81,6 +86,13 @@ pub struct TaskLedgerIndexRecord {
     pub updated_seq: u64,
     /// Last time this row was updated in unix epoch milliseconds.
     pub updated_at_ms: i64,
+    /// A human accepted the task after its retry ladder was exhausted; never
+    /// implies `verified`.
+    #[serde(default)]
+    pub accepted_by_human: bool,
+    /// A human revised the task's requirement.
+    #[serde(default)]
+    pub requirement_revised: bool,
 }
 
 impl TaskLedgerIndexRecord {
@@ -152,12 +164,15 @@ impl TaskLedgerStore {
         conn.execute(
             "INSERT INTO task_ledger_index
                 (run_id, task_id, project_path, status, verified, discovered_from,
-                 last_authority_node, updated_seq, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_authority_node, updated_seq, updated_at, accepted_by_human,
+                 requirement_revised)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(run_id, task_id) DO UPDATE SET
                 project_path = excluded.project_path,
                 status = excluded.status,
                 verified = excluded.verified,
+                accepted_by_human = excluded.accepted_by_human,
+                requirement_revised = excluded.requirement_revised,
                 discovered_from = COALESCE(excluded.discovered_from, discovered_from),
                 last_authority_node = excluded.last_authority_node,
                 updated_seq = excluded.updated_seq,
@@ -172,6 +187,8 @@ impl TaskLedgerStore {
                 input.last_authority_node.as_deref(),
                 input.updated_seq as i64,
                 input.observed_at_ms,
+                i64::from(input.accepted_by_human),
+                i64::from(input.requirement_revised),
             ],
         )?;
         self.get(input.run_id, &input.task_id)?
@@ -192,7 +209,8 @@ impl TaskLedgerStore {
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         let mut sql = String::from(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
-                    last_authority_node, updated_seq, updated_at
+                    last_authority_node, updated_seq, updated_at, accepted_by_human,
+                    requirement_revised
              FROM task_ledger_index WHERE 1=1",
         );
         let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -239,7 +257,8 @@ impl TaskLedgerStore {
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         conn.query_row(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
-                    last_authority_node, updated_seq, updated_at
+                    last_authority_node, updated_seq, updated_at, accepted_by_human,
+                    requirement_revised
              FROM task_ledger_index WHERE run_id = ? AND task_id = ?",
             params![run_id.to_string(), task_id],
             row_to_record,
@@ -275,6 +294,8 @@ fn row_to_record(row: &Row<'_>) -> rusqlite::Result<TaskLedgerIndexRecord> {
         last_authority_node: row.get(6)?,
         updated_seq: row.get::<_, i64>(7)? as u64,
         updated_at_ms: row.get(8)?,
+        accepted_by_human: row.get::<_, i64>(9)? != 0,
+        requirement_revised: row.get::<_, i64>(10)? != 0,
 
         freshness: surge_core::verification_evidence::ProofFreshness::Unknown,
     })
@@ -339,6 +360,8 @@ mod tests {
             last_authority_node: Some("verify_1".into()),
             updated_seq: 7,
             observed_at_ms: 1_700_000_000_000,
+            accepted_by_human: false,
+            requirement_revised: false,
         }
     }
 

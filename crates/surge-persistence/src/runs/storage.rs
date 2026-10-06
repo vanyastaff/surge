@@ -157,6 +157,8 @@ impl Storage {
                         last_authority_node: row.last_authority_node.clone(),
                         updated_seq: row.updated_seq.0,
                         observed_at_ms,
+                        accepted_by_human: row.accepted_by_human,
+                        requirement_revised: row.requirement_revised,
                     })
                     .map_err(|e| e.to_string())?;
             }

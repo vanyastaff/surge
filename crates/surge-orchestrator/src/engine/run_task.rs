@@ -2761,6 +2761,83 @@ async fn route_commit_exit_if_requested(
     }
 }
 
+/// A human override answered on a default escalation gate (v1 task 1.2):
+/// `accept_as_is` records `TaskAcceptedByHuman` with the exhausted stage's
+/// latest findings; `revise_requirement` records `RequirementRevised` from the
+/// answer's comment. Committed in the route batch, so it is never lost or
+/// doubled across a crash.
+fn human_override_effect(
+    state: &RunExecutionState,
+    outcome: &OutcomeKey,
+) -> Option<VersionedEventPayload> {
+    use surge_core::escalation::{ACCEPT_OUTCOME, REVISE_OUTCOME};
+    if outcome.as_str() != ACCEPT_OUTCOME && outcome.as_str() != REVISE_OUTCOME {
+        return None;
+    }
+    let gate = &state.cursor.node;
+    let graph = &state.routing_graph;
+    let source = std::iter::once(graph.edges.as_slice())
+        .chain(graph.subgraphs.values().map(|sg| sg.edges.as_slice()))
+        .find_map(|edges| surge_core::escalation::escalation_gate_source(edges, gate))?
+        .clone();
+    let task = crate::engine::frames::active_task_id(&state.frames);
+    let comment = state
+        .memory
+        .gate_decisions
+        .values()
+        .filter(|record| &record.node == gate)
+        .find_map(|record| record.response.as_ref())
+        .and_then(|response| response.get("comment"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|comment| !comment.is_empty())
+        .map(str::to_owned);
+    let payload = if outcome.as_str() == ACCEPT_OUTCOME {
+        let findings = state
+            .memory
+            .artifacts_by_node
+            .get(&source)
+            .into_iter()
+            .flatten()
+            .rfind(|artifact| artifact.name == "verification-report")
+            .map(|artifact| artifact.hash);
+        tracing::info!(
+            target: "engine::escalation",
+            node = %source,
+            task = task.as_ref().map_or("(none)", |task| task.as_str()),
+            with_findings = findings.is_some(),
+            "work accepted by a human after an exhausted retry ladder"
+        );
+        EventPayload::TaskAcceptedByHuman {
+            node: source,
+            task,
+            findings,
+            comment,
+        }
+    } else {
+        let Some(text) = comment else {
+            tracing::warn!(
+                target: "engine::escalation",
+                node = %source,
+                "revise requirement answered without a revised requirement; checking again unchanged"
+            );
+            return None;
+        };
+        tracing::info!(
+            target: "engine::escalation",
+            node = %source,
+            task = task.as_ref().map_or("(none)", |task| task.as_str()),
+            "requirement revised by a human"
+        );
+        EventPayload::RequirementRevised {
+            node: source,
+            task,
+            text,
+        }
+    };
+    Some(VersionedEventPayload::new(payload))
+}
+
 /// Largest `discovered-tasks` artifact a split planner may hand back.
 const SPLIT_TASKS_MAX_BYTES: usize = 256 * 1024;
 /// Most replacement tasks one split may insert.
@@ -2939,9 +3016,10 @@ async fn route_and_snapshot(
         .pending_graph_revisions
         .extend(applied_events.graph_revisions);
     apply_pending_revisions(&mut prepared);
+    let human_override = human_override_effect(&prepared, outcome);
     let split = task_split_effect(params, &mut prepared, outcome, stage_start_seq).await?;
     let routed = route_stage_outcome(&mut prepared, outcome)?;
-    let mut events: Vec<VersionedEventPayload> = split.into_iter().collect();
+    let mut events: Vec<VersionedEventPayload> = human_override.into_iter().chain(split).collect();
     events.extend(routing_events(&prepared, outcome, &routed));
     if let Some(record) = outstanding_stage_outcome(&prepared)? {
         if record.commit.outcome() != outcome {

@@ -60,7 +60,13 @@ verifier's `failed` back to the implementer). When the limit is spent and
   (`TaskSplit` in the run log). If the planner reports `cannot_split`, the rung
   is spent, or the loop is not in a loop body, routing reaches a human gate: **Retry once more** returns to the
   loop target for one more attempt, and the counter is not reset, so the next
-  rejection asks again. **Stop** ends the run, or fails the current iteration inside a
+  rejection asks again. **Accept as is** continues on the exhausted stage's success path
+  (its verified outcome, else its first forward edge that does not fail) and
+  records `TaskAcceptedByHuman`: completed, never verified, the verifier's
+  latest findings kept. **Revise requirement** records the comment as
+  `RequirementRevised` and runs the exhausted stage again; every later stage of
+  the same task (or of the run, outside task loops) sees the revision first in
+  its prompt. **Stop** ends the run, or fails the current iteration inside a
   loop so `on_iteration_failure` applies. The gate has no practical deadline.
   It is derived from the persisted graph and never written into it.
 - A stage whose capped edges lead to different targets gets no default gate

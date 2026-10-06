@@ -427,12 +427,25 @@ fn commit_stage_route(
 ) -> Result<EventSeq, WriterError> {
     use surge_core::run_event::EventPayload;
     let all = payloads;
-    // A split planner's route carries its `TaskSplit` first, so the splice and
-    // the route commit (with the snapshot holding the grown loop) are atomic.
-    let payloads = match all.first().map(VersionedEventPayload::payload) {
-        Some(EventPayload::TaskSplit { .. }) => &all[1..],
-        _ => all,
-    };
+    // Task-scoped records (a split, a human override) lead a route batch so
+    // they commit atomically with the route and its snapshot.
+    let leading = all
+        .iter()
+        .take_while(|payload| {
+            matches!(
+                payload.payload(),
+                EventPayload::TaskSplit { .. }
+                    | EventPayload::TaskAcceptedByHuman { .. }
+                    | EventPayload::RequirementRevised { .. }
+            )
+        })
+        .count();
+    if leading > 2 {
+        return Err(WriterError::OperationRejected(
+            "stage route carries too many task records".into(),
+        ));
+    }
+    let payloads = &all[leading..];
     if !(2..=3).contains(&payloads.len())
         || !matches!(payloads[0].payload(), EventPayload::EdgeTraversed { .. })
         || !matches!(payloads[1].payload(), EventPayload::StageCompleted { .. })

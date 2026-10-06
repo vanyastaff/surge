@@ -1664,3 +1664,59 @@ fn historical_unbound_verification_never_counts_as_fresh_proof() {
         VerdictResult::Superseded
     ));
 }
+
+#[test]
+fn a_human_acceptance_is_reported_but_never_evidence_backed() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let findings = ContentHash::compute(b"verification-report");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::RequirementRevised {
+                node: verifier.clone(),
+                task: Some("t1".into()),
+                text: "Sessions last 24 hours".into(),
+            },
+        ),
+        event(
+            3,
+            EventPayload::TaskAcceptedByHuman {
+                node: verifier.clone(),
+                task: Some("t1".into()),
+                findings: Some(findings),
+                comment: Some("demo".into()),
+            },
+        ),
+        event(
+            4,
+            EventPayload::RunCompleted {
+                terminal_node: node_key("success"),
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(report.verdicts.len(), 1);
+    assert_eq!(
+        report.verdicts[0].result,
+        VerdictResult::AcceptedByHuman {
+            findings: Some(findings)
+        }
+    );
+    assert!(report.verdicts[0].requirement_revised);
+    assert_eq!(report.evidence_backed, Some(false));
+    let markdown = render_markdown(&report);
+    assert!(
+        markdown.contains("ACCEPTED BY A HUMAN — not verified")
+            && markdown.contains("against a revised requirement"),
+        "{markdown}"
+    );
+    assert!(render_html(&report).contains("ACCEPTED BY A HUMAN — not verified"));
+}

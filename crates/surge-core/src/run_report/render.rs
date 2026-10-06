@@ -181,8 +181,12 @@ pub fn render_markdown(report: &RunReport) -> String {
                 "- task `{}` ({}): {}\n",
                 escape_markdown(verdict.task_id.as_str()),
                 escape_markdown_display(&verdict.node),
-                verdict_label(&verdict.result)
+                verdict_label(&verdict.result),
             ));
+            if verdict.requirement_revised {
+                out.pop();
+                out.push_str(" · against a revised requirement\n");
+            }
         }
         out.push('\n');
     }
@@ -477,6 +481,13 @@ fn verdict_label(result: &VerdictResult) -> String {
         },
         VerdictResult::Superseded => {
             "SUPERSEDED — task moved on after this verdict; must be re-earned".to_string()
+        },
+        VerdictResult::AcceptedByHuman { findings } => match findings {
+            Some(findings) => format!(
+                "ACCEPTED BY A HUMAN — not verified; findings `{}` kept",
+                escape_markdown_display(findings)
+            ),
+            None => "ACCEPTED BY A HUMAN — not verified".to_string(),
         },
     }
 }
@@ -813,6 +824,21 @@ fn render_verdicts_section(report: &RunReport) -> String {
                 "warn",
                 "SUPERSEDED — task moved on after this verdict; must be re-earned".to_string(),
             ),
+            VerdictResult::AcceptedByHuman { findings } => (
+                "warn",
+                match findings {
+                    Some(findings) => format!(
+                        "ACCEPTED BY A HUMAN — not verified; findings {} kept",
+                        escape_display(findings)
+                    ),
+                    None => "ACCEPTED BY A HUMAN — not verified".to_string(),
+                },
+            ),
+        };
+        let label = if verdict.requirement_revised {
+            format!("{label} · against a revised requirement")
+        } else {
+            label
         };
         items.push_str(&format!(
             "<li>task <code>{}</code> ({}): <span class=\"{class}\">{}</span></li>\n",

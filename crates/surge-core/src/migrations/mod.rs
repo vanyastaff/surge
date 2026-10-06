@@ -108,7 +108,11 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v18:** adds [`EventPayload::TaskSplit`], the verifier ladder's split rung
 /// (a task replaced by smaller tasks in the same loop). A v17-max reader has
 /// no variant for it and rejects v18 with [`SurgeError::SchemaTooNew`].
-pub const MAX_SUPPORTED_VERSION: u32 = 18;
+/// **v19:** adds [`EventPayload::TaskAcceptedByHuman`] and
+/// [`EventPayload::RequirementRevised`], the human overrides of an exhausted
+/// retry ladder. A v18-max reader would otherwise miss that a completed task
+/// was accepted by a human rather than verified, so it rejects v19.
+pub const MAX_SUPPORTED_VERSION: u32 = 19;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -426,6 +430,20 @@ impl Migration for IdentityV18 {
     }
 }
 
+/// Identity decoder for human override records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV19;
+impl Migration for IdentityV19 {
+    fn version(&self) -> u32 {
+        19
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v19 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -436,7 +454,7 @@ impl MigrationChain {
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
     /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
-    /// [`IdentityV16`], [`IdentityV17`], and [`IdentityV18`].
+    /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], and [`IdentityV19`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -459,6 +477,7 @@ impl MigrationChain {
                 Box::new(IdentityV16),
                 Box::new(IdentityV17),
                 Box::new(IdentityV18),
+                Box::new(IdentityV19),
             ],
         }
     }
@@ -637,6 +656,35 @@ mod tests {
     }
 
     #[test]
+    fn v19_human_overrides_round_trip_and_v18_readers_reject_them() {
+        let accepted = EventPayload::TaskAcceptedByHuman {
+            node: NodeKey::try_from("verify").unwrap(),
+            task: Some(crate::roadmap::RoadmapTaskId::from("login")),
+            findings: Some(crate::content_hash::ContentHash::compute(b"report")),
+            comment: Some("good enough for the demo".into()),
+        };
+        let revised = EventPayload::RequirementRevised {
+            node: NodeKey::try_from("verify").unwrap(),
+            task: None,
+            text: "Sessions may last 24 hours".into(),
+        };
+        for (payload, tag) in [
+            (accepted, "task_accepted_by_human"),
+            (revised, "requirement_revised"),
+        ] {
+            let wrapper = VersionedEventPayload::new(payload.clone());
+            assert_eq!(wrapper.schema_version, 19);
+            let bytes = serde_json::to_vec(&wrapper).unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
+            assert_eq!(migrate_payload(19, &bytes).unwrap(), payload);
+            assert!(matches!(
+                migrate_payload(20, &bytes),
+                Err(SurgeError::SchemaTooNew { found: 20, max: 19 })
+            ));
+        }
+    }
+
+    #[test]
     fn v18_task_split_round_trips_and_v17_readers_reject_it() {
         let item: toml::Value =
             toml::from_str("id = 'login-a'\ntitle = 'Reject empty passwords'").unwrap();
@@ -647,13 +695,13 @@ mod tests {
             into: vec![item],
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 18);
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("\"task_split\""));
         assert_eq!(migrate_payload(18, &bytes).unwrap(), payload);
         assert!(matches!(
-            migrate_payload(19, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 19, max: 18 })
+            migrate_payload(20, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 20, max: 19 })
         ));
     }
 
@@ -906,8 +954,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(19, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 19, max: 18 })
+            migrate_payload(20, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 20, max: 19 })
         ));
     }
 

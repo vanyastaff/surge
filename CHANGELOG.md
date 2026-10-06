@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — accept as is, or revise the requirement, on an exhausted ladder
+
+- The default escalation gate now offers **Accept as is** and **Revise
+  requirement** next to Retry and Stop. Accepting continues on the stage's
+  success path and records `TaskAcceptedByHuman`: the task is completed but
+  never verified, the verifier's latest findings stay attached, and the run is
+  not reported as a proven success. Revising records the comment as
+  `RequirementRevised` and runs the stage again; later stages of the task see
+  the revision in their prompt, and a later verification is reported as
+  "against a revised requirement".
+- The run report, the fold ledger, the per-run `task_ledger` view, the registry
+  index and `surge ledger` ("by human", "yes·rev") tell the three outcomes
+  apart. **Event payload schema v19**; SQLite migrations per-run 0009 and
+  registry 0031 add the `accepted_by_human` and `requirement_revised` columns.
+
 ### Added — exhausted roadmap tasks are split in place
 
 - In a task loop, a task that keeps failing verification after its retries

@@ -137,6 +137,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0030-owned-flow-wake-refusals",
         include_str!("migrations/registry/0030_owned_flow_wake_refusals.sql"),
     ),
+    (
+        "0031_task_ledger_human_overrides",
+        include_str!("migrations/registry/0031_task_ledger_human_overrides.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -172,6 +176,10 @@ pub const PER_RUN_MIGRATIONS: MigrationSet = &[
     (
         "per-run-0008-stage-known-cost",
         include_str!("migrations/per_run/0008_stage_known_cost.sql"),
+    ),
+    (
+        "per-run-0009-task-ledger-human-overrides",
+        include_str!("migrations/per_run/0009_task_ledger_human_overrides.sql"),
     ),
 ];
 

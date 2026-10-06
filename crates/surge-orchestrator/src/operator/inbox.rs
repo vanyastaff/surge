@@ -811,6 +811,8 @@ mod tests {
                 last_authority_node: None,
                 updated_seq: 1,
                 observed_at_ms: 0,
+                accepted_by_human: false,
+                requirement_revised: false,
             })
             .unwrap();
         storage
@@ -870,6 +872,8 @@ mod tests {
                 last_authority_node: None,
                 updated_seq: 1,
                 observed_at_ms: 0,
+                accepted_by_human: false,
+                requirement_revised: false,
             })
             .unwrap();
         for (i, task_id) in ["t2", "t3", "t4", "t5"].into_iter().enumerate() {
@@ -885,6 +889,8 @@ mod tests {
                     last_authority_node: None,
                     updated_seq: 2 + i as u64,
                     observed_at_ms: 0,
+                    accepted_by_human: false,
+                    requirement_revised: false,
                 })
                 .unwrap();
         }

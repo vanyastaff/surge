@@ -31,6 +31,12 @@ pub const EXHAUSTED_OUTCOME: &str = "max_traversals_exceeded";
 pub const RETRY_OUTCOME: &str = "retry";
 /// Gate outcome ending the run, or the current loop iteration inside a loop.
 pub const STOP_OUTCOME: &str = "stop";
+/// Gate outcome accepting the work without verification (v1 task 1.2); the
+/// run continues on the exhausted stage's success path.
+pub const ACCEPT_OUTCOME: &str = "accept_as_is";
+/// Gate outcome revising the requirement (in the answer's comment) and running
+/// the exhausted stage again against it (v1 task 1.2).
+pub const REVISE_OUTCOME: &str = "revise_requirement";
 /// Synthetic outcome routing takes when an escalation edge is itself
 /// exhausted: the next rung of the ladder.
 pub const ESCALATION_EXHAUSTED_OUTCOME: &str = "escalation_exhausted";
@@ -53,6 +59,62 @@ pub const SPLIT_PLANNER_PROFILE: &str = "task-splitter@1.0";
 /// derived graphs carry it.
 pub const ESCALATION_ROLE_FIELD: &str = "surge_escalation_role";
 const SPLIT_ROLE: &str = "split";
+
+/// The stage whose exhausted ladder reaches `gate`, when `gate` is a default
+/// escalation gate in this scope: an `escalate` edge on a ladder rung leads to
+/// it.
+#[must_use]
+pub fn escalation_gate_source<'a>(edges: &'a [Edge], gate: &NodeKey) -> Option<&'a NodeKey> {
+    edges
+        .iter()
+        .find(|edge| {
+            &edge.to == gate
+                && edge.kind == EdgeKind::Escalate
+                && ESCALATION_RUNGS.contains(&edge.from.outcome.as_str())
+                && !is_alternate_attempt(edge)
+        })
+        .map(|edge| &edge.from.node)
+}
+
+/// The node an exhausted `source` continues to when its work is accepted: the
+/// target of its verified outcome, else of its first forward edge that is not
+/// a retry loop and does not end the run in failure.
+fn success_target(
+    nodes: &BTreeMap<NodeKey, Node>,
+    edges: &[Edge],
+    source: &NodeKey,
+) -> Option<NodeKey> {
+    let node = nodes.get(source)?;
+    let failing = |target: &NodeKey| {
+        matches!(
+            nodes.get(target).map(|node| &node.config),
+            Some(NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Failure { .. },
+                ..
+            }))
+        )
+    };
+    let from_outcome = |outcome: &OutcomeKey| {
+        edges
+            .iter()
+            .find(|edge| &edge.from.node == source && &edge.from.outcome == outcome)
+    };
+    if let Some(edge) = node
+        .declared_outcomes
+        .iter()
+        .filter(|decl| decl.ledger_effect == crate::node::LedgerEffect::Verified)
+        .find_map(|decl| from_outcome(&decl.id))
+    {
+        return Some(edge.to.clone());
+    }
+    node.declared_outcomes.iter().find_map(|decl| {
+        let edge = from_outcome(&decl.id)?;
+        (edge.kind == EdgeKind::Forward
+            && edge.policy.max_traversals.is_none()
+            && !failing(&edge.to))
+        .then(|| edge.to.clone())
+    })
+}
 
 /// Whether `node` is a derived split planner (see [`SPLIT_PLANNER_PROFILE`]).
 #[must_use]
@@ -291,9 +353,11 @@ fn add_gates(
             nodes.get(&target).map(|node| &node.config),
             Some(NodeConfig::Agent(_))
         );
+        let accept_to = success_target(nodes, edges, &source);
         let ladder = Ladder {
             alternate,
             split: alternate && loop_body,
+            accept_to,
         };
         let Some(addition) = gate_for(&source, &target, &loop_edges, ladder, names) else {
             continue;
@@ -305,13 +369,15 @@ fn add_gates(
     }
 }
 
-/// Automatic rungs before the gate.
-#[derive(Clone, Copy)]
+/// Automatic rungs before the gate, and where an acceptance continues.
+#[derive(Clone)]
 struct Ladder {
     /// One extra attempt of the loop's agent.
     alternate: bool,
     /// A split planner (only inside loop bodies).
     split: bool,
+    /// Success continuation of the source; `None` offers no acceptance.
+    accept_to: Option<NodeKey>,
 }
 
 struct Addition {
@@ -379,30 +445,72 @@ fn gate_for(
             "The planner did not split the task into smaller ones."
         );
     }
+    let accept = OutcomeKey::try_from(ACCEPT_OUTCOME).ok()?;
+    let revise = OutcomeKey::try_from(REVISE_OUTCOME).ok()?;
+    let accept_edge = match &ladder.accept_to {
+        Some(_) => Some(names.edge(&format!("{source}_accept"), "escalation_edge")?),
+        None => None,
+    };
+    let revise_edge = names.edge(&format!("{source}_revise"), "escalation_edge")?;
     let _ = write!(
         body,
-        "\nRetry gives `{target}` one more attempt with the latest findings. \
-         Stop ends this run, or this task when it runs inside a loop."
+        "\nRetry gives `{target}` one more attempt with the latest findings."
     );
+    if ladder.accept_to.is_some() {
+        let _ = write!(
+            body,
+            " Accept as is continues with the work recorded as accepted by you, \
+             not verified; the findings stay attached."
+        );
+    }
+    let _ = write!(
+        body,
+        " Revise requirement runs `{source}` again against the new requirement you \
+         write in the comment. Stop ends this run, or this task when it runs \
+         inside a loop."
+    );
+    let decl = |id: &OutcomeKey, description: &str, hint| OutcomeDecl {
+        id: id.clone(),
+        description: description.into(),
+        edge_kind_hint: hint,
+        is_terminal: false,
+        ledger_effect: Default::default(),
+    };
+    let option = |outcome: &OutcomeKey, label: &str, style| ApprovalOption {
+        outcome: outcome.clone(),
+        label: label.into(),
+        style,
+    };
+    let mut declared_outcomes = vec![decl(
+        &retry,
+        "Give the loop one more attempt",
+        EdgeKind::Backtrack,
+    )];
+    let mut options = vec![option(&retry, "Retry once more", OptionStyle::Primary)];
+    if ladder.accept_to.is_some() {
+        declared_outcomes.push(decl(
+            &accept,
+            "Accept the work as is, not verified",
+            EdgeKind::Forward,
+        ));
+        options.push(option(&accept, "Accept as is", OptionStyle::Warn));
+    }
+    declared_outcomes.push(decl(
+        &revise,
+        "Revise the requirement and check again",
+        EdgeKind::Backtrack,
+    ));
+    options.push(option(&revise, "Revise requirement", OptionStyle::Normal));
+    declared_outcomes.push(decl(
+        &stop,
+        "Stop after the attempt limit",
+        EdgeKind::Forward,
+    ));
+    options.push(option(&stop, "Stop", OptionStyle::Danger));
     let gate_node = Node {
         id: gate.clone(),
         position: Position::default(),
-        declared_outcomes: vec![
-            OutcomeDecl {
-                id: retry.clone(),
-                description: "Give the loop one more attempt".into(),
-                edge_kind_hint: EdgeKind::Backtrack,
-                is_terminal: false,
-                ledger_effect: Default::default(),
-            },
-            OutcomeDecl {
-                id: stop.clone(),
-                description: "Stop after the attempt limit".into(),
-                edge_kind_hint: EdgeKind::Forward,
-                is_terminal: false,
-                ledger_effect: Default::default(),
-            },
-        ],
+        declared_outcomes,
         config: NodeConfig::HumanGate(HumanGateConfig {
             delivery_channels: Vec::new(),
             timeout_seconds: Some(NO_PRACTICAL_DEADLINE_SECS),
@@ -412,18 +520,7 @@ fn gate_for(
                 body,
                 show_artifacts: Vec::new(),
             },
-            options: vec![
-                ApprovalOption {
-                    outcome: retry.clone(),
-                    label: "Retry once more".into(),
-                    style: OptionStyle::Primary,
-                },
-                ApprovalOption {
-                    outcome: stop.clone(),
-                    label: "Stop".into(),
-                    style: OptionStyle::Danger,
-                },
-            ],
+            options,
             allow_freetext: false,
             mode: HumanGateMode::Generic,
         }),
@@ -498,6 +595,16 @@ fn gate_for(
     let outcome = rung.next()?;
     edges.push(edge(to_gate, source, outcome, &gate, EdgeKind::Escalate));
     edges.push(edge(retry_edge, &gate, &retry, target, EdgeKind::Backtrack));
+    if let (Some(id), Some(to)) = (accept_edge, &ladder.accept_to) {
+        edges.push(edge(id, &gate, &accept, to, EdgeKind::Forward));
+    }
+    edges.push(edge(
+        revise_edge,
+        &gate,
+        &revise,
+        source,
+        EdgeKind::Backtrack,
+    ));
     edges.push(edge(stop_edge, &gate, &stop, &stopped, EdgeKind::Forward));
     Some(Addition { nodes, edges })
 }
@@ -568,7 +675,7 @@ mod tests {
 
         let config = gate_config(&effective, "verify_1_escalation");
         let outcomes: Vec<&str> = config.options.iter().map(|o| o.outcome.as_str()).collect();
-        assert_eq!(outcomes, ["retry", "stop"]);
+        assert_eq!(outcomes, ["retry", ACCEPT_OUTCOME, REVISE_OUTCOME, "stop"]);
         assert_eq!(config.timeout_seconds, Some(u32::MAX));
         assert!(config.summary.body.contains("`verify_1` reported `failed`"));
         let edge_to = |from: &str, outcome: &str| {
@@ -628,6 +735,31 @@ mod tests {
         assert_eq!(
             edge_to("verify_1_escalation", "stop"),
             Some(("verify_1_stopped".into(), EdgeKind::Forward))
+        );
+        // Accepting continues on the verifier's verified path; revising runs
+        // the verifier again.
+        assert_eq!(
+            edge_to("verify_1_escalation", ACCEPT_OUTCOME),
+            Some(("success".into(), EdgeKind::Forward))
+        );
+        assert_eq!(
+            edge_to("verify_1_escalation", REVISE_OUTCOME),
+            Some(("verify_1".into(), EdgeKind::Backtrack))
+        );
+        // The implementer's partial loop accepts into verification, never
+        // into the failure terminal.
+        assert_eq!(
+            edge_to("implement_1_escalation", ACCEPT_OUTCOME),
+            Some(("verify_1".into(), EdgeKind::Forward))
+        );
+        assert_eq!(
+            escalation_gate_source(&effective.edges, &key("verify_1_escalation"))
+                .map(NodeKey::as_str),
+            Some("verify_1")
+        );
+        assert_eq!(
+            escalation_gate_source(&effective.edges, &key("verify_1")),
+            None
         );
         // The implementer's own `partial` self-loop gets its own gate.
         assert_eq!(

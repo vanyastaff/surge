@@ -335,6 +335,34 @@ async fn previous_attempt_feedback(p: &AgentStageParams<'_>) -> Option<String> {
     rendered
 }
 
+/// Requirement revisions a human made (v1 task 1.2) that apply to this stage:
+/// those for its task, and run-wide ones. Newest last, so the latest wins.
+fn prepend_requirement_revisions(
+    prompt: String,
+    revisions: &[surge_core::run_state::RequirementRevision],
+    task: Option<&surge_core::roadmap::RoadmapTaskId>,
+) -> String {
+    use std::fmt::Write as _;
+    let applicable: Vec<_> = revisions
+        .iter()
+        .filter(|revision| revision.task.is_none() || revision.task.as_ref() == task)
+        .collect();
+    if applicable.is_empty() {
+        return prompt;
+    }
+    let mut text = String::from(
+        "## Requirement revised by the operator\n\
+         The operator changed the requirement for this work. Where it conflicts \
+         with the task or earlier criteria, the latest revision wins:\n",
+    );
+    for revision in applicable {
+        let _ = writeln!(text, "- {}", clip(&revision.text));
+    }
+    text.push('\n');
+    text.push_str(&prompt);
+    text
+}
+
 fn clip(text: &str) -> String {
     let text = text.trim();
     match text.char_indices().nth(FEEDBACK_FIELD_MAX_CHARS) {
@@ -1497,6 +1525,11 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         Some(feedback) => feedback + &prompt_text,
         None => prompt_text,
     };
+    let prompt_text = prepend_requirement_revisions(
+        prompt_text,
+        &p.run_memory.requirement_revisions,
+        p.active_task_id.as_ref(),
+    );
     // Prepend any queued operator steer messages to this turn's prompt (B2).
     // Non-destructive: steering lands here, at the stage boundary, because ACP
     // v1 offers no mid-turn injection channel.
@@ -4095,6 +4128,33 @@ mod tests {
         let text = render_previous_attempt_feedback(&from, Some(&clipped), None).unwrap();
         assert!(text.contains(&format!("{}…", "x".repeat(FEEDBACK_FIELD_MAX_CHARS))));
         assert!(!text.contains(&"x".repeat(FEEDBACK_FIELD_MAX_CHARS + 1)));
+    }
+
+    #[test]
+    fn requirement_revisions_apply_to_their_task_and_run_wide() {
+        use surge_core::run_state::RequirementRevision;
+        let revision = |task: Option<&str>, text: &str, seq| RequirementRevision {
+            node: NodeKey::try_from("verify").unwrap(),
+            task: task.map(surge_core::roadmap::RoadmapTaskId::from),
+            text: text.into(),
+            seq,
+        };
+        let revisions = [
+            revision(Some("login"), "Allow empty passwords in dev", 3),
+            revision(Some("logout"), "Keep sessions on logout", 4),
+            revision(None, "Use UTC everywhere", 5),
+        ];
+        let login = surge_core::roadmap::RoadmapTaskId::from("login");
+        let prompt = prepend_requirement_revisions("Do it.".into(), &revisions, Some(&login));
+        assert!(prompt.starts_with("## Requirement revised by the operator"));
+        assert!(prompt.contains("- Allow empty passwords in dev"));
+        assert!(prompt.contains("- Use UTC everywhere"));
+        assert!(!prompt.contains("Keep sessions on logout"));
+        assert!(prompt.ends_with("Do it."));
+        assert_eq!(
+            prepend_requirement_revisions("Do it.".into(), &revisions[..2], None),
+            "Do it."
+        );
     }
 
     #[test]

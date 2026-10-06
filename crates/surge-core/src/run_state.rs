@@ -349,6 +349,9 @@ pub struct RunMemory {
     /// it to recognise an extra escalation attempt
     /// (`surge_core::escalation::is_alternate_attempt`) after a restart too.
     pub entered_via: BTreeMap<NodeKey, crate::keys::EdgeKey>,
+    /// Requirement revisions a human made, oldest first. Stages of the same
+    /// task (or every stage, for a run-wide revision) see them in the prompt.
+    pub requirement_revisions: Vec<RequirementRevision>,
     /// Per-bootstrap-stage latest edit feedback. Updated on every
     /// `BootstrapEditRequested { stage, feedback }` event — the newest
     /// feedback overwrites the previous entry for that stage. Read by the
@@ -401,6 +404,7 @@ impl LedgerState {
         entry.status = to;
         if to != RoadmapStatus::Completed {
             entry.verified = false;
+            entry.accepted_by_human = false;
         }
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
@@ -421,8 +425,8 @@ impl LedgerState {
                 status: RoadmapStatus::Pending,
                 verified: false,
                 discovered_from: Some(discovered_from.clone()),
-                last_authority_node: None,
                 updated_seq: seq,
+                ..LedgerTask::default()
             });
     }
 
@@ -444,7 +448,34 @@ impl LedgerState {
         let entry = self.tasks.entry(task_id.clone()).or_default();
         entry.status = RoadmapStatus::Completed;
         entry.verified = claim == crate::verification_evidence::VerificationClaim::Verified;
+        if entry.verified {
+            entry.accepted_by_human = false;
+        }
         entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+
+    /// Record a human acceptance: completed, never verified, findings kept.
+    fn record_accepted_by_human(
+        &mut self,
+        task_id: &RoadmapTaskId,
+        node: &NodeKey,
+        findings: Option<ContentHash>,
+        seq: u64,
+    ) {
+        let entry = self.tasks.entry(task_id.clone()).or_default();
+        entry.status = RoadmapStatus::Completed;
+        entry.verified = false;
+        entry.accepted_by_human = true;
+        entry.findings = findings;
+        entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+
+    /// Record that a human revised the task's requirement.
+    fn record_requirement_revised(&mut self, task_id: &RoadmapTaskId, seq: u64) {
+        let entry = self.tasks.entry(task_id.clone()).or_default();
+        entry.requirement_revised = true;
         entry.updated_seq = seq;
     }
 }
@@ -462,6 +493,13 @@ pub struct LedgerTask {
     pub last_authority_node: Option<NodeKey>,
     /// Seq of the last event that touched this task.
     pub updated_seq: u64,
+    /// A human accepted the task after its retry ladder was exhausted
+    /// (`TaskAcceptedByHuman`). Never implies `verified`.
+    pub accepted_by_human: bool,
+    /// The verifier's latest findings kept with a human acceptance.
+    pub findings: Option<ContentHash>,
+    /// A human revised the task's requirement (`RequirementRevised`).
+    pub requirement_revised: bool,
 }
 
 impl Default for LedgerTask {
@@ -472,8 +510,24 @@ impl Default for LedgerTask {
             discovered_from: None,
             last_authority_node: None,
             updated_seq: 0,
+            accepted_by_human: false,
+            findings: None,
+            requirement_revised: false,
         }
     }
+}
+
+/// A requirement revision a human made for a stage (`RequirementRevised`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequirementRevision {
+    /// Stage that ran again against the revision.
+    pub node: NodeKey,
+    /// Task it applies to; `None` applies to the whole run.
+    pub task: Option<RoadmapTaskId>,
+    /// The revised requirement.
+    pub text: String,
+    /// Sequence of the `RequirementRevised` event.
+    pub seq: u64,
 }
 
 /// True when `node` exists in `graph` — at the top level **or inside any
@@ -1129,6 +1183,25 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
         // `OutcomeReported`, no fold-side mutation is needed. These explicit
         // arms prevent a future change from accidentally treating the audit
         // events as state transitions.
+        (
+            RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+                parked,
+            },
+            EventPayload::TaskAcceptedByHuman { .. } | EventPayload::RequirementRevised { .. },
+        ) => {
+            memory.apply_override_event(event);
+            Ok(RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                pending_human_input,
+                parked,
+            })
+        },
         (state, EventPayload::HookExecuted { .. }) => Ok(state),
         (state, EventPayload::OutcomeRejectedByHook { .. }) => Ok(state),
         (state, _) => Ok(state),
@@ -1208,6 +1281,33 @@ impl RunMemory {
             crate::node::NodeConfig::HumanGate(_) => GateDecisionPurpose::HumanGate,
             crate::node::NodeConfig::Agent(config) => skill_decision_purpose(config, schema),
             _ => GateDecisionPurpose::Unbound,
+        }
+    }
+
+    /// Human overrides of an exhausted retry ladder (v1 task 1.2). Shared by
+    /// both fold paths so the ledger agrees on every surface.
+    fn apply_override_event(&mut self, event: &RunEvent) {
+        match &event.payload {
+            EventPayload::TaskAcceptedByHuman {
+                node,
+                task: Some(task),
+                findings,
+                ..
+            } => self
+                .ledger
+                .record_accepted_by_human(task, node, *findings, event.seq),
+            EventPayload::RequirementRevised { node, task, text } => {
+                if let Some(task) = task {
+                    self.ledger.record_requirement_revised(task, event.seq);
+                }
+                self.requirement_revisions.push(RequirementRevision {
+                    node: node.clone(),
+                    task: task.clone(),
+                    text: text.clone(),
+                    seq: event.seq,
+                });
+            },
+            _ => {},
         }
     }
 
@@ -1581,6 +1681,7 @@ impl RunMemory {
         }
         self.apply_recovery_event(event);
         self.apply_mcp_call_event(event);
+        self.apply_override_event(event);
         if let EventPayload::EdgeTraversed { edge, to, .. } = &event.payload {
             self.entered_via.insert(to.clone(), edge.clone());
         }
@@ -2292,6 +2393,50 @@ mod tests {
                 edge_seq: 5,
             }
         );
+    }
+
+    #[test]
+    fn human_overrides_fold_into_the_ledger_and_never_verify() {
+        let mut m = RunMemory::default();
+        let verify = NodeKey::try_from("verify").unwrap();
+        let task = RoadmapTaskId::from("login");
+        let findings = ContentHash::compute(b"report");
+        m.apply_event(&make_event(
+            1,
+            EventPayload::RequirementRevised {
+                node: verify.clone(),
+                task: Some(task.clone()),
+                text: "Sessions last 24 hours".into(),
+            },
+        ));
+        m.apply_event(&make_event(
+            2,
+            EventPayload::TaskAcceptedByHuman {
+                node: verify.clone(),
+                task: Some(task.clone()),
+                findings: Some(findings),
+                comment: None,
+            },
+        ));
+        let entry = &m.ledger.tasks[&task];
+        assert_eq!(entry.status, RoadmapStatus::Completed);
+        assert!(!entry.verified);
+        assert!(entry.accepted_by_human);
+        assert!(entry.requirement_revised);
+        assert_eq!(entry.findings, Some(findings));
+        assert_eq!(m.requirement_revisions.len(), 1);
+        assert_eq!(m.requirement_revisions[0].text, "Sessions last 24 hours");
+        // A later status change back into work clears the acceptance.
+        m.apply_event(&make_event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: task.clone(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: verify,
+            },
+        ));
+        assert!(!m.ledger.tasks[&task].accepted_by_human);
     }
 
     #[test]

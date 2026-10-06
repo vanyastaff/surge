@@ -704,3 +704,148 @@ async fn an_exhausted_task_is_split_and_its_subtasks_run_in_its_place() {
         "the split rung resolves the task without asking"
     );
 }
+
+/// Run `retry_loop_graph` to its escalation gate (two rounds plus the extra
+/// attempt), answer it once with `answer`, then play `after` turns.
+async fn answer_gate_once(
+    answer: serde_json::Value,
+    after: Vec<Turn>,
+) -> (RunOutcome, Vec<String>, Vec<EventPayload>) {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let engine = Engine::new(
+        mock.clone(),
+        storage.clone(),
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
+        EngineConfig::default(),
+    );
+    let turn = |outcome, summary| Turn {
+        outcome,
+        summary,
+        file: None,
+    };
+    let mut script = vec![
+        turn("done", "first"),
+        turn("failed", "Empty passwords sign in."),
+        turn("done", "second"),
+        turn("failed", "Empty passwords sign in."),
+        turn("done", "extra"),
+        turn("failed", "Empty passwords still sign in."),
+    ];
+    script.extend(after);
+    let driver = drive_turns(mock.clone(), dir.path().to_path_buf(), script).await;
+    let run = RunId::new();
+    let mut tap = engine.subscribe_tap();
+    let handle = engine
+        .start_run(
+            run,
+            retry_loop_graph(),
+            dir.path().into(),
+            EngineRunConfig::default(),
+        )
+        .await
+        .unwrap();
+    let gate = tokio::time::timeout(Duration::from_secs(30), next_gate(&mut tap, run))
+        .await
+        .expect("gate raised");
+    assert_eq!(gate.0.as_str(), "verify_escalation");
+    engine
+        .resolve_gate_input(run, gate.0, gate.1, answer)
+        .await
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+        .await
+        .expect("run finishes")
+        .unwrap();
+    let prompts = driver.await.unwrap();
+    storage
+        .inspect_folded_run(run)
+        .await
+        .expect("a journal with a human override stays trusted");
+    let events = storage
+        .open_run_reader(run)
+        .await
+        .unwrap()
+        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| event.payload.payload)
+        .collect();
+    (outcome, prompts, events)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accept_as_is_continues_on_the_success_path_and_records_a_human_acceptance() {
+    let (outcome, _, events) = answer_gate_once(
+        serde_json::json!({"outcome": "accept_as_is", "comment": "Fine for the demo."}),
+        Vec::new(),
+    )
+    .await;
+    assert!(
+        matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
+        "{outcome:?}"
+    );
+    let accepted: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            EventPayload::TaskAcceptedByHuman {
+                node,
+                task,
+                findings,
+                comment,
+            } => Some((
+                node.as_str().to_owned(),
+                task.clone(),
+                *findings,
+                comment.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        accepted,
+        [(
+            "verify".to_owned(),
+            None,
+            None,
+            Some("Fine for the demo.".to_owned())
+        )]
+    );
+    assert!(events.iter().any(|event| matches!(event,
+        EventPayload::EdgeTraversed { from, to, .. } if from.as_str() == "verify_escalation" && to.as_str() == "end")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revise_requirement_reruns_the_stage_against_the_revision() {
+    let (outcome, prompts, events) = answer_gate_once(
+        serde_json::json!({
+            "outcome": "revise_requirement",
+            "comment": "Empty passwords are allowed in the dev profile only."
+        }),
+        vec![Turn {
+            outcome: "passed",
+            summary: "Dev profile allows empty passwords; prod rejects them.",
+            file: None,
+        }],
+    )
+    .await;
+    assert!(
+        matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
+        "{outcome:?}"
+    );
+    // The verifier ran again and saw the revision first.
+    let rerun = &prompts[6];
+    assert!(
+        rerun.starts_with("## Requirement revised by the operator"),
+        "{rerun}"
+    );
+    assert!(rerun.contains("Empty passwords are allowed in the dev profile only."));
+    assert!(events.iter().any(|event| matches!(event,
+        EventPayload::RequirementRevised { node, text, .. }
+            if node.as_str() == "verify" && text.starts_with("Empty passwords are allowed"))));
+    assert!(events.iter().any(|event| matches!(event,
+        EventPayload::EdgeTraversed { from, to, kind: EdgeKind::Backtrack, .. }
+            if from.as_str() == "verify_escalation" && to.as_str() == "verify")));
+}

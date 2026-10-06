@@ -451,6 +451,34 @@ pub enum EventPayload {
         /// New items, in order, inserted at `index + 1`.
         into: Vec<toml::Value>,
     },
+    /// A human accepted a stage's work after its retry ladder was exhausted
+    /// (v1 task 1.2). Never verification: the task is recorded as accepted by
+    /// a human and the verifier's findings stay attached.
+    TaskAcceptedByHuman {
+        /// Stage whose repeated rejection was overridden.
+        node: NodeKey,
+        /// Task the stage was working on, when it ran inside a task loop.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<crate::roadmap::RoadmapTaskId>,
+        /// Latest `verification-report` that stage sealed, when it sealed one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        findings: Option<ContentHash>,
+        /// The operator's note.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+    },
+    /// A human revised the requirement a stage is checked against and sent it
+    /// back for another attempt (v1 task 1.2). Later stages of the same task
+    /// see the revision; a later verification counts as verified against it.
+    RequirementRevised {
+        /// Stage that runs again against the revision.
+        node: NodeKey,
+        /// Task whose requirement changed, when inside a task loop.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<crate::roadmap::RoadmapTaskId>,
+        /// The revised requirement, as the operator wrote it.
+        text: String,
+    },
     LoopCompleted {
         loop_id: NodeKey,
         completed_iterations: u32,
@@ -800,6 +828,8 @@ impl EventPayload {
             Self::LoopIterationStarted { .. } => "LoopIterationStarted",
             Self::LoopIterationCompleted { .. } => "LoopIterationCompleted",
             Self::TaskSplit { .. } => "TaskSplit",
+            Self::TaskAcceptedByHuman { .. } => "TaskAcceptedByHuman",
+            Self::RequirementRevised { .. } => "RequirementRevised",
             Self::LoopCompleted { .. } => "LoopCompleted",
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",

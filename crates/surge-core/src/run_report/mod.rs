@@ -233,6 +233,9 @@ impl RunReport {
         > = std::collections::BTreeMap::new();
 
         let mut verification = crate::verification_evidence::VerificationContext::default();
+        // Tasks whose requirement a human revised (`RequirementRevised`).
+        let mut revised_tasks: std::collections::BTreeSet<crate::roadmap::RoadmapTaskId> =
+            std::collections::BTreeSet::new();
         for event in events {
             use crate::verification_evidence::VerificationInvalidation;
             let invalidated = verification.observe(&event.payload);
@@ -267,6 +270,33 @@ impl RunReport {
             match &event.payload {
                 EventPayload::RunStarted { initial_prompt, .. } => {
                     report.header.initial_prompt = Some(initial_prompt.clone());
+                },
+                // Mirrors `LedgerState::record_accepted_by_human`: completed,
+                // never verified, findings kept.
+                EventPayload::TaskAcceptedByHuman {
+                    node,
+                    task: Some(task_id),
+                    findings,
+                    ..
+                } => {
+                    ledger_task_ids.insert(task_id.clone(), (RoadmapStatus::Completed, false));
+                    upsert_verdict(
+                        &mut report.verdicts,
+                        VerifierVerdict {
+                            task_id: task_id.clone(),
+                            node: node.clone(),
+                            result: VerdictResult::AcceptedByHuman {
+                                findings: *findings,
+                            },
+                            requirement_revised: revised_tasks.contains(task_id),
+                        },
+                    );
+                },
+                EventPayload::TaskAcceptedByHuman { task: None, .. } => {},
+                EventPayload::RequirementRevised { task, .. } => {
+                    if let Some(task_id) = task {
+                        revised_tasks.insert(task_id.clone());
+                    }
                 },
                 EventPayload::RunCompleted { terminal_node } => {
                     report.completion = RunCompletion::Completed {
@@ -455,6 +485,7 @@ impl RunReport {
                         VerifierVerdict {
                             task_id: task_id.clone(),
                             node: node.clone(),
+                            requirement_revised: revised_tasks.contains(task_id),
                             result,
                         },
                     );
@@ -819,6 +850,7 @@ fn record_task_status_change(
                     task_id: task_id.clone(),
                     node: authority_node.clone(),
                     result: VerdictResult::Rejected,
+                    requirement_revised: false,
                 },
             );
         },
@@ -854,6 +886,7 @@ fn record_task_status_change(
                         task_id: task_id.clone(),
                         node: authority_node.clone(),
                         result: VerdictResult::Superseded,
+                        requirement_revised: false,
                     },
                 );
             }
@@ -1044,6 +1077,11 @@ pub struct VerifierVerdict {
     pub node: NodeKey,
     /// The verdict itself.
     pub result: VerdictResult,
+    /// The task's requirement was revised by a human before this verdict
+    /// (`RequirementRevised`); a `Verified` verdict then holds against the
+    /// revised requirement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requirement_revised: bool,
 }
 
 /// The result a [`VerifierVerdict`] carries.
@@ -1080,6 +1118,14 @@ pub enum VerdictResult {
     /// `verified` on such a transition rather than deleting the task's
     /// ledger row.
     Superseded,
+    /// A human accepted the task after its retry ladder was exhausted
+    /// (`TaskAcceptedByHuman`). Never verification: it does not count as
+    /// evidence-backed, and the verifier's latest findings stay attached.
+    AcceptedByHuman {
+        /// Latest `verification-report` the overridden stage sealed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        findings: Option<ContentHash>,
+    },
 }
 
 /// One evidence artifact.
