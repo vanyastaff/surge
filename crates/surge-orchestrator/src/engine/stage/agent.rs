@@ -267,6 +267,34 @@ fn record_task_quota_rate_limit(
     )
 }
 
+/// Tell the agent which MCP calls a previous session left without a result
+/// (ADR-0021 decision 4). Their outcome is unknown and Surge never replays them.
+fn prepend_interrupted_mcp_calls(
+    prompt: String,
+    calls: &[surge_core::run_state::UnresolvedMcpCall],
+) -> String {
+    if calls.is_empty() {
+        return prompt;
+    }
+    let mut notice = String::from(
+        "## Interrupted tool calls\n\
+         A previous session ended while these MCP tool calls were running. Their \
+         outcome is unknown: check the current state before retrying, and do not \
+         repeat an action that may already have happened.\n",
+    );
+    for call in calls {
+        use std::fmt::Write as _;
+        let _ = writeln!(
+            notice,
+            "- `{}` on MCP server `{}` (event {})",
+            call.tool, call.server, call.seq
+        );
+    }
+    notice.push('\n');
+    notice.push_str(&prompt);
+    notice
+}
+
 fn append_completion_contract(mut prompt: String, outcomes: &[OutcomeKey]) -> String {
     prompt.push_str(
         "\n\n## Stage completion protocol\n\
@@ -1338,6 +1366,16 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         steered.push_str(&prompt_text);
         steered
     };
+    let interrupted = &p.run_memory.unresolved_mcp_calls;
+    if !interrupted.is_empty() {
+        tracing::info!(
+            target: "mcp::recovery",
+            node = %p.node,
+            calls = interrupted.len(),
+            "notifying agent of interrupted MCP calls with unknown outcome"
+        );
+    }
+    let prompt_text = prepend_interrupted_mcp_calls(prompt_text, interrupted);
     let prompt_msg = MessageContent::Text(prompt_text);
     let mut prompt_finished = tokio_util::sync::CancellationToken::new();
     let prompt_signal = prompt_finished.clone();
@@ -1981,9 +2019,9 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // log. Engine-built-in tools resolve to `None`.
                 let mcp_server = session_dispatcher.resolved_origin(&tool);
 
-                let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
-
-                // Persist ToolCalled + ToolResultReceived.
+                // ToolCalled is durable before dispatch so a crash mid-call leaves
+                // an unresolved call in the log; the resumed stage is told its
+                // outcome is unknown (ADR-0021 decision 4).
                 let args_redacted_hash = ContentHash::compute(args_redacted_json.as_bytes());
                 p.writer
                     .append_event(VersionedEventPayload::new(EventPayload::ToolCalled {
@@ -1994,6 +2032,8 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
 
                 // Surface MCP restart-exhaustion as a replay-safe
                 // `EscalationRequested` (fold pass-through). Emitted
@@ -3816,6 +3856,25 @@ mod effort_floor_tests {
 mod tests {
     use super::*;
     use surge_core::profile::VerificationCfg;
+
+    #[test]
+    fn interrupted_mcp_calls_are_named_before_the_prompt_and_absent_otherwise() {
+        assert_eq!(
+            prepend_interrupted_mcp_calls("Do it.".into(), &[]),
+            "Do it."
+        );
+        let calls = [surge_core::run_state::UnresolvedMcpCall {
+            session: surge_core::id::SessionId::new(),
+            tool: "add_comment".into(),
+            server: "github".into(),
+            seq: 42,
+        }];
+        let prompt = prepend_interrupted_mcp_calls("Do it.".into(), &calls);
+        assert!(prompt.starts_with("## Interrupted tool calls"));
+        assert!(prompt.contains("`add_comment` on MCP server `github` (event 42)"));
+        assert!(prompt.contains("outcome is unknown"));
+        assert!(prompt.ends_with("Do it."));
+    }
 
     #[test]
     fn completion_contract_requires_tool_submission_with_actual_outcomes() {

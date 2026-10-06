@@ -111,7 +111,10 @@ the resumed run's start. The record is written on resume, not at park:
 appending before `seal_suspension` would move the log past the fence's
 snapshot. Owned-flow MCP suite 23/23 locally.
 
-Open: the interrupted-call notice (design step 5) and its new tests.
+Done (step 5): `ToolCalled` is appended before dispatch, `RunMemory.unresolved_mcp_calls`
+folds MCP calls without a result and clears on the next `SessionOpened`, and the
+first stage after an interruption gets an "Interrupted tool calls" notice before
+its prompt. No new event or schema bump was needed.
 
 Oracle changes beyond the mapping table, with reasons:
 

@@ -8,8 +8,10 @@ date = "2026-10-05"
 
 ## Status
 
-Accepted and implemented on 2026-10-05 (group stop, best-effort record,
-restart); the interrupted-call notice of decision 4 remains open.
+Accepted and implemented on 2026-10-05: group stop, best-effort record,
+restart, and the interrupted-call notice. Decision 4 needs no new event: a
+`ToolCalled` without a matching `ToolResultReceived` is the outcome-unknown
+record, because `ToolCalled` is now durable before dispatch.
 Supersedes [ADR-0020](0020-managed-mcp-recovery.md) in full. ADR-0014 (per-run,
 supervised, sandbox-delegated MCP) is unchanged.
 

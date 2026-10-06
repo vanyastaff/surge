@@ -252,8 +252,22 @@ pub enum TerminalReason {
     Aborted,
 }
 
+/// An MCP tool call recorded without a result (ADR-0021 decision 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedMcpCall {
+    pub session: SessionId,
+    pub tool: String,
+    pub server: String,
+    /// Sequence of the `ToolCalled` event.
+    pub seq: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunMemory {
+    /// MCP calls whose result was never recorded, oldest first. Cleared when the
+    /// next provider session opens, so only the first stage after an interruption
+    /// sees them; their outcome is unknown and they are never replayed.
+    pub unresolved_mcp_calls: Vec<UnresolvedMcpCall>,
     /// Immutable provider connection history for each stable execution invocation.
     /// Pre-dispatch writer coverage retained until confirmed cleanup.
     pub execution_writers: std::collections::HashMap<
@@ -1174,6 +1188,37 @@ impl RunMemory {
         }
     }
 
+    fn apply_mcp_call_event(&mut self, event: &RunEvent) {
+        match &event.payload {
+            EventPayload::ToolCalled {
+                session,
+                tool,
+                mcp_server: Some(server),
+                ..
+            } => self.unresolved_mcp_calls.push(UnresolvedMcpCall {
+                session: *session,
+                tool: tool.clone(),
+                server: server.clone(),
+                seq: event.seq,
+            }),
+            EventPayload::ToolResultReceived {
+                session,
+                mcp_server: Some(server),
+                ..
+            } => {
+                if let Some(index) = self
+                    .unresolved_mcp_calls
+                    .iter()
+                    .position(|call| call.session == *session && call.server == *server)
+                {
+                    self.unresolved_mcp_calls.remove(index);
+                }
+            },
+            EventPayload::SessionOpened { .. } => self.unresolved_mcp_calls.clear(),
+            _ => {},
+        }
+    }
+
     fn apply_recovery_event(&mut self, event: &RunEvent) {
         match &event.payload {
             EventPayload::StageEntered { node, .. } => {
@@ -1512,6 +1557,7 @@ impl RunMemory {
             self.bootstrap_edit_loop_cap = config.bootstrap_edit_loop_cap;
         }
         self.apply_recovery_event(event);
+        self.apply_mcp_call_event(event);
         match self.verification.observe(&event.payload) {
             VerificationInvalidation::All => self
                 .ledger
@@ -1818,6 +1864,54 @@ mod tests {
     use crate::sandbox::SandboxMode;
     use chrono::Utc;
     use std::path::PathBuf;
+
+    #[test]
+    fn unresolved_mcp_calls_track_calls_without_results_until_next_session() {
+        let session = SessionId::new();
+        let called = |tool: &str| EventPayload::ToolCalled {
+            session,
+            tool: tool.into(),
+            args_redacted: ContentHash::compute(b"args"),
+            mcp_server: Some("github".into()),
+        };
+        let mut memory = RunMemory::default();
+        memory.apply_event(&make_event(1, called("create_issue")));
+        memory.apply_event(&make_event(2, called("add_comment")));
+        memory.apply_event(&make_event(
+            3,
+            EventPayload::ToolResultReceived {
+                session,
+                success: true,
+                result: ContentHash::compute(b"ok"),
+                mcp_server: Some("github".into()),
+            },
+        ));
+        // Engine tools are not MCP effects.
+        memory.apply_event(&make_event(
+            4,
+            EventPayload::ToolCalled {
+                session,
+                tool: "read_file".into(),
+                args_redacted: ContentHash::compute(b"args"),
+                mcp_server: None,
+            },
+        ));
+        assert_eq!(memory.unresolved_mcp_calls.len(), 1);
+        assert_eq!(memory.unresolved_mcp_calls[0].tool, "add_comment");
+        assert_eq!(memory.unresolved_mcp_calls[0].seq, 2);
+        memory.apply_event(&make_event(
+            5,
+            EventPayload::SessionOpened {
+                handoff: None,
+                opened: None,
+                node: NodeKey::try_from("impl").unwrap(),
+                session: SessionId::new(),
+                agent: "implementer@1.0".into(),
+                agent_id: None,
+            },
+        ));
+        assert!(memory.unresolved_mcp_calls.is_empty());
+    }
 
     fn make_event(seq: u64, payload: EventPayload) -> RunEvent {
         RunEvent {

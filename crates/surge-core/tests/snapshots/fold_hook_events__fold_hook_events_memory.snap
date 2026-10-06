@@ -4,6 +4,7 @@ assertion_line: 238
 expression: memory
 ---
 RunMemory {
+    unresolved_mcp_calls: [],
     execution_writers: {},
     provider_sessions: {},
     session_establishments: {},

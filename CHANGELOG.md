@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GroupOnly`; the record never means confirmed closure.
 - **Event payload schema v17**: v16 readers reject v17 logs with
   `SchemaTooNew` instead of misreading best-effort cleanup as closure.
+- An MCP tool call cut off by a crash is never replayed. `ToolCalled` is now
+  recorded before dispatch, and the first stage after an interruption opens
+  with an "Interrupted tool calls" notice naming each call whose outcome is
+  unknown, so the agent checks before retrying.
 
 ### Changed — MCP startup deadline and selected-catalog escalation
 
