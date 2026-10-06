@@ -438,6 +438,19 @@ pub enum EventPayload {
         index: u32,
         outcome: OutcomeKey,
     },
+    /// Verifier ladder split rung: the loop's current task was replaced by
+    /// smaller tasks, inserted right after it in the same loop and run.
+    TaskSplit {
+        /// Loop whose item list grew.
+        loop_id: NodeKey,
+        /// Index of the replaced item.
+        index: u32,
+        /// `id` of the replaced task, when its item carried one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
+        /// New items, in order, inserted at `index + 1`.
+        into: Vec<toml::Value>,
+    },
     LoopCompleted {
         loop_id: NodeKey,
         completed_iterations: u32,
@@ -786,6 +799,7 @@ impl EventPayload {
             Self::EdgeTraversed { .. } => "EdgeTraversed",
             Self::LoopIterationStarted { .. } => "LoopIterationStarted",
             Self::LoopIterationCompleted { .. } => "LoopIterationCompleted",
+            Self::TaskSplit { .. } => "TaskSplit",
             Self::LoopCompleted { .. } => "LoopCompleted",
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",

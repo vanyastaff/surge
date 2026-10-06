@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — exhausted roadmap tasks are split in place
+
+- In a task loop, a task that keeps failing verification after its retries
+  and the extra attempt now reaches a split planner (`task-splitter@1.0`). It
+  replaces the task with smaller tasks (`discovered-tasks.toml`, now with
+  optional `acceptance_criteria`) that run right after it in the same run; the
+  replaced iteration ends without failure. If the task cannot be split, the
+  human gate follows. Recorded as the new `TaskSplit` event.
+- **Event payload schema v18**: v17 readers reject v18 logs with
+  `SchemaTooNew`.
+
+### Fixed — retry budgets inside loops are per task
+
+- `max_traversals` counters in a loop body were shared by every item, so a
+  task could inherit another task's spent retries. They now reset at each
+  iteration, in the engine and in the journal inspector.
+
 ### Added — an automatic extra attempt before asking a human
 
 - An exhausted retry loop whose target is an agent stage now gets one extra

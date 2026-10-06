@@ -499,6 +499,7 @@ pub fn maintain(
         | EventPayload::ExecutionWriterEstablished { .. }
         | EventPayload::ExecutionWriterClosed { .. }
         | EventPayload::ExecutionWriterGroupStopped { .. }
+        | EventPayload::TaskSplit { .. }
         | EventPayload::SessionEstablishmentRequested { .. }
         | EventPayload::RunSuspended { .. }
         | EventPayload::RunRecoveryRequired { .. }

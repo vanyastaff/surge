@@ -700,6 +700,7 @@ impl RunReport {
                 | EventPayload::ExecutionWriterEstablished { .. }
                 | EventPayload::ExecutionWriterClosed { .. }
                 | EventPayload::ExecutionWriterGroupStopped { .. }
+                | EventPayload::TaskSplit { .. }
                 | EventPayload::QuotaStagePlanned { .. }
                 | EventPayload::SessionEstablishmentRequested { .. }
                 | EventPayload::RunSuspended { .. }

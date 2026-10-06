@@ -2761,6 +2761,157 @@ async fn route_commit_exit_if_requested(
     }
 }
 
+/// Largest `discovered-tasks` artifact a split planner may hand back.
+const SPLIT_TASKS_MAX_BYTES: usize = 256 * 1024;
+/// Most replacement tasks one split may insert.
+const SPLIT_TASKS_MAX: usize = 12;
+
+/// The split rung of the verifier ladder: when a derived split planner
+/// (`surge_core::escalation::is_split_planner`) routes `split`, insert the
+/// tasks from its `discovered-tasks` artifact right after the current item of
+/// the innermost loop frame and return the `TaskSplit` record. The caller
+/// commits it in the same batch as the route and snapshot, so a crash never
+/// splices twice or loses the splice.
+/// The validated `discovered-tasks` the split planner produced in this occurrence.
+async fn read_split_tasks(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    node: &surge_core::keys::NodeKey,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+) -> Result<surge_core::roadmap::DiscoveredTasksArtifact, String> {
+    let artifact = state
+        .memory
+        .artifacts_by_node
+        .get(node)
+        .into_iter()
+        .flatten()
+        .rfind(|artifact| {
+            artifact.name == "discovered-tasks"
+                && artifact.produced_at_seq > stage_start_seq.as_u64()
+        })
+        .ok_or_else(|| {
+            format!("split planner {node} reported split without discovered-tasks.toml")
+        })?;
+    let bytes = params
+        .artifact_store
+        .open_bounded(params.run_id, artifact.hash, SPLIT_TASKS_MAX_BYTES)
+        .await
+        .map_err(|error| format!("read split tasks: {error}"))?;
+    let text = String::from_utf8(bytes).map_err(|_| "split tasks are not UTF-8".to_owned())?;
+    let tasks: surge_core::roadmap::DiscoveredTasksArtifact =
+        toml::from_str(&text).map_err(|error| format!("parse split tasks: {error}"))?;
+    if let Some(issue) = tasks.validate().first() {
+        return Err(format!("split tasks are invalid: {issue}"));
+    }
+    if tasks.tasks.is_empty() || tasks.tasks.len() > SPLIT_TASKS_MAX {
+        return Err(format!(
+            "split must produce 1..={SPLIT_TASKS_MAX} tasks, got {}",
+            tasks.tasks.len()
+        ));
+    }
+    Ok(tasks)
+}
+
+/// Loop items for the replacement tasks, linked to the replaced task.
+fn split_items(
+    tasks: &surge_core::roadmap::DiscoveredTasksArtifact,
+    origin: Option<&str>,
+) -> Vec<toml::Value> {
+    tasks
+        .tasks
+        .iter()
+        .map(|entry| {
+            let mut item = toml::map::Map::new();
+            item.insert("id".into(), entry.id.as_str().into());
+            item.insert("title".into(), entry.title.clone().into());
+            if let Some(description) = &entry.description {
+                item.insert("description".into(), description.clone().into());
+            }
+            if !entry.acceptance_criteria.is_empty() {
+                let criteria = entry
+                    .acceptance_criteria
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect();
+                item.insert("acceptance_criteria".into(), toml::Value::Array(criteria));
+            }
+            if let Some(origin) = origin {
+                item.insert("discovered_from".into(), origin.into());
+            }
+            toml::Value::Table(item)
+        })
+        .collect()
+}
+
+async fn task_split_effect(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    outcome: &OutcomeKey,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+) -> Result<Option<VersionedEventPayload>, String> {
+    if outcome.as_str() != surge_core::escalation::SPLIT_OUTCOME {
+        return Ok(None);
+    }
+    let node = state.cursor.node.clone();
+    let is_split = lookup_in_active_frame(&state.routing_graph, &node, &state.frames)
+        .is_some_and(surge_core::escalation::is_split_planner);
+    if !is_split {
+        return Ok(None);
+    }
+    let tasks = read_split_tasks(params, state, &node, stage_start_seq).await?;
+    let Some(crate::engine::frames::Frame::Loop(frame)) = state
+        .frames
+        .iter_mut()
+        .rev()
+        .find(|frame| matches!(frame, crate::engine::frames::Frame::Loop(_)))
+    else {
+        return Err(format!("split planner {node} runs outside a loop"));
+    };
+    let index = frame.current_index;
+    let current = frame
+        .items
+        .get(index as usize)
+        .ok_or_else(|| "split loop has no current item".to_owned())?;
+    let task = current
+        .get("id")
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    let taken: std::collections::BTreeSet<&str> = frame
+        .items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(toml::Value::as_str))
+        .collect();
+    if let Some(clash) = tasks
+        .tasks
+        .iter()
+        .find(|entry| taken.contains(entry.id.as_str()))
+    {
+        return Err(format!("split task id {} is already in the loop", clash.id));
+    }
+    let into = split_items(&tasks, task.as_deref());
+    if frame.items.len() + into.len() > crate::engine::frames::MAX_LOOP_ITEMS_RESOLVED {
+        return Err("split would exceed the loop item limit".into());
+    }
+    let at = index as usize + 1;
+    frame.items.splice(at..at, into.iter().cloned());
+    tracing::info!(
+        target: "engine::escalation",
+        %node,
+        loop_id = %frame.loop_node,
+        index,
+        task = task.as_deref().unwrap_or("(no id)"),
+        count = into.len(),
+        "task split into smaller tasks"
+    );
+    Ok(Some(VersionedEventPayload::new(EventPayload::TaskSplit {
+        loop_id: frame.loop_node.clone(),
+        index,
+        task,
+        into,
+    })))
+}
+
 async fn route_and_snapshot(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -2788,8 +2939,10 @@ async fn route_and_snapshot(
         .pending_graph_revisions
         .extend(applied_events.graph_revisions);
     apply_pending_revisions(&mut prepared);
+    let split = task_split_effect(params, &mut prepared, outcome, stage_start_seq).await?;
     let routed = route_stage_outcome(&mut prepared, outcome)?;
-    let mut events = routing_events(&prepared, outcome, &routed);
+    let mut events: Vec<VersionedEventPayload> = split.into_iter().collect();
+    events.extend(routing_events(&prepared, outcome, &routed));
     if let Some(record) = outstanding_stage_outcome(&prepared)? {
         if record.commit.outcome() != outcome {
             return Err("committed stage outcome differs from routed outcome".into());
@@ -2915,27 +3068,35 @@ fn route_after_max_traversal(
             "max_traversals exceeded on edge {edge} (action: Fail)"
         ));
     }
-    let mut route = |key: &str| -> Result<_, RoutingError> {
+    // Mirrors `surge_core::route_selection::resolve_stage_route`, which the
+    // journal inspector replays: an exhausted escalation edge takes the next rung.
+    let mut result = Err(RoutingError::ExceededTraversal {
+        edge: edge.clone(),
+        count: 0,
+        max: 0,
+        action: ExceededAction::Escalate,
+    });
+    for rung in surge_core::escalation::ESCALATION_RUNGS {
+        if !matches!(
+            result,
+            Err(RoutingError::ExceededTraversal {
+                action: ExceededAction::Escalate,
+                ..
+            })
+        ) {
+            break;
+        }
         let synthetic =
-            OutcomeKey::try_from(key).map_err(|_| RoutingError::InvalidEscalationOutcome)?;
-        crate::engine::routing::next_node_after_with_counters(
+            OutcomeKey::try_from(rung).map_err(|_| format!("escalation outcome {rung}"))?;
+        result = crate::engine::routing::next_node_after_with_counters(
             &state.routing_graph,
             &state.cursor.node,
             &synthetic,
             &mut state.frames,
             &mut state.root_traversal_counts,
-        )
-    };
-    // Mirrors `surge_core::route_selection::resolve_stage_route`, which the
-    // journal inspector replays: an exhausted escalation edge escalates once more.
-    let routed = match route(surge_core::escalation::EXHAUSTED_OUTCOME) {
-        Err(RoutingError::ExceededTraversal {
-            action: ExceededAction::Escalate,
-            ..
-        }) => route(surge_core::escalation::ESCALATION_EXHAUSTED_OUTCOME),
-        result => result,
+        );
     }
-    .map_err(|_| {
+    let routed = result.map_err(|_| {
         format!(
             "max_traversals exceeded on edge {edge} and no escalation route exists \
              (several capped targets from one stage get no default gate)"

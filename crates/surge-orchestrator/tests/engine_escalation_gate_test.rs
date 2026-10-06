@@ -149,19 +149,48 @@ async fn drive_agent_turns(
     mock: Arc<fixtures::mock_bridge::MockBridge>,
     script: &[(&'static str, &'static str)],
 ) -> tokio::task::JoinHandle<Vec<String>> {
-    let script = script.to_vec();
+    let turns = script
+        .iter()
+        .map(|(outcome, summary)| Turn {
+            outcome,
+            summary,
+            file: None,
+        })
+        .collect();
+    drive_turns(mock, std::path::PathBuf::new(), turns).await
+}
+
+/// One scripted agent turn; `file` is written to the worktree and reported
+/// as produced before the outcome is delivered.
+#[derive(Clone)]
+struct Turn {
+    outcome: &'static str,
+    summary: &'static str,
+    file: Option<(&'static str, &'static str)>,
+}
+
+async fn drive_turns(
+    mock: Arc<fixtures::mock_bridge::MockBridge>,
+    worktree: std::path::PathBuf,
+    script: Vec<Turn>,
+) -> tokio::task::JoinHandle<Vec<String>> {
     let sessions: Vec<SessionId> = script.iter().map(|_| SessionId::new()).collect();
     mock.pin_session_ids(sessions.clone()).await;
     tokio::spawn(async move {
         let mut prompts = Vec::new();
-        for (index, ((key, summary), session)) in script.iter().zip(&sessions).enumerate() {
+        for (index, (turn, session)) in script.iter().zip(&sessions).enumerate() {
             wait_for_turn(&mock, index).await;
             prompts.push(mock.last_prompt().await.unwrap_or_default());
+            let mut produced = Vec::new();
+            if let Some((path, content)) = turn.file {
+                std::fs::write(worktree.join(path), content).unwrap();
+                produced.push(path.into());
+            }
             mock.enqueue_event(BridgeEvent::OutcomeReported {
                 session: *session,
-                outcome: OutcomeKey::try_from(*key).unwrap(),
-                summary: (*summary).into(),
-                artifacts_produced: vec![],
+                outcome: OutcomeKey::try_from(turn.outcome).unwrap(),
+                summary: turn.summary.into(),
+                artifacts_produced: produced,
                 verification_report: None,
             })
             .await;
@@ -415,5 +444,263 @@ async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
         !persisted
             .nodes
             .contains_key(&NodeKey::try_from("verify_escalation").unwrap())
+    );
+}
+
+/// task_loop over two task items; body: implement --done--> verify;
+/// verify --passed--> task_end; verify --failed--> implement (backtrack, at
+/// most once, escalate when exhausted).
+fn task_loop_graph() -> Graph {
+    use surge_core::graph::Subgraph;
+    use surge_core::keys::SubgraphKey;
+    use surge_core::loop_config::{
+        ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+    };
+    let item = |text: &str| -> toml::Value { toml::from_str(text).unwrap() };
+    let body_key = SubgraphKey::try_from("task_body").unwrap();
+    let mut body = retry_loop_graph();
+    body.nodes.remove(&NodeKey::try_from("end").unwrap());
+    body.nodes.insert(
+        NodeKey::try_from("task_end").unwrap(),
+        Node {
+            id: NodeKey::try_from("task_end").unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        },
+    );
+    for edge in &mut body.edges {
+        if edge.to.as_str() == "end" {
+            edge.to = NodeKey::try_from("task_end").unwrap();
+        }
+    }
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        NodeKey::try_from("task_loop").unwrap(),
+        Node {
+            id: NodeKey::try_from("task_loop").unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![outcome("completed", EdgeKind::Forward)],
+            config: NodeConfig::Loop(LoopConfig {
+                iterates_over: IterableSource::Static(vec![
+                    item("id = 'login'\ntitle = 'Login form'\nacceptance_criteria = ['Valid users sign in', 'Empty passwords are rejected']"),
+                    item("id = 'logout'\ntitle = 'Logout'"),
+                ]),
+                body: body_key.clone(),
+                iteration_var_name: "task".into(),
+                exit_condition: ExitCondition::AllItems,
+                on_iteration_failure: FailurePolicy::Abort,
+                parallelism: ParallelismMode::Sequential,
+                gate_after_each: false,
+            }),
+        },
+    );
+    nodes.insert(
+        NodeKey::try_from("end").unwrap(),
+        Node {
+            id: NodeKey::try_from("end").unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        },
+    );
+    Graph {
+        schema_version: SCHEMA_VERSION,
+        metadata: GraphMetadata::new("task-split-harness", chrono::Utc::now()),
+        start: NodeKey::try_from("task_loop").unwrap(),
+        nodes,
+        edges: vec![edge(
+            "e_loop_done",
+            "task_loop",
+            "completed",
+            "end",
+            EdgeKind::Forward,
+        )],
+        subgraphs: BTreeMap::from([(
+            body_key,
+            Subgraph {
+                start: body.start,
+                nodes: body.nodes,
+                edges: body.edges,
+            },
+        )]),
+    }
+}
+
+const SPLIT_TASKS: &str = r#"schema_version = 1
+
+[[tasks]]
+id = "login-a"
+title = "Sign in valid users"
+acceptance_criteria = ["Valid users sign in"]
+
+[[tasks]]
+id = "login-b"
+title = "Reject empty passwords"
+description = "The part the verifier rejected."
+acceptance_criteria = ["Empty passwords are rejected"]
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_exhausted_task_is_split_and_its_subtasks_run_in_its_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let engine = Engine::new(
+        mock.clone(),
+        storage.clone(),
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
+        EngineConfig::default(),
+    );
+    let turn = |outcome, summary| Turn {
+        outcome,
+        summary,
+        file: None,
+    };
+    let script = vec![
+        // `login`: two loop rounds, the extra attempt, then the split planner.
+        turn("done", "login 1"),
+        turn("failed", "Empty passwords still sign in."),
+        turn("done", "login 2"),
+        turn("failed", "Empty passwords still sign in."),
+        turn("done", "login extra"),
+        turn(
+            "failed",
+            "Empty passwords still sign in after the extra attempt.",
+        ),
+        Turn {
+            outcome: "split",
+            summary: "Separated the rejected criterion.",
+            file: Some(("discovered-tasks.toml", SPLIT_TASKS)),
+        },
+        // `login-a`: one rejection on a fresh budget, then a pass.
+        turn("done", "login-a 1"),
+        turn("failed", "Redirect missing."),
+        turn("done", "login-a 2"),
+        turn("passed", "ok"),
+        // `login-b`, then the original `logout`.
+        turn("done", "login-b"),
+        turn("passed", "ok"),
+        turn("done", "logout"),
+        turn("passed", "ok"),
+    ];
+    let driver = drive_turns(mock.clone(), dir.path().to_path_buf(), script).await;
+    let run = RunId::new();
+    let handle = engine
+        .start_run(
+            run,
+            task_loop_graph(),
+            dir.path().into(),
+            EngineRunConfig::default(),
+        )
+        .await
+        .expect("start_run");
+    let outcome = tokio::time::timeout(Duration::from_secs(60), handle.await_completion())
+        .await
+        .expect("run finishes")
+        .unwrap();
+    if !matches!(&outcome, RunOutcome::Completed { .. }) {
+        let kinds: Vec<String> = storage
+            .open_run_reader(run)
+            .await
+            .unwrap()
+            .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| {
+                format!("{:?}", event.payload.payload)
+                    .chars()
+                    .take(160)
+                    .collect()
+            })
+            .collect();
+        panic!("run did not complete: {outcome:?}\n{}", kinds.join("\n"));
+    }
+    let prompts = driver.await.unwrap();
+    assert!(
+        matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
+        "{outcome:?}"
+    );
+
+    // The split planner saw the task and the verifier's findings.
+    assert!(
+        prompts[6].contains("Feedback from the previous attempt"),
+        "{}",
+        prompts[6]
+    );
+    assert!(prompts[6].contains("after the extra attempt"));
+    assert!(prompts[6].contains("Empty passwords are rejected"));
+    // The first subtask runs with its own item.
+    assert!(prompts[7].contains("Sign in valid users"), "{}", prompts[7]);
+
+    storage
+        .inspect_folded_run(run)
+        .await
+        .expect("a journal with a task split stays trusted");
+    let events: Vec<EventPayload> = storage
+        .open_run_reader(run)
+        .await
+        .unwrap()
+        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| event.payload.payload)
+        .collect();
+    let splits: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            EventPayload::TaskSplit {
+                loop_id,
+                index,
+                task,
+                into,
+            } => Some((
+                loop_id.as_str().to_owned(),
+                *index,
+                task.clone(),
+                into.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(splits.len(), 1);
+    let (loop_id, index, task, into) = &splits[0];
+    assert_eq!(
+        (loop_id.as_str(), *index, task.as_deref()),
+        ("task_loop", 0, Some("login"))
+    );
+    let ids: Vec<&str> = into
+        .iter()
+        .filter_map(|item| item.get("id").and_then(toml::Value::as_str))
+        .collect();
+    assert_eq!(ids, ["login-a", "login-b"]);
+    assert_eq!(
+        into[1].get("discovered_from").and_then(toml::Value::as_str),
+        Some("login")
+    );
+    let started: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            EventPayload::LoopIterationStarted { item, .. } => item
+                .get("id")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, ["login", "login-a", "login-b", "logout"]);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EventPayload::HumanInputRequested { .. })),
+        "the split rung resolves the task without asking"
     );
 }

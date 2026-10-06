@@ -105,7 +105,10 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// best-effort MCP group cleanup. A v16-max reader has no variant to decode it
 /// into, so it rejects v17 with [`SurgeError::SchemaTooNew`] instead of
 /// misreading best-effort cleanup as confirmed closure.
-pub const MAX_SUPPORTED_VERSION: u32 = 17;
+/// **v18:** adds [`EventPayload::TaskSplit`], the verifier ladder's split rung
+/// (a task replaced by smaller tasks in the same loop). A v17-max reader has
+/// no variant for it and rejects v18 with [`SurgeError::SchemaTooNew`].
+pub const MAX_SUPPORTED_VERSION: u32 = 18;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -409,6 +412,20 @@ impl Migration for IdentityV17 {
     }
 }
 
+/// Identity decoder for task split records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV18;
+impl Migration for IdentityV18 {
+    fn version(&self) -> u32 {
+        18
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v18 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -419,7 +436,7 @@ impl MigrationChain {
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
     /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
-    /// [`IdentityV16`], and [`IdentityV17`].
+    /// [`IdentityV16`], [`IdentityV17`], and [`IdentityV18`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -441,6 +458,7 @@ impl MigrationChain {
                 Box::new(IdentityV15),
                 Box::new(IdentityV16),
                 Box::new(IdentityV17),
+                Box::new(IdentityV18),
             ],
         }
     }
@@ -619,12 +637,33 @@ mod tests {
     }
 
     #[test]
+    fn v18_task_split_round_trips_and_v17_readers_reject_it() {
+        let item: toml::Value =
+            toml::from_str("id = 'login-a'\ntitle = 'Reject empty passwords'").unwrap();
+        let payload = EventPayload::TaskSplit {
+            loop_id: NodeKey::try_from("task_loop").unwrap(),
+            index: 2,
+            task: Some("login".into()),
+            into: vec![item],
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, 18);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("\"task_split\""));
+        assert_eq!(migrate_payload(18, &bytes).unwrap(), payload);
+        assert!(matches!(
+            migrate_payload(19, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 19, max: 18 })
+        ));
+    }
+
+    #[test]
     fn v17_group_stopped_round_trips_and_v16_readers_reject_it() {
         let payload = EventPayload::ExecutionWriterGroupStopped {
             writer: crate::id::ExecutionWriterId::new(),
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 17);
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert!(
             String::from_utf8_lossy(&bytes).contains("execution_writer_group_stopped"),
@@ -867,8 +906,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(18, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 18, max: 17 })
+            migrate_payload(19, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 19, max: 18 })
         ));
     }
 

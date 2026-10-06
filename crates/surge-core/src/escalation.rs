@@ -34,6 +34,32 @@ pub const STOP_OUTCOME: &str = "stop";
 /// Synthetic outcome routing takes when an escalation edge is itself
 /// exhausted: the next rung of the ladder.
 pub const ESCALATION_EXHAUSTED_OUTCOME: &str = "escalation_exhausted";
+/// Synthetic outcome after the split rung is spent.
+pub const SPLIT_EXHAUSTED_OUTCOME: &str = "split_exhausted";
+/// Escalation outcomes in ladder order. Routing takes the first; whenever the
+/// edge it selects is itself exhausted (`escalate`), it takes the next.
+pub const ESCALATION_RUNGS: [&str; 3] = [
+    EXHAUSTED_OUTCOME,
+    ESCALATION_EXHAUSTED_OUTCOME,
+    SPLIT_EXHAUSTED_OUTCOME,
+];
+/// Split planner outcome: subtasks were written to `discovered-tasks.toml`.
+pub const SPLIT_OUTCOME: &str = "split";
+/// Split planner outcome: the task cannot be split usefully.
+pub const CANNOT_SPLIT_OUTCOME: &str = "cannot_split";
+/// Profile of the derived split planner.
+pub const SPLIT_PLANNER_PROFILE: &str = "task-splitter@1.0";
+/// `AgentConfig::custom_fields` key marking the derived split planner. Only
+/// derived graphs carry it.
+pub const ESCALATION_ROLE_FIELD: &str = "surge_escalation_role";
+const SPLIT_ROLE: &str = "split";
+
+/// Whether `node` is a derived split planner (see [`SPLIT_PLANNER_PROFILE`]).
+#[must_use]
+pub fn is_split_planner(node: &Node) -> bool {
+    matches!(&node.config, NodeConfig::Agent(agent)
+        if agent.custom_fields.get(ESCALATION_ROLE_FIELD).and_then(toml::Value::as_str) == Some(SPLIT_ROLE))
+}
 /// `EdgePolicy::label` of a derived edge that re-enters the loop's agent for
 /// its one extra attempt. The engine runs that occurrence on the configured
 /// retry agent. Only derived graphs carry it; it is never persisted.
@@ -155,9 +181,35 @@ pub fn with_default_escalation_gates(graph: &Graph) -> Graph {
         nodes: taken_nodes,
         edges: taken_edges,
     };
-    add_gates(&mut effective.nodes, &mut effective.edges, &mut names);
-    for subgraph in effective.subgraphs.values_mut() {
-        add_gates(&mut subgraph.nodes, &mut subgraph.edges, &mut names);
+    // Loop bodies iterate task items; only there can a task be split.
+    let loop_bodies: BTreeSet<crate::keys::SubgraphKey> = effective
+        .nodes
+        .values()
+        .chain(
+            effective
+                .subgraphs
+                .values()
+                .flat_map(|sg| sg.nodes.values()),
+        )
+        .filter_map(|node| match &node.config {
+            NodeConfig::Loop(config) => Some(config.body.clone()),
+            _ => None,
+        })
+        .collect();
+    add_gates(
+        &mut effective.nodes,
+        &mut effective.edges,
+        false,
+        &mut names,
+    );
+    for (key, subgraph) in &mut effective.subgraphs {
+        let loop_body = loop_bodies.contains(key);
+        add_gates(
+            &mut subgraph.nodes,
+            &mut subgraph.edges,
+            loop_body,
+            &mut names,
+        );
     }
     effective
 }
@@ -202,7 +254,12 @@ where
     })
 }
 
-fn add_gates(nodes: &mut BTreeMap<NodeKey, Node>, edges: &mut Vec<Edge>, names: &mut Names) {
+fn add_gates(
+    nodes: &mut BTreeMap<NodeKey, Node>,
+    edges: &mut Vec<Edge>,
+    loop_body: bool,
+    names: &mut Names,
+) {
     let Ok(exhausted) = OutcomeKey::try_from(EXHAUSTED_OUTCOME) else {
         return;
     };
@@ -234,8 +291,11 @@ fn add_gates(nodes: &mut BTreeMap<NodeKey, Node>, edges: &mut Vec<Edge>, names: 
             nodes.get(&target).map(|node| &node.config),
             Some(NodeConfig::Agent(_))
         );
-        let Some(addition) = gate_for(&source, &target, &loop_edges, &exhausted, alternate, names)
-        else {
+        let ladder = Ladder {
+            alternate,
+            split: alternate && loop_body,
+        };
+        let Some(addition) = gate_for(&source, &target, &loop_edges, ladder, names) else {
             continue;
         };
         for node in addition.nodes {
@@ -243,6 +303,15 @@ fn add_gates(nodes: &mut BTreeMap<NodeKey, Node>, edges: &mut Vec<Edge>, names: 
         }
         edges.extend(addition.edges);
     }
+}
+
+/// Automatic rungs before the gate.
+#[derive(Clone, Copy)]
+struct Ladder {
+    /// One extra attempt of the loop's agent.
+    alternate: bool,
+    /// A split planner (only inside loop bodies).
+    split: bool,
 }
 
 struct Addition {
@@ -254,15 +323,29 @@ fn gate_for(
     source: &NodeKey,
     target: &NodeKey,
     loop_edges: &[Edge],
-    exhausted: &OutcomeKey,
-    alternate: bool,
+    ladder: Ladder,
     names: &mut Names,
 ) -> Option<Addition> {
     let retry = OutcomeKey::try_from(RETRY_OUTCOME).ok()?;
     let stop = OutcomeKey::try_from(STOP_OUTCOME).ok()?;
-    let escalation_exhausted = OutcomeKey::try_from(ESCALATION_EXHAUSTED_OUTCOME).ok()?;
+    let rungs = ESCALATION_RUNGS
+        .iter()
+        .map(|rung| OutcomeKey::try_from(*rung).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let alternate = ladder.alternate;
     let alternate_edge = if alternate {
         Some(names.edge(&format!("{source}_alternate"), "escalation_edge")?)
+    } else {
+        None
+    };
+    let split = if ladder.split {
+        Some((
+            names.node(&format!("{source}_split"), "escalation_split")?,
+            names.node(&format!("{source}_replaced"), "escalation_replaced")?,
+            names.edge(&format!("{source}_to_split"), "escalation_edge")?,
+            names.edge(&format!("{source}_split_done"), "escalation_edge")?,
+            names.edge(&format!("{source}_split_refused"), "escalation_edge")?,
+        ))
     } else {
         None
     };
@@ -288,6 +371,12 @@ fn gate_for(
             body,
             "One extra attempt of `{target}` (on the retry agent, when one is configured) \
              was also sent back."
+        );
+    }
+    if split.is_some() {
+        let _ = writeln!(
+            body,
+            "The planner did not split the task into smaller ones."
         );
     }
     let _ = write!(
@@ -360,30 +449,96 @@ fn gate_for(
         kind,
         policy: EdgePolicy::default(),
     };
-    let mut edges = Vec::with_capacity(4);
-    if let Some(id) = alternate_edge {
-        let mut extra = edge(id, source, exhausted, target, EdgeKind::Escalate);
-        extra.policy = EdgePolicy {
+    let capped_once = |mut edge: Edge, label: Option<&str>| {
+        edge.policy = EdgePolicy {
             max_traversals: Some(1),
             on_max_exceeded: ExceededAction::Escalate,
-            label: Some(ALTERNATE_ATTEMPT_LABEL.into()),
+            label: label.map(Into::into),
         };
-        edges.push(extra);
-        edges.push(edge(
-            to_gate,
-            source,
-            &escalation_exhausted,
-            &gate,
-            EdgeKind::Escalate,
+        edge
+    };
+    let mut nodes = vec![gate_node, stopped_node];
+    let mut edges = Vec::with_capacity(7);
+    // Rungs in order: each automatic rung takes the next rung outcome.
+    let mut rung = rungs.iter();
+    if let Some(id) = alternate_edge {
+        let outcome = rung.next()?;
+        edges.push(capped_once(
+            edge(id, source, outcome, target, EdgeKind::Escalate),
+            Some(ALTERNATE_ATTEMPT_LABEL),
         ));
-    } else {
-        edges.push(edge(to_gate, source, exhausted, &gate, EdgeKind::Escalate));
     }
+    if let Some((planner, replaced, to_split, done, refused)) = split {
+        let outcome = rung.next()?;
+        edges.push(capped_once(
+            edge(to_split, source, outcome, &planner, EdgeKind::Escalate),
+            None,
+        ));
+        let split_outcome = OutcomeKey::try_from(SPLIT_OUTCOME).ok()?;
+        let cannot = OutcomeKey::try_from(CANNOT_SPLIT_OUTCOME).ok()?;
+        edges.push(edge(
+            done,
+            &planner,
+            &split_outcome,
+            &replaced,
+            EdgeKind::Forward,
+        ));
+        edges.push(edge(refused, &planner, &cannot, &gate, EdgeKind::Forward));
+        nodes.push(split_planner_node(&planner, &split_outcome, &cannot)?);
+        nodes.push(Node {
+            id: replaced,
+            position: Position::default(),
+            declared_outcomes: Vec::new(),
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: Some(format!("`{target}` was replaced by smaller tasks")),
+            }),
+        });
+    }
+    let outcome = rung.next()?;
+    edges.push(edge(to_gate, source, outcome, &gate, EdgeKind::Escalate));
     edges.push(edge(retry_edge, &gate, &retry, target, EdgeKind::Backtrack));
     edges.push(edge(stop_edge, &gate, &stop, &stopped, EdgeKind::Forward));
-    Some(Addition {
-        nodes: vec![gate_node, stopped_node],
-        edges,
+    Some(Addition { nodes, edges })
+}
+
+fn split_planner_node(id: &NodeKey, split: &OutcomeKey, cannot: &OutcomeKey) -> Option<Node> {
+    let mut custom_fields = BTreeMap::new();
+    custom_fields.insert(
+        ESCALATION_ROLE_FIELD.to_owned(),
+        toml::Value::String(SPLIT_ROLE.into()),
+    );
+    Some(Node {
+        id: id.clone(),
+        position: Position::default(),
+        declared_outcomes: vec![
+            OutcomeDecl {
+                id: split.clone(),
+                description: "Smaller tasks written to discovered-tasks.toml".into(),
+                edge_kind_hint: EdgeKind::Forward,
+                is_terminal: false,
+                ledger_effect: Default::default(),
+            },
+            OutcomeDecl {
+                id: cannot.clone(),
+                description: "The task cannot be split usefully".into(),
+                edge_kind_hint: EdgeKind::Forward,
+                is_terminal: false,
+                ledger_effect: Default::default(),
+            },
+        ],
+        config: NodeConfig::Agent(crate::agent_config::AgentConfig {
+            profile: crate::keys::ProfileKey::try_from(SPLIT_PLANNER_PROFILE).ok()?,
+            prompt_overrides: None,
+            tool_overrides: None,
+            sandbox_override: None,
+            approvals_override: None,
+            bindings: Vec::new(),
+            rules_overrides: None,
+            limits: crate::agent_config::NodeLimits::default(),
+            hooks: Vec::new(),
+            custom_fields,
+        }),
     })
 }
 
@@ -673,6 +828,101 @@ mod tests {
             targets[max + 1..]
                 .iter()
                 .all(|(to, _)| to == "verify_1_escalation")
+        );
+    }
+
+    #[test]
+    fn loop_bodies_get_a_split_rung_between_the_extra_attempt_and_the_gate() {
+        let graph = BundledFlows::by_name_latest("multi-milestone")
+            .unwrap()
+            .graph;
+        let effective = with_default_escalation_gates(&graph);
+        let body = effective
+            .subgraphs
+            .values()
+            .find(|sg| sg.nodes.contains_key(&key::<NodeKey>("verify_task")))
+            .unwrap();
+        let route = |outcome: &str| {
+            body.edges
+                .iter()
+                .find(|e| {
+                    e.from.node.as_str() == "verify_task" && e.from.outcome.as_str() == outcome
+                })
+                .map(|e| e.to.as_str().to_owned())
+        };
+        assert_eq!(route(EXHAUSTED_OUTCOME).as_deref(), Some("impl_task"));
+        assert_eq!(
+            route(ESCALATION_EXHAUSTED_OUTCOME).as_deref(),
+            Some("verify_task_split")
+        );
+        assert_eq!(
+            route(SPLIT_EXHAUSTED_OUTCOME).as_deref(),
+            Some("verify_task_escalation")
+        );
+        let planner = &body.nodes[&key::<NodeKey>("verify_task_split")];
+        assert!(is_split_planner(planner));
+        let NodeConfig::Agent(agent) = &planner.config else {
+            panic!("agent");
+        };
+        assert_eq!(agent.profile.as_str(), SPLIT_PLANNER_PROFILE);
+        let from_planner = |outcome: &str| {
+            body.edges
+                .iter()
+                .find(|e| {
+                    e.from.node.as_str() == "verify_task_split"
+                        && e.from.outcome.as_str() == outcome
+                })
+                .map(|e| e.to.as_str().to_owned())
+        };
+        assert_eq!(
+            from_planner(SPLIT_OUTCOME).as_deref(),
+            Some("verify_task_replaced")
+        );
+        assert_eq!(
+            from_planner(CANNOT_SPLIT_OUTCOME).as_deref(),
+            Some("verify_task_escalation")
+        );
+        assert!(matches!(
+            &body.nodes[&key::<NodeKey>("verify_task_replaced")].config,
+            NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                ..
+            })
+        ));
+        // Outside loops there is no split rung.
+        let linear =
+            with_default_escalation_gates(&BundledFlows::by_name_latest("linear-3").unwrap().graph);
+        assert!(linear.find_node(&key("verify_1_split")).is_none());
+
+        // Routing climbs all three rungs in order.
+        let verify: NodeKey = key("verify_task");
+        let failed: OutcomeKey = key("failed");
+        let mut counts = std::collections::HashMap::new();
+        let targets: Vec<String> = (0..7)
+            .map(|_| {
+                crate::route_selection::resolve_stage_route(
+                    &body.edges,
+                    &verify,
+                    &failed,
+                    &mut counts,
+                )
+                .unwrap()
+                .target
+                .as_str()
+                .to_owned()
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            [
+                "impl_task",
+                "impl_task",
+                "impl_task",
+                "impl_task",
+                "verify_task_split",
+                "verify_task_escalation",
+                "verify_task_escalation"
+            ]
         );
     }
 }

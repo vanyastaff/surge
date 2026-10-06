@@ -426,6 +426,13 @@ fn commit_stage_route(
     blob: &[u8],
 ) -> Result<EventSeq, WriterError> {
     use surge_core::run_event::EventPayload;
+    let all = payloads;
+    // A split planner's route carries its `TaskSplit` first, so the splice and
+    // the route commit (with the snapshot holding the grown loop) are atomic.
+    let payloads = match all.first().map(VersionedEventPayload::payload) {
+        Some(EventPayload::TaskSplit { .. }) => &all[1..],
+        _ => all,
+    };
     if !(2..=3).contains(&payloads.len())
         || !matches!(payloads[0].payload(), EventPayload::EdgeTraversed { .. })
         || !matches!(payloads[1].payload(), EventPayload::StageCompleted { .. })
@@ -490,7 +497,7 @@ fn commit_stage_route(
         }
     }
     let mut final_seq = prefix;
-    for payload in payloads {
+    for payload in all {
         let timestamp = cfg.clock.now_ms();
         let assigned: u64 = tx.query_row(
             "INSERT INTO events(timestamp,kind,payload,schema_version) VALUES(?,?,?,?) RETURNING seq",

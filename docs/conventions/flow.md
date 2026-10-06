@@ -52,8 +52,13 @@ verifier's `failed` back to the implementer). When the limit is spent and
   (`surge_core::escalation`). When the loop target is an agent node, it first
   gets **one extra automatic attempt** with the latest findings, on the agent
   set in `surge.toml` (`[escalation] retry_agent`, optional `retry_model`) or,
-  when none is set, on its own agent. If that is sent back too, routing takes
-  `escalation_exhausted` to a human gate: **Retry once more** returns to the
+  when none is set, on its own agent. If that is sent back too and the loop
+  runs inside a loop body (a roadmap task loop), a split planner
+  (`task-splitter@1.0`) may replace the task with 1-12 smaller tasks written to
+  `discovered-tasks.toml`. They run right after it in the same loop, each with
+  its own retry budget, and the replaced task's iteration ends without failure
+  (`TaskSplit` in the run log). If the planner reports `cannot_split`, the rung
+  is spent, or the loop is not in a loop body, routing reaches a human gate: **Retry once more** returns to the
   loop target for one more attempt, and the counter is not reset, so the next
   rejection asks again. **Stop** ends the run, or fails the current iteration inside a
   loop so `on_iteration_failure` applies. The gate has no practical deadline.
@@ -69,6 +74,9 @@ retry_model = "gpt-5"       # optional
 
 A stage that runs under a frozen quota plan keeps its planned runtime for the
 extra attempt.
+
+Retry budgets (`max_traversals`) inside a loop body reset at every iteration:
+a task never inherits the traversals another task spent.
 
 A stage re-entered through a backtrack edge (or the extra attempt) receives a "Feedback from the
 previous attempt" section with the sending stage's outcome, summary and

@@ -111,7 +111,7 @@ wake refusals respectively. Version 16 adds the nested
 could not produce its tool catalog; see ADR-0014 decision 8). This is the same
 nested-enum rule as v8: v15 readers reject v16 envelopes with `SchemaTooNew`, and
 every earlier payload still decodes through the existing identity migrations. The
-current maximum supported payload version is 17.
+current maximum supported payload version is 18.
 
 Version 17 adds `EventPayload::ExecutionWriterGroupStopped`, the ADR-0021
 best-effort cleanup record for a host-launched MCP writer whose process group
@@ -119,6 +119,12 @@ was observed empty. It is a new top-level variant, so v16 readers reject v17
 envelopes with `SchemaTooNew`; that is deliberate, because a reader that
 ignored it could not tell best-effort cleanup from confirmed closure. Earlier
 payloads decode through the identity migrations unchanged.
+
+Version 18 adds `EventPayload::TaskSplit`, the verifier ladder's split rung: a
+loop's current task replaced by smaller tasks inserted right after it. It is a
+new top-level variant, so v17 readers reject v18 envelopes with `SchemaTooNew`.
+A stage route batch may now begin with one `TaskSplit`, committed atomically
+with the route and its snapshot.
 Older binaries may reject these envelopes before decoding; forward readability does
 not provide downgrade support. SQLite storage migrations are separate from payload
 versions. See [Release and rollback procedure](release-procedure.md).
