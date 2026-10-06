@@ -45,6 +45,7 @@ RunMemory {
     budget_exceeded_noted: false,
     bootstrap_edit_counts: {},
     node_visits: {},
+    backtrack_feedback: {},
     last_edit_feedback_by_stage: {},
     roadmap_patches: {},
     latest_graph_revision: None,

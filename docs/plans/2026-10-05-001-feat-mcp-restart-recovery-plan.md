@@ -1,7 +1,7 @@
 ---
 title: "feat: MCP cold recovery by group cleanup and restart (ADR-0021)"
 type: feat
-status: in-progress
+status: completed
 date: 2026-10-05
 ---
 
@@ -128,6 +128,10 @@ Oracle changes beyond the mapping table, with reasons:
   group is no longer an unresolved domain.
 
 ## Verification
+
+Passed on CI run 37391960503 (`3e5db7d`): Test Suite and Clippy green on
+macOS and Ubuntu.
+
 
 `cargo clippy --workspace --all-targets --all-features -D warnings`; nextest
 for surge-core, surge-persistence, surge-orchestrator, surge-mcp and

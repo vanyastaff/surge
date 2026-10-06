@@ -1,0 +1,56 @@
+---
+title: "feat: verifier rejection ladder (v1 task 1.1)"
+type: feat
+status: in-progress
+date: 2026-10-05
+---
+
+# feat: verifier rejection ladder (v1 task 1.1)
+
+## Summary
+
+When an implementer → verifier loop runs out of attempts, the run should climb
+a ladder instead of failing: retry on a different allowed agent, then let a
+planner split the task using the verifier's findings, then ask a human. Part of
+the [v1 plan](2026-10-05-002-feat-v1-release-plan.md), phase 1.
+
+## Current state (code map, 2026-10-05)
+
+- `ExceededAction::Escalate` (the default) only re-routes through a declared
+  `max_traversals_exceeded` outcome edge (`route_after_max_traversal`,
+  `surge-orchestrator/src/engine/run_task.rs`). No shipped flow declares one,
+  so every exhausted loop in `linear-3`, `bug-fix`, `refactor` and
+  `multi-milestone` fails the run.
+- A re-entered implementer gets no feedback. Shipped implementer nodes bind only
+  `spec`; the verifier's `verification-report` artifact and outcome summary stay
+  in the run log. Retries are blind.
+- Per-attempt agent override exists only for quota fallback (`quota_opening`,
+  frozen candidates) and only for persistent work items.
+- `FailurePolicy::Replan` is a stub; roadmap patches can add or replace draft
+  items between iterations.
+- Gates raised without a declared node exist (`SkillTrust`, agent
+  `request_human_input`). `EscalationRequested` is informational and has no
+  max-traversal cause.
+- Parallelism is per run (one work item attempt per run), so a ladder is per
+  run; other work items keep running by construction.
+
+## Steps
+
+| Step | What | Done when |
+|---|---|---|
+| A | **Done.** **Feedback on re-entry.** A stage entered through a backtrack edge gets a "Feedback from the previous attempt" section before its prompt: the source stage's outcome and summary, and the failed or skipped checks of a `verification-report` it produced. Engine-level, so user flows benefit without new bindings. | Fold and prompt tests; the section is absent on a first entry. |
+| B | **Human rung as the default end.** `Escalate` with no declared escalation edge raises a host gate (retry / stop; accept-as-is and revise arrive with 1.2) and records `EscalationRequested` with a max-traversal cause, instead of failing. Schema bump. | Engine test: exhausted loop parks on a gate; "retry" resets the edge counter; "stop" fails cleanly; replay is stable. |
+| C | **Retry on another agent.** Before the human rung, one more attempt of the loop's implementer on the next allowed escalation profile (configured in `surge.toml`, default: the capacity rotation candidate). Uses the per-attempt override path, not a graph change. | Mock-agent test: the retry runs on the alternate profile and its result routes normally. |
+| D | **Planner split.** In roadmap flows, after the agent retry, a planner drafts a roadmap patch that replaces the task with smaller ones, using the findings; the patch follows the normal approval policy. Flows without a roadmap skip to the human rung. | `multi-milestone` fixture: exhausted task becomes an approved split and the loop continues. |
+
+Steps run in order; each is independently shippable and keeps all current
+fail-closed behaviour for `ExceededAction::Fail`.
+
+## Decisions
+
+- Feedback is injected by the engine (like steering and the interrupted-call
+  notice), not through new flow bindings, so existing and user flows get it.
+- A ladder never runs the same rung twice for one exhausted edge; the human
+  rung is always reachable.
+- Records say what happened ("retried on profile X", "split into N tasks",
+  "accepted by a human") and never present a human acceptance as verified.

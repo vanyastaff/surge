@@ -267,6 +267,150 @@ fn record_task_quota_rate_limit(
     )
 }
 
+/// Largest `verification-report` read back for re-entry feedback.
+const FEEDBACK_REPORT_MAX_BYTES: usize = 256 * 1024;
+/// Per-field cap so one long note cannot crowd out the stage prompt.
+const FEEDBACK_FIELD_MAX_CHARS: usize = 2_000;
+/// Checks listed in re-entry feedback; the rest are counted.
+const FEEDBACK_MAX_CHECKS: usize = 20;
+
+/// Why the previous attempt of this node was sent back, when it was re-entered
+/// through a backtrack edge: the sending node's outcome and summary, and the
+/// `verification-report` it sealed for that outcome, if any.
+async fn previous_attempt_feedback(p: &AgentStageParams<'_>) -> Option<String> {
+    let entry = p.run_memory.backtrack_feedback.get(p.node)?;
+    let records = p.run_memory.outcomes.get(&entry.from);
+    let mut sent = records
+        .into_iter()
+        .flatten()
+        .filter(|record| record.seq < entry.edge_seq);
+    let outcome = sent.next_back();
+    let earlier = sent.next_back().map_or(0, |record| record.seq);
+    let report_ref = p
+        .run_memory
+        .artifacts_by_node
+        .get(&entry.from)
+        .into_iter()
+        .flatten()
+        .rfind(|artifact| {
+            artifact.name == "verification-report"
+                && artifact.produced_at_seq > earlier
+                && artifact.produced_at_seq < entry.edge_seq
+        });
+    let report = match report_ref {
+        None => None,
+        Some(artifact) => match p
+            .artifact_store
+            .open_bounded(p.run_id, artifact.hash, FEEDBACK_REPORT_MAX_BYTES)
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+                toml::from_str::<surge_core::roadmap::VerificationReportArtifact>(&text)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(report) => Some(report),
+            Err(error) => {
+                tracing::warn!(
+                    target: "engine::feedback",
+                    node = %p.node,
+                    from = %entry.from,
+                    %error,
+                    "verification report unavailable for re-entry feedback"
+                );
+                None
+            },
+        },
+    };
+    let rendered = render_previous_attempt_feedback(&entry.from, outcome, report.as_ref());
+    if rendered.is_some() {
+        tracing::info!(
+            target: "engine::feedback",
+            node = %p.node,
+            from = %entry.from,
+            with_report = report.is_some(),
+            "binding previous-attempt feedback into the re-entered stage prompt"
+        );
+    }
+    rendered
+}
+
+fn clip(text: &str) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(FEEDBACK_FIELD_MAX_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
+}
+
+fn render_previous_attempt_feedback(
+    from: &NodeKey,
+    outcome: Option<&surge_core::run_state::OutcomeRecord>,
+    report: Option<&surge_core::roadmap::VerificationReportArtifact>,
+) -> Option<String> {
+    use std::fmt::Write as _;
+    use surge_core::roadmap::VerificationCheckResult;
+
+    let summary = outcome
+        .map(|record| clip(&record.summary))
+        .unwrap_or_default();
+    if summary.is_empty() && report.is_none() {
+        return None;
+    }
+    let mut text = String::from(
+        "## Feedback from the previous attempt
+",
+    );
+    match outcome {
+        Some(record) => {
+            let _ = writeln!(
+                text,
+                "Stage `{from}` sent this work back with outcome `{}`. Address it before \
+                 reporting again.",
+                record.outcome
+            );
+        },
+        None => {
+            let _ = writeln!(text, "Stage `{from}` sent this work back.");
+        },
+    }
+    if !summary.is_empty() {
+        let _ = writeln!(text, "\nSummary: {summary}");
+    }
+    if let Some(report) = report {
+        let report_summary = clip(&report.summary);
+        if !report_summary.is_empty() && report_summary != summary {
+            let _ = writeln!(text, "\nVerifier summary: {report_summary}");
+        }
+        let open: Vec<_> = report
+            .checks
+            .iter()
+            .filter(|check| check.result != VerificationCheckResult::Passed)
+            .collect();
+        if !open.is_empty() {
+            text.push_str("\nChecks that did not pass:\n");
+            for check in open.iter().take(FEEDBACK_MAX_CHECKS) {
+                let result = match check.result {
+                    VerificationCheckResult::Failed => "failed",
+                    VerificationCheckResult::Skipped => "skipped",
+                    VerificationCheckResult::Cancelled => "cancelled",
+                    VerificationCheckResult::Passed => "passed",
+                };
+                let _ = write!(text, "- `{}` — {result}", clip(&check.command));
+                if let Some(note) = check.note.as_deref().map(clip).filter(|n| !n.is_empty()) {
+                    let _ = write!(text, ": {note}");
+                }
+                text.push('\n');
+            }
+            if open.len() > FEEDBACK_MAX_CHECKS {
+                let _ = writeln!(text, "- …and {} more", open.len() - FEEDBACK_MAX_CHECKS);
+            }
+        }
+    }
+    text.push('\n');
+    Some(text)
+}
+
 /// Tell the agent which MCP calls a previous session left without a result
 /// (ADR-0021 decision 4). Their outcome is unknown and Surge never replays them.
 fn prepend_interrupted_mcp_calls(
@@ -1349,6 +1493,10 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         }
     }
 
+    let prompt_text = match previous_attempt_feedback(&p).await {
+        Some(feedback) => feedback + &prompt_text,
+        None => prompt_text,
+    };
     // Prepend any queued operator steer messages to this turn's prompt (B2).
     // Non-destructive: steering lands here, at the stage boundary, because ACP
     // v1 offers no mid-turn injection channel.
@@ -3874,6 +4022,79 @@ mod tests {
         assert!(prompt.contains("`add_comment` on MCP server `github` (event 42)"));
         assert!(prompt.contains("outcome is unknown"));
         assert!(prompt.ends_with("Do it."));
+    }
+
+    #[test]
+    fn previous_attempt_feedback_names_outcome_summary_and_open_checks() {
+        use surge_core::roadmap::{
+            VerificationCheck, VerificationCheckResult, VerificationReportArtifact,
+            VerificationReportOutcome,
+        };
+        let from = NodeKey::try_from("verify_1").unwrap();
+        let record = surge_core::run_state::OutcomeRecord {
+            outcome: OutcomeKey::try_from("failed").unwrap(),
+            summary: "Login form accepts empty passwords.".into(),
+            seq: 7,
+        };
+        assert_eq!(render_previous_attempt_feedback(&from, None, None), None);
+        let empty = surge_core::run_state::OutcomeRecord {
+            summary: "  ".into(),
+            ..record.clone()
+        };
+        assert_eq!(
+            render_previous_attempt_feedback(&from, Some(&empty), None),
+            None
+        );
+
+        let check = |command: &str, result, note: Option<&str>| VerificationCheck {
+            command: command.into(),
+            result,
+            covers: Vec::new(),
+            note: note.map(Into::into),
+        };
+        let mut checks = vec![
+            check("cargo nextest run", VerificationCheckResult::Passed, None),
+            check(
+                "cargo nextest run login",
+                VerificationCheckResult::Failed,
+                Some("empty_password_is_rejected panicked"),
+            ),
+        ];
+        checks.extend((0..FEEDBACK_MAX_CHECKS).map(|n| {
+            check(
+                &format!("probe {n}"),
+                VerificationCheckResult::Skipped,
+                None,
+            )
+        }));
+        let report = VerificationReportArtifact {
+            task_id: "T1".into(),
+            outcome: VerificationReportOutcome::Failed,
+            summary: "One acceptance criterion is unmet.".into(),
+            checks,
+            ..VerificationReportArtifact::default()
+        };
+        let text = render_previous_attempt_feedback(&from, Some(&record), Some(&report)).unwrap();
+        assert!(text.starts_with("## Feedback from the previous attempt\n"));
+        assert!(text.contains("Stage `verify_1` sent this work back with outcome `failed`"));
+        assert!(text.contains("Summary: Login form accepts empty passwords."));
+        assert!(text.contains("Verifier summary: One acceptance criterion is unmet."));
+        assert!(
+            text.contains(
+                "- `cargo nextest run login` — failed: empty_password_is_rejected panicked"
+            )
+        );
+        assert!(!text.contains("`cargo nextest run` —"));
+        assert!(text.contains("- …and 1 more"));
+
+        let long = "x".repeat(FEEDBACK_FIELD_MAX_CHARS + 50);
+        let clipped = surge_core::run_state::OutcomeRecord {
+            summary: long,
+            ..record
+        };
+        let text = render_previous_attempt_feedback(&from, Some(&clipped), None).unwrap();
+        assert!(text.contains(&format!("{}…", "x".repeat(FEEDBACK_FIELD_MAX_CHARS))));
+        assert!(!text.contains(&"x".repeat(FEEDBACK_FIELD_MAX_CHARS + 1)));
     }
 
     #[test]

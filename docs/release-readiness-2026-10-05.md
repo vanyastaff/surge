@@ -268,3 +268,22 @@ Windows Clippy and test jobs now run with `continue-on-error` and carry
 workflow. This reflects the user-directed macOS scope and grants no Windows
 support claim; Windows repair is scheduled after v1
 ([release plan](plans/2026-10-05-002-feat-v1-release-plan.md)).
+
+## MCP restart recovery implemented — 2026-10-05
+
+ADR-0021 is implemented (group stop, `ExecutionWriterGroupStopped` at schema
+v17, restart from the frozen manifest, interrupted-call notice). CI run
+37391960503 on `3e5db7d` passed Test Suite, Clippy and MSRV on macOS and
+Ubuntu, including the owned-flow MCP suite with refusal oracles unchanged
+(oracle changes are recorded in the
+[restart-recovery plan](plans/2026-10-05-001-feat-mcp-restart-recovery-plan.md)).
+The "Productive MCP cold recovery" P0 row is satisfied by that evidence. NO-GO
+stays until the remaining v1 phases and the final release gates pass.
+
+Windows, same run: the `GETFINALPATHNAMEBYHANDLE_FLAGS` error is gone. Clippy
+stopped on one Windows-only dead-code error (fixed next, with the other
+Windows-only dead-code warnings). The advisory test job compiled and ran 3571
+tests: 3456 passed, 115 failed, about 60 distinct tests. Most are Unix process
+and file-ownership tests (cold host, owned flow, secure start preparation) and
+one mock-bridge admission test compiled into many test binaries. These remain
+advisory and belong to Windows support after v1.

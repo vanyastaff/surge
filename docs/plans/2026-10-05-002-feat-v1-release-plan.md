@@ -24,14 +24,14 @@ starts by confirming them, because a mapping pass can miss existing code.
 
 | # | Task | Depends on | Done when |
 |---|---|---|---|
-| 0.1 | **MCP restart recovery** ([ADR-0021](../adr/0021-mcp-restart-recovery.md), [plan](2026-10-05-001-feat-mcp-restart-recovery-plan.md)): group termination, best-effort cleanup record, restart from frozen manifest, outcome-unknown notice for interrupted calls. | — | Owned-flow MCP suite 23/23 on macOS and Linux CI, refusal oracles unchanged. |
-| 0.2 | **CI scope for the macOS release.** Decided 2026-10-05: Windows Clippy and test jobs are advisory (`continue-on-error`, named "advisory"); their known compile error (`GETFINALPATHNAMEBYHANDLE_FLAGS`) is fixed with Windows support after v1. | — | Done in CI; Windows failures stay visible but no longer fail the workflow. |
+| 0.1 | **MCP restart recovery** ([ADR-0021](../adr/0021-mcp-restart-recovery.md), [plan](2026-10-05-001-feat-mcp-restart-recovery-plan.md)): group termination, best-effort cleanup record, restart from frozen manifest, outcome-unknown notice for interrupted calls. | — | **Done 2026-10-05** (CI run 37391960503 on `3e5db7d`, macOS and Ubuntu green). |
+| 0.2 | **CI scope for the macOS release.** Decided 2026-10-05: Windows Clippy and test jobs are advisory (`continue-on-error`, named "advisory"); Windows compile errors are being fixed as they appear; the ~60 Unix-dependent Windows test failures stay advisory until Windows support after v1. | — | Done in CI; Windows failures stay visible but no longer fail the workflow. |
 
 ## Phase 1 — engine foundations (no UI)
 
 | # | Task | Current state | Done when |
 |---|---|---|---|
-| 1.1 | **Verifier rejection ladder.** Implement `ExceededAction::Escalate` behind `EdgePolicy.max_traversals`: retry on a different or stronger allowed model, then a planner split using the verifier's findings, then a human gate. Independent tasks keep running. | `Escalate` declared in `surge-core/src/edge.rs`, runtime semantics reserved. | Engine tests cover each rung, dependency-aware continuation and event replay. |
+| 1.1 | **Verifier rejection ladder** ([plan](2026-10-05-003-feat-verifier-rejection-ladder-plan.md); step A, feedback on re-entry, done). Implement `ExceededAction::Escalate` behind `EdgePolicy.max_traversals`: retry on a different or stronger allowed model, then a planner split using the verifier's findings, then a human gate. Independent tasks keep running. | `Escalate` declared in `surge-core/src/edge.rs`, runtime semantics reserved. | Engine tests cover each rung, dependency-aware continuation and event replay. |
 | 1.2 | **Human override of a rejection.** "Accept as is" (recorded and rendered as accepted by a human, never verified, findings kept) and "revise requirement and re-verify". | Missing. | Ledger, run report and fold distinguish the three outcomes. |
 | 1.3 | **Loop protection.** No progress (no new events), repeated identical tool calls or a turn cap counts as a failed attempt and enters 1.1. Defaults in `surge.toml`. | Missing. | Mock-agent tests for each trigger. |
 | 1.4 | **Agent switching on limits.** Make capacity `Rotate` reachable: move a parked task to another allowed agent; park only when none fits. Keep the verifier on a different vendor than the implementer where possible, warn otherwise. | Parking and wake complete (ADR-0016); `Rotate` unreachable. | Rate-limit fixture switches agents; no allowed agent parks and wakes. |

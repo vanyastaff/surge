@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — verifier findings reach the re-entered stage
+
+- A stage re-entered through a backtrack edge (for example an implementer
+  sent back by its verifier) now opens with a "Feedback from the previous
+  attempt" section: the sending stage's outcome and summary, plus the checks
+  that did not pass in the `verification-report` it sealed. Previously the
+  retry ran without the verifier's findings. Fields are clipped and the check
+  list is capped so feedback cannot crowd out the stage prompt. Works for
+  shipped and user flows without new bindings (`RunMemory.backtrack_feedback`).
+
 ### Changed — MCP cold recovery by group cleanup and restart (ADR-0021)
 
 - Resuming a run with a prior host-launched MCP server no longer refuses when

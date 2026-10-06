@@ -262,6 +262,17 @@ pub struct UnresolvedMcpCall {
     pub seq: u64,
 }
 
+/// The backtrack edge that most recently re-entered a node, kept until that
+/// node reports its next outcome. The engine uses it to show the re-entered
+/// agent why the previous attempt was sent back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BacktrackFeedback {
+    /// Node whose outcome sent the run back.
+    pub from: NodeKey,
+    /// Sequence of the `EdgeTraversed { kind: Backtrack }` event.
+    pub edge_seq: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunMemory {
     /// MCP calls whose result was never recorded, oldest first. Cleared when the
@@ -328,6 +339,8 @@ pub struct RunMemory {
     /// backtrack-aware feature) reads it to detect re-entries without
     /// scanning the event log.
     pub node_visits: BTreeMap<NodeKey, u32>,
+    /// Pending re-entry feedback per target node; see [`BacktrackFeedback`].
+    pub backtrack_feedback: BTreeMap<NodeKey, BacktrackFeedback>,
     /// Per-bootstrap-stage latest edit feedback. Updated on every
     /// `BootstrapEditRequested { stage, feedback }` event — the newest
     /// feedback overwrites the previous entry for that stage. Read by the
@@ -1634,6 +1647,7 @@ impl RunMemory {
                 outcome,
                 summary,
             } => {
+                self.backtrack_feedback.remove(node);
                 self.outcomes
                     .entry(node.clone())
                     .or_default()
@@ -1668,10 +1682,18 @@ impl RunMemory {
             },
             EventPayload::EdgeTraversed {
                 kind: EdgeKind::Backtrack,
+                from,
                 to,
                 ..
             } => {
                 *self.node_visits.entry(to.clone()).or_insert(0) += 1;
+                self.backtrack_feedback.insert(
+                    to.clone(),
+                    BacktrackFeedback {
+                        from: from.clone(),
+                        edge_seq: event.seq,
+                    },
+                );
             },
             EventPayload::RoadmapPatchDrafted {
                 patch_id,
@@ -2156,6 +2178,41 @@ mod tests {
             },
         ));
         assert!(m.budget_warning_raised);
+    }
+
+    #[test]
+    fn backtrack_feedback_waits_for_the_reentered_node_outcome() {
+        use crate::keys::EdgeKey;
+
+        let mut m = RunMemory::default();
+        let implement = NodeKey::try_from("implement_1").unwrap();
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let outcome = |node: &NodeKey, key: &str| EventPayload::OutcomeReported {
+            node: node.clone(),
+            outcome: OutcomeKey::try_from(key).unwrap(),
+            summary: String::new(),
+        };
+        m.apply_event(&make_event(1, outcome(&verify, "failed")));
+        m.apply_event(&make_event(
+            2,
+            EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("e_retry").unwrap(),
+                from: verify.clone(),
+                to: implement.clone(),
+                kind: EdgeKind::Backtrack,
+            },
+        ));
+        assert_eq!(
+            m.backtrack_feedback.get(&implement),
+            Some(&BacktrackFeedback {
+                from: verify.clone(),
+                edge_seq: 2,
+            })
+        );
+        m.apply_event(&make_event(3, outcome(&verify, "failed")));
+        assert!(m.backtrack_feedback.contains_key(&implement));
+        m.apply_event(&make_event(4, outcome(&implement, "done")));
+        assert!(m.backtrack_feedback.is_empty());
     }
 
     #[test]
