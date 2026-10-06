@@ -199,15 +199,16 @@ async fn per_server_catalog_isolates_a_server_that_misses_its_startup_deadline()
 #[tokio::test]
 async fn actual_catalog_deadline_spans_pages_and_call_timeout_remains_exact() {
     assert_cold_start_is_not_catalog_evidence().await;
-    // Each page takes 250 ms: separate per-page deadlines would fit 400 ms, the
-    // shared one cannot, and page two still arrives ~150 ms before it expires.
-    for (budget, succeeds) in [(400, false), (1000, true)] {
+    // Each page takes 500 ms: separate per-page deadlines would fit 800 ms, the
+    // shared one cannot, and page two is still requested ~300 ms before it
+    // expires (slack for loaded CI runners). The call sleeps between budgets.
+    for (budget, succeeds) in [(800, false), (2000, true)] {
         let mut fixture = delayed_catalog_fixture();
         let script = fixture.dir.path().join("child.py");
         let original = std::fs::read_to_string(&script).unwrap();
         std::fs::write(&script, original.replace(
             "    if method == 'initialize':",
-            "    if method == 'tools/list':\n        import time; time.sleep(0.25)\n    elif method == 'tools/call':\n        import time; time.sleep(0.6)\n    if method == 'initialize':",
+            "    if method == 'tools/list':\n        import time; time.sleep(0.5)\n    elif method == 'tools/call':\n        import time; time.sleep(1.2)\n    if method == 'initialize':",
         )).unwrap();
         let McpTransportConfig::Stdio { env, .. } = &mut fixture.config.transport else {
             panic!("stdio fixture");

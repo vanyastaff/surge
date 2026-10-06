@@ -583,7 +583,7 @@ mod tests {
             .await
             .unwrap();
         // Release the writer slot so `fork` can append `ForkCreated`.
-        drop(writer);
+        writer.close().await.unwrap();
 
         let child = RunId::new();
         let out = fork(&storage, ForkRequest::new(parent, child, 3))
@@ -674,7 +674,7 @@ mod tests {
             .write_graph_snapshot(snap_seq, serde_json::to_vec(&snapshot).unwrap())
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
 
         let child = RunId::new();
         fork(&storage, ForkRequest::new(parent, child, 3))
@@ -726,7 +726,7 @@ mod tests {
             ])
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
 
         let zero = fork(&storage, ForkRequest::new(parent, RunId::new(), 0)).await;
         assert!(
@@ -765,7 +765,7 @@ mod tests {
             ])
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
 
         let res = fork(&storage, ForkRequest::new(parent, RunId::new(), 2)).await;
         assert!(
@@ -861,7 +861,7 @@ mod tests {
             ])
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
         (storage, parent)
     }
 

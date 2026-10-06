@@ -467,7 +467,7 @@ mod tests {
         let storage = Storage::open(dir.path()).await.unwrap();
         let broken = RunId::new();
         let writer = storage.create_run(broken, dir.path(), None).await.unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
         let db = storage
             .home()
             .join("runs")
@@ -515,7 +515,7 @@ mod tests {
             let id = RunId::new();
             let writer = storage.create_run(id, dir.path(), None).await.unwrap();
             writer.flush().await.unwrap();
-            drop(writer);
+            writer.close().await.unwrap();
             storage.set_run_status(&id, status, Some(1)).await.unwrap();
             std::fs::remove_file(
                 storage
