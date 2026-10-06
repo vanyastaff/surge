@@ -91,9 +91,11 @@ Answers from the maintainer interview of 2026-10-05 are marked *(maintainer)*.
    level, so every run has the same shape on the dashboard.
 9. **Persisted graphs stay immutable**; engine-added rungs stay in the derived
    routing graph (`surge_core::escalation`).
-10. **Views** *(maintainer: evaluate both visually first)*: a task tree with
-    drill-down into one task's pipeline, and one large graph with collapsible
-    task groups. A mockup of both on the JWT example decides which ships first.
+10. **View: task tree with drill-down** *(maintainer, after reviewing a mockup
+    of both views on the JWT example, 2026-10-05)*. The desktop shows the task
+    tree with status and progress; selecting a task shows its own pipeline, the
+    ladder state, agent, criteria, PR and attempts. The single large graph with
+    collapsible task groups was the rejected alternative.
 
 ## Migration
 
@@ -125,7 +127,6 @@ replaying through the loop-frame path.
 
 ## Open questions
 
-- Which view ships first, after the maintainer reviews the mockup.
 - Size estimate used by the split guard (planner-declared size, or measured
   from history as the product strategy suggests for compaction signals).
 
