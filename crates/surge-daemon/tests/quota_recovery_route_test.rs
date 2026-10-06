@@ -2504,11 +2504,15 @@ async fn selected_crash_fixture(phase: &str) {
     let identity = surge_acp::process_evidence::observe(pid).unwrap();
     first.stop_and_wait().unwrap();
     if surge_acp::process_evidence::observe(pid).ok().as_ref() == Some(&identity) {
-        nix::sys::signal::kill(
+        // The provider may exit on its own between the identity check and the
+        // kill; an already-gone process is exactly the outcome wanted.
+        match nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap()),
             nix::sys::signal::Signal::SIGKILL,
-        )
-        .unwrap();
+        ) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => {},
+            Err(error) => panic!("kill surviving provider {pid}: {error}"),
+        }
     }
     std::fs::remove_file(home.join("quota.sock")).unwrap();
     let mut second = cold_host::ColdHost::spawn(
