@@ -180,6 +180,7 @@ fn main() -> std::process::ExitCode {
                 // like a builtin one.
                 agent_registry: Some(agent_registry.clone()),
                 escalation: surge_orchestrator::engine::escalation_config(&config, &agent_registry),
+                fallback_agents: config.capacity.fallback_agents.clone(),
                 ..EngineConfig::default()
             },
         ));

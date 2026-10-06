@@ -732,6 +732,7 @@ impl RunReport {
                 | EventPayload::ExecutionWriterClosed { .. }
                 | EventPayload::ExecutionWriterGroupStopped { .. }
                 | EventPayload::TaskSplit { .. }
+                | EventPayload::StageRuntimeRotated { .. }
                 | EventPayload::QuotaStagePlanned { .. }
                 | EventPayload::SessionEstablishmentRequested { .. }
                 | EventPayload::RunSuspended { .. }

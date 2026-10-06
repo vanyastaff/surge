@@ -456,6 +456,7 @@ impl Engine {
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
             escalation: self.config.escalation.clone(),
+            fallback_agents: self.config.fallback_agents.clone(),
             storage: self.storage.clone(),
             // A fresh run was never parked — nothing to bypass.
             capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(false),
@@ -1312,6 +1313,7 @@ impl Engine {
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
             escalation: self.config.escalation.clone(),
+            fallback_agents: self.config.fallback_agents.clone(),
             storage: self.storage.clone(),
             capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(
                 was_parked || capacity_continue,

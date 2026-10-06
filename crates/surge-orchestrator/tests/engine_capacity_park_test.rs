@@ -319,6 +319,7 @@ async fn configured_blind_backoff_reaches_the_park_decision_not_the_hardcoded_de
         // `capacity.rs`/`capacity_config.rs` for jitter's own coverage).
         jitter_max: Duration::ZERO,
         rotation_profile: None,
+        fallback_agents: Vec::new(),
     };
     let capacity_policy: CapacityPolicy = (&capacity_config).into();
     assert_eq!(capacity_policy.rotation, RotationPolicy::Disabled);
@@ -639,6 +640,7 @@ async fn rotation_without_durable_task_owner_refuses_before_any_provider_effect(
         blind_park_limit: 5,
         jitter_max: Duration::ZERO,
         rotation_profile: Some("alternate-role@1.0".into()),
+        fallback_agents: Vec::new(),
     };
     let engine = Engine::new_full(
         bridge,

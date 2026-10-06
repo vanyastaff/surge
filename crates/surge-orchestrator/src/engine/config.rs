@@ -72,6 +72,10 @@ pub struct EngineConfig {
     /// (`surge_core::escalation`). Engine-level like `capacity`, so a resumed
     /// run keeps it; production wiring copies `SurgeConfig::escalation`.
     pub escalation: surge_core::escalation::EscalationConfig,
+    /// Agents a stage moves to when its own agent's usage limit is exhausted
+    /// (`[capacity].fallback_agents`, v1 task 1.4), in order. Engine-level so
+    /// a resumed run keeps them. Empty keeps parking.
+    pub fallback_agents: Vec<String>,
 }
 
 impl Default for EngineConfig {
@@ -85,6 +89,7 @@ impl Default for EngineConfig {
             memory_store_path: None,
             agent_registry: None,
             escalation: surge_core::escalation::EscalationConfig::default(),
+            fallback_agents: Vec::new(),
         }
     }
 }

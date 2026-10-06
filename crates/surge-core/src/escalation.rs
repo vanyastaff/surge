@@ -208,21 +208,7 @@ impl EscalationConfig {
         agent: &crate::agent_config::AgentConfig,
     ) -> Option<crate::agent_config::AgentConfig> {
         let agent_id = self.retry_agent()?;
-        let mut runtime = toml::map::Map::new();
-        runtime.insert("agent_id".into(), toml::Value::String(agent_id.into()));
-        if let Some(model) = self
-            .retry_model
-            .as_deref()
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-        {
-            runtime.insert("model".into(), toml::Value::String(model.into()));
-        }
-        let mut retry = agent.clone();
-        retry
-            .custom_fields
-            .insert("runtime".into(), toml::Value::Table(runtime));
-        Some(retry)
+        Some(agent.with_runtime_override(agent_id, self.retry_model.as_deref()))
     }
 }
 

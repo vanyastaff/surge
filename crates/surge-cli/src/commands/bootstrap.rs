@@ -471,6 +471,7 @@ async fn build_local_engine(
                 config,
                 &surge_acp::Registry::for_run(config),
             ),
+            fallback_agents: config.capacity.fallback_agents.clone(),
             ..EngineConfig::default()
         },
     ));

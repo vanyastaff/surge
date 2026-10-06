@@ -81,6 +81,24 @@ retry_model = "gpt-5"       # optional
 A stage that runs under a frozen quota plan keeps its planned runtime for the
 extra attempt.
 
+## Agent switching on limits
+
+When a stage's agent hits its usage limit, the engine moves that stage to
+another agent instead of parking, if `surge.toml` names fallbacks:
+
+```toml
+[capacity]
+fallback_agents = ["codex-acp", "gemini"]   # tried in order, registry ids
+```
+
+The first fallback that is configured, launchable and not itself exhausted is
+chosen, preferring one that differs from the stage's verifier/implementer
+partner; if only the partner's agent fits it is used and the move is flagged.
+The stage opens a fresh session on the new agent (a provider session never
+continues across agents) and stays there until it routes an outcome. When no
+fallback fits, the run parks and wakes as before. Every move is a
+`StageRuntimeRotated` event.
+
 ## Loop protection
 
 A stage attempt ends as a **failed attempt** when the engine sees no activity

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — agent switching on usage limits
+
+- `[capacity].fallback_agents` in `surge.toml` (registry ids, in order): when a
+  stage's agent hits its usage limit, the stage moves to the first fallback
+  that is configured, launchable and has capacity left, preferring an agent
+  that differs from the stage's verifier/implementer partner (flagged when
+  only the partner's agent fits), instead of parking. With no fallback
+  available the run parks and wakes as before. The move is recorded as
+  `StageRuntimeRotated` before the next session opens, survives a restart and
+  bounds ping-pong between exhausted agents. **Event payload schema v21.**
+  Task-owned runs keep their frozen quota plan.
+
 ### Changed — loop protection ends an attempt instead of the run
 
 - A stage attempt with no activity for `idle_limit_secs` (new, default 900),

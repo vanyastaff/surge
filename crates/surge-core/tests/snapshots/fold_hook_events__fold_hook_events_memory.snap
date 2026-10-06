@@ -49,6 +49,7 @@ RunMemory {
     escalations: {},
     entered_via: {},
     requirement_revisions: [],
+    runtime_rotations: {},
     last_edit_feedback_by_stage: {},
     roadmap_patches: {},
     latest_graph_revision: None,

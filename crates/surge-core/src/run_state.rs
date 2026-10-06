@@ -352,6 +352,10 @@ pub struct RunMemory {
     /// Requirement revisions a human made, oldest first. Stages of the same
     /// task (or every stage, for a run-wide revision) see them in the prompt.
     pub requirement_revisions: Vec<RequirementRevision>,
+    /// Active agent rotations per stage (`StageRuntimeRotated`), kept until
+    /// the stage routes an outcome (`StageCompleted`). The engine applies the
+    /// latest one so a restarted host resumes on the same agent.
+    pub runtime_rotations: BTreeMap<NodeKey, RuntimeRotation>,
     /// Per-bootstrap-stage latest edit feedback. Updated on every
     /// `BootstrapEditRequested { stage, feedback }` event — the newest
     /// feedback overwrites the previous entry for that stage. Read by the
@@ -515,6 +519,16 @@ impl Default for LedgerTask {
             requirement_revised: false,
         }
     }
+}
+
+/// The agent a stage moved to on an exhausted usage limit, and how many
+/// moves this visit has made (bounds ping-pong between exhausted agents).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRotation {
+    /// Registry id of the agent the stage runs on now.
+    pub to: String,
+    /// Moves made since the stage last routed an outcome.
+    pub count: u32,
 }
 
 /// A requirement revision a human made for a stage (`RequirementRevised`).
@@ -1296,6 +1310,22 @@ impl RunMemory {
             } => self
                 .ledger
                 .record_accepted_by_human(task, node, *findings, event.seq),
+            EventPayload::StageRuntimeRotated { node, to, .. } => {
+                let count = self
+                    .runtime_rotations
+                    .get(node)
+                    .map_or(0, |rotation| rotation.count);
+                self.runtime_rotations.insert(
+                    node.clone(),
+                    RuntimeRotation {
+                        to: to.clone(),
+                        count: count.saturating_add(1),
+                    },
+                );
+            },
+            EventPayload::StageCompleted { node, .. } => {
+                self.runtime_rotations.remove(node);
+            },
             EventPayload::RequirementRevised { node, task, text } => {
                 if let Some(task) = task {
                     self.ledger.record_requirement_revised(task, event.seq);

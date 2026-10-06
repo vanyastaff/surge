@@ -115,7 +115,10 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v20:** adds [`crate::run_event::EscalationCause::LoopGuardNoProgress`] and
 /// [`crate::run_event::EscalationCause::LoopGuardToolCallCap`] (loop
 /// protection). Same nested-enum rule as v8: v19 readers reject v20.
-pub const MAX_SUPPORTED_VERSION: u32 = 20;
+/// **v21:** adds [`EventPayload::StageRuntimeRotated`] (a stage moved to a
+/// fallback agent on an exhausted usage limit). A v20 reader would replay the
+/// stage on the exhausted agent, so it rejects v21.
+pub const MAX_SUPPORTED_VERSION: u32 = 21;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -461,6 +464,20 @@ impl Migration for IdentityV20 {
     }
 }
 
+/// Identity decoder for agent rotation records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV21;
+impl Migration for IdentityV21 {
+    fn version(&self) -> u32 {
+        21
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v21 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -471,8 +488,8 @@ impl MigrationChain {
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
     /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
-    /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], [`IdentityV19`], and
-    /// [`IdentityV20`].
+    /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], [`IdentityV19`],
+    /// [`IdentityV20`], and [`IdentityV21`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -497,6 +514,7 @@ impl MigrationChain {
                 Box::new(IdentityV18),
                 Box::new(IdentityV19),
                 Box::new(IdentityV20),
+                Box::new(IdentityV21),
             ],
         }
     }
@@ -675,6 +693,26 @@ mod tests {
     }
 
     #[test]
+    fn v21_runtime_rotation_round_trips_and_v20_readers_reject_it() {
+        let payload = EventPayload::StageRuntimeRotated {
+            node: NodeKey::try_from("implement").unwrap(),
+            from: "claude-code".into(),
+            to: "codex".into(),
+            reason: "usage limit reached".into(),
+            same_as_partner: true,
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, 21);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("stage_runtime_rotated"));
+        assert_eq!(migrate_payload(21, &bytes).unwrap(), payload);
+        assert!(matches!(
+            migrate_payload(22, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 22, max: 21 })
+        ));
+    }
+
+    #[test]
     fn v20_loop_protection_causes_round_trip_and_v19_readers_reject_them() {
         use crate::run_event::EscalationCause;
         for (cause, tag) in [
@@ -693,13 +731,13 @@ mod tests {
                 cause,
             };
             let wrapper = VersionedEventPayload::new(payload.clone());
-            assert_eq!(wrapper.schema_version, 20);
+            assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
             let bytes = serde_json::to_vec(&wrapper).unwrap();
             assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
             assert_eq!(migrate_payload(20, &bytes).unwrap(), payload);
             assert!(matches!(
-                migrate_payload(21, &bytes),
-                Err(SurgeError::SchemaTooNew { found: 21, max: 20 })
+                migrate_payload(22, &bytes),
+                Err(SurgeError::SchemaTooNew { found: 22, max: 21 })
             ));
         }
     }
@@ -745,8 +783,8 @@ mod tests {
         assert!(String::from_utf8_lossy(&bytes).contains("\"task_split\""));
         assert_eq!(migrate_payload(18, &bytes).unwrap(), payload);
         assert!(matches!(
-            migrate_payload(21, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 21, max: 20 })
+            migrate_payload(MAX_SUPPORTED_VERSION + 1, &bytes),
+            Err(SurgeError::SchemaTooNew { found, max }) if found == MAX_SUPPORTED_VERSION + 1 && max == MAX_SUPPORTED_VERSION
         ));
     }
 
@@ -999,8 +1037,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(21, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 21, max: 20 })
+            migrate_payload(MAX_SUPPORTED_VERSION + 1, &bytes),
+            Err(SurgeError::SchemaTooNew { found, max }) if found == MAX_SUPPORTED_VERSION + 1 && max == MAX_SUPPORTED_VERSION
         ));
     }
 

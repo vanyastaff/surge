@@ -138,6 +138,8 @@ pub(crate) struct RunTaskParams {
     pub capacity_policy: surge_core::capacity::CapacityPolicy,
     /// Engine-level `[escalation]` settings for the extra retry attempt.
     pub escalation: surge_core::escalation::EscalationConfig,
+    /// `[capacity].fallback_agents`: where a stage moves on an exhausted limit.
+    pub fallback_agents: Vec<String>,
     /// Registry-level storage handle (Task 12 M3) — the run task's own
     /// door onto `runs.status`/`runs.wake_at`, used only to call
     /// [`surge_persistence::runs::Storage::set_run_parked`] when
@@ -1405,6 +1407,188 @@ enum StageDispatch {
     },
 }
 
+/// The node's config moved to the agent of its active rotation
+/// (`StageRuntimeRotated`, v1 task 1.4). `None` keeps `cfg`. Stages under a
+/// frozen quota plan keep their planned runtime.
+fn runtime_rotation_config(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> Option<surge_core::agent_config::AgentConfig> {
+    let node = &state.cursor.node;
+    let rotation = state.memory.runtime_rotations.get(node)?;
+    if params.run_config.quota_recovery.stage(node).is_some() {
+        return None;
+    }
+    Some(cfg.with_runtime_override(&rotation.to, None))
+}
+
+/// Canonical capacity-ledger key for a configured agent id.
+fn canonical_runtime(id: &str) -> crate::engine::capacity::CanonicalRuntimeId {
+    crate::engine::capacity::CanonicalRuntimeId::resolve(&surge_acp::Registry::builtin(), id)
+}
+
+/// Runtimes of the agent nodes paired with `node` by a capped retry edge in
+/// its scope (a verifier and the implementer it sends work back to), with
+/// their active rotations applied.
+fn partner_runtimes(params: &RunTaskParams, state: &RunExecutionState) -> Vec<String> {
+    let node = &state.cursor.node;
+    let graph = &state.routing_graph;
+    let Some((nodes, edges)) = std::iter::once((&graph.nodes, graph.edges.as_slice()))
+        .chain(
+            graph
+                .subgraphs
+                .values()
+                .map(|sg| (&sg.nodes, sg.edges.as_slice())),
+        )
+        .find(|(nodes, _)| nodes.contains_key(node))
+    else {
+        return Vec::new();
+    };
+    let partners: std::collections::BTreeSet<&surge_core::keys::NodeKey> = edges
+        .iter()
+        .filter(|edge| edge.policy.max_traversals.is_some() && edge.from.node != edge.to)
+        .filter_map(|edge| {
+            if &edge.from.node == node {
+                Some(&edge.to)
+            } else if &edge.to == node {
+                Some(&edge.from.node)
+            } else {
+                None
+            }
+        })
+        .collect();
+    partners
+        .into_iter()
+        .filter_map(|partner| {
+            let NodeConfig::Agent(cfg) = &nodes.get(partner)?.config else {
+                return None;
+            };
+            let cfg = match state.memory.runtime_rotations.get(partner) {
+                Some(rotation) => cfg.with_runtime_override(&rotation.to, None),
+                None => cfg.clone(),
+            };
+            crate::engine::stage::agent::resolve_node_runtime_id(
+                params.profile_registry.as_deref(),
+                &cfg,
+            )
+            .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
+        })
+        .collect()
+}
+
+/// Move the current stage to a fallback agent when `current` is exhausted
+/// (v1 task 1.4): choose among the node's own agent and
+/// `[capacity].fallback_agents`, record `StageRuntimeRotated` before any
+/// provider effect of the next attempt, and fold it into memory. `false`
+/// means nothing fits (or rotation is off) and the caller parks.
+async fn try_rotate_agent(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    current: &crate::engine::capacity::CanonicalRuntimeId,
+    reason: &str,
+) -> bool {
+    if params.fallback_agents.is_empty()
+        || params
+            .run_config
+            .quota_recovery
+            .stage(&state.cursor.node)
+            .is_some()
+    {
+        return false;
+    }
+    let moves = state
+        .memory
+        .runtime_rotations
+        .get(&state.cursor.node)
+        .map_or(0, |rotation| rotation.count);
+    if moves as usize > params.fallback_agents.len() {
+        tracing::warn!(target: "engine::capacity", node = %state.cursor.node, moves,
+            "every fallback agent was tried this visit; parking");
+        return false;
+    }
+    let NodeConfig::Agent(own) = &node.config else {
+        return false;
+    };
+    let own_runtime = crate::engine::stage::agent::resolve_node_runtime_id(
+        params.profile_registry.as_deref(),
+        own,
+    )
+    .map(crate::engine::capacity::CanonicalRuntimeId::into_string);
+    let builtin = surge_acp::Registry::builtin();
+    let registry = params.agent_registry.as_deref().unwrap_or(&builtin);
+    let now = chrono::Utc::now();
+    let mut candidates = Vec::new();
+    for id in own_runtime.iter().chain(params.fallback_agents.iter()) {
+        let canonical = canonical_runtime(id);
+        let runnable = registry
+            .find_normalized(id)
+            .is_some_and(|entry| surge_acp::agent_env::resolve(&entry.id, &entry.env).is_ok());
+        let fresh = match params.capacity_ledger.status(&canonical).await {
+            Ok(status) => crate::engine::capacity::exhausted_reason(&status, now).is_none(),
+            Err(_) => false,
+        };
+        candidates.push(surge_core::agent_rotation::Candidate {
+            id: id.clone(),
+            canonical: canonical.into_string(),
+            available: runnable && fresh,
+        });
+    }
+    let partners = partner_runtimes(params, state);
+    let Some(choice) = surge_core::agent_rotation::choose(&candidates, current.as_str(), &partners)
+    else {
+        tracing::info!(target: "engine::capacity", node = %state.cursor.node, runtime = %current,
+            "no fallback agent has capacity; parking");
+        return false;
+    };
+    if choice.same_as_partner {
+        tracing::warn!(target: "engine::capacity", node = %state.cursor.node, to = %choice.to,
+            "only available fallback agent matches the stage's verifier/implementer partner");
+    }
+    let event = EventPayload::StageRuntimeRotated {
+        node: state.cursor.node.clone(),
+        from: current.as_str().to_owned(),
+        to: choice.to.clone(),
+        reason: reason.to_owned(),
+        same_as_partner: choice.same_as_partner,
+    };
+    if let Err(error) = params
+        .writer
+        .append_event(VersionedEventPayload::new(event))
+        .await
+    {
+        tracing::warn!(target: "engine::capacity", node = %state.cursor.node, %error,
+            "could not record the agent rotation; parking instead");
+        return false;
+    }
+    match apply_memory_events_after(
+        &params.writer,
+        params.run_id,
+        surge_persistence::runs::EventSeq(state.memory_applied_seq),
+        &mut state.memory,
+    )
+    .await
+    {
+        Ok(applied) => {
+            state
+                .pending_graph_revisions
+                .extend(applied.graph_revisions);
+            if let Ok(current) = params.writer.current_seq().await {
+                state.memory_applied_seq = current.as_u64();
+            }
+        },
+        Err(error) => {
+            tracing::warn!(target: "engine::capacity", node = %state.cursor.node, %error,
+                "could not refresh memory after the rotation; parking instead");
+            return false;
+        },
+    }
+    tracing::info!(target: "engine::capacity", node = %state.cursor.node, from = %current,
+        to = %choice.to, "usage limit exhausted; moving the stage to a fallback agent");
+    true
+}
+
 /// The node's config for this occurrence when it is the extra attempt of an
 /// exhausted retry loop (entered through a derived edge marked by
 /// `surge_core::escalation::is_alternate_attempt`): its runtime moved to the
@@ -1450,6 +1634,8 @@ async fn dispatch_node_stage(
         NodeConfig::Agent(cfg) => {
             let retry = alternate_attempt_config(params, state, cfg);
             let cfg = retry.as_ref().unwrap_or(cfg);
+            let rotated = runtime_rotation_config(params, state, cfg);
+            let cfg = rotated.as_ref().unwrap_or(cfg);
             return dispatch_agent_node_with_capacity_gate(params, state, node, cfg).await;
         },
         NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
@@ -1582,6 +1768,68 @@ fn has_configured_task_capacity(params: &RunTaskParams, node: &surge_core::NodeK
             })
 }
 
+/// Pre-dispatch capacity check for an agent stage: park when its runtime is
+/// exhausted (after trying a fallback agent, v1 task 1.4), otherwise let it
+/// dispatch. `Some` is the dispatch decision that replaces the stage run.
+async fn capacity_precheck(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    runtime: crate::engine::capacity::CanonicalRuntimeId,
+) -> Option<StageDispatch> {
+    match capacity_decision_for(params, &state.cursor.node, &runtime).await {
+        surge_core::capacity::Decision::Park { wake_at, basis } => {
+            let reason = format!("{runtime} usage limit exhausted until {wake_at}");
+            if try_rotate_agent(params, state, node, &runtime, &reason).await {
+                return Some(StageDispatch::Continue);
+            }
+            return Some(StageDispatch::Park {
+                wake_at,
+                basis,
+                runtime: Some(runtime.into_string()),
+                details: None,
+            });
+        },
+        surge_core::capacity::Decision::Dispatch { degraded } => {
+            warn_on_degraded_dispatch(&state.cursor.node, degraded);
+        },
+        surge_core::capacity::Decision::Rotate { to } => {
+            tracing::warn!(target: "engine::capacity", node = %state.cursor.node,
+                candidate = %to, "rotation requires a persisted quota handoff; applying configured park policy");
+            let status = params
+                .capacity_ledger
+                .status(&runtime)
+                .await
+                .unwrap_or(surge_core::capacity::CapacityStatus::NeverObserved);
+            let mut park_policy = params.capacity_policy.clone();
+            park_policy.rotation = surge_core::capacity::RotationPolicy::Disabled;
+            match park_policy.decide(None, &status, chrono::Utc::now()) {
+                surge_core::capacity::Decision::Park { wake_at, basis } => {
+                    let reason = format!("{runtime} usage limit exhausted until {wake_at}");
+                    if try_rotate_agent(params, state, node, &runtime, &reason).await {
+                        return Some(StageDispatch::Continue);
+                    }
+                    return Some(StageDispatch::Park {
+                        wake_at,
+                        basis,
+                        runtime: Some(runtime.into_string()),
+                        details: None,
+                    });
+                },
+                surge_core::capacity::Decision::Dispatch { degraded } => {
+                    warn_on_degraded_dispatch(&state.cursor.node, degraded);
+                },
+                surge_core::capacity::Decision::Rotate { .. } => {
+                    return Some(StageDispatch::Failed(
+                        "capacity fallback policy unexpectedly selected rotation".into(),
+                    ));
+                },
+            }
+        },
+    }
+    None
+}
+
 async fn dispatch_agent_node_with_capacity_gate(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1619,49 +1867,9 @@ async fn dispatch_agent_node_with_capacity_gate(
     if !bypass_precheck
         && !host_planned_capacity
         && let Some(runtime) = runtime.clone()
+        && let Some(dispatch) = capacity_precheck(params, state, node, runtime).await
     {
-        match capacity_decision_for(params, &state.cursor.node, &runtime).await {
-            surge_core::capacity::Decision::Park { wake_at, basis } => {
-                return StageDispatch::Park {
-                    wake_at,
-                    basis,
-                    runtime: Some(runtime.into_string()),
-                    details: None,
-                };
-            },
-            surge_core::capacity::Decision::Dispatch { degraded } => {
-                warn_on_degraded_dispatch(&state.cursor.node, degraded);
-            },
-            surge_core::capacity::Decision::Rotate { to } => {
-                tracing::warn!(target: "engine::capacity", node = %state.cursor.node,
-                    candidate = %to, "rotation requires a persisted quota handoff; applying configured park policy");
-                let status = params
-                    .capacity_ledger
-                    .status(&runtime)
-                    .await
-                    .unwrap_or(surge_core::capacity::CapacityStatus::NeverObserved);
-                let mut park_policy = params.capacity_policy.clone();
-                park_policy.rotation = surge_core::capacity::RotationPolicy::Disabled;
-                match park_policy.decide(None, &status, chrono::Utc::now()) {
-                    surge_core::capacity::Decision::Park { wake_at, basis } => {
-                        return StageDispatch::Park {
-                            wake_at,
-                            basis,
-                            runtime: Some(runtime.into_string()),
-                            details: None,
-                        };
-                    },
-                    surge_core::capacity::Decision::Dispatch { degraded } => {
-                        warn_on_degraded_dispatch(&state.cursor.node, degraded);
-                    },
-                    surge_core::capacity::Decision::Rotate { .. } => {
-                        return StageDispatch::Failed(
-                            "capacity fallback policy unexpectedly selected rotation".into(),
-                        );
-                    },
-                }
-            },
-        }
+        return dispatch;
     }
 
     let dispatch_prefix = params.writer.current_seq().await.ok();
@@ -1694,6 +1902,19 @@ async fn dispatch_agent_node_with_capacity_gate(
     match observe_rate_limited_runtime(params, &state.cursor.node, &raw_runtime, retry_after).await
     {
         surge_core::capacity::Decision::Park { wake_at, basis } => {
+            let reason = format!("{raw_runtime} rate limited: {details}");
+            if suspension_requested(params).is_none()
+                && try_rotate_agent(
+                    params,
+                    state,
+                    node,
+                    &canonical_runtime(&raw_runtime),
+                    &reason,
+                )
+                .await
+            {
+                return StageDispatch::Continue;
+            }
             capacity_park_dispatch(params, result, wake_at, basis, raw_runtime, details)
         },
         // Rule 4's explicit operator opt-out (`blind_backoff` removed):

@@ -68,7 +68,7 @@ pub struct MockBridge {
     /// than one dispatch attempt to fail (e.g. "this run must never reach
     /// a second agent's `send_message`, but if it does, it must fail fast
     /// rather than hang waiting for an event nobody scripted").
-    next_send_message_errors: Mutex<VecDeque<SendMessageError>>,
+    next_send_message_errors: Mutex<VecDeque<Option<SendMessageError>>>,
     /// One-shot cleanup failure, for ownership and typed-error propagation tests.
     pub next_close_error: Mutex<Option<CloseSessionError>>,
 }
@@ -131,7 +131,17 @@ impl MockBridge {
     /// drains succeeds.
     #[allow(dead_code)] // not exercised by every test binary sharing the fixture
     pub async fn fail_next_send_message(&self, err: SendMessageError) {
-        self.next_send_message_errors.lock().await.push_back(err);
+        self.next_send_message_errors
+            .lock()
+            .await
+            .push_back(Some(err));
+    }
+
+    /// Let the next unscripted `send_message` succeed, so a failure queued
+    /// after it lands on a later call.
+    #[allow(dead_code)] // not exercised by every test binary sharing the fixture
+    pub async fn pass_next_send_message(&self) {
+        self.next_send_message_errors.lock().await.push_back(None);
     }
 
     /// Drain the scripted-event queue and broadcast each event to subscribers.
@@ -251,7 +261,7 @@ impl BridgeFacade for MockBridge {
             .lock()
             .await
             .push(RecordedCall::SendMessage { session });
-        if let Some(err) = self.next_send_message_errors.lock().await.pop_front() {
+        if let Some(Some(err)) = self.next_send_message_errors.lock().await.pop_front() {
             return Err(err);
         }
         Ok(())

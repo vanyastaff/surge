@@ -467,6 +467,23 @@ pub enum EventPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         comment: Option<String>,
     },
+    /// A stage moved to another agent because its own agent's usage limit was
+    /// exhausted (v1 task 1.4). Recorded before the next attempt opens a
+    /// session; the stage keeps that agent until it routes an outcome.
+    StageRuntimeRotated {
+        /// Stage that moved.
+        node: NodeKey,
+        /// Canonical runtime it moved away from.
+        from: String,
+        /// Registry id of the agent it moved to.
+        to: String,
+        /// Why: the exhausted window, as the operator should read it.
+        reason: String,
+        /// No allowed agent differed from the stage's verifier/implementer
+        /// partner, so both now run on the same agent.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        same_as_partner: bool,
+    },
     /// A human revised the requirement a stage is checked against and sent it
     /// back for another attempt (v1 task 1.2). Later stages of the same task
     /// see the revision; a later verification counts as verified against it.
@@ -830,6 +847,7 @@ impl EventPayload {
             Self::TaskSplit { .. } => "TaskSplit",
             Self::TaskAcceptedByHuman { .. } => "TaskAcceptedByHuman",
             Self::RequirementRevised { .. } => "RequirementRevised",
+            Self::StageRuntimeRotated { .. } => "StageRuntimeRotated",
             Self::LoopCompleted { .. } => "LoopCompleted",
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",
