@@ -40,6 +40,28 @@ type = "success"
 - Agent nodes reference profiles like `implementer@1.0`, not free-form prompts.
 - Bundled archetypes include `feature`, `bug-fix`, `refactor`, `performance`, `security`, `docs`, and `migration`.
 
+## Retry loops and escalation
+
+A retry loop is a backtrack edge with `max_traversals` (for example a
+verifier's `failed` back to the implementer). When the limit is spent and
+`on_max_exceeded = "escalate"` (the default), routing takes the source's
+`max_traversals_exceeded` outcome:
+
+- If the flow declares an edge for that outcome, it is used as written.
+- Otherwise the engine adds a default human gate at run time
+  (`surge_core::escalation`): **Retry once more** returns to the loop target
+  for one more attempt, and the counter is not reset, so the next rejection
+  asks again. **Stop** ends the run, or fails the current iteration inside a
+  loop so `on_iteration_failure` applies. The gate has no practical deadline.
+  It is derived from the persisted graph and never written into it.
+- A stage whose capped edges lead to different targets gets no default gate
+  and still fails when exhausted.
+
+A stage re-entered through a backtrack edge receives a "Feedback from the
+previous attempt" section with the sending stage's outcome, summary and
+failed checks. A retry through the default gate carries the exhausted stage's
+feedback.
+
 ## Profile Guidance
 
 Flow Generator writes only `flow.toml`. Its validation uses the specialized

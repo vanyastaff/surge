@@ -341,6 +341,10 @@ pub struct RunMemory {
     pub node_visits: BTreeMap<NodeKey, u32>,
     /// Pending re-entry feedback per target node; see [`BacktrackFeedback`].
     pub backtrack_feedback: BTreeMap<NodeKey, BacktrackFeedback>,
+    /// Latest escalation into each gate: the exhausted stage and the
+    /// `EdgeTraversed { kind: Escalate }` sequence. A retry backtracking out
+    /// of that gate carries the exhausted stage's feedback, not the gate's.
+    pub escalations: BTreeMap<NodeKey, BacktrackFeedback>,
     /// Per-bootstrap-stage latest edit feedback. Updated on every
     /// `BootstrapEditRequested { stage, feedback }` event — the newest
     /// feedback overwrites the previous entry for that stage. Read by the
@@ -608,14 +612,15 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             // first cursor lands on `graph.start` with attempt 1 — actual
             // node execution then drives subsequent `StageEntered` events.
             let start = graph.start.clone();
+            let effective = crate::escalation::with_default_escalation_gates(graph);
             Ok(RunState::Pipeline {
-                graph: Arc::new(graph.as_ref().clone()),
+                graph: Arc::new(effective.clone()),
                 cursor: Cursor {
                     node: start,
                     attempt: 1,
                 },
                 memory: RunMemory {
-                    verification_graph: Some(graph.clone()),
+                    verification_graph: Some(Box::new(effective)),
                     ..RunMemory::default()
                 },
                 pending_human_input: None,
@@ -1015,6 +1020,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 ..
             } = state
             {
+                let revised = crate::escalation::with_default_escalation_gates(revised);
                 if !revised.nodes.contains_key(&cursor.node) {
                     return Err(FoldError::UnknownNode {
                         node: cursor.node.clone(),
@@ -1022,7 +1028,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 }
                 memory.apply_event(event);
                 Ok(RunState::Pipeline {
-                    graph: Arc::new(revised.as_ref().clone()),
+                    graph: Arc::new(revised),
                     cursor,
                     memory,
                     pending_human_input,
@@ -1585,7 +1591,9 @@ impl RunMemory {
         match &event.payload {
             EventPayload::PipelineMaterialized { graph, .. }
             | EventPayload::GraphRevisionAccepted { graph, .. } => {
-                self.verification_graph = Some(graph.clone())
+                self.verification_graph = Some(Box::new(
+                    crate::escalation::with_default_escalation_gates(graph),
+                ));
             },
             EventPayload::TaskVerified {
                 task_id,
@@ -1687,7 +1695,23 @@ impl RunMemory {
                 ..
             } => {
                 *self.node_visits.entry(to.clone()).or_insert(0) += 1;
-                self.backtrack_feedback.insert(
+                let feedback =
+                    self.escalations
+                        .get(from)
+                        .cloned()
+                        .unwrap_or_else(|| BacktrackFeedback {
+                            from: from.clone(),
+                            edge_seq: event.seq,
+                        });
+                self.backtrack_feedback.insert(to.clone(), feedback);
+            },
+            EventPayload::EdgeTraversed {
+                kind: EdgeKind::Escalate,
+                from,
+                to,
+                ..
+            } => {
+                self.escalations.insert(
                     to.clone(),
                     BacktrackFeedback {
                         from: from.clone(),
@@ -2213,6 +2237,52 @@ mod tests {
         assert!(m.backtrack_feedback.contains_key(&implement));
         m.apply_event(&make_event(4, outcome(&implement, "done")));
         assert!(m.backtrack_feedback.is_empty());
+    }
+
+    #[test]
+    fn retry_through_an_escalation_gate_keeps_the_exhausted_stage_feedback() {
+        use crate::keys::EdgeKey;
+
+        let mut m = RunMemory::default();
+        let traverse = |edge: &str, from: &str, to: &str, kind| EventPayload::EdgeTraversed {
+            edge: EdgeKey::try_from(edge).unwrap(),
+            from: NodeKey::try_from(from).unwrap(),
+            to: NodeKey::try_from(to).unwrap(),
+            kind,
+        };
+        m.apply_event(&make_event(
+            5,
+            traverse(
+                "e_exhausted",
+                "verify_1",
+                "verify_1_escalation",
+                EdgeKind::Escalate,
+            ),
+        ));
+        m.apply_event(&make_event(
+            9,
+            EventPayload::OutcomeReported {
+                node: NodeKey::try_from("verify_1_escalation").unwrap(),
+                outcome: OutcomeKey::try_from("retry").unwrap(),
+                summary: "human gate decision".into(),
+            },
+        ));
+        m.apply_event(&make_event(
+            10,
+            traverse(
+                "e_retry",
+                "verify_1_escalation",
+                "implement_1",
+                EdgeKind::Backtrack,
+            ),
+        ));
+        assert_eq!(
+            m.backtrack_feedback[&NodeKey::try_from("implement_1").unwrap()],
+            BacktrackFeedback {
+                from: NodeKey::try_from("verify_1").unwrap(),
+                edge_seq: 5,
+            }
+        );
     }
 
     #[test]

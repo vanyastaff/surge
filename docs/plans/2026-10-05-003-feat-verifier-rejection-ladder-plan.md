@@ -39,7 +39,7 @@ the [v1 plan](2026-10-05-002-feat-v1-release-plan.md), phase 1.
 | Step | What | Done when |
 |---|---|---|
 | A | **Done.** **Feedback on re-entry.** A stage entered through a backtrack edge gets a "Feedback from the previous attempt" section before its prompt: the source stage's outcome and summary, and the failed or skipped checks of a `verification-report` it produced. Engine-level, so user flows benefit without new bindings. | Fold and prompt tests; the section is absent on a first entry. |
-| B | **Human rung as the default end.** `Escalate` with no declared escalation edge raises a host gate (retry / stop; accept-as-is and revise arrive with 1.2) and records `EscalationRequested` with a max-traversal cause, instead of failing. Schema bump. | Engine test: exhausted loop parks on a gate; "retry" resets the edge counter; "stop" fails cleanly; replay is stable. |
+| B | **Done.** **Human rung as the default end.** `Escalate` with no declared escalation edge reaches a default `HumanGate` (retry / stop; accept-as-is and revise arrive with 1.2) instead of failing. | `engine_escalation_gate_test`: exhausted loop asks; retry runs one more attempt with the verifier's findings; stop fails cleanly; a restarted host reissues the gate; the journal stays trusted. |
 | C | **Retry on another agent.** Before the human rung, one more attempt of the loop's implementer on the next allowed escalation profile (configured in `surge.toml`, default: the capacity rotation candidate). Uses the per-attempt override path, not a graph change. | Mock-agent test: the retry runs on the alternate profile and its result routes normally. |
 | D | **Planner split.** In roadmap flows, after the agent retry, a planner drafts a roadmap patch that replaces the task with smaller ones, using the findings; the patch follows the normal approval policy. Flows without a roadmap skip to the human rung. | `multi-milestone` fixture: exhausted task becomes an approved split and the loop continues. |
 
@@ -47,6 +47,24 @@ Steps run in order; each is independently shippable and keeps all current
 fail-closed behaviour for `ExceededAction::Fail`.
 
 ## Decisions
+
+Step B, 2026-10-05:
+
+- The gate is an ordinary `HumanGate` in a *derived* graph
+  (`surge_core::escalation::with_default_escalation_gates`), applied by the
+  engine's routing graph, the run-state fold and operator views. The persisted
+  graph, its hashes and frozen task graphs are unchanged, and the existing
+  gate recovery, Inbox, CLI, MCP and desktop paths work without changes. A
+  host-raised gate on the exhausted agent stage was rejected: it would add a
+  second outcome to that stage's occurrence and conflict with gate recovery.
+- No new event or schema bump: `EdgeTraversed { kind: Escalate }` plus the
+  gate's request and answer are the record. `EscalationRequested` stays for
+  causes without a gate.
+- Retry grants one more attempt and does not reset the exhausted counter, so
+  each further rejection asks again rather than silently spending a new
+  budget.
+- The gate has no practical deadline (`timeout_seconds = u32::MAX`): an
+  unattended run waits for the operator instead of failing at night.
 
 - Feedback is injected by the engine (like steering and the interrupted-call
   notice), not through new flow bindings, so existing and user flows get it.

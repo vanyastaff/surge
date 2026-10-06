@@ -559,7 +559,8 @@ async fn execute_stage_step(
     if let Some(outcome) = abort_if_cancelled(params).await {
         return StageLoopStep::Done(outcome);
     }
-    let Some(node) = lookup_in_active_frame(&state.active_graph, &state.cursor.node, &state.frames)
+    let Some(node) =
+        lookup_in_active_frame(&state.routing_graph, &state.cursor.node, &state.frames)
     else {
         return StageLoopStep::Done(
             failed(
@@ -1160,7 +1161,13 @@ async fn abort_run_for_budget(
 #[derive(Clone)]
 struct RunExecutionState {
     memory_applied_seq: u64,
+    /// The persisted graph (initial or latest applied revision). Amendments
+    /// and hashes use this graph.
     active_graph: Graph,
+    /// `active_graph` plus default escalation gates
+    /// (`surge_core::escalation`); node lookup and routing use this graph.
+    /// Recomputed whenever `active_graph` changes.
+    routing_graph: Graph,
     cursor: Cursor,
     hook_executor: HookExecutor,
     memory: RunMemory,
@@ -1218,6 +1225,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
     let budget_exceeded_noted = memory.budget_exceeded_noted;
 
     Ok(RunExecutionState {
+        routing_graph: surge_core::escalation::with_default_escalation_gates(&active_graph),
         active_graph,
         cursor,
         hook_executor: HookExecutor::new(),
@@ -1250,7 +1258,8 @@ async fn drain_roadmap_queue(
         run_id: params.run_id,
         receiver: &mut params.roadmap_amendments,
     };
-    roadmap_queue
+    let applied = state.applied_graph_revision_seq;
+    let drained = roadmap_queue
         .drain(
             &mut state.active_graph,
             &state.cursor,
@@ -1259,10 +1268,15 @@ async fn drain_roadmap_queue(
             &mut state.processed_graph_revision_seq,
             &mut state.applied_graph_revision_seq,
         )
-        .await
+        .await;
+    if state.applied_graph_revision_seq != applied {
+        state.refresh_routing_graph();
+    }
+    drained
 }
 
 fn apply_pending_revisions(state: &mut RunExecutionState) {
+    let applied = state.applied_graph_revision_seq;
     maybe_apply_pending_graph_revision(
         &mut state.active_graph,
         &state.cursor,
@@ -1271,6 +1285,16 @@ fn apply_pending_revisions(state: &mut RunExecutionState) {
         &mut state.processed_graph_revision_seq,
         &mut state.applied_graph_revision_seq,
     );
+    if state.applied_graph_revision_seq != applied {
+        state.refresh_routing_graph();
+    }
+}
+
+impl RunExecutionState {
+    fn refresh_routing_graph(&mut self) {
+        self.routing_graph =
+            surge_core::escalation::with_default_escalation_gates(&self.active_graph);
+    }
 }
 
 async fn abort_if_cancelled(params: &RunTaskParams) -> Option<RunOutcome> {
@@ -2286,7 +2310,7 @@ async fn finish_loop_iteration(
     };
     match crate::engine::stage::loop_stage::on_loop_iteration_done(
         &just_completed,
-        &state.active_graph,
+        &state.routing_graph,
         &mut state.frames,
         &mut state.cursor,
         &params.writer,
@@ -2339,7 +2363,7 @@ fn current_subgraph_outputs(
         return Err("SubgraphDone signal but no Subgraph frame on top".into());
     };
     match lookup_in_active_frame(
-        &state.active_graph,
+        &state.routing_graph,
         &frame.outer_node,
         &state.frames[..state.frames.len() - 1],
     )
@@ -2439,7 +2463,7 @@ async fn enter_loop_node(
     cfg: &surge_core::loop_config::LoopConfig,
 ) -> StageDispatch {
     let return_to =
-        match return_to_after_completed(&state.active_graph, &state.cursor, &state.frames) {
+        match return_to_after_completed(&state.routing_graph, &state.cursor, &state.frames) {
             Ok(node) => node,
             Err(error) => return StageDispatch::Failed(format!("loop return_to: {error}")),
         };
@@ -2448,7 +2472,7 @@ async fn enter_loop_node(
             node: &state.cursor.node,
             loop_config: cfg,
             worktree_path: &params.worktree_path,
-            graph: &state.active_graph,
+            graph: &state.routing_graph,
             run_memory: &state.memory,
             writer: &params.writer,
             frames: &mut state.frames,
@@ -2476,7 +2500,7 @@ async fn enter_subgraph_node(
     cfg: &surge_core::subgraph_config::SubgraphConfig,
 ) -> StageDispatch {
     let return_to =
-        match return_to_after_completed(&state.active_graph, &state.cursor, &state.frames) {
+        match return_to_after_completed(&state.routing_graph, &state.cursor, &state.frames) {
             Ok(node) => node,
             Err(error) => return StageDispatch::Failed(format!("subgraph return_to: {error}")),
         };
@@ -2484,7 +2508,7 @@ async fn enter_subgraph_node(
         crate::engine::stage::subgraph_stage::SubgraphStageParams {
             node: &state.cursor.node,
             subgraph_config: cfg,
-            graph: &state.active_graph,
+            graph: &state.routing_graph,
             run_memory: &state.memory,
             writer: &params.writer,
             frames: &mut state.frames,
@@ -2825,7 +2849,7 @@ fn route_stage_outcome(
     outcome: &OutcomeKey,
 ) -> Result<crate::engine::routing::RoutedEdge, String> {
     match crate::engine::routing::next_node_after_with_counters(
-        &state.active_graph,
+        &state.routing_graph,
         &state.cursor.node,
         outcome,
         &mut state.frames,
@@ -2848,16 +2872,28 @@ fn route_after_max_traversal(
         surge_core::edge::ExceededAction::Escalate => {
             let synthetic = OutcomeKey::try_from("max_traversals_exceeded")
                 .map_err(|e| format!("synthetic outcome: {e}"))?;
-            crate::engine::routing::next_node_after_with_counters(
-                &state.active_graph,
+            let routed = crate::engine::routing::next_node_after_with_counters(
+                &state.routing_graph,
                 &state.cursor.node,
                 &synthetic,
                 &mut state.frames,
                 &mut state.root_traversal_counts,
             )
             .map_err(|_| {
-                format!("max_traversals exceeded on edge {edge} and no escalate route declared")
-            })
+                format!(
+                    "max_traversals exceeded on edge {edge} and no escalation route exists \
+                     (several capped targets from one stage get no default gate)"
+                )
+            })?;
+            tracing::info!(
+                target: "engine::escalation",
+                node = %state.cursor.node,
+                %edge,
+                to = %routed.target,
+                via = %routed.edge_id,
+                "retry loop exhausted; escalating"
+            );
+            Ok(routed)
         },
         surge_core::edge::ExceededAction::Fail => Err(format!(
             "max_traversals exceeded on edge {edge} (action: Fail)"
@@ -3290,7 +3326,12 @@ fn maybe_apply_pending_graph_revision(
         return;
     }
 
-    if !revision.graph.nodes.contains_key(&cursor.node) {
+    // The cursor may rest on a default escalation gate the revision's
+    // effective graph keeps under the same key.
+    if !surge_core::escalation::with_default_escalation_gates(&revision.graph)
+        .nodes
+        .contains_key(&cursor.node)
+    {
         tracing::warn!(
             target: "engine::roadmap_update",
             patch_id = %revision.patch_id,

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — an exhausted retry loop asks instead of failing
+
+- When a capped retry loop (for example verifier `failed` back to the
+  implementer) runs out of attempts and the flow declares no
+  `max_traversals_exceeded` edge, the run now stops at a default human gate
+  instead of failing: **Retry once more** gives the loop one more attempt with
+  the verifier's findings, **Stop** ends the run (inside a loop, fails the
+  iteration so `on_iteration_failure` applies). The gate waits without a
+  practical deadline and survives a daemon restart. It is derived at run time
+  (`surge_core::escalation`); persisted graphs and their hashes are unchanged,
+  and there is no schema change. Shipped `linear-3`, `bug-fix`, `refactor` and
+  `multi-milestone` flows get it automatically.
+
 ### Added — verifier findings reach the re-entered stage
 
 - A stage re-entered through a backtrack edge (for example an implementer
