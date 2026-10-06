@@ -9,7 +9,7 @@ date = "2026-10-05"
 ## Status
 
 Proposed on 2026-10-05, at the maintainer's request after the verifier
-rejection ladder ([plan](../plans/2026-10-05-003-feat-verifier-rejection-ladder-plan.md))
+rejection ladder; decisions refined in a maintainer interview the same day ([plan](../plans/2026-10-05-003-feat-verifier-rejection-ladder-plan.md))
 showed the cost of the current shape. Not implemented. Open questions are listed
 at the end and need the maintainer's answers before acceptance.
 
@@ -52,31 +52,48 @@ Node {
 
 ## Decision (proposed)
 
-1. **A step is a first-class run entity.** A step has an id, title, order,
-   status and a list of tasks. Roadmap milestones become steps when a run is
-   materialized. The graph keeps describing *how* work is done (the per-task
-   pipeline: spec → implement → verify, gates, terminals); steps and tasks
-   describe *what* is done.
-2. **A task is a first-class run entity owned by a step.** A task has an id,
-   title, description, acceptance criteria, status, dependencies, and:
-   - `assignment` — the agent (runtime, model, effort) chosen for it, which the
-     planner proposes and the user may edit before approval, and which the
-     ladder may change for one attempt;
-   - `attempts` — each attempt's session(s), outcome, findings and agent;
-   - `pr` — the review branch or GitHub PR for its verified result (v1 1.9);
-   - `children` — tasks it was split into (the ladder's split rung), with the
-     parent marked *replaced*.
-3. **Events are task-scoped.** Task lifecycle events carry the task id
-   (`TaskStarted`, `TaskAttemptStarted { agent }`, `TaskSplit`, `TaskVerified`,
-   `TaskPrOpened`, `TaskAcceptedByHuman`). The fold builds a `Steps { tasks }`
-   view; reports, the desktop dashboard and `surge mcp serve` read that view,
-   not loop frames.
-4. **Loops iterate the step/task view, not a frozen artifact copy.** The task
-   loop asks the fold for the next runnable task of the current step, so a
-   split, a new idea placed into a step (v1 1.8) or a re-run of a task is a
-   task-view change, not a frame splice.
-5. **Persisted graphs stay immutable**; the derived routing graph
-   (`surge_core::escalation`) stays the mechanism for engine-added rungs.
+Answers from the maintainer interview of 2026-10-05 are marked *(maintainer)*.
+
+1. **Everything is a task, and tasks form a tree** *(maintainer)*. A project, a
+   stage, a milestone and a subtask are the same entity:
+   `Task { id, title, description, criteria, status, tasks: [TaskRef], … }`.
+   Any task can be split into smaller tasks at any depth. "Step" and
+   "milestone" are only names for levels of the tree in the UI.
+2. **Each task has its own pipeline** *(maintainer)*: the ordered stages it goes
+   through (for example `research → planner → builder → verify → tester`). The
+   planner composes it from allowed node kinds when the task is planned; the
+   engine validates it at load and the user sees and may edit it before
+   approval. A task without its own pipeline uses the project default.
+3. **A planner stage creates child tasks of its own task** *(maintainer, JWT
+   example)*. When a task's pipeline reaches its planner and the planner breaks
+   the work into ten steps, those steps become real child tasks of that task,
+   visible with their own status, not text inside a plan. Later stages of the
+   parent work through the children in order (a fresh session per child, each
+   child marked done on its own). The parent's verifier checks every child and
+   the parent's own criteria, so splitting can never drop a requirement. The
+   ladder's split rung (`TaskSplit`) is the same operation, triggered by
+   repeated rejection instead of by the plan.
+4. **A task owns its execution record**: `assignment` (agent, model, effort;
+   proposed by the planner, editable before approval, changed by the ladder for
+   one attempt), `attempts` (sessions, outcome, findings, agent per attempt) and
+   `pr` (one PR per task, as decided in the 2026-10-05 product interview).
+5. **Guards on splitting**: a maximum depth, and a split is accepted only when
+   the children are smaller than the parent by the planner's size estimate.
+6. **One run per root task**; every task attempt opens a fresh session
+   (product decision: context inside a task is the runtime's job). Independent
+   sibling tasks run sequentially in v1; parallel siblings come after v1
+   *(maintainer)*. Dependencies are stored from the start.
+7. **Events are task-scoped** (`TaskPlanned { parent, children }`,
+   `TaskAttemptStarted { task, agent }`, `TaskSplit`, `TaskVerified`,
+   `TaskPrOpened`, `TaskAcceptedByHuman`). The fold builds the task tree; the
+   desktop, reports and `surge mcp serve` read the tree, not loop frames.
+8. **Flows without a roadmap** (`linear`, `bug-fix`) are a root task with one
+   level, so every run has the same shape on the dashboard.
+9. **Persisted graphs stay immutable**; engine-added rungs stay in the derived
+   routing graph (`surge_core::escalation`).
+10. **Views** *(maintainer: evaluate both visually first)*: a task tree with
+    drill-down into one task's pipeline, and one large graph with collapsible
+    task groups. A mockup of both on the JWT example decides which ships first.
 
 ## Migration
 
@@ -106,15 +123,11 @@ replaying through the loop-frame path.
 - **One run per task (work items).** Already exists for persistent tasks; it
   isolates sessions well but loses the step-level view and the in-run ladder.
 
-## Open questions for the maintainer
+## Open questions
 
-1. Is a step exactly a roadmap milestone, or can the planner group tasks into
-   steps differently from milestones?
-2. Should the per-task pipeline stay one shared subgraph, or may a task carry
-   its own methodology (for example TDD adds a test-author step, v1 1.6)?
-3. Is a PR per task or per step when tasks in a step are small?
-4. Should several tasks of one step run in parallel when they do not depend on
-   each other (the product decisions say independent tasks keep running)?
+- Which view ships first, after the maintainer reviews the mockup.
+- Size estimate used by the split guard (planner-declared size, or measured
+  from history as the product strategy suggests for compaction signals).
 
 ## Consequences
 
