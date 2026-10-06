@@ -657,6 +657,8 @@ async fn append_loop_escalations(
         let cause = match &esc.trip {
             LoopGuardTrip::RepeatedToolCall { .. } => EscalationCause::LoopGuardRepeatedToolCall,
             LoopGuardTrip::NodeDeadlineExceeded { .. } => EscalationCause::LoopGuardNodeDeadline,
+            LoopGuardTrip::NoProgress { .. } => EscalationCause::LoopGuardNoProgress,
+            LoopGuardTrip::ToolCallCapExceeded { .. } => EscalationCause::LoopGuardToolCallCap,
         };
         writer
             .append_event(VersionedEventPayload::new(
@@ -1583,10 +1585,17 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
     // configured limit) is caught right away rather than a full period late.
     let mut deadline_poll = tokio::time::interval(std::time::Duration::from_secs(1));
     deadline_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A loop-protection trip observed while dispatching a tool call; the
+    // attempt ends at the top of the next iteration, after that call's result
+    // is durable and delivered (v1 task 1.3).
+    let mut guard_trip: Option<LoopGuardTrip> = None;
 
     // Drive the event loop until OutcomeReported (success) or SessionEnded
     // (failure / abnormal termination).
     let outcome = loop {
+        if let Some(trip) = guard_trip.take() {
+            return Err(StageError::LoopGuardTripped(trip));
+        }
         if prompt_success && candidates.is_empty()
             && !p.bridge.legacy_stage_event_adapter()
             && let Some(feedback) = retry_feedback.take()
@@ -1642,19 +1651,10 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             _ = deadline_poll.tick() => {
                 session_dispatcher.poll_wall_clock_deadline();
                 let trips = append_loop_escalations(p.writer, &session_dispatcher).await?;
-                // A repeated-tool-call trip only blocks the next dispatch —
-                // the turn itself may still be mid-stream and recovers once
-                // the agent stops repeating. A wall-clock trip has no such
-                // recovery: the node is already past its budget and a turn
-                // burning tokens with no tool calls at all would otherwise
-                // run to its own end (`.autopilot/competitive-waves/spec.md`
-                // §15 / ticket 17: "raising EscalationRequested rather than
-                // burning budget" — a mark that lets the burn continue is
-                // not that). So this trip ends the stage; the other does not.
-                if let Some(trip) = trips
-                    .into_iter()
-                    .find(|t| matches!(t, LoopGuardTrip::NodeDeadlineExceeded { .. }))
-                {
+                // Every loop-protection trip ends the attempt (v1 task 1.3):
+                // the engine routes it as a failed attempt into the stage's
+                // retry ladder, or fails the run when the stage has none.
+                if let Some(trip) = trips.into_iter().next() {
                     return Err(StageError::LoopGuardTripped(trip));
                 }
                 continue;
@@ -1767,6 +1767,8 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         if event_session_id(&event) != Some(session_id) {
             continue;
         }
+        // Any event from this session is progress for loop protection.
+        session_dispatcher.note_activity();
 
         if matches!(event, BridgeEvent::OutcomeReported { .. }) && !prompt_success {
             if candidates.len() >= 64 {
@@ -2250,12 +2252,16 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // EscalationRequested ... rather than burning budget").
                 // Emitted before the fallible `ToolResultReceived` append
                 // for the same reason: a storage failure must not silently
-                // drop the escalation. The drained trips are discarded here
-                // (unlike the timer-poll call site): a repeated-tool-call
-                // trip already stopped this exact dispatch by refusing to
-                // route the call (see `check_loop_guard` above); it does not
-                // need to also end the stage.
-                append_loop_escalations(p.writer, &session_dispatcher).await?;
+                // drop the escalation. The trip already refused this exact
+                // dispatch (see `check_loop_guard`); the attempt ends once
+                // this call's result is recorded and delivered (v1 task 1.3).
+                if let Some(trip) = append_loop_escalations(p.writer, &session_dispatcher)
+                    .await?
+                    .into_iter()
+                    .next()
+                {
+                    guard_trip = Some(trip);
+                }
 
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
                 let result_hash = match &engine_result {

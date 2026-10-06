@@ -116,6 +116,29 @@ fn success_target(
     })
 }
 
+/// The outcome that sends `node` around its retry loop: the first declared
+/// outcome whose edge is capped with `escalate`. Loop protection routes a
+/// failed attempt through it, so the attempt counts against the same budget
+/// and an exhausted budget climbs the same ladder (v1 task 1.3).
+#[must_use]
+pub fn retry_outcome(
+    nodes: &BTreeMap<NodeKey, Node>,
+    edges: &[Edge],
+    node: &NodeKey,
+) -> Option<OutcomeKey> {
+    nodes.get(node)?.declared_outcomes.iter().find_map(|decl| {
+        edges
+            .iter()
+            .any(|edge| {
+                &edge.from.node == node
+                    && edge.from.outcome == decl.id
+                    && edge.policy.max_traversals.is_some()
+                    && edge.policy.on_max_exceeded == ExceededAction::Escalate
+            })
+            .then(|| decl.id.clone())
+    })
+}
+
 /// Whether `node` is a derived split planner (see [`SPLIT_PLANNER_PROFILE`]).
 #[must_use]
 pub fn is_split_planner(node: &Node) -> bool {
@@ -1056,5 +1079,20 @@ mod tests {
                 "verify_task_escalation"
             ]
         );
+    }
+
+    #[test]
+    fn retry_outcome_is_the_capped_escalating_loop() {
+        let graph = BundledFlows::by_name_latest("linear-3").unwrap().graph;
+        let retry = |node: &str| retry_outcome(&graph.nodes, &graph.edges, &key(node));
+        assert_eq!(
+            retry("implement_1").as_ref().map(OutcomeKey::as_str),
+            Some("partial")
+        );
+        assert_eq!(
+            retry("verify_1").as_ref().map(OutcomeKey::as_str),
+            Some("failed")
+        );
+        assert_eq!(retry("spec_1"), None);
     }
 }

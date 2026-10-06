@@ -112,7 +112,10 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// [`EventPayload::RequirementRevised`], the human overrides of an exhausted
 /// retry ladder. A v18-max reader would otherwise miss that a completed task
 /// was accepted by a human rather than verified, so it rejects v19.
-pub const MAX_SUPPORTED_VERSION: u32 = 19;
+/// **v20:** adds [`crate::run_event::EscalationCause::LoopGuardNoProgress`] and
+/// [`crate::run_event::EscalationCause::LoopGuardToolCallCap`] (loop
+/// protection). Same nested-enum rule as v8: v19 readers reject v20.
+pub const MAX_SUPPORTED_VERSION: u32 = 20;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -444,6 +447,20 @@ impl Migration for IdentityV19 {
     }
 }
 
+/// Identity decoder for loop-protection escalation causes.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV20;
+impl Migration for IdentityV20 {
+    fn version(&self) -> u32 {
+        20
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v20 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -454,7 +471,8 @@ impl MigrationChain {
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
     /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
-    /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], and [`IdentityV19`].
+    /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], [`IdentityV19`], and
+    /// [`IdentityV20`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -478,6 +496,7 @@ impl MigrationChain {
                 Box::new(IdentityV17),
                 Box::new(IdentityV18),
                 Box::new(IdentityV19),
+                Box::new(IdentityV20),
             ],
         }
     }
@@ -656,6 +675,36 @@ mod tests {
     }
 
     #[test]
+    fn v20_loop_protection_causes_round_trip_and_v19_readers_reject_them() {
+        use crate::run_event::EscalationCause;
+        for (cause, tag) in [
+            (
+                EscalationCause::LoopGuardNoProgress,
+                "loop_guard_no_progress",
+            ),
+            (
+                EscalationCause::LoopGuardToolCallCap,
+                "loop_guard_tool_call_cap",
+            ),
+        ] {
+            let payload = EventPayload::EscalationRequested {
+                stage: None,
+                reason: "loop protection".into(),
+                cause,
+            };
+            let wrapper = VersionedEventPayload::new(payload.clone());
+            assert_eq!(wrapper.schema_version, 20);
+            let bytes = serde_json::to_vec(&wrapper).unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
+            assert_eq!(migrate_payload(20, &bytes).unwrap(), payload);
+            assert!(matches!(
+                migrate_payload(21, &bytes),
+                Err(SurgeError::SchemaTooNew { found: 21, max: 20 })
+            ));
+        }
+    }
+
+    #[test]
     fn v19_human_overrides_round_trip_and_v18_readers_reject_them() {
         let accepted = EventPayload::TaskAcceptedByHuman {
             node: NodeKey::try_from("verify").unwrap(),
@@ -673,14 +722,10 @@ mod tests {
             (revised, "requirement_revised"),
         ] {
             let wrapper = VersionedEventPayload::new(payload.clone());
-            assert_eq!(wrapper.schema_version, 19);
+            assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
             let bytes = serde_json::to_vec(&wrapper).unwrap();
             assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
             assert_eq!(migrate_payload(19, &bytes).unwrap(), payload);
-            assert!(matches!(
-                migrate_payload(20, &bytes),
-                Err(SurgeError::SchemaTooNew { found: 20, max: 19 })
-            ));
         }
     }
 
@@ -700,8 +745,8 @@ mod tests {
         assert!(String::from_utf8_lossy(&bytes).contains("\"task_split\""));
         assert_eq!(migrate_payload(18, &bytes).unwrap(), payload);
         assert!(matches!(
-            migrate_payload(20, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 20, max: 19 })
+            migrate_payload(21, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 21, max: 20 })
         ));
     }
 
@@ -954,8 +999,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(20, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 20, max: 19 })
+            migrate_payload(21, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 21, max: 20 })
         ));
     }
 

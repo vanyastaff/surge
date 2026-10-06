@@ -247,6 +247,7 @@ fn instant_wall_clock_trip(store_path: PathBuf) -> EngineRunConfig {
         tool_call_loop_guard: Some(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 100,
             node_wall_clock_limit_secs: 0,
+            ..ToolCallLoopGuardConfig::default()
         }),
         ..run_config_with_memory_store(store_path)
     }

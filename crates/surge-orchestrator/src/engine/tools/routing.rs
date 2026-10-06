@@ -439,6 +439,12 @@ impl ToolDispatcher for RoutingToolDispatcher {
         self.poll_wall_clock_deadline_inner();
     }
 
+    fn note_activity(&self) {
+        if let Ok(mut state) = self.loop_guard.lock() {
+            state.guard.touch();
+        }
+    }
+
     fn resolved_origin(&self, tool: &str) -> Option<String> {
         match self.routing_table.get(tool) {
             Some(ToolOrigin::Mcp { server, .. }) => Some(server.clone()),
@@ -670,6 +676,7 @@ mod tests {
             .with_tool_call_loop_guard_config(ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 3,
                 node_wall_clock_limit_secs: 3600,
+                ..ToolCallLoopGuardConfig::default()
             });
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
@@ -717,6 +724,7 @@ mod tests {
             .with_tool_call_loop_guard_config(ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 1,
                 node_wall_clock_limit_secs: 3600,
+                ..ToolCallLoopGuardConfig::default()
             });
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
@@ -750,9 +758,7 @@ mod tests {
                 assert_eq!(tool, "shell_exec");
                 assert_eq!(*threshold, 1);
             },
-            other @ LoopGuardTrip::NodeDeadlineExceeded { .. } => {
-                panic!("expected RepeatedToolCall, got {other:?}")
-            },
+            other => panic!("expected RepeatedToolCall, got {other:?}"),
         }
         assert!(
             r.drain_loop_escalations().is_empty(),
@@ -770,6 +776,7 @@ mod tests {
             .with_tool_call_loop_guard_config(ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 100,
                 node_wall_clock_limit_secs: 0,
+                ..ToolCallLoopGuardConfig::default()
             });
         let run_memory = surge_core::run_state::RunMemory::default();
         let ctx = ToolDispatchContext {
@@ -796,9 +803,7 @@ mod tests {
         );
         match &r.drain_loop_escalations()[0].trip {
             LoopGuardTrip::NodeDeadlineExceeded { .. } => {},
-            other @ LoopGuardTrip::RepeatedToolCall { .. } => {
-                panic!("expected NodeDeadlineExceeded, got {other:?}")
-            },
+            other => panic!("expected NodeDeadlineExceeded, got {other:?}"),
         }
     }
 

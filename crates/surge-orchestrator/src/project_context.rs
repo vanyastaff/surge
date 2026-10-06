@@ -1646,6 +1646,7 @@ mod with_project_context_seed_threshold_tests {
             tool_call_loop_guard: ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 7,
                 node_wall_clock_limit_secs: 42,
+                ..ToolCallLoopGuardConfig::default()
             },
             output_spill: OutputSpillConfig {
                 max_output_bytes: 123,
@@ -1685,6 +1686,7 @@ mod with_project_context_seed_threshold_tests {
             tool_call_loop_guard: ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 99,
                 node_wall_clock_limit_secs: 999,
+                ..ToolCallLoopGuardConfig::default()
             },
             output_spill: OutputSpillConfig {
                 max_output_bytes: 999,
@@ -1695,6 +1697,7 @@ mod with_project_context_seed_threshold_tests {
         let caller_guard = ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 1,
             node_wall_clock_limit_secs: 1,
+            ..ToolCallLoopGuardConfig::default()
         };
         let caller_spill = OutputSpillConfig {
             max_output_bytes: 1,
@@ -1738,6 +1741,7 @@ mod with_project_context_seed_threshold_tests {
             tool_call_loop_guard: ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 99,
                 node_wall_clock_limit_secs: 999,
+                ..ToolCallLoopGuardConfig::default()
             },
             output_spill: OutputSpillConfig {
                 max_output_bytes: 999,

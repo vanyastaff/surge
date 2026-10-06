@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — loop protection ends an attempt instead of the run
+
+- A stage attempt with no activity for `idle_limit_secs` (new, default 900),
+  more than `max_tool_calls` tool calls (new, default 1000), the same tool call
+  past `max_repeat_tool_calls`, or past `node_wall_clock_limit_secs` now ends
+  as a failed attempt. When the stage has a capped retry outcome (an
+  implementer's `partial`, a verifier's `failed`), the engine routes it there
+  with the reason as feedback, so it counts against the same budget and climbs
+  the rejection ladder; otherwise the run fails as before. Repeated identical
+  calls used to be refused without ending the attempt, and a wall-clock trip
+  used to fail the run outright.
+- `[tool_call_loop_guard]` in `surge.toml` gains `idle_limit_secs` and
+  `max_tool_calls` (`0` disables either). **Event payload schema v20** adds the
+  `loop_guard_no_progress` and `loop_guard_tool_call_cap` escalation causes.
+
 ### Added — accept as is, or revise the requirement, on an exhausted ladder
 
 - The default escalation gate now offers **Accept as is** and **Revise

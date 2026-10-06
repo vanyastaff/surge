@@ -166,13 +166,18 @@ async fn configured_repeat_threshold_is_honored_not_the_default() {
     let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
     let run_id = RunId::new();
+    // The run now fails (see below): keep its failure write-back away from
+    // the developer's real memory store.
+    let memory_dir = tempfile::tempdir().unwrap();
     let run_config = EngineRunConfig {
+        memory_store_path: Some(memory_dir.path().join("memory.db")),
         // Non-default: the built-in default is 3. If this were ignored and
         // the dispatcher fell back to `ToolCallLoopGuardConfig::default()`,
         // both calls below would succeed.
         tool_call_loop_guard: Some(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 1,
             node_wall_clock_limit_secs: 3600,
+            ..ToolCallLoopGuardConfig::default()
         }),
         ..EngineRunConfig::default()
     };
@@ -188,9 +193,15 @@ async fn configured_repeat_threshold_is_honored_not_the_default() {
 
     let outcome = handle.await_completion().await.unwrap();
     pump.await.unwrap();
+    // Loop protection (v1 task 1.3): the trip ends the attempt. This node has
+    // no retry loop to count it against, so the run fails; the scripted
+    // `done` is never consumed.
     match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed, got {other:?}"),
+        RunOutcome::Failed { error } => assert!(
+            error.contains("called 2 times in a row"),
+            "the failure must name the repeated call: {error}"
+        ),
+        other => panic!("expected Failed, got {other:?}"),
     }
 
     let calls = mock.recorded_calls.lock().await;
@@ -294,6 +305,7 @@ async fn node_wall_clock_deadline_trips_without_any_tool_call() {
         tool_call_loop_guard: Some(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 100,
             node_wall_clock_limit_secs: 0,
+            ..ToolCallLoopGuardConfig::default()
         }),
         memory_store_path: Some(store_path),
         ..EngineRunConfig::default()

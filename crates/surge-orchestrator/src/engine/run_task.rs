@@ -2670,6 +2670,39 @@ async fn resolve_stage_error(
         return record_suppressed_error(params, state, suppressed, &raw_reason).await;
     }
 
+    // Loop protection (v1 task 1.3): a tripped attempt is a failed attempt,
+    // not a failed run, when the stage has a retry loop to count it against.
+    if let StageError::LoopGuardTripped(trip) = &error
+        && let Some(retry) = loop_protection_retry(state)
+    {
+        tracing::info!(
+            target: "engine::escalation",
+            node = %state.cursor.node,
+            outcome = %retry,
+            reason = %trip,
+            "loop protection ended the attempt; routing it as a failed attempt"
+        );
+        if let Err(write_err) = params
+            .writer
+            .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
+                node: state.cursor.node.clone(),
+                outcome: retry.clone(),
+                summary: format!(
+                    "Loop protection ended this attempt: {}",
+                    trip.operator_message()
+                ),
+            }))
+            .await
+        {
+            return Err(failed(
+                params,
+                format!("write OutcomeReported (loop protection): {write_err}"),
+            )
+            .await);
+        }
+        return Ok(retry);
+    }
+
     let stage_failed_seq = params
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
@@ -2696,6 +2729,22 @@ async fn resolve_stage_error(
         .await;
     }
     Err(failed(params, raw_reason).await)
+}
+
+/// The current stage's retry-loop outcome in the routing graph scope that
+/// holds it (see `surge_core::escalation::retry_outcome`).
+fn loop_protection_retry(state: &RunExecutionState) -> Option<OutcomeKey> {
+    let graph = &state.routing_graph;
+    let node = &state.cursor.node;
+    std::iter::once((&graph.nodes, graph.edges.as_slice()))
+        .chain(
+            graph
+                .subgraphs
+                .values()
+                .map(|sg| (&sg.nodes, sg.edges.as_slice())),
+        )
+        .find(|(nodes, _)| nodes.contains_key(node))
+        .and_then(|(nodes, edges)| surge_core::escalation::retry_outcome(nodes, edges, node))
 }
 
 async fn record_suppressed_error(

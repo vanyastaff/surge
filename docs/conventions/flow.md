@@ -81,6 +81,26 @@ retry_model = "gpt-5"       # optional
 A stage that runs under a frozen quota plan keeps its planned runtime for the
 extra attempt.
 
+## Loop protection
+
+A stage attempt ends as a **failed attempt** when the engine sees no activity
+for `idle_limit_secs`, the same tool call more than `max_repeat_tool_calls`
+times in a row, more than `max_tool_calls` tool calls, or the attempt running
+past `node_wall_clock_limit_secs`. The engine routes it through the stage's
+capped retry outcome (for example an implementer's `partial`, a verifier's
+`failed`) with the reason as feedback for the next attempt, so it counts
+against the same budget and an exhausted budget climbs the same ladder. A
+stage without a capped retry outcome fails the run, as before. Each trip also
+records `EscalationRequested` with a loop-guard cause.
+
+```toml
+[tool_call_loop_guard]
+max_repeat_tool_calls = 3        # 4th identical call in a row ends the attempt
+node_wall_clock_limit_secs = 3600
+idle_limit_secs = 900            # 0 disables
+max_tool_calls = 1000            # 0 disables
+```
+
 Retry budgets (`max_traversals`) inside a loop body reset at every iteration:
 a task never inherits the traversals another task spent.
 

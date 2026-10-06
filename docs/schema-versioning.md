@@ -111,7 +111,7 @@ wake refusals respectively. Version 16 adds the nested
 could not produce its tool catalog; see ADR-0014 decision 8). This is the same
 nested-enum rule as v8: v15 readers reject v16 envelopes with `SchemaTooNew`, and
 every earlier payload still decodes through the existing identity migrations. The
-current maximum supported payload version is 19.
+current maximum supported payload version is 20.
 
 Version 17 adds `EventPayload::ExecutionWriterGroupStopped`, the ADR-0021
 best-effort cleanup record for a host-launched MCP writer whose process group
@@ -133,6 +133,10 @@ readers reject v19 envelopes with `SchemaTooNew`. Either event may lead a stage
 route batch (at most two task records per batch). The per-run `task_ledger`
 view and the registry `task_ledger_index` gain `accepted_by_human` and
 `requirement_revised` columns (per-run migration 0009, registry 0031).
+
+Version 20 adds `EscalationCause::LoopGuardNoProgress` and
+`EscalationCause::LoopGuardToolCallCap` (loop protection). Same nested-enum rule
+as v8: v19 readers reject v20 envelopes with `SchemaTooNew`.
 Older binaries may reject these envelopes before decoding; forward readability does
 not provide downgrade support. SQLite storage migrations are separate from payload
 versions. See [Release and rollback procedure](release-procedure.md).

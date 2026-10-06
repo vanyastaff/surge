@@ -929,6 +929,11 @@ pub enum EscalationCause {
     /// transport failure. The stage proceeds without that server's tools;
     /// this records that the degradation happened (schema v16).
     McpSelectedCatalogUnavailable,
+    /// `LoopGuard` saw no activity from a stage attempt for
+    /// `idle_limit_secs` (schema v20).
+    LoopGuardNoProgress,
+    /// `LoopGuard` saw a stage attempt exceed `max_tool_calls` (schema v20).
+    LoopGuardToolCallCap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
