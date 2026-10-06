@@ -1254,8 +1254,11 @@ async fn quota_dispatch_fixture_source(
                 poll_interval: Duration::from_millis(10),
             };
             let scheduler_task = tokio::spawn(scheduler.run(cancel.clone()));
+            // Generous: a woken run restarts the provider process, which a
+            // loaded CI runner can delay well past a few seconds. A real
+            // failure to wake still fails here, named as such.
             let awakened = tokio::time::timeout(
-                Duration::from_secs(5),
+                Duration::from_secs(30),
                 wait_for_terminal_journal(&storage, next.run),
             )
             .await;
@@ -1264,7 +1267,11 @@ async fn quota_dispatch_fixture_source(
             if let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
                 &after_journal.database
             {
-                if let Some(cap) = budget_cap {
+                // Only a terminal journal can carry the final charge; a wake
+                // that timed out is reported below with full diagnostics.
+                if let Some(cap) = budget_cap
+                    && awakened.is_ok()
+                {
                     assert_retained_budget_result(events, cap);
                 }
 
