@@ -321,6 +321,20 @@ async fn journey(root: PathBuf, live: bool) -> Result<(), String> {
     shutdown.cancel();
     let server_result = tokio::time::timeout(Duration::from_secs(10), server).await;
     drop(engine);
+    // Tasks spawned by the server and run tracking release their engine (and
+    // through it the bridge) after shutdown is observed, not synchronously.
+    let released = tokio::time::timeout(Duration::from_secs(10), async {
+        while Arc::strong_count(&bridge) > 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    if released.is_err() {
+        eprintln!(
+            "bridge still has {} owners 10s after shutdown",
+            Arc::strong_count(&bridge)
+        );
+    }
     let bridge_result = match Arc::try_unwrap(bridge) {
         Ok(bridge) => bridge
             .shutdown()
