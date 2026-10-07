@@ -4,6 +4,8 @@
 //! the `match` arm in `engine::stage::agent::execute_agent_stage`.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -173,89 +175,94 @@ async fn stage_with_cleanup(
     close_error: Option<surge_acp::bridge::error::CloseSessionError>,
     success: bool,
 ) -> surge_orchestrator::engine::stage::StageResult {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    let fixture_result = {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    *mock.next_close_error.lock().await = close_error;
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        *mock.next_close_error.lock().await = close_error;
 
-    let pump = if success {
-        let session = surge_core::SessionId::new();
-        mock.pin_session_ids(vec![session]).await;
-        mock.enqueue_event(surge_acp::bridge::BridgeEvent::OutcomeReported {
-            session,
-            outcome: "done".parse().unwrap(),
-            summary: "validated result".into(),
-            artifacts_produced: vec![],
+        let pump = if success {
+            let session = surge_core::SessionId::new();
+            mock.pin_session_ids(vec![session]).await;
+            mock.enqueue_event(surge_acp::bridge::BridgeEvent::OutcomeReported {
+                session,
+                outcome: "done".parse().unwrap(),
+                summary: "validated result".into(),
+                artifacts_produced: vec![],
 
-            verification_report: None,
+                verification_report: None,
+            })
+            .await;
+            let worker = mock.clone();
+            Some(tokio::spawn(
+                async move { worker.pump_after_subscribe(1).await },
+            ))
+        } else {
+            mock.fail_next_send_message(SendMessageError::RateLimited {
+                retry_after: Some(Duration::from_secs(30)),
+                details: "429 Too Many Requests: Retry-After: 30".into(),
+            })
+            .await;
+            None
+        };
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg();
+        let node = NodeKey::try_from("plan_1").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: std::time::Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            // No profile registry wired (legacy path) — the runtime key must
+            // come back `None`, never a fabricated placeholder (Task 12 §1.10).
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
         })
         .await;
-        let worker = mock.clone();
-        Some(tokio::spawn(
-            async move { worker.pump_after_subscribe(1).await },
-        ))
-    } else {
-        mock.fail_next_send_message(SendMessageError::RateLimited {
-            retry_after: Some(Duration::from_secs(30)),
-            details: "429 Too Many Requests: Retry-After: 30".into(),
-        })
-        .await;
-        None
+
+        if let Some(pump) = pump {
+            pump.await.unwrap();
+        }
+        writer.close().await.unwrap();
+        result
     };
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg();
-    let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: std::time::Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        // No profile registry wired (legacy path) — the runtime key must
-        // come back `None`, never a fabricated placeholder (Task 12 §1.10).
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await;
-
-    if let Some(pump) = pump {
-        pump.await.unwrap();
-    }
-    writer.close().await.unwrap();
-    result
+    dir.close().unwrap();
+    fixture_result
 }
 
 /// The branch every real entry point actually uses (`profile_registry:
@@ -271,82 +278,88 @@ async fn agent_stage_with_profile_registry_reports_normalized_runtime() {
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: Some(Duration::from_secs(30)),
-        details: "429 Too Many Requests: Retry-After: 30".into(),
-    })
-    .await;
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+            details: "429 Too Many Requests: Retry-After: 30".into(),
+        })
+        .await;
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg_with_profile("rate-limited-role@1.0");
-    let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: std::time::Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: Some(registry),
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await;
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg_with_profile("rate-limited-role@1.0");
+        let node = NodeKey::try_from("plan_1").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: std::time::Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: Some(registry),
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await;
 
-    let Err(StageError::RateLimited {
-        runtime,
-        retry_after,
-        details,
-    }) = result
-    else {
-        panic!("expected StageError::RateLimited, got: {result:?}");
-    };
-    assert_eq!(
-        runtime.as_deref(),
-        Some("claude-acp"),
-        "the profile's raw agent_id \"claude-code\" is itself only a \
+        let Err(StageError::RateLimited {
+            runtime,
+            retry_after,
+            details,
+        }) = result
+        else {
+            panic!("expected StageError::RateLimited, got: {result:?}");
+        };
+        assert_eq!(
+            runtime.as_deref(),
+            Some("claude-acp"),
+            "the profile's raw agent_id \"claude-code\" is itself only a \
          registry alias for \"claude-acp\" — runtime must carry the \
          normalized id, not the raw profile spelling"
-    );
-    assert_eq!(retry_after, Some(Duration::from_secs(30)));
-    assert!(
-        details.contains("429"),
-        "details should preserve raw text, got: {details}"
-    );
+        );
+        assert_eq!(retry_after, Some(Duration::from_secs(30)));
+        assert!(
+            details.contains("429"),
+            "details should preserve raw text, got: {details}"
+        );
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }
 
 /// Writes a minimal disk profile whose `[runtime] agent_id = "mock"` is
@@ -401,95 +414,101 @@ async fn agent_stage_with_unregistered_mock_runtime_falls_back_to_raw_id_not_non
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: Some(Duration::from_secs(30)),
-        details: "429 Too Many Requests: Retry-After: 30".into(),
-    })
-    .await;
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg_with_profile("mock-role@1.0");
-    let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: std::time::Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: Some(registry),
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await;
-
-    let Err(StageError::RateLimited { runtime, .. }) = result else {
-        panic!("expected StageError::RateLimited, got: {result:?}");
-    };
-    assert_eq!(
-        runtime.as_deref(),
-        Some("mock"),
-        "an unrecognized-by-the-registry agent_id from a *resolved* profile must fall back to \
-         the raw id, never silently become None"
-    );
-
-    // Same fallback must apply to `SessionOpened.agent_id` — the field
-    // `surge-cli`'s inbox capacity scan actually keys off.
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(
-            surge_persistence::runs::seq::EventSeq(0)
-                ..surge_persistence::runs::seq::EventSeq(u64::MAX),
-        )
-        .await
-        .unwrap();
-    let session_opened_agent_id = events
-        .iter()
-        .find_map(|e| match &e.payload.payload {
-            surge_core::run_event::EventPayload::SessionOpened { agent_id, .. } => {
-                Some(agent_id.clone())
-            },
-            _ => None,
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+            details: "429 Too Many Requests: Retry-After: 30".into(),
         })
-        .expect("SessionOpened must have been recorded");
-    assert_eq!(
-        session_opened_agent_id.as_deref(),
-        Some("mock"),
-        "SessionOpened.agent_id must fall back to the raw id too, not just \
+        .await;
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg_with_profile("mock-role@1.0");
+        let node = NodeKey::try_from("plan_1").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: std::time::Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: Some(registry),
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await;
+
+        let Err(StageError::RateLimited { runtime, .. }) = result else {
+            panic!("expected StageError::RateLimited, got: {result:?}");
+        };
+        assert_eq!(
+            runtime.as_deref(),
+            Some("mock"),
+            "an unrecognized-by-the-registry agent_id from a *resolved* profile must fall back to \
+         the raw id, never silently become None"
+        );
+
+        // Same fallback must apply to `SessionOpened.agent_id` — the field
+        // `surge-cli`'s inbox capacity scan actually keys off.
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(
+                surge_persistence::runs::seq::EventSeq(0)
+                    ..surge_persistence::runs::seq::EventSeq(u64::MAX),
+            )
+            .await
+            .unwrap();
+        let session_opened_agent_id = events
+            .iter()
+            .find_map(|e| match &e.payload.payload {
+                surge_core::run_event::EventPayload::SessionOpened { agent_id, .. } => {
+                    Some(agent_id.clone())
+                },
+                _ => None,
+            })
+            .expect("SessionOpened must have been recorded");
+        assert_eq!(
+            session_opened_agent_id.as_deref(),
+            Some("mock"),
+            "SessionOpened.agent_id must fall back to the raw id too, not just \
          StageError::RateLimited.runtime — this is the field surge-cli's inbox scan reads"
-    );
+        );
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }

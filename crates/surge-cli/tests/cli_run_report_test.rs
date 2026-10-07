@@ -8,6 +8,16 @@
 //! three formats — the same seed-events-directly-then-invoke-the-binary
 //! pattern `cli_replay.rs` uses, so no agent runtime is needed.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -138,7 +148,7 @@ async fn seed_rich_completed_run(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     run
 }
@@ -167,85 +177,88 @@ async fn seed_torn_run(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     run
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_json_reconstructs_every_populated_section() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_rich_completed_run(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_rich_completed_run(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &run.to_string(), "--format", "json"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &run.to_string(), "--format", "json"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
 
-    // `RunId` serializes as the bare ULID (no `run-` prefix) — see
-    // `surge_core::id`'s `define_id!` macro doc; `Display` (used by
-    // `run.to_string()`) adds the prefix for human-facing text instead.
-    assert_eq!(json["run_id"], run.as_ulid().to_string());
-    assert_eq!(json["completion"]["status"], "completed");
+        // `RunId` serializes as the bare ULID (no `run-` prefix) — see
+        // `surge_core::id`'s `define_id!` macro doc; `Display` (used by
+        // `run.to_string()`) adds the prefix for human-facing text instead.
+        assert_eq!(json["run_id"], run.as_ulid().to_string());
+        assert_eq!(json["completion"]["status"], "completed");
 
-    let nodes = json["nodes"].as_array().expect("nodes array");
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0]["node"], "implement");
-    assert_eq!(nodes[0]["attempts"], 1);
-    assert_eq!(nodes[0]["status"]["state"], "completed");
+        let nodes = json["nodes"].as_array().expect("nodes array");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["node"], "implement");
+        assert_eq!(nodes[0]["attempts"], 1);
+        assert_eq!(nodes[0]["status"]["state"], "completed");
 
-    let skills = json["skills"].as_array().expect("skills array");
-    assert_eq!(skills.len(), 1, "R14: every bound skill must be listed");
-    assert_eq!(skills[0]["name"], "archify");
-    assert_eq!(skills[0]["provider"], "project_dir");
-    assert_eq!(skills[0]["gate_enabled"], true);
+        let skills = json["skills"].as_array().expect("skills array");
+        assert_eq!(skills.len(), 1, "R14: every bound skill must be listed");
+        assert_eq!(skills[0]["name"], "archify");
+        assert_eq!(skills[0]["provider"], "project_dir");
+        assert_eq!(skills[0]["gate_enabled"], true);
 
-    let evidence = json["evidence"].as_array().expect("evidence array");
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0]["name"], "diff.patch");
+        let evidence = json["evidence"].as_array().expect("evidence array");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["name"], "diff.patch");
 
-    let outcomes = json["outcomes"].as_array().expect("outcomes array");
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0]["outcome"], "done");
+        let outcomes = json["outcomes"].as_array().expect("outcomes array");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0]["outcome"], "done");
 
-    let steers = json["steers"].as_array().expect("steers array");
-    assert_eq!(steers.len(), 1);
-    assert_eq!(steers[0]["id"], "steer-1");
+        let steers = json["steers"].as_array().expect("steers array");
+        assert_eq!(steers.len(), 1);
+        assert_eq!(steers[0]["id"], "steer-1");
 
-    assert_eq!(json["cost"]["prompt_tokens"], 500);
-    assert_eq!(json["cost"]["output_tokens"], 250);
-    assert_eq!(json["cost"]["cache_hits"], 10);
-    assert_eq!(
-        json["cost"]["uncosted_token_events"], 0,
-        "this fixture's TokensConsumed always carries a price"
-    );
+        assert_eq!(json["cost"]["prompt_tokens"], 500);
+        assert_eq!(json["cost"]["output_tokens"], 250);
+        assert_eq!(json["cost"]["cache_hits"], 10);
+        assert_eq!(
+            json["cost"]["uncosted_token_events"], 0,
+            "this fixture's TokensConsumed always carries a price"
+        );
 
-    assert_eq!(json["header"]["initial_prompt"], "seed");
-    assert!(
-        json["header"]["first_event_at"].is_string(),
-        "header must carry the first event's timestamp"
-    );
-    assert!(
-        json["header"]["last_event_at"].is_string(),
-        "header must carry the last event's timestamp"
-    );
+        assert_eq!(json["header"]["initial_prompt"], "seed");
+        assert!(
+            json["header"]["first_event_at"].is_string(),
+            "header must carry the first event's timestamp"
+        );
+        assert!(
+            json["header"]["last_event_at"].is_string(),
+            "header must carry the last event's timestamp"
+        );
 
-    // No resolved input event in this fixture carries a memory receipt.
-    assert!(json["memory_receipts"].as_array().unwrap().is_empty());
-    // The JSON form preserves the legacy-coverage caveat.
-    let caveats = json["caveats"].as_array().expect("caveats array");
-    assert!(
-        caveats.iter().any(|c| c
-            .as_str()
-            .unwrap_or_default()
-            .contains("legacy journals may omit per-node memory selection receipts")),
-        "caveats: {caveats:?}"
-    );
+        // No resolved input event in this fixture carries a memory receipt.
+        assert!(json["memory_receipts"].as_array().unwrap().is_empty());
+        // The JSON form preserves the legacy-coverage caveat.
+        let caveats = json["caveats"].as_array().expect("caveats array");
+        assert!(
+            caveats.iter().any(|c| c
+                .as_str()
+                .unwrap_or_default()
+                .contains("legacy journals may omit per-node memory selection receipts")),
+            "caveats: {caveats:?}"
+        );
+    }
+    tmp.close().unwrap();
 }
 
 /// Seed a run stopped by a guard escalation — no terminal event, but the
@@ -273,29 +286,32 @@ async fn seed_escalation_stopped_run(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     run
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_names_why_a_guard_stopped_run_is_incomplete() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_escalation_stopped_run(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_escalation_stopped_run(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &run.to_string(), "--format", "json"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &run.to_string(), "--format", "json"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert_eq!(json["completion"]["status"], "incomplete");
-    let escalations = json["escalations"].as_array().expect("escalations array");
-    assert_eq!(escalations.len(), 1);
-    assert_eq!(escalations[0]["cause"], "loop_guard_node_deadline");
+        assert_eq!(json["completion"]["status"], "incomplete");
+        let escalations = json["escalations"].as_array().expect("escalations array");
+        assert_eq!(escalations.len(), 1);
+        assert_eq!(escalations[0]["cause"], "loop_guard_node_deadline");
+    }
+    tmp.close().unwrap();
 }
 
 /// Seed a run parked on a provider rate limit — R27.1/§1(16): parked is not
@@ -324,29 +340,32 @@ async fn seed_parked_run(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     run
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_renders_a_parked_run_distinctly_from_not_finished() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_parked_run(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_parked_run(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &run.to_string()])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &run.to_string()])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("PARKED"), "got:\n{stdout}");
-    assert!(
-        !stdout.contains("This run has not finished"),
-        "a parked run is a proven pause, not an unexplained stall:\n{stdout}"
-    );
+        assert!(stdout.contains("PARKED"), "got:\n{stdout}");
+        assert!(
+            !stdout.contains("This run has not finished"),
+            "a parked run is a proven pause, not an unexplained stall:\n{stdout}"
+        );
+    }
+    tmp.close().unwrap();
 }
 
 /// A hook-rejected outcome must not read as an accepted one — the CLI-level
@@ -380,33 +399,36 @@ async fn seed_run_with_a_hook_rejected_outcome(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     run
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_shows_a_hook_rejected_outcome_as_rejected_not_accepted() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_run_with_a_hook_rejected_outcome(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_run_with_a_hook_rejected_outcome(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &run.to_string(), "--format", "json"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &run.to_string(), "--format", "json"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    let outcomes = json["outcomes"].as_array().expect("outcomes array");
-    assert_eq!(
-        outcomes.len(),
-        1,
-        "the rejection updates the entry in place"
-    );
-    assert_eq!(outcomes[0]["status"]["outcome_status"], "rejected_by_hook");
-    assert_eq!(outcomes[0]["status"]["hook_id"], "test-runner");
+        let outcomes = json["outcomes"].as_array().expect("outcomes array");
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "the rejection updates the entry in place"
+        );
+        assert_eq!(outcomes[0]["status"]["outcome_status"], "rejected_by_hook");
+        assert_eq!(outcomes[0]["status"]["hook_id"], "test-runner");
+    }
+    tmp.close().unwrap();
 }
 
 /// R27.1: a run whose log never reaches a terminal event still compiles a
@@ -414,57 +436,65 @@ async fn report_shows_a_hook_rejected_outcome_as_rejected_not_accepted() {
 /// is visible in the default (Markdown) rendering.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_defaults_to_markdown_and_flags_an_incomplete_run() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_torn_run(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_torn_run(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &run.to_string()])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &run.to_string()])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(
-        stdout.contains("## Nodes"),
-        "must render as Markdown by default"
-    );
-    assert!(
-        stdout.contains("This run has not finished"),
-        "R27.1: a torn run must say so explicitly, got:\n{stdout}"
-    );
+        assert!(
+            stdout.contains("## Nodes"),
+            "must render as Markdown by default"
+        );
+        assert!(
+            stdout.contains("This run has not finished"),
+            "R27.1: a torn run must say so explicitly, got:\n{stdout}"
+        );
+    }
+    tmp.close().unwrap();
 }
 
 /// R29: the HTML form is one self-contained file, reachable through the
 /// real CLI path — no external stylesheet, script, or CDN reference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_html_format_is_self_contained() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_rich_completed_run(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_rich_completed_run(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &run.to_string(), "--format", "html"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &run.to_string(), "--format", "html"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("<!doctype html>"));
-    assert!(stdout.contains("<style>"), "styles must be inlined");
-    assert!(!stdout.contains("<link"));
-    assert!(!stdout.to_lowercase().contains("<script"));
-    assert!(!stdout.contains("http://") && !stdout.contains("https://"));
+        assert!(stdout.contains("<!doctype html>"));
+        assert!(stdout.contains("<style>"), "styles must be inlined");
+        assert!(!stdout.contains("<link"));
+        assert!(!stdout.to_lowercase().contains("<script"));
+        assert!(!stdout.contains("http://") && !stdout.contains("https://"));
+    }
+    tmp.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_rejects_an_unknown_run_id() {
-    let tmp = tempfile::tempdir().unwrap();
-
-    assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["run", "report", &RunId::new().to_string()])
-        .assert()
-        .failure();
+    let tmp = FixtureHome::new().unwrap();
+    {
+        assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["run", "report", &RunId::new().to_string()])
+            .assert()
+            .failure();
+    }
+    tmp.close().unwrap();
 }

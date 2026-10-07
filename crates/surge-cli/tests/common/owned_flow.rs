@@ -21,6 +21,16 @@ pub fn commit_project(project: &Path) {
 
 pub struct Daemon(pub Child);
 
+impl Daemon {
+    pub fn close(mut self) -> std::io::Result<()> {
+        if self.0.try_wait()?.is_none() {
+            self.0.kill()?;
+        }
+        self.0.wait()?;
+        Ok(())
+    }
+}
+
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.0.kill();

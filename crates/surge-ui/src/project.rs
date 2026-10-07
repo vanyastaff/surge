@@ -60,6 +60,11 @@ impl RecentProjects {
     /// Save recent projects to disk.
     pub fn save(&self) -> anyhow::Result<()> {
         let path = Self::file_path();
+        #[cfg(windows)]
+        let _runtime_home = path
+            .parent()
+            .map(surge_persistence::RuntimeHomeOwner::prepare)
+            .transpose()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -688,3 +688,34 @@ outer fixture and protected child remain strictly current-user-owned. Retained
 routing, fixed NTFS and all three backend assertions remain unchanged. Independent
 security accepted this focused repair (profile replan repair 1); native positive
 backend RED is still pending and must not be inferred from this fixture fix.
+
+### Caller settlement required by checked fixture cleanup
+
+Independent architecture and security review accepted two bounded lifetime fixes
+before their implementation. They preserve productive-run semantics and make
+completed operations release their actual owners before returning.
+
+Daemon server setup finishes binding/publication before maintenance starts.
+Reconciliation, drain and serving are joined inline. Cancellation wins at the next
+operation boundary; an already executing operation finishes. Inbox polling hands
+accepted launches through a bounded channel to owned, concurrently polled ticket
+followers. Shutdown stops new actions and drains accepted followers. Ticket sync
+polls actual completion concurrently with events, so a retained event sender cannot
+hide failed completion. Terminal evidence is applied once; conflicts are diagnosed.
+Production main retains the consumer through graceful shutdown. Pre-spawn exit
+guards cancel the shared token on unexpected server/consumer exit, including abort
+before first poll. Hard abort is explicitly not proof of settled blocking SQL work.
+
+Fork captures its operation result, always awaits acquired child and parent writer
+closure, and records parent lineage only after successful child closure. Typed boxed
+errors preserve both operation and closure failures. Windows retains the exclusive
+protected run/artifacts reservation through copy and Storage handoff. Existing
+partial children are preserved on error; no compensating pathname deletion is added.
+This contract concerns returned results. Dropping an in-flight fork still uses the
+established retained actor lease and does not claim synchronous destructor joining.
+
+Actual macOS RED observations preceded these changes: four daemon ownership/hang
+failures, and five fork failures reporting WriterAlreadyHeld on immediate reacquire.
+The focused fork repair passed 17/17 tests. Strict affected-crate gates, independent
+reviews and Windows execution remain required; these local observations do not close
+Stage 1 or authorize opening the private/preparation guards.

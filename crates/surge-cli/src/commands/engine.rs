@@ -725,8 +725,11 @@ fn surge_runs_dir() -> Result<PathBuf> {
             .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
             .join(".surge"),
     };
-    let runs = surge_home.join("runs");
-    std::fs::create_dir_all(&runs).with_context(|| format!("create {}", runs.display()))?;
+    #[cfg(not(windows))]
+    {
+        let runs = surge_home.join("runs");
+        std::fs::create_dir_all(&runs).with_context(|| format!("create {}", runs.display()))?;
+    }
     // Storage::open expects the surge-home dir (parent of runs/), which it
     // populates with the runs/ subdir itself.
     Ok(surge_home)
@@ -967,7 +970,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn owned_startup_waits_for_schema_publication_and_preserves_errors() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -977,9 +980,23 @@ mod tests {
             .join("runs")
             .join(run.to_string())
             .join("events.sqlite");
+        #[cfg(not(windows))]
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        #[cfg(windows)]
+        let run_namespace = surge_persistence::RuntimeHomeOwner::prepare(home.path())
+            .unwrap()
+            .reserve_run_directory(run)
+            .unwrap();
         // Deterministic create_run window: file exists, migration and registry
         // publication have not happened. Inspection must not treat it as ready.
+        #[cfg(windows)]
+        {
+            let empty = run_namespace
+                .open_append(std::ffi::OsStr::new("events.sqlite"))
+                .unwrap();
+            empty.flush().unwrap();
+        }
+        #[cfg(not(windows))]
         drop(rusqlite::Connection::open(&db).unwrap());
         assert!(
             !super::owned_startup_ready(&storage, home.path(), run)
@@ -1027,6 +1044,10 @@ mod tests {
                 .await
                 .is_err()
         );
+        drop(storage);
+        #[cfg(windows)]
+        drop(run_namespace);
+        home.close().unwrap();
     }
 
     #[test]

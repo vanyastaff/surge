@@ -44,6 +44,15 @@
 
 pub use error::{PersistenceError, Result};
 
+/// SQLite pool manager; Windows connections retain checked native ownership.
+#[cfg(not(windows))]
+pub use r2d2_sqlite::SqliteConnectionManager;
+#[cfg(windows)]
+pub use runs::connection::{
+    OwnedSqliteConnectionManager as SqliteConnectionManager,
+    RetainedConnection as OwnedSqliteConnection,
+};
+
 /// Content-addressed artifact store for run outputs.
 pub mod artifacts;
 
@@ -99,6 +108,17 @@ pub mod error {
     /// Errors that can occur during persistence operations
     #[derive(Debug, Error)]
     pub enum PersistenceError {
+        /// A live owner holds incompatible native sharing rights or an OS lock.
+        #[error("runtime file ownership is busy")]
+        OwnershipBusy,
+        /// Native ownership refused before filesystem-backed storage opened.
+        #[error("state-home {category}: {message}")]
+        StateHome {
+            /// Stable native failure category without private bytes.
+            category: &'static str,
+            /// SDK status or structural refusal.
+            message: String,
+        },
         /// I/O error
         #[error("I/O error: {0}")]
         Io(#[from] std::io::Error),
@@ -125,3 +145,19 @@ pub mod work_items;
 
 #[cfg(windows)]
 mod state_home;
+
+#[cfg(windows)]
+pub use state_home::{
+    RuntimeAppendFile, RuntimeControlFile, RuntimeDirectory, RuntimeDirectoryOwner,
+    RuntimeHomeOwner,
+};
+
+#[cfg(test)]
+pub(crate) mod runtime_home_fixture {
+    #[cfg(windows)]
+    use crate::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}

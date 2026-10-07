@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use surge_core::run_event::RunEvent;
 use surge_core::{ContentHash, RoadmapPatchId, RunId, VersionedEventPayload, migrate_payload};

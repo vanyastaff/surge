@@ -1,4 +1,5 @@
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use std::path::Path;
 use std::str::FromStr;

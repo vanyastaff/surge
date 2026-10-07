@@ -578,28 +578,31 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_resumes_a_due_run_using_its_recorded_worktree() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        let real_worktree = tmp.path().join("actual-worktree");
-        std::fs::create_dir_all(&real_worktree).unwrap();
-        park(&storage, run_id, &real_worktree, NOW - 1_000).await;
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            let real_worktree = tmp.path().join("actual-worktree");
+            std::fs::create_dir_all(&real_worktree).unwrap();
+            park(&storage, run_id, &real_worktree, NOW - 1_000).await;
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let sched = scheduler(storage.clone(), facade, clock);
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let sched = scheduler(storage.clone(), facade, clock);
 
-        sched.tick().await;
+            sched.tick().await;
 
-        let calls = stub.resume_calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "the due run must resume exactly once");
-        assert_eq!(
-            calls[0],
-            (run_id, real_worktree),
-            "must resume into the RECORDED worktree, not a reconstructed guess"
-        );
+            let calls = stub.resume_calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "the due run must resume exactly once");
+            assert_eq!(
+                calls[0],
+                (run_id, real_worktree),
+                "must resume into the RECORDED worktree, not a reconstructed guess"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     /// Mutation-provable: neutralizing `due_parked`'s `wake_at <= now`
@@ -607,27 +610,30 @@ mod tests {
     /// this assertion fail — a not-yet-due parked run must never resume.
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_does_not_resume_a_not_yet_due_run() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        let real_worktree = tmp.path().join("actual-worktree");
-        std::fs::create_dir_all(&real_worktree).unwrap();
-        park(&storage, run_id, &real_worktree, NOW + 3_600_000).await;
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            let real_worktree = tmp.path().join("actual-worktree");
+            std::fs::create_dir_all(&real_worktree).unwrap();
+            park(&storage, run_id, &real_worktree, NOW + 3_600_000).await;
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let sched = scheduler(storage.clone(), facade, clock);
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let sched = scheduler(storage.clone(), facade, clock);
 
-        sched.tick().await;
+            sched.tick().await;
 
-        assert!(
-            stub.resume_calls.lock().unwrap().is_empty(),
-            "a run whose wake_at has not passed must not resume"
-        );
-        let summary = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(summary.status, surge_core::RunStatus::Parked);
+            assert!(
+                stub.resume_calls.lock().unwrap().is_empty(),
+                "a run whose wake_at has not passed must not resume"
+            );
+            let summary = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(summary.status, surge_core::RunStatus::Parked);
+        }
+        tmp.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -640,186 +646,198 @@ mod tests {
             },
         };
 
-        let home = tempdir().unwrap();
-        let project = tempdir().unwrap();
-        let storage = Storage::open(home.path()).await.unwrap();
-        let worktree = home.path().join("retained-task-worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
-        let workspace = WorkItemWorkspace {
-            repository: project.path().join(".git"),
-            checkout: project.path().to_path_buf(),
-            path: worktree.clone(),
-            ownership: "fixture-owner".into(),
-            branch: "fixture-branch".into(),
-            base_commit: "a".repeat(40),
-        };
-        let requirements = WorkItemRequirements::new(
-            "Keep this task under its durable owner".into(),
-            vec!["Do not use an unowned generic resume".into()],
-        )
-        .unwrap();
-        let create = WorkItemCommand::Create {
-            operation_id: WorkItemOperationId::new(),
-            project: project.path().to_path_buf(),
-            title: "Parked task recovery".into(),
-            requirements,
-        };
-        let WorkItemResult::Detail(detail) = storage
-            .work_items()
-            .mutate(&create, Some(&workspace), None, "fixture", NOW)
-            .unwrap()
-        else {
-            panic!("task create did not return detail")
-        };
-        let graph: surge_core::graph::Graph =
-            toml::from_str(include_str!("../../../examples/flow_terminal_only.toml")).unwrap();
-        let frozen = serde_json::to_string(&EngineRunConfig::default()).unwrap();
-        let start = WorkItemCommand::Start {
-            operation_id: WorkItemOperationId::new(),
-            item: detail.item.id,
-            expected_version: detail.item.version,
-            graph: Box::new(graph),
-            quota_recovery: None,
-        };
-        let WorkItemResult::Attempt(attempt) = storage
-            .work_items()
-            .mutate(&start, None, Some(&frozen), "fixture", NOW + 1)
-            .unwrap()
-        else {
-            panic!("task start did not reserve an attempt")
-        };
-        create_fixture_run(&storage, attempt.run, project.path()).await;
-        storage
-            .work_items()
-            .settle(
-                attempt.run,
-                attempt.binding.generation,
-                WorkItemAttemptState::Attention,
-                Some("fixture preserves uncertain task ownership".into()),
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let project = tempdir().unwrap();
+            let storage = Storage::open(home.path()).await.unwrap();
+            let worktree = home.path().join("retained-task-worktree");
+            std::fs::create_dir_all(&worktree).unwrap();
+            let workspace = WorkItemWorkspace {
+                repository: project.path().join(".git"),
+                checkout: project.path().to_path_buf(),
+                path: worktree.clone(),
+                ownership: "fixture-owner".into(),
+                branch: "fixture-branch".into(),
+                base_commit: "a".repeat(40),
+            };
+            let requirements = WorkItemRequirements::new(
+                "Keep this task under its durable owner".into(),
+                vec!["Do not use an unowned generic resume".into()],
             )
             .unwrap();
-        park(&storage, attempt.run, &worktree, NOW - 1).await;
-
-        let engine = Arc::new(surge_orchestrator::engine::Engine::new(
-            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
-            storage.clone(),
-            Arc::new(
-                surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
-                    project.path().to_path_buf(),
-                ),
-            ),
-            surge_orchestrator::engine::EngineConfig::default(),
-        ));
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let mut sched = scheduler(storage.clone(), facade, clock);
-        sched.tracking = crate::tracked_run::TrackingContext::new(engine, storage.clone());
-
-        sched.tick().await;
-
-        assert!(
-            stub.resume_calls.lock().unwrap().is_empty(),
-            "a task-owned Attention state must never bypass its durable owner via generic resume"
-        );
-        assert_eq!(
+            let create = WorkItemCommand::Create {
+                operation_id: WorkItemOperationId::new(),
+                project: project.path().to_path_buf(),
+                title: "Parked task recovery".into(),
+                requirements,
+            };
+            let WorkItemResult::Detail(detail) = storage
+                .work_items()
+                .mutate(&create, Some(&workspace), None, "fixture", NOW)
+                .unwrap()
+            else {
+                panic!("task create did not return detail")
+            };
+            let graph: surge_core::graph::Graph =
+                toml::from_str(include_str!("../../../examples/flow_terminal_only.toml")).unwrap();
+            let frozen = serde_json::to_string(&EngineRunConfig::default()).unwrap();
+            let start = WorkItemCommand::Start {
+                operation_id: WorkItemOperationId::new(),
+                item: detail.item.id,
+                expected_version: detail.item.version,
+                graph: Box::new(graph),
+                quota_recovery: None,
+            };
+            let WorkItemResult::Attempt(attempt) = storage
+                .work_items()
+                .mutate(&start, None, Some(&frozen), "fixture", NOW + 1)
+                .unwrap()
+            else {
+                panic!("task start did not reserve an attempt")
+            };
+            create_fixture_run(&storage, attempt.run, project.path()).await;
             storage
                 .work_items()
-                .for_run(attempt.run)
-                .unwrap()
-                .unwrap()
-                .state,
-            WorkItemAttemptState::Attention,
-            "wake must preserve the task's explicit recovery decision"
-        );
+                .settle(
+                    attempt.run,
+                    attempt.binding.generation,
+                    WorkItemAttemptState::Attention,
+                    Some("fixture preserves uncertain task ownership".into()),
+                )
+                .unwrap();
+            park(&storage, attempt.run, &worktree, NOW - 1).await;
+
+            let engine = Arc::new(surge_orchestrator::engine::Engine::new(
+                Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+                storage.clone(),
+                Arc::new(
+                    surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                        project.path().to_path_buf(),
+                    ),
+                ),
+                surge_orchestrator::engine::EngineConfig::default(),
+            ));
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let mut sched = scheduler(storage.clone(), facade, clock);
+            sched.tracking = crate::tracked_run::TrackingContext::new(engine, storage.clone());
+
+            sched.tick().await;
+
+            assert!(
+                stub.resume_calls.lock().unwrap().is_empty(),
+                "a task-owned Attention state must never bypass its durable owner via generic resume"
+            );
+            assert_eq!(
+                storage
+                    .work_items()
+                    .for_run(attempt.run)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                WorkItemAttemptState::Attention,
+                "wake must preserve the task's explicit recovery decision"
+            );
+        }
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_fails_honestly_when_the_recorded_worktree_is_gone() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        let gone_worktree = tmp.path().join("never-created");
-        park(&storage, run_id, &gone_worktree, NOW - 1_000).await;
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            let gone_worktree = tmp.path().join("never-created");
+            park(&storage, run_id, &gone_worktree, NOW - 1_000).await;
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let sched = scheduler(storage.clone(), facade, clock);
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let sched = scheduler(storage.clone(), facade, clock);
 
-        sched.tick().await;
+            sched.tick().await;
 
-        assert!(
-            stub.resume_calls.lock().unwrap().is_empty(),
-            "must never attempt a resume into a worktree that does not exist"
-        );
-        let summary = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(
-            summary.status,
-            surge_core::RunStatus::Failed,
-            "a missing worktree must fail the run honestly, not leave it silently Parked"
-        );
+            assert!(
+                stub.resume_calls.lock().unwrap().is_empty(),
+                "must never attempt a resume into a worktree that does not exist"
+            );
+            let summary = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(
+                summary.status,
+                surge_core::RunStatus::Failed,
+                "a missing worktree must fail the run honestly, not leave it silently Parked"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_fails_honestly_when_no_worktree_was_ever_recorded() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        // Registry says Parked and due, but the run's own log never wrote a
-        // RunParked event at all (e.g. a corrupted/truncated log) — the
-        // legacy-path equivalent of "we have nowhere to resume into".
-        storage.set_run_parked(&run_id, NOW - 1_000).await.unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            // Registry says Parked and due, but the run's own log never wrote a
+            // RunParked event at all (e.g. a corrupted/truncated log) — the
+            // legacy-path equivalent of "we have nowhere to resume into".
+            storage.set_run_parked(&run_id, NOW - 1_000).await.unwrap();
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let sched = scheduler(storage.clone(), facade, clock);
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let sched = scheduler(storage.clone(), facade, clock);
 
-        sched.tick().await;
+            sched.tick().await;
 
-        assert!(stub.resume_calls.lock().unwrap().is_empty());
-        let summary = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(summary.status, surge_core::RunStatus::Failed);
+            assert!(stub.resume_calls.lock().unwrap().is_empty());
+            let summary = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(summary.status, surge_core::RunStatus::Failed);
+        }
+        tmp.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_resumes_every_due_run_and_skips_every_not_yet_due_one() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
 
-        let mut due_ids = Vec::new();
-        for i in 0..3 {
-            let run_id = RunId::new();
-            create_fixture_run(&storage, run_id, "/proj").await;
-            let wt = tmp.path().join(format!("due-{i}"));
-            std::fs::create_dir_all(&wt).unwrap();
-            park(&storage, run_id, &wt, NOW - 1_000).await;
-            due_ids.push(run_id);
+            let mut due_ids = Vec::new();
+            for i in 0..3 {
+                let run_id = RunId::new();
+                create_fixture_run(&storage, run_id, "/proj").await;
+                let wt = tmp.path().join(format!("due-{i}"));
+                std::fs::create_dir_all(&wt).unwrap();
+                park(&storage, run_id, &wt, NOW - 1_000).await;
+                due_ids.push(run_id);
+            }
+            let not_due_run = RunId::new();
+            create_fixture_run(&storage, not_due_run, "/proj").await;
+            let not_due_wt = tmp.path().join("not-due");
+            std::fs::create_dir_all(&not_due_wt).unwrap();
+            park(&storage, not_due_run, &not_due_wt, NOW + 60_000).await;
+
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let sched = scheduler(storage.clone(), facade, clock);
+
+            sched.tick().await;
+
+            let resumed: std::collections::HashSet<RunId> = stub
+                .resume_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+            assert_eq!(resumed, due_ids.into_iter().collect());
         }
-        let not_due_run = RunId::new();
-        create_fixture_run(&storage, not_due_run, "/proj").await;
-        let not_due_wt = tmp.path().join("not-due");
-        std::fs::create_dir_all(&not_due_wt).unwrap();
-        park(&storage, not_due_run, &not_due_wt, NOW + 60_000).await;
-
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let sched = scheduler(storage.clone(), facade, clock);
-
-        sched.tick().await;
-
-        let resumed: std::collections::HashSet<RunId> = stub
-            .resume_calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(id, _)| *id)
-            .collect();
-        assert_eq!(resumed, due_ids.into_iter().collect());
+        tmp.close().unwrap();
     }
 
     async fn escalation_count(storage: &Arc<Storage>, run_id: RunId) -> usize {
@@ -847,93 +865,102 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_escalates_once_when_the_blind_park_limit_is_crossed() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        let wt = tmp.path().join("actual-worktree");
-        std::fs::create_dir_all(&wt).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            let wt = tmp.path().join("actual-worktree");
+            std::fs::create_dir_all(&wt).unwrap();
 
-        // Two consecutive blind parks recorded in the run's own log —
-        // `park` appends one `RunParked{PolicyBackoff}` and sets the
-        // registry row each call.
-        park(&storage, run_id, &wt, NOW - 2_000).await;
-        park(&storage, run_id, &wt, NOW - 1_000).await;
+            // Two consecutive blind parks recorded in the run's own log —
+            // `park` appends one `RunParked{PolicyBackoff}` and sets the
+            // registry row each call.
+            park(&storage, run_id, &wt, NOW - 2_000).await;
+            park(&storage, run_id, &wt, NOW - 1_000).await;
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let mut sched = scheduler(storage.clone(), facade, clock);
-        sched.blind_park_limit = 2;
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let mut sched = scheduler(storage.clone(), facade, clock);
+            sched.blind_park_limit = 2;
 
-        sched.tick().await;
+            sched.tick().await;
 
-        assert_eq!(
-            escalation_count(&storage, run_id).await,
-            1,
-            "2 consecutive blind parks against a limit of 2 must raise exactly one escalation"
-        );
-        assert_eq!(
-            stub.resume_calls.lock().unwrap().len(),
-            1,
-            "escalating must not stop the run from still getting its normal wake attempt"
-        );
+            assert_eq!(
+                escalation_count(&storage, run_id).await,
+                1,
+                "2 consecutive blind parks against a limit of 2 must raise exactly one escalation"
+            );
+            assert_eq!(
+                stub.resume_calls.lock().unwrap().len(),
+                1,
+                "escalating must not stop the run from still getting its normal wake attempt"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_does_not_escalate_below_the_blind_park_limit() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        let wt = tmp.path().join("actual-worktree");
-        std::fs::create_dir_all(&wt).unwrap();
-        park(&storage, run_id, &wt, NOW - 1_000).await;
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            let wt = tmp.path().join("actual-worktree");
+            std::fs::create_dir_all(&wt).unwrap();
+            park(&storage, run_id, &wt, NOW - 1_000).await;
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let mut sched = scheduler(storage.clone(), facade, clock);
-        sched.blind_park_limit = 2;
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let mut sched = scheduler(storage.clone(), facade, clock);
+            sched.blind_park_limit = 2;
 
-        sched.tick().await;
+            sched.tick().await;
 
-        assert_eq!(
-            escalation_count(&storage, run_id).await,
-            0,
-            "1 consecutive blind park against a limit of 2 must not escalate yet"
-        );
+            assert_eq!(
+                escalation_count(&storage, run_id).await,
+                0,
+                "1 consecutive blind park against a limit of 2 must not escalate yet"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tick_does_not_re_escalate_the_same_streak_on_a_later_tick() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let run_id = RunId::new();
-        create_fixture_run(&storage, run_id, "/proj").await;
-        let wt = tmp.path().join("actual-worktree");
-        std::fs::create_dir_all(&wt).unwrap();
-        park(&storage, run_id, &wt, NOW - 2_000).await;
-        park(&storage, run_id, &wt, NOW - 1_000).await;
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let run_id = RunId::new();
+            create_fixture_run(&storage, run_id, "/proj").await;
+            let wt = tmp.path().join("actual-worktree");
+            std::fs::create_dir_all(&wt).unwrap();
+            park(&storage, run_id, &wt, NOW - 2_000).await;
+            park(&storage, run_id, &wt, NOW - 1_000).await;
 
-        let stub = Arc::new(StubFacade::default());
-        let facade: Arc<dyn EngineFacade> = stub.clone();
-        let clock = Arc::new(MockClock::new(NOW));
-        let mut sched = scheduler(storage.clone(), facade, clock);
-        sched.blind_park_limit = 2;
+            let stub = Arc::new(StubFacade::default());
+            let facade: Arc<dyn EngineFacade> = stub.clone();
+            let clock = Arc::new(MockClock::new(NOW));
+            let mut sched = scheduler(storage.clone(), facade, clock);
+            sched.blind_park_limit = 2;
 
-        // The stub facade never clears the registry's Parked status (unlike
-        // the real Engine::resume_run), so the same run is still `due` on
-        // a second tick with the same unresolved streak.
-        sched.tick().await;
-        sched.tick().await;
+            // The stub facade never clears the registry's Parked status (unlike
+            // the real Engine::resume_run), so the same run is still `due` on
+            // a second tick with the same unresolved streak.
+            sched.tick().await;
+            sched.tick().await;
 
-        assert_eq!(
-            escalation_count(&storage, run_id).await,
-            1,
-            "a second tick against the same unresolved streak must not raise a second \
+            assert_eq!(
+                escalation_count(&storage, run_id).await,
+                1,
+                "a second tick against the same unresolved streak must not raise a second \
              escalation — once per streak, not once per tick"
-        );
+            );
+        }
+        tmp.close().unwrap();
     }
 
     // `run()` itself — `tokio::select!` around `interval.tick()` calling

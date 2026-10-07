@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use surge_core::{RunId, RunStatus};
@@ -57,20 +57,38 @@ pub fn open_registry_pool(
     clock: &dyn Clock,
 ) -> Result<Pool<SqliteConnectionManager>, OpenError> {
     let db_dir = home.join("db");
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&db_dir)?;
+    #[cfg(windows)]
+    let namespace = crate::state_home::StateHomeOwner::open(home)?.registry()?;
     let db_path = db_dir.join("registry.sqlite");
 
     // Apply migrations on a dedicated connection.
+    #[cfg(windows)]
+    let mut conn = super::connection::RetainedConnection::open_owned(
+        &db_path,
+        rusqlite::OpenFlags::default(),
+        namespace.clone(),
+    )?;
+    #[cfg(not(windows))]
     let mut conn = rusqlite::Connection::open(&db_path)?;
     apply_pragmas(&conn, REGISTRY_PRAGMAS)?;
     crate::runs::busy::install(&conn)?;
-    apply_migrations(&mut conn, REGISTRY_MIGRATIONS, clock)
-        .map_err(|e| OpenError::MigrationFailed(e.to_string()))?;
+    apply_migrations(
+        super::connection::raw_mut(&mut conn),
+        REGISTRY_MIGRATIONS,
+        clock,
+    )
+    .map_err(|e| OpenError::MigrationFailed(e.to_string()))?;
     drop(conn);
 
     // Every registry store shares this pool, and most of them are called
     // synchronously from async code; see `runs::busy`.
-    let manager = SqliteConnectionManager::file(&db_path).with_init(|c| {
+    #[cfg(windows)]
+    let manager = SqliteConnectionManager::file(&db_path, namespace);
+    #[cfg(not(windows))]
+    let manager = SqliteConnectionManager::file(&db_path);
+    let manager = manager.with_init(move |c| {
         apply_pragmas(c, REGISTRY_PRAGMAS)?;
         crate::runs::busy::install(c)
     });
@@ -428,7 +446,6 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
 mod tests {
     use super::*;
     use crate::runs::clock::MockClock;
-    use tempfile::TempDir;
 
     fn fixture_summary(id: RunId, pid: Option<i32>) -> RunSummary {
         RunSummary {
@@ -445,229 +462,256 @@ mod tests {
 
     #[test]
     fn insert_get_list_delete_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let s = fixture_summary(RunId::new(), Some(1234));
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let s = fixture_summary(RunId::new(), Some(1234));
 
-        insert_run(&pool, &s).unwrap();
-        let got = get_run(&pool, &s.id).unwrap().unwrap();
-        assert_eq!(got.id, s.id);
-        assert_eq!(got.daemon_pid, Some(1234));
+            insert_run(&pool, &s).unwrap();
+            let got = get_run(&pool, &s.id).unwrap().unwrap();
+            assert_eq!(got.id, s.id);
+            assert_eq!(got.daemon_pid, Some(1234));
 
-        let listed = list_runs(&pool, &RunFilter::default()).unwrap();
-        assert_eq!(listed.len(), 1);
+            let listed = list_runs(&pool, &RunFilter::default()).unwrap();
+            assert_eq!(listed.len(), 1);
 
-        delete_run(&pool, &s.id).unwrap();
-        assert!(get_run(&pool, &s.id).unwrap().is_none());
+            delete_run(&pool, &s.id).unwrap();
+            assert!(get_run(&pool, &s.id).unwrap().is_none());
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn suffix_lookup_matches_the_tail_literally_and_sees_every_run() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        // More runs than any scan window a caller might have used.
-        let mut ids = Vec::new();
-        for i in 0..120i64 {
-            let mut s = fixture_summary(RunId::new(), None);
-            s.started_at_ms = 1_700_000_000_000 + i;
-            insert_run(&pool, &s).unwrap();
-            ids.push(s.id);
+            // More runs than any scan window a caller might have used.
+            let mut ids = Vec::new();
+            for i in 0..120i64 {
+                let mut s = fixture_summary(RunId::new(), None);
+                s.started_at_ms = 1_700_000_000_000 + i;
+                insert_run(&pool, &s).unwrap();
+                ids.push(s.id);
+            }
+            let oldest = ids[0];
+            let tail = |id: &RunId, n: usize| {
+                let text = id.to_string();
+                text[text.len() - n..].to_owned()
+            };
+
+            // The very first run is found by its full-length tail.
+            let found = find_ids_by_suffix(&pool, &tail(&oldest, 12), 5).unwrap();
+            assert_eq!(found, vec![oldest]);
+
+            // Nothing matches an unrelated tail, an empty suffix, or LIKE wildcards.
+            assert_eq!(
+                find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5).unwrap().len(),
+                0
+            );
+            assert_eq!(find_ids_by_suffix(&pool, "", 5).unwrap().len(), 0);
+            assert_eq!(find_ids_by_suffix(&pool, "%", 5).unwrap().len(), 0);
+            assert_eq!(find_ids_by_suffix(&pool, "_", 5).unwrap().len(), 0);
+
+            // A one-character tail is shared by several runs; newest first, capped.
+            let c = tail(&ids[119], 1);
+            let shared = find_ids_by_suffix(&pool, &c, 3).unwrap();
+            assert!(!shared.is_empty() && shared.len() <= 3);
+            assert_eq!(
+                shared[0],
+                *ids.iter().rev().find(|i| tail(i, 1) == c).unwrap()
+            );
         }
-        let oldest = ids[0];
-        let tail = |id: &RunId, n: usize| {
-            let text = id.to_string();
-            text[text.len() - n..].to_owned()
-        };
-
-        // The very first run is found by its full-length tail.
-        let found = find_ids_by_suffix(&pool, &tail(&oldest, 12), 5).unwrap();
-        assert_eq!(found, vec![oldest]);
-
-        // Nothing matches an unrelated tail, an empty suffix, or LIKE wildcards.
-        assert_eq!(
-            find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5).unwrap().len(),
-            0
-        );
-        assert_eq!(find_ids_by_suffix(&pool, "", 5).unwrap().len(), 0);
-        assert_eq!(find_ids_by_suffix(&pool, "%", 5).unwrap().len(), 0);
-        assert_eq!(find_ids_by_suffix(&pool, "_", 5).unwrap().len(), 0);
-
-        // A one-character tail is shared by several runs; newest first, capped.
-        let c = tail(&ids[119], 1);
-        let shared = find_ids_by_suffix(&pool, &c, 3).unwrap();
-        assert!(!shared.is_empty() && shared.len() <= 3);
-        assert_eq!(
-            shared[0],
-            *ids.iter().rev().find(|i| tail(i, 1) == c).unwrap()
-        );
+        tmp.close().unwrap();
     }
 
     #[test]
     fn list_filter_by_status() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        let mut a = fixture_summary(RunId::new(), Some(1));
-        a.status = RunStatus::Running;
-        let mut b = fixture_summary(RunId::new(), None);
-        b.status = RunStatus::Completed;
+            let mut a = fixture_summary(RunId::new(), Some(1));
+            a.status = RunStatus::Running;
+            let mut b = fixture_summary(RunId::new(), None);
+            b.status = RunStatus::Completed;
 
-        insert_run(&pool, &a).unwrap();
-        insert_run(&pool, &b).unwrap();
+            insert_run(&pool, &a).unwrap();
+            insert_run(&pool, &b).unwrap();
 
-        let running = list_runs(
-            &pool,
-            &RunFilter {
-                status: Some(RunStatus::Running),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(running.len(), 1);
-        assert_eq!(running[0].id, a.id);
+            let running = list_runs(
+                &pool,
+                &RunFilter {
+                    status: Some(RunStatus::Running),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(running.len(), 1);
+            assert_eq!(running[0].id, a.id);
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn update_status_transitions() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let s = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &s).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let s = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &s).unwrap();
 
-        update_status(&pool, &s.id, RunStatus::Crashed, Some(1_700_000_000_500)).unwrap();
-        let got = get_run(&pool, &s.id).unwrap().unwrap();
-        assert_eq!(got.status, RunStatus::Crashed);
-        assert_eq!(got.ended_at_ms, Some(1_700_000_000_500));
+            update_status(&pool, &s.id, RunStatus::Crashed, Some(1_700_000_000_500)).unwrap();
+            let got = get_run(&pool, &s.id).unwrap().unwrap();
+            assert_eq!(got.status, RunStatus::Crashed);
+            assert_eq!(got.ended_at_ms, Some(1_700_000_000_500));
+        }
+        tmp.close().unwrap();
     }
 
     /// The stale-pid sweep reads and writes separately; a run re-owned by
     /// another daemon (or no longer active) in between must not be rewritten.
     #[test]
     fn stale_crash_rewrite_requires_same_owner_and_active_status() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let mut s = fixture_summary(RunId::new(), Some(41));
-        s.status = RunStatus::Running;
-        insert_run(&pool, &s).unwrap();
-        let conn = pool.get().unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let mut s = fixture_summary(RunId::new(), Some(41));
+            s.status = RunStatus::Running;
+            insert_run(&pool, &s).unwrap();
+            let conn = pool.get().unwrap();
 
-        assert!(!mark_crashed_if_stale_connection(&conn, &s.id, 40, 1).unwrap());
-        set_run_parked(&pool, &s.id, 5).unwrap();
-        assert!(!mark_crashed_if_stale_connection(&conn, &s.id, 41, 1).unwrap());
-        assert_eq!(
-            get_run(&pool, &s.id).unwrap().unwrap().status,
-            RunStatus::Parked
-        );
+            assert!(!mark_crashed_if_stale_connection(&conn, &s.id, 40, 1).unwrap());
+            set_run_parked(&pool, &s.id, 5).unwrap();
+            assert!(!mark_crashed_if_stale_connection(&conn, &s.id, 41, 1).unwrap());
+            assert_eq!(
+                get_run(&pool, &s.id).unwrap().unwrap().status,
+                RunStatus::Parked
+            );
 
-        update_status(&pool, &s.id, RunStatus::Running, None).unwrap();
-        assert!(mark_crashed_if_stale_connection(&conn, &s.id, 41, 7).unwrap());
-        let got = get_run(&pool, &s.id).unwrap().unwrap();
-        assert_eq!(got.status, RunStatus::Crashed);
-        assert_eq!(got.ended_at_ms, Some(7));
+            update_status(&pool, &s.id, RunStatus::Running, None).unwrap();
+            assert!(mark_crashed_if_stale_connection(&conn, &s.id, 41, 7).unwrap());
+            let got = get_run(&pool, &s.id).unwrap().unwrap();
+            assert_eq!(got.status, RunStatus::Crashed);
+            assert_eq!(got.ended_at_ms, Some(7));
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn set_run_parked_transitions_status_and_records_wake_at() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let s = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &s).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let s = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &s).unwrap();
 
-        set_run_parked(&pool, &s.id, 1_700_000_100_000).unwrap();
+            set_run_parked(&pool, &s.id, 1_700_000_100_000).unwrap();
 
-        let got = get_run(&pool, &s.id).unwrap().unwrap();
-        assert_eq!(got.status, RunStatus::Parked);
-        assert_eq!(got.wake_at_ms, Some(1_700_000_100_000));
+            let got = get_run(&pool, &s.id).unwrap().unwrap();
+            assert_eq!(got.status, RunStatus::Parked);
+            assert_eq!(got.wake_at_ms, Some(1_700_000_100_000));
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn clear_parked_transitions_status_and_nulls_wake_at() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let s = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &s).unwrap();
-        set_run_parked(&pool, &s.id, 1_700_000_100_000).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let s = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &s).unwrap();
+            set_run_parked(&pool, &s.id, 1_700_000_100_000).unwrap();
 
-        clear_parked(&pool, &s.id, RunStatus::Running).unwrap();
+            clear_parked(&pool, &s.id, RunStatus::Running).unwrap();
 
-        let got = get_run(&pool, &s.id).unwrap().unwrap();
-        assert_eq!(got.status, RunStatus::Running);
-        assert_eq!(
-            got.wake_at_ms, None,
-            "wake_at must be cleared in the same write, not left stale"
-        );
+            let got = get_run(&pool, &s.id).unwrap().unwrap();
+            assert_eq!(got.status, RunStatus::Running);
+            assert_eq!(
+                got.wake_at_ms, None,
+                "wake_at must be cleared in the same write, not left stale"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn clear_parked_run_is_no_longer_returned_by_due_parked() {
         // Task 12 M3 review, BLOCKING #3: a resumed parked run must not be
         // resumed a second time by a later `due_parked` scan.
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let s = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &s).unwrap();
-        let now_ms = 1_700_000_000_000_i64;
-        set_run_parked(&pool, &s.id, now_ms - 1_000).unwrap();
-        assert_eq!(due_parked(&pool, now_ms).unwrap().len(), 1);
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let s = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &s).unwrap();
+            let now_ms = 1_700_000_000_000_i64;
+            set_run_parked(&pool, &s.id, now_ms - 1_000).unwrap();
+            assert_eq!(due_parked(&pool, now_ms).unwrap().len(), 1);
 
-        clear_parked(&pool, &s.id, RunStatus::Running).unwrap();
+            clear_parked(&pool, &s.id, RunStatus::Running).unwrap();
 
-        assert!(
-            due_parked(&pool, now_ms).unwrap().is_empty(),
-            "a resumed run must not still be due"
-        );
+            assert!(
+                due_parked(&pool, now_ms).unwrap().is_empty(),
+                "a resumed run must not still be due"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn due_parked_requires_both_parked_status_and_elapsed_wake_at() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let now_ms = 1_700_000_000_000_i64;
-
-        // Due: parked, wake_at already in the past.
-        let due = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &due).unwrap();
-        set_run_parked(&pool, &due.id, now_ms - 1_000).unwrap();
-
-        // Not due yet: parked, wake_at still in the future.
-        let not_yet = fixture_summary(RunId::new(), Some(2));
-        insert_run(&pool, &not_yet).unwrap();
-        set_run_parked(&pool, &not_yet.id, now_ms + 1_000).unwrap();
-
-        // Wrong status: a run whose `wake_at` column happens to be in the
-        // past but whose status was never transitioned to Parked. Never
-        // reachable through `set_run_parked` (which always sets both
-        // columns together) -- crafted directly with a raw UPDATE to prove
-        // the `status = ?` filter is load-bearing on its own, not merely
-        // redundant with the `wake_at <= ?` comparison.
-        let running_with_stale_wake_at = fixture_summary(RunId::new(), Some(3));
-        insert_run(&pool, &running_with_stale_wake_at).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = pool.get().unwrap();
-            conn.execute(
-                "UPDATE runs SET wake_at = ? WHERE id = ?",
-                params![now_ms - 1_000, running_with_stale_wake_at.id.to_string()],
-            )
-            .unwrap();
-        }
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let now_ms = 1_700_000_000_000_i64;
 
-        let due_now = due_parked(&pool, now_ms).unwrap();
-        assert_eq!(
-            due_now.len(),
-            1,
-            "only the parked run past its wake_at is due"
-        );
-        assert_eq!(due_now[0].id, due.id);
+            // Due: parked, wake_at already in the past.
+            let due = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &due).unwrap();
+            set_run_parked(&pool, &due.id, now_ms - 1_000).unwrap();
+
+            // Not due yet: parked, wake_at still in the future.
+            let not_yet = fixture_summary(RunId::new(), Some(2));
+            insert_run(&pool, &not_yet).unwrap();
+            set_run_parked(&pool, &not_yet.id, now_ms + 1_000).unwrap();
+
+            // Wrong status: a run whose `wake_at` column happens to be in the
+            // past but whose status was never transitioned to Parked. Never
+            // reachable through `set_run_parked` (which always sets both
+            // columns together) -- crafted directly with a raw UPDATE to prove
+            // the `status = ?` filter is load-bearing on its own, not merely
+            // redundant with the `wake_at <= ?` comparison.
+            let running_with_stale_wake_at = fixture_summary(RunId::new(), Some(3));
+            insert_run(&pool, &running_with_stale_wake_at).unwrap();
+            {
+                let conn = pool.get().unwrap();
+                conn.execute(
+                    "UPDATE runs SET wake_at = ? WHERE id = ?",
+                    params![now_ms - 1_000, running_with_stale_wake_at.id.to_string()],
+                )
+                .unwrap();
+            }
+
+            let due_now = due_parked(&pool, now_ms).unwrap();
+            assert_eq!(
+                due_now.len(),
+                1,
+                "only the parked run past its wake_at is due"
+            );
+            assert_eq!(due_now[0].id, due.id);
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
@@ -677,41 +721,47 @@ mod tests {
         // raw UPDATE to prove `wake_at <= ?` alone already excludes a NULL
         // wake_at (SQLite's `NULL <= x` is NULL, not true) -- so `due_parked`
         // needs no separate `IS NOT NULL` clause to stay correct.
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let s = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &s).unwrap();
-        update_status(&pool, &s.id, RunStatus::Parked, None).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let s = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &s).unwrap();
+            update_status(&pool, &s.id, RunStatus::Parked, None).unwrap();
 
-        let due_now = due_parked(&pool, 1_700_000_000_000).unwrap();
-        assert!(due_now.is_empty(), "a NULL wake_at must never read as due");
+            let due_now = due_parked(&pool, 1_700_000_000_000).unwrap();
+            assert!(due_now.is_empty(), "a NULL wake_at must never read as due");
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn due_parked_orders_by_wake_at_ascending() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        let now_ms = 1_700_000_000_000_i64;
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+            let now_ms = 1_700_000_000_000_i64;
 
-        // Inserted (and parked) in the *opposite* order of their wake_at,
-        // so a query that forgot `ORDER BY` (or sorted descending) would
-        // still pass a single-row test but fail this one.
-        let later = fixture_summary(RunId::new(), Some(1));
-        insert_run(&pool, &later).unwrap();
-        set_run_parked(&pool, &later.id, now_ms - 1_000).unwrap();
+            // Inserted (and parked) in the *opposite* order of their wake_at,
+            // so a query that forgot `ORDER BY` (or sorted descending) would
+            // still pass a single-row test but fail this one.
+            let later = fixture_summary(RunId::new(), Some(1));
+            insert_run(&pool, &later).unwrap();
+            set_run_parked(&pool, &later.id, now_ms - 1_000).unwrap();
 
-        let earlier = fixture_summary(RunId::new(), Some(2));
-        insert_run(&pool, &earlier).unwrap();
-        set_run_parked(&pool, &earlier.id, now_ms - 5_000).unwrap();
+            let earlier = fixture_summary(RunId::new(), Some(2));
+            insert_run(&pool, &earlier).unwrap();
+            set_run_parked(&pool, &earlier.id, now_ms - 5_000).unwrap();
 
-        let due_now = due_parked(&pool, now_ms).unwrap();
-        assert_eq!(due_now.len(), 2);
-        assert_eq!(
-            due_now.iter().map(|r| r.id).collect::<Vec<_>>(),
-            vec![earlier.id, later.id],
-            "earliest wake_at must come first"
-        );
+            let due_now = due_parked(&pool, now_ms).unwrap();
+            assert_eq!(due_now.len(), 2);
+            assert_eq!(
+                due_now.iter().map(|r| r.id).collect::<Vec<_>>(),
+                vec![earlier.id, later.id],
+                "earliest wake_at must come first"
+            );
+        }
+        tmp.close().unwrap();
     }
 }

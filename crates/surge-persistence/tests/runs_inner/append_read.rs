@@ -44,6 +44,7 @@ async fn append_read_1000_events_correct_ordered_atomic() {
     }
 
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -71,4 +72,5 @@ async fn read_events_with_u64_max_upper_bound_returns_all() {
     assert_eq!(all.len(), 5, "u64::MAX upper bound must return all events");
 
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }

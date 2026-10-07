@@ -1,9 +1,9 @@
 //! One-purpose runtime-independent delivery owner; no execution capability is minted here.
 use super::refusal_delivery;
+use crate::SqliteConnectionManager;
 use crate::runs::{clock::Clock, writer_slot::ActiveWriters};
 use crate::work_items::{Result, WorkItemError, start_preparation::secure_lock::PreparationLock};
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use std::{
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock},
@@ -355,6 +355,7 @@ impl ReadyGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_home_fixture::FixtureHome;
     use crate::work_items::{LaunchLock, WorkItemLaunchClaim};
     use surge_core::{id::WorkItemOperationId, work_item::WorkItemCommand};
 
@@ -374,101 +375,104 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ready_wait_is_outside_registry_transaction_and_newer_stop_wins() {
-        let home = tempfile::tempdir().unwrap();
-        let storage = crate::runs::Storage::open(home.path()).await.unwrap();
-        let store = storage.work_items();
-        let (receipt, claim) =
-            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
-        let guard = original_guard(&claim);
-        let original_token: String = store
-            .pool
-            .get()
-            .unwrap()
-            .query_row(
-                "SELECT claim_token FROM work_item_attempts WHERE run=?",
-                [receipt.run.to_string()],
-                |row| row.get(0),
+        let home = FixtureHome::new().unwrap();
+        {
+            let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+            let store = storage.work_items();
+            let (receipt, claim) =
+                super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+            let guard = original_guard(&claim);
+            let original_token: String = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                    [receipt.run.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let gate = Arc::new(ReadyGate::default());
+            let worker_gate = gate.clone();
+            let worker_resources = resources(&storage);
+            let pending = std::thread::spawn(move || {
+                PreparedRefusal::reserve_inner(
+                    guard,
+                    worker_resources,
+                    receipt.run,
+                    Some(worker_gate),
+                    None,
+                )
+            });
+            gate.wait_entered();
+            // This is a second actual connection and normal immutable operator operation.
+            let current = store.show(receipt.item).unwrap();
+            let command = WorkItemCommand::Suspend {
+                operation_id: WorkItemOperationId::new(),
+                item: receipt.item,
+                expected_version: current.item.version,
+            };
+            let stopped = store
+                .mutate(&command, None, None, "ready-barrier", 100)
+                .unwrap();
+            assert!(matches!(
+                stopped,
+                surge_core::work_item::WorkItemResult::Control(_)
+            ));
+            let observed = store.execution_control(receipt.run).unwrap().unwrap();
+            assert_eq!(
+                observed.state,
+                surge_core::execution_recovery::ExecutionControlState::SuspendRequested
+            );
+            gate.release();
+            let prepared = pending.join().unwrap().unwrap();
+            let mut conn = store.pool.get().unwrap();
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            let fresh = crate::work_items::control::read_control(&tx, receipt.run, None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(fresh, observed);
+            let receipts: u64 = tx
+                .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let token: String = tx
+                .query_row(
+                    "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                    [receipt.run.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            tx.rollback().unwrap();
+            drop(prepared); // actual aborted owner join only after the transaction was released.
+            assert_eq!(receipts, 0);
+            assert_eq!(token, original_token);
+            assert_eq!(
+                store.execution_control(receipt.run).unwrap().unwrap(),
+                observed
+            );
+            assert!(matches!(store.claim(receipt.run), Err(WorkItemError::Busy)));
+            drop(claim);
+            let released = PreparationLock::acquire_stable(
+                home.path(),
+                crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                    operation: receipt.operation_id,
+                    run: receipt.run,
+                },
             )
             .unwrap();
-        let gate = Arc::new(ReadyGate::default());
-        let worker_gate = gate.clone();
-        let worker_resources = resources(&storage);
-        let pending = std::thread::spawn(move || {
-            PreparedRefusal::reserve_inner(
-                guard,
-                worker_resources,
-                receipt.run,
-                Some(worker_gate),
-                None,
-            )
-        });
-        gate.wait_entered();
-        // This is a second actual connection and normal immutable operator operation.
-        let current = store.show(receipt.item).unwrap();
-        let command = WorkItemCommand::Suspend {
-            operation_id: WorkItemOperationId::new(),
-            item: receipt.item,
-            expected_version: current.item.version,
-        };
-        let stopped = store
-            .mutate(&command, None, None, "ready-barrier", 100)
-            .unwrap();
-        assert!(matches!(
-            stopped,
-            surge_core::work_item::WorkItemResult::Control(_)
-        ));
-        let observed = store.execution_control(receipt.run).unwrap().unwrap();
-        assert_eq!(
-            observed.state,
-            surge_core::execution_recovery::ExecutionControlState::SuspendRequested
-        );
-        gate.release();
-        let prepared = pending.join().unwrap().unwrap();
-        let mut conn = store.pool.get().unwrap();
-        let tx = conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .unwrap();
-        let fresh = crate::work_items::control::read_control(&tx, receipt.run, None)
-            .unwrap()
-            .unwrap();
-        assert_eq!(fresh, observed);
-        let receipts: u64 = tx
-            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        let token: String = tx
-            .query_row(
-                "SELECT claim_token FROM work_item_attempts WHERE run=?",
-                [receipt.run.to_string()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        tx.rollback().unwrap();
-        drop(prepared); // actual aborted owner join only after the transaction was released.
-        assert_eq!(receipts, 0);
-        assert_eq!(token, original_token);
-        assert_eq!(
-            store.execution_control(receipt.run).unwrap().unwrap(),
-            observed
-        );
-        assert!(matches!(store.claim(receipt.run), Err(WorkItemError::Busy)));
-        drop(claim);
-        let released = PreparationLock::acquire_stable(
-            home.path(),
-            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
-                operation: receipt.operation_id,
-                run: receipt.run,
-            },
-        )
-        .unwrap();
-        released.verify().unwrap();
-        drop(released);
-        // A newer Stop is still not dispatchable merely because its real lease released.
-        assert!(matches!(
-            store.claim(receipt.run),
-            Err(WorkItemError::Conflict(_))
-        ));
+            released.verify().unwrap();
+            drop(released);
+            // A newer Stop is still not dispatchable merely because its real lease released.
+            assert!(matches!(
+                store.claim(receipt.run),
+                Err(WorkItemError::Conflict(_))
+            ));
+        }
+        home.close().expect("close runtime home");
     }
 
     fn wait_for(condition: impl Fn() -> bool) -> bool {
@@ -479,11 +483,10 @@ mod tests {
         condition()
     }
     fn owned_fixture() -> (
-        tempfile::TempDir,
-        Arc<crate::runs::Storage>,
-        tokio::runtime::Runtime,
+        FixtureHome,
+        (Arc<crate::runs::Storage>, tokio::runtime::Runtime),
     ) {
-        let home = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -492,253 +495,268 @@ mod tests {
         let storage = runtime
             .block_on(crate::runs::Storage::open(home.path()))
             .unwrap();
-        (home, storage, runtime)
+        (home, (storage, runtime))
     }
     fn closed_admission_does_not_wait_behind_pending_join() {
-        let (home, storage, _runtime) = owned_fixture();
-        let store = storage.work_items();
-        let (first, claim_a) =
-            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
-        let a = PreparedRefusal::reserve(original_guard(&claim_a), resources(&storage), first.run)
+        let (home, owners) = owned_fixture();
+        {
+            let (storage, _runtime) = owners;
+            let store = storage.work_items();
+            let (first, claim_a) =
+                super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+            let a =
+                PreparedRefusal::reserve(original_guard(&claim_a), resources(&storage), first.run)
+                    .unwrap();
+            drop(claim_a);
+            let (second, claim_b) =
+                super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+            let b =
+                PreparedRefusal::reserve(original_guard(&claim_b), resources(&storage), second.run)
+                    .unwrap();
+            drop(claim_b);
+            // An actual ambiguous-commit absence resolution creates a finished but unreaped B.
+            let absent = surge_core::work_item::OwnedFlowWakeRefusalReceipt::new(
+                second.run,
+                second.operation_id,
+                second.binding.clone(),
+                surge_core::work_item::OwnedFlowWakeLineage {
+                    invocation: surge_core::id::StageInvocationId::new(),
+                    control_generation: 1,
+                    cycle_generation: 1,
+                    source_revision: 1,
+                    wake_identity: "rolled-back-wake".into(),
+                },
+                surge_core::work_item::OwnedFlowWakeRefusalReason::InputsAssociationMismatch,
+            )
             .unwrap();
-        drop(claim_a);
-        let (second, claim_b) =
-            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
-        let b = PreparedRefusal::reserve(original_guard(&claim_b), resources(&storage), second.run)
+            let absent_hash = absent.hash().unwrap();
+            b.publish(absent_hash, absent_hash, true);
+            let finished_b = wait_for(|| {
+                lock(registry()).entries.iter().any(|entry| {
+                    entry.slot.run_hint == second.run
+                        && entry.handle.as_ref().is_some_and(JoinHandle::is_finished)
+                })
+            });
+            close_admission();
+            let joining = std::thread::spawn(join_all);
+            let blocked_a = wait_for(|| {
+                lock(registry())
+                    .entries
+                    .iter()
+                    .any(|entry| entry.slot.run_hint == first.run && entry.handle.is_none())
+            });
+            let (send, receive) = std::sync::mpsc::channel();
+            let probe_guard = PreparationLock::acquire_stable(
+                home.path(),
+                crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                    operation: WorkItemOperationId::new(),
+                    run: RunId::new(),
+                },
+            )
             .unwrap();
-        drop(claim_b);
-        // An actual ambiguous-commit absence resolution creates a finished but unreaped B.
-        let absent = surge_core::work_item::OwnedFlowWakeRefusalReceipt::new(
-            second.run,
-            second.operation_id,
-            second.binding.clone(),
-            surge_core::work_item::OwnedFlowWakeLineage {
-                invocation: surge_core::id::StageInvocationId::new(),
-                control_generation: 1,
-                cycle_generation: 1,
-                source_revision: 1,
-                wake_identity: "rolled-back-wake".into(),
-            },
-            surge_core::work_item::OwnedFlowWakeRefusalReason::InputsAssociationMismatch,
-        )
-        .unwrap();
-        let absent_hash = absent.hash().unwrap();
-        b.publish(absent_hash, absent_hash, true);
-        let finished_b = wait_for(|| {
-            lock(registry()).entries.iter().any(|entry| {
-                entry.slot.run_hint == second.run
-                    && entry.handle.as_ref().is_some_and(JoinHandle::is_finished)
-            })
-        });
-        close_admission();
-        let joining = std::thread::spawn(join_all);
-        let blocked_a = wait_for(|| {
-            lock(registry())
-                .entries
-                .iter()
-                .any(|entry| entry.slot.run_hint == first.run && entry.handle.is_none())
-        });
-        let (send, receive) = std::sync::mpsc::channel();
-        let probe_guard = PreparationLock::acquire_stable(
-            home.path(),
-            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
-                operation: WorkItemOperationId::new(),
-                run: RunId::new(),
-            },
-        )
-        .unwrap();
-        let probe_resources = resources(&storage);
-        let probe = std::thread::spawn(move || {
-            let denied = matches!(
-                PreparedRefusal::reserve(Arc::new(probe_guard), probe_resources, RunId::new()),
-                Err(WorkItemError::Busy)
-            );
-            send.send(denied).unwrap();
-        });
-        let immediate_busy = receive
-            .recv_timeout(std::time::Duration::from_millis(250))
-            .ok();
-        let original_excluded =
-            matches!(PreparationLock::acquire_stable(home.path(),
-            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
-                operation: first.operation_id, run: first.run,
-            }), Err(WorkItemError::Busy));
-        drop(a); // resolves the original admitted Ready reservation, never erased by close.
-        joining.join().unwrap();
-        probe.join().unwrap();
-        assert!(finished_b);
-        assert!(blocked_a);
-        assert!(original_excluded);
-        assert_eq!(immediate_busy, Some(true));
-        assert!(lock(registry()).entries.is_empty());
+            let probe_resources = resources(&storage);
+            let probe = std::thread::spawn(move || {
+                let denied = matches!(
+                    PreparedRefusal::reserve(Arc::new(probe_guard), probe_resources, RunId::new()),
+                    Err(WorkItemError::Busy)
+                );
+                send.send(denied).unwrap();
+            });
+            let immediate_busy = receive
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .ok();
+            let original_excluded = matches!(PreparationLock::acquire_stable(home.path(),
+                crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                    operation: first.operation_id, run: first.run,
+                }), Err(WorkItemError::Busy));
+            drop(a); // resolves the original admitted Ready reservation, never erased by close.
+            joining.join().unwrap();
+            probe.join().unwrap();
+            assert!(finished_b);
+            assert!(blocked_a);
+            assert!(original_excluded);
+            assert_eq!(immediate_busy, Some(true));
+            assert!(lock(registry()).entries.is_empty());
+        }
+        home.close().expect("close runtime home");
     }
     fn registered_creation_is_counted_until_actual_handle_and_resolution() {
-        let (home, storage, _runtime) = owned_fixture();
-        let store = storage.work_items();
-        let (receipt, claim) =
-            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
-        let guard = original_guard(&claim);
-        drop(claim);
-        let creation = Arc::new(ReadyGate::default());
-        let creator_gate = creation.clone();
-        let delivery_resources = resources(&storage);
-        let creating = std::thread::spawn(move || {
-            PreparedRefusal::reserve_inner(
-                guard,
-                delivery_resources,
-                receipt.run,
-                None,
-                Some(creator_gate),
+        let (home, owners) = owned_fixture();
+        {
+            let (storage, _runtime) = owners;
+            let store = storage.work_items();
+            let (receipt, claim) =
+                super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+            let guard = original_guard(&claim);
+            drop(claim);
+            let creation = Arc::new(ReadyGate::default());
+            let creator_gate = creation.clone();
+            let delivery_resources = resources(&storage);
+            let creating = std::thread::spawn(move || {
+                PreparedRefusal::reserve_inner(
+                    guard,
+                    delivery_resources,
+                    receipt.run,
+                    None,
+                    Some(creator_gate),
+                )
+            });
+            creation.wait_entered();
+            close_admission();
+            let (send, receive) = std::sync::mpsc::channel();
+            let joining = std::thread::spawn(move || {
+                join_all();
+                send.send(()).unwrap();
+            });
+            let entered = wait_for(|| *lock(&JOINING.0));
+            let premature = receive
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_ok();
+            creation.release();
+            let prepared = creating.join().unwrap().unwrap();
+            let still_waiting = receive
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err();
+            drop(prepared);
+            joining.join().unwrap();
+            assert!(entered);
+            assert!(!premature);
+            assert!(still_waiting);
+            assert!(lock(registry()).entries.is_empty());
+            let _released = PreparationLock::acquire_stable(
+                home.path(),
+                crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                    operation: receipt.operation_id,
+                    run: receipt.run,
+                },
             )
-        });
-        creation.wait_entered();
-        close_admission();
-        let (send, receive) = std::sync::mpsc::channel();
-        let joining = std::thread::spawn(move || {
-            join_all();
-            send.send(()).unwrap();
-        });
-        let entered = wait_for(|| *lock(&JOINING.0));
-        let premature = receive
-            .recv_timeout(std::time::Duration::from_millis(100))
-            .is_ok();
-        creation.release();
-        let prepared = creating.join().unwrap().unwrap();
-        let still_waiting = receive
-            .recv_timeout(std::time::Duration::from_millis(100))
-            .is_err();
-        drop(prepared);
-        joining.join().unwrap();
-        assert!(entered);
-        assert!(!premature);
-        assert!(still_waiting);
-        assert!(lock(registry()).entries.is_empty());
-        let _released = PreparationLock::acquire_stable(
-            home.path(),
-            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
-                operation: receipt.operation_id,
-                run: receipt.run,
-            },
-        )
-        .unwrap();
+            .unwrap();
+        }
+        home.close().expect("close runtime home");
     }
     fn ambiguous_lookup_unavailable_retains_until_actual_absence() {
-        let (home, storage, _runtime) = owned_fixture();
-        let store = storage.work_items();
-        let (receipt, claim) =
-            super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
-        let token: String = store
-            .pool
-            .get()
+        let (home, owners) = owned_fixture();
+        {
+            let (storage, _runtime) = owners;
+            let store = storage.work_items();
+            let (receipt, claim) =
+                super::super::tests::accepted(&store, home.path(), WorkItemOperationId::new());
+            let token: String = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                    [receipt.run.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let guard = original_guard(&claim);
+            drop(claim);
+            // Isolated damaged-storage model: querying the exact table really fails,
+            // rather than returning a made-up None or intercepting production reads.
+            store
+                .pool
+                .get()
+                .unwrap()
+                .execute(
+                    "ALTER TABLE owned_flow_wake_refusals RENAME TO unavailable_refusals",
+                    [],
+                )
+                .unwrap();
+            let prepared =
+                PreparedRefusal::reserve(guard, resources(&storage), receipt.run).unwrap();
+            let absent = surge_core::work_item::OwnedFlowWakeRefusalReceipt::new(
+                receipt.run,
+                receipt.operation_id,
+                receipt.binding.clone(),
+                surge_core::work_item::OwnedFlowWakeLineage {
+                    invocation: surge_core::id::StageInvocationId::new(),
+                    control_generation: 1,
+                    cycle_generation: 1,
+                    source_revision: 1,
+                    wake_identity: "uncommitted-observed-wake".into(),
+                },
+                surge_core::work_item::OwnedFlowWakeRefusalReason::InputsAssociationMismatch,
+            )
             .unwrap()
-            .query_row(
-                "SELECT claim_token FROM work_item_attempts WHERE run=?",
-                [receipt.run.to_string()],
-                |row| row.get(0),
+            .hash()
+            .unwrap();
+            prepared.publish(absent, absent, true);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let actual_lookup_failed = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                    row.get::<_, u64>(0)
+                })
+                .is_err();
+            close_admission();
+            let (send, receive) = std::sync::mpsc::channel();
+            let joining = std::thread::spawn(move || {
+                join_all();
+                send.send(()).unwrap();
+            });
+            let entered = wait_for(|| *lock(&JOINING.0));
+            let premature = receive
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_ok();
+            let original_excluded = matches!(PreparationLock::acquire_stable(home.path(),
+                crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                    operation: receipt.operation_id, run: receipt.run,
+                }), Err(WorkItemError::Busy));
+            store
+                .pool
+                .get()
+                .unwrap()
+                .execute(
+                    "ALTER TABLE unavailable_refusals RENAME TO owned_flow_wake_refusals",
+                    [],
+                )
+                .unwrap();
+            assert!(
+                receive
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .is_ok()
+            );
+            joining.join().unwrap();
+            let current_token: String = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                    [receipt.run.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(current_token, token);
+            assert!(actual_lookup_failed);
+            assert!(entered);
+            assert!(
+                !premature,
+                "unavailable receipt lookup was treated as confirmed absence"
+            );
+            assert!(original_excluded);
+            assert!(lock(registry()).entries.is_empty());
+            let _released = PreparationLock::acquire_stable(
+                home.path(),
+                crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
+                    operation: receipt.operation_id,
+                    run: receipt.run,
+                },
             )
             .unwrap();
-        let guard = original_guard(&claim);
-        drop(claim);
-        // Isolated damaged-storage model: querying the exact table really fails,
-        // rather than returning a made-up None or intercepting production reads.
-        store
-            .pool
-            .get()
-            .unwrap()
-            .execute(
-                "ALTER TABLE owned_flow_wake_refusals RENAME TO unavailable_refusals",
-                [],
-            )
-            .unwrap();
-        let prepared = PreparedRefusal::reserve(guard, resources(&storage), receipt.run).unwrap();
-        let absent = surge_core::work_item::OwnedFlowWakeRefusalReceipt::new(
-            receipt.run,
-            receipt.operation_id,
-            receipt.binding.clone(),
-            surge_core::work_item::OwnedFlowWakeLineage {
-                invocation: surge_core::id::StageInvocationId::new(),
-                control_generation: 1,
-                cycle_generation: 1,
-                source_revision: 1,
-                wake_identity: "uncommitted-observed-wake".into(),
-            },
-            surge_core::work_item::OwnedFlowWakeRefusalReason::InputsAssociationMismatch,
-        )
-        .unwrap()
-        .hash()
-        .unwrap();
-        prepared.publish(absent, absent, true);
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let actual_lookup_failed = store
-            .pool
-            .get()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
-                row.get::<_, u64>(0)
-            })
-            .is_err();
-        close_admission();
-        let (send, receive) = std::sync::mpsc::channel();
-        let joining = std::thread::spawn(move || {
-            join_all();
-            send.send(()).unwrap();
-        });
-        let entered = wait_for(|| *lock(&JOINING.0));
-        let premature = receive
-            .recv_timeout(std::time::Duration::from_millis(200))
-            .is_ok();
-        let original_excluded =
-            matches!(PreparationLock::acquire_stable(home.path(),
-            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
-                operation: receipt.operation_id, run: receipt.run,
-            }), Err(WorkItemError::Busy));
-        store
-            .pool
-            .get()
-            .unwrap()
-            .execute(
-                "ALTER TABLE unavailable_refusals RENAME TO owned_flow_wake_refusals",
-                [],
-            )
-            .unwrap();
-        assert!(
-            receive
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .is_ok()
-        );
-        joining.join().unwrap();
-        let current_token: String = store
-            .pool
-            .get()
-            .unwrap()
-            .query_row(
-                "SELECT claim_token FROM work_item_attempts WHERE run=?",
-                [receipt.run.to_string()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(current_token, token);
-        assert!(actual_lookup_failed);
-        assert!(entered);
-        assert!(
-            !premature,
-            "unavailable receipt lookup was treated as confirmed absence"
-        );
-        assert!(original_excluded);
-        assert!(lock(registry()).entries.is_empty());
-        let _released = PreparationLock::acquire_stable(
-            home.path(),
-            crate::work_items::start_preparation::secure_lock::PreparationLockKey::FlowLaunch {
-                operation: receipt.operation_id,
-                run: receipt.run,
-            },
-        )
-        .unwrap();
+        }
+        home.close().expect("close runtime home");
     }
 
     fn ninth_live_reservation_is_busy_without_refusal_mutation() {
-        let (home_a, storage_a, _runtime_a) = owned_fixture();
-        let (home, storage, _runtime) = owned_fixture();
+        let (home_a, owners) = owned_fixture();
+        let (storage_a, runtime_a) = owners;
+        let (home, owners) = owned_fixture();
+        let (storage, runtime) = owners;
         let store = storage.work_items();
         let mut reservations = Vec::new();
         for index in 0..8 {
@@ -815,6 +833,13 @@ mod tests {
         assert_eq!(rows, 0);
         assert_eq!(rows_a, 0);
         assert!(lock(registry()).entries.is_empty());
+        drop(store);
+        drop(storage);
+        drop(runtime);
+        home.close().expect("close runtime home");
+        drop(storage_a);
+        drop(runtime_a);
+        home_a.close().expect("close runtime home");
     }
 
     #[test]

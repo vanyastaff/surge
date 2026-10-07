@@ -1,0 +1,14 @@
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.16s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID f98fceb9-01e5-4d24-aecf-adc23d4aac5c with nextest profile: default
+    Starting 3 tests across 1 binary (6 tests skipped)
+        PASS [   0.152s] (1/3) surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt
+        PASS [   0.158s] (2/3) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+        PASS [   0.159s] (3/3) surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower
+────────────
+     Summary [   0.161s] 3 tests run: 3 passed, 6 skipped

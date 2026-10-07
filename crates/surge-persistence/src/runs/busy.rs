@@ -110,44 +110,47 @@ mod tests {
     /// connection's write lock, must not stop the runtime's only worker.
     #[test]
     fn contended_registry_write_in_task_keeps_single_worker_running() {
-        let home = tempfile::tempdir().unwrap();
-        let pool = crate::runs::registry::open_registry_pool(
-            home.path(),
-            &crate::runs::clock::SystemClock,
-        )
-        .unwrap();
-        let holder = Connection::open(home.path().join("db").join("registry.sqlite")).unwrap();
-        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let pool = crate::runs::registry::open_registry_pool(
+                home.path(),
+                &crate::runs::clock::SystemClock,
+            )
             .unwrap();
-        let ticks = Arc::new(AtomicU64::new(0));
-        let ticker = ticks.clone();
-        runtime.spawn(async move {
-            loop {
-                ticker.fetch_add(1, Ordering::Relaxed);
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        });
-        std::thread::sleep(Duration::from_millis(50));
+            let holder = Connection::open(home.path().join("db").join("registry.sqlite")).unwrap();
+            holder.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-        let write = runtime.spawn(async move {
-            let conn = pool.get().unwrap();
-            conn.execute("DELETE FROM runtime_capacity", [])
-        });
-        std::thread::sleep(Duration::from_millis(100));
-        let before = ticks.load(Ordering::Relaxed);
-        std::thread::sleep(Duration::from_millis(400));
-        let during = ticks.load(Ordering::Relaxed) - before;
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap();
+            let ticks = Arc::new(AtomicU64::new(0));
+            let ticker = ticks.clone();
+            runtime.spawn(async move {
+                loop {
+                    ticker.fetch_add(1, Ordering::Relaxed);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            });
+            std::thread::sleep(Duration::from_millis(50));
 
-        holder.execute_batch("ROLLBACK").unwrap();
-        runtime.block_on(write).unwrap().unwrap();
-        assert!(
-            during >= 10,
-            "worker stalled while a registry write waited on the lock: {during} ticks in 400 ms"
-        );
+            let write = runtime.spawn(async move {
+                let conn = pool.get().unwrap();
+                conn.execute("DELETE FROM runtime_capacity", [])
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            let before = ticks.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(400));
+            let during = ticks.load(Ordering::Relaxed) - before;
+
+            holder.execute_batch("ROLLBACK").unwrap();
+            runtime.block_on(write).unwrap().unwrap();
+            assert!(
+                during >= 10,
+                "worker stalled while a registry write waited on the lock: {during} ticks in 400 ms"
+            );
+        }
+        home.close().unwrap();
     }
 }

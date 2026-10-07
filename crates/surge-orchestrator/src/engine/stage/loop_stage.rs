@@ -569,7 +569,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn empty_iterable_skips_frame_push() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -598,11 +598,14 @@ mod tests {
             LoopEntryEffect::Entered(_) => panic!("expected Skipped for empty iterable"),
         }
         assert!(frames.is_empty(), "frame stack should remain empty");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn three_items_pushes_frame_and_advances_to_body_start() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -638,11 +641,14 @@ mod tests {
             LoopEntryEffect::Skipped(_) => panic!("expected Entered for non-empty iterable"),
         }
         assert_eq!(frames.len(), 1);
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn items_above_resolved_cap_returns_error() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -685,13 +691,16 @@ mod tests {
             },
             other => panic!("expected LoopItemsTooLarge, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     use surge_core::run_state::Cursor;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn iteration_advance_increments_index() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -729,11 +738,14 @@ mod tests {
             NodeKey::try_from("body_start").unwrap(),
             "cursor reset to body start"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn iteration_done_at_last_index_pops_frame() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -764,6 +776,9 @@ mod tests {
 
         assert!(frames.is_empty(), "frame popped after last iteration");
         assert_eq!(cursor.node, return_to, "cursor restored to return_to");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

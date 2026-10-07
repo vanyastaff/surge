@@ -14,13 +14,24 @@ use surge_core::id::RunId;
 pub struct DismissedRuns {
     ids: HashSet<RunId>,
     path: Option<PathBuf>,
+    #[cfg(windows)]
+    runtime_home: Option<PathBuf>,
 }
 
 impl DismissedRuns {
     /// Load from the default location under `SURGE_HOME`.
     pub fn load() -> Self {
         surge_core::home::surge_home_dir()
-            .map(|home| Self::load_from(home.join("ui").join("dismissed-runs.json")))
+            .map(|home| {
+                #[cfg(windows)]
+                {
+                    let mut loaded = Self::load_from(home.join("ui").join("dismissed-runs.json"));
+                    loaded.runtime_home = Some(home);
+                    loaded
+                }
+                #[cfg(not(windows))]
+                Self::load_from(home.join("ui").join("dismissed-runs.json"))
+            })
             .unwrap_or_default()
     }
 
@@ -34,6 +45,8 @@ impl DismissedRuns {
         Self {
             ids,
             path: Some(path),
+            #[cfg(windows)]
+            runtime_home: None,
         }
     }
 
@@ -48,10 +61,21 @@ impl DismissedRuns {
             return;
         }
         if let Some(path) = &self.path
-            && let Err(error) = save(path, &self.ids)
+            && let Err(error) = self.save_to(path)
         {
             tracing::warn!(%error, path = %path.display(), "could not persist dismissed runs");
         }
+    }
+
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        let _runtime_home = self
+            .runtime_home
+            .as_deref()
+            .map(surge_persistence::RuntimeHomeOwner::prepare)
+            .transpose()
+            .map_err(std::io::Error::other)?;
+        save(path, &self.ids)
     }
 }
 

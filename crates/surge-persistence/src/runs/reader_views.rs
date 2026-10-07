@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use crate::SqliteConnectionManager;
 use r2d2::PooledConnection;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Row, params};
 use serde::de::DeserializeOwned;
 use surge_core::{ContentHash, NodeKey, RoadmapPatchId, RoadmapStatus};

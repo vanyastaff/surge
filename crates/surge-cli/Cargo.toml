@@ -43,7 +43,11 @@ which = "6"
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["signal"] }
 
+[target.'cfg(windows)'.dependencies]
+interprocess.workspace = true
+
 [dev-dependencies]
+interprocess = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 git2 = { workspace = true }
 tempfile = { workspace = true }

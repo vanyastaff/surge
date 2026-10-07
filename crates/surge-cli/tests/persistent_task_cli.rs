@@ -1,4 +1,15 @@
 //! The compiled CLI talks to the real durable daemon through an isolated home.
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
+use interprocess::local_socket::tokio::prelude::*;
 use serde_json::Value;
 use std::{path::Path, sync::Arc};
 use surge_orchestrator::engine::{
@@ -27,7 +38,7 @@ async fn cli(home: &Path, project: &Path, args: Vec<String>) -> Value {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compiled_task_commands_create_start_replay_and_show_the_same_persistent_item() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let project = tempfile::tempdir().unwrap();
     let repo = git2::Repository::init(project.path()).unwrap();
     let oid = repo.index().unwrap().write_tree().unwrap();
@@ -61,12 +72,22 @@ async fn compiled_task_commands_create_start_replay_and_show_the_same_persistent
         Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
         shutdown.clone(),
     ));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&socket)
+                .expect("fixture IPC name");
+            if LocalSocketStream::connect(name).await.is_ok() {
+                break;
+            }
+            assert!(
+                !host.is_finished(),
+                "daemon exited before accepting connections"
+            );
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    })
+    .await
+    .expect("daemon accepts the actual IPC connection");
     // The subprocess receives only this temp home; it cannot discover the user's daemon.
     std::fs::write(
         home.path().join("daemon/daemon.pid"),
@@ -288,4 +309,7 @@ async fn compiled_task_commands_create_start_replay_and_show_the_same_persistent
     assert_eq!(listed["value"]["entries"].as_array().unwrap().len(), 1);
     shutdown.cancel();
     host.await.unwrap().unwrap();
+    drop(storage);
+    drop(project);
+    home.close().unwrap();
 }

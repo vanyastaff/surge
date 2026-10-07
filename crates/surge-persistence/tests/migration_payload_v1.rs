@@ -8,6 +8,17 @@
 //!    migration chain. This proves the persistence layer is calling
 //!    `migrate_payload` rather than deserializing the blob directly.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+
+use runtime_home_fixture::FixtureHome;
+
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -22,7 +33,7 @@ use surge_persistence::runs::seq::EventSeq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_path_round_trips_v1_events() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -59,7 +70,7 @@ async fn read_path_round_trips_v1_events() {
     }
 
     writer.flush().await.unwrap();
-    drop(writer);
+    writer.close().await.expect("close writer");
 
     let reader = storage.open_run_reader(run_id).await.unwrap();
     let events = reader
@@ -80,11 +91,14 @@ async fn read_path_round_trips_v1_events() {
         );
         assert_eq!(ev.payload.payload, payloads[i]);
     }
+    drop(reader);
+    drop(storage);
+    dir.close().expect("close runtime home");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_path_rejects_unsupported_schema_version() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -128,4 +142,7 @@ async fn read_path_rejects_unsupported_schema_version() {
         msg.contains("schema migration failed") && msg.contains("999"),
         "unexpected error: {msg}"
     );
+    drop(reader);
+    drop(storage);
+    dir.close().expect("close runtime home");
 }

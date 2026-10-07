@@ -118,9 +118,9 @@ async fn handle_run_finished(
     let (body, _state, purpose) = format_completion(outcome);
     if let Some(kind) = terminal_kind(outcome) {
         let changed = {
-            let mut guard = conn.lock().await;
+            let guard = conn.lock().await;
             intake_outbox::enqueue_terminal(
-                &mut guard,
+                &guard,
                 &row.task_id,
                 run_id_str,
                 kind,

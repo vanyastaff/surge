@@ -1,4 +1,8 @@
 //! Legacy recovery must never claim a durable bootstrap operation's reserved runs.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{collections::HashSet, time::Duration};
 use surge_core::{
     ContentHash, RunId,
@@ -11,7 +15,8 @@ use surge_persistence::runs::Storage;
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_recovery_excludes_both_reserved_ids_even_for_future_payloads() {
     let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let operation = RunId::new();
     let planning = RunId::new();
     let implementation = RunId::new();
@@ -86,4 +91,9 @@ async fn legacy_recovery_excludes_both_reserved_ids_even_for_future_payloads() {
             "legacy recovery claimed reserved bootstrap IDs for payload v{version}"
         );
     }
+    for writer in writers {
+        writer.close().await.unwrap();
+    }
+    drop(storage);
+    home.close().unwrap();
 }

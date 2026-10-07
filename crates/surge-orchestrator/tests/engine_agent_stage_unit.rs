@@ -1,6 +1,8 @@
 //! Unit tests: agent stage opens session, sends prompt, observes OutcomeReported, closes session.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -44,114 +46,120 @@ fn agent_cfg() -> AgentConfig {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_stage_loops_until_outcome_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    // Pre-pin the session id so we can script the OutcomeReported event with
-    // the exact id that open_session will return.
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        // Pre-pin the session id so we can script the OutcomeReported event with
+        // the exact id that open_session will return.
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg();
-    let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let item: toml::Value = toml::from_str(
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg();
+        let node = NodeKey::try_from("plan_1").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let item: toml::Value = toml::from_str(
         "id = 'pause-timer'\ndescription = 'Preserve {{literal}} task text'\nacceptance_criteria = ['Pause keeps remaining time']",
     ).unwrap();
-    let loop_config: surge_core::loop_config::LoopConfig = toml::from_str(
+        let loop_config: surge_core::loop_config::LoopConfig = toml::from_str(
         "body = 'body'\niteration_var_name = 'task'\n[iterates_over]\ntype = 'static'\nvalue = []\n[exit_condition]\ntype = 'all_items'\n[on_iteration_failure]\ntype = 'abort'",
     ).unwrap();
-    let mut frames = vec![surge_orchestrator::engine::frames::Frame::Loop(
-        surge_orchestrator::engine::frames::LoopFrame {
-            loop_node: NodeKey::try_from("task_loop").unwrap(),
-            config: loop_config,
-            items: vec![
-                toml::Value::String("previous-task-must-not-be-active".into()),
-                item,
-            ],
-            current_index: 1,
-            attempts_remaining: 0,
-            return_to: NodeKey::try_from("end").unwrap(),
-            traversal_counts: Default::default(),
-        },
-    )];
-    let mut milestone = frames[0].clone();
-    let surge_orchestrator::engine::frames::Frame::Loop(ref mut outer) = milestone else {
-        panic!("expected loop");
-    };
-    outer.loop_node = NodeKey::try_from("milestone_loop").unwrap();
-    outer.config.iteration_var_name = "milestone".into();
-    outer.items = vec![toml::from_str("id = 'timer-controls'").unwrap()];
-    outer.current_index = 0;
-    frames.insert(0, milestone);
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &frames,
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: std::time::Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .unwrap();
+        let mut frames = vec![surge_orchestrator::engine::frames::Frame::Loop(
+            surge_orchestrator::engine::frames::LoopFrame {
+                loop_node: NodeKey::try_from("task_loop").unwrap(),
+                config: loop_config,
+                items: vec![
+                    toml::Value::String("previous-task-must-not-be-active".into()),
+                    item,
+                ],
+                current_index: 1,
+                attempts_remaining: 0,
+                return_to: NodeKey::try_from("end").unwrap(),
+                traversal_counts: Default::default(),
+            },
+        )];
+        let mut milestone = frames[0].clone();
+        let surge_orchestrator::engine::frames::Frame::Loop(ref mut outer) = milestone else {
+            panic!("expected loop");
+        };
+        outer.loop_node = NodeKey::try_from("milestone_loop").unwrap();
+        outer.config.iteration_var_name = "milestone".into();
+        outer.items = vec![toml::from_str("id = 'timer-controls'").unwrap()];
+        outer.current_index = 0;
+        frames.insert(0, milestone);
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &frames,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: std::time::Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await
+        .unwrap();
 
-    pump.await.unwrap();
+        pump.await.unwrap();
 
-    assert_eq!(result.as_ref(), "done");
-    let prompt = mock.last_prompt().await.unwrap();
-    assert!(prompt.contains("pause-timer"));
-    assert!(prompt.find("timer-controls").unwrap() < prompt.find("pause-timer").unwrap());
-    assert!(prompt.contains("Pause keeps remaining time"));
-    assert!(prompt.contains("{{literal}}"));
-    assert!(!prompt.contains("previous-task-must-not-be-active"));
+        assert_eq!(result.as_ref(), "done");
+        let prompt = mock.last_prompt().await.unwrap();
+        assert!(prompt.contains("pause-timer"));
+        assert!(prompt.find("timer-controls").unwrap() < prompt.find("pause-timer").unwrap());
+        assert!(prompt.contains("Pause keeps remaining time"));
+        assert!(prompt.contains("{{literal}}"));
+        assert!(!prompt.contains("previous-task-must-not-be-active"));
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -162,130 +170,137 @@ async fn reentered_stage_prompt_carries_the_verifier_findings() {
     };
     use surge_core::run_state::{ArtifactRef, BacktrackFeedback, OutcomeRecord, RunMemory};
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let report = VerificationReportArtifact {
-        task_id: "T1".into(),
-        outcome: VerificationReportOutcome::Failed,
-        summary: "Empty passwords are accepted.".into(),
-        checks: vec![VerificationCheck {
-            command: "cargo nextest run login".into(),
-            result: VerificationCheckResult::Failed,
-            covers: Vec::new(),
-            note: Some("empty_password_is_rejected panicked".into()),
-        }],
-        ..VerificationReportArtifact::default()
-    };
-    let stored = artifact_store
-        .put(
+        let report = VerificationReportArtifact {
+            task_id: "T1".into(),
+            outcome: VerificationReportOutcome::Failed,
+            summary: "Empty passwords are accepted.".into(),
+            checks: vec![VerificationCheck {
+                command: "cargo nextest run login".into(),
+                result: VerificationCheckResult::Failed,
+                covers: Vec::new(),
+                note: Some("empty_password_is_rejected panicked".into()),
+            }],
+            ..VerificationReportArtifact::default()
+        };
+        let stored = artifact_store
+            .put(
+                run_id,
+                "verification-report",
+                toml::to_string(&report).unwrap().as_bytes(),
+            )
+            .await
+            .unwrap();
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let node = NodeKey::try_from("implement_1").unwrap();
+        let mut memory = RunMemory::default();
+        memory.artifacts_by_node.insert(
+            verify.clone(),
+            vec![ArtifactRef {
+                hash: stored.hash,
+                path: stored.path,
+                name: "verification-report".into(),
+                produced_by: verify.clone(),
+                produced_at_seq: 10,
+            }],
+        );
+        memory.outcomes.insert(
+            verify.clone(),
+            vec![OutcomeRecord {
+                outcome: OutcomeKey::from_str("failed").unwrap(),
+                summary: "Login criterion unmet.".into(),
+                seq: 11,
+            }],
+        );
+        memory.backtrack_feedback.insert(
+            node.clone(),
+            BacktrackFeedback {
+                from: verify,
+                edge_seq: 12,
+            },
+        );
+
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "fixed".into(),
+            artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let cfg = agent_cfg();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
             run_id,
-            "verification-report",
-            toml::to_string(&report).unwrap().as_bytes(),
-        )
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: std::time::Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
         .await
         .unwrap();
-    let verify = NodeKey::try_from("verify_1").unwrap();
-    let node = NodeKey::try_from("implement_1").unwrap();
-    let mut memory = RunMemory::default();
-    memory.artifacts_by_node.insert(
-        verify.clone(),
-        vec![ArtifactRef {
-            hash: stored.hash,
-            path: stored.path,
-            name: "verification-report".into(),
-            produced_by: verify.clone(),
-            produced_at_seq: 10,
-        }],
-    );
-    memory.outcomes.insert(
-        verify.clone(),
-        vec![OutcomeRecord {
-            outcome: OutcomeKey::from_str("failed").unwrap(),
-            summary: "Login criterion unmet.".into(),
-            seq: 11,
-        }],
-    );
-    memory.backtrack_feedback.insert(
-        node.clone(),
-        BacktrackFeedback {
-            from: verify,
-            edge_seq: 12,
-        },
-    );
+        pump.await.unwrap();
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "fixed".into(),
-        artifacts_produced: vec![],
-        verification_report: None,
-    })
-    .await;
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        assert_eq!(result.as_ref(), "done");
+        let prompt = mock.last_prompt().await.unwrap();
+        assert!(
+            prompt.starts_with("## Feedback from the previous attempt"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Stage `verify_1` sent this work back with outcome `failed`"));
+        assert!(prompt.contains("Summary: Login criterion unmet."));
+        assert!(prompt.contains("Verifier summary: Empty passwords are accepted."));
+        assert!(
+            prompt.contains(
+                "- `cargo nextest run login` — failed: empty_password_is_rejected panicked"
+            )
+        );
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let cfg = agent_cfg();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: std::time::Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .unwrap();
-    pump.await.unwrap();
-
-    assert_eq!(result.as_ref(), "done");
-    let prompt = mock.last_prompt().await.unwrap();
-    assert!(
-        prompt.starts_with("## Feedback from the previous attempt"),
-        "{prompt}"
-    );
-    assert!(prompt.contains("Stage `verify_1` sent this work back with outcome `failed`"));
-    assert!(prompt.contains("Summary: Login criterion unmet."));
-    assert!(prompt.contains("Verifier summary: Empty passwords are accepted."));
-    assert!(
-        prompt
-            .contains("- `cargo nextest run login` — failed: empty_password_is_rejected panicked")
-    );
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }

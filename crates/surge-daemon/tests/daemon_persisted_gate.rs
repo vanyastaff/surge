@@ -1,4 +1,8 @@
 //! Real Engine events must reach IPC before gate approval and before terminal closure.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use surge_acp::bridge::{
     error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError},
@@ -135,7 +139,8 @@ async fn connect(path: PathBuf) -> DaemonEngineFacade {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_gate_request_and_resolution_arrive_before_terminal_and_slot_release() {
     let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let engine = Arc::new(Engine::new(
         Arc::new(NoAgent(broadcast::channel(8).0)),
         storage.clone(),
@@ -260,12 +265,17 @@ async fn real_gate_request_and_resolution_arrive_before_terminal_and_slot_releas
         .unwrap()
         .unwrap()
         .unwrap();
+    drop(client);
+    drop(engine);
+    drop(storage);
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unreadable_run_stream_fails_waiter_but_another_run_stays_connected() {
     let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let engine = Arc::new(Engine::new(
         Arc::new(NoAgent(broadcast::channel(8).0)),
         storage.clone(),
@@ -314,7 +324,7 @@ async fn unreadable_run_stream_fails_waiter_but_another_run_stays_connected() {
     // Publish an unread, malformed journal row atomically, preserving the live
     // database and append-only triggers. Copy metadata from its actual gate.
     let mut connection = rusqlite::Connection::open(
-        root.path()
+        home.path()
             .join("runs")
             .join(first_id.to_string())
             .join("events.sqlite"),
@@ -404,6 +414,11 @@ async fn unreadable_run_stream_fails_waiter_but_another_run_stays_connected() {
     .unwrap();
     shutdown.cancel();
     server.await.unwrap().unwrap();
+    drop(connection);
+    drop(client);
+    drop(engine);
+    drop(storage);
+    home.close().unwrap();
 }
 
 async fn wait_for_gate(

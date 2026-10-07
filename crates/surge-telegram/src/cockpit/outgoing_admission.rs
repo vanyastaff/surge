@@ -99,11 +99,11 @@ mod tests {
         }
     }
     async fn fixture() -> (
-        tempfile::TempDir,
+        crate::runtime_home_fixture::FixtureHome,
         Arc<Storage>,
         AdmittedTelegramApi<RecordingApi>,
     ) {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let api = AdmittedTelegramApi {
             api: RecordingApi::default(),
@@ -122,7 +122,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn outgoing_cards_recheck_pair_revoke_and_repair() {
-        let (_home, storage, api) = fixture().await;
+        let (home, storage, api) = fixture().await;
         assert!(api.send_message(42, "unpaired secret", &[]).await.is_err());
         assert!(
             api.edit_message_text(42, 19, "unpaired edit secret", &[])
@@ -152,11 +152,14 @@ mod tests {
             *api.api.payloads.lock().unwrap(),
             ["paired", "paired edit", "repaired", "repaired edit"]
         );
+        drop(api);
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn revoked_reconcile_preserves_card_until_repair_without_sending() {
-        let (_home, storage, api) = fixture().await;
+        let (home, storage, api) = fixture().await;
         let store = SqliteCardStore {
             storage: storage.clone(),
         };
@@ -196,11 +199,15 @@ mod tests {
             .unwrap();
         assert_eq!(report.closed, 1);
         assert_eq!(api.api.payloads.lock().unwrap().len(), 1);
+        drop(store);
+        drop(api);
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn pairing_lookup_failure_is_reported_without_network_delegation() {
-        let (_home, storage, api) = fixture().await;
+        let (home, storage, api) = fixture().await;
         storage
             .acquire_registry_conn()
             .unwrap()
@@ -211,5 +218,8 @@ mod tests {
             Err(crate::error::TelegramCockpitError::Persistence(_))
         ));
         assert!(api.api.payloads.lock().unwrap().is_empty());
+        drop(api);
+        drop(storage);
+        home.close().unwrap();
     }
 }

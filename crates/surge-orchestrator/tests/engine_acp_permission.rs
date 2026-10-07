@@ -1,4 +1,8 @@
 //! Real engine/ACP permission roundtrip, isolated by a process watchdog.
+#[path = "fixtures/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -144,7 +148,7 @@ fn watchdog(test: &str, mode: u8) {
             .block_on(roundtrip(PathBuf::from(root), mode));
         return;
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = FixtureHome::new().unwrap();
     let mut helper = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
         .env("SURGE_PERMISSION_HELPER", root.path())
@@ -178,6 +182,7 @@ fn watchdog(test: &str, mode: u8) {
         status.is_some_and(|status| status.success()),
         "real ACP permission journey failed or exceeded watchdog"
     );
+    root.close().unwrap();
 }
 
 #[test]
@@ -824,6 +829,7 @@ async fn verify_failure(
             .any(|event| matches!(event.payload, EventPayload::OutcomeReported { .. })),
         success
     );
+    writer.close().await.unwrap();
 }
 
 async fn wait_for_human_request(
@@ -945,39 +951,43 @@ impl BridgeFacade for SpoofedBroadcast {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_session_ignores_injected_legacy_broadcast_authority() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path()).await.unwrap();
-    let (events, _) = tokio::sync::broadcast::channel(16);
-    let engine = Engine::new(
-        Arc::new(SpoofedBroadcast { events }),
-        storage.clone(),
-        Arc::new(WorktreeToolDispatcher::new(root.path().into())),
-        EngineConfig::default(),
-    );
-    let graph = toml::from_str(include_str!("../../../examples/flow_elevation_demo.toml")).unwrap();
-    let id = RunId::new();
-    let handle = engine
-        .start_run(id, graph, root.path().into(), EngineRunConfig::default())
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(3), handle.await_completion())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(outcome, RunOutcome::Failed { .. }), "{outcome:?}");
-    let events = storage
-        .open_run_reader(id)
-        .await
-        .unwrap()
-        .read_run_events()
-        .await
-        .unwrap();
-    assert!(!events.iter().any(|event| matches!(
-        event.payload,
-        EventPayload::OutcomeReported { .. }
-            | EventPayload::HumanInputRequested { .. }
-            | EventPayload::StageToolReceipt { .. }
-    )));
+    let root = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(root.path()).await.unwrap();
+        let (events, _) = tokio::sync::broadcast::channel(16);
+        let engine = Engine::new(
+            Arc::new(SpoofedBroadcast { events }),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(root.path().into())),
+            EngineConfig::default(),
+        );
+        let graph =
+            toml::from_str(include_str!("../../../examples/flow_elevation_demo.toml")).unwrap();
+        let id = RunId::new();
+        let handle = engine
+            .start_run(id, graph, root.path().into(), EngineRunConfig::default())
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(3), handle.await_completion())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Failed { .. }), "{outcome:?}");
+        let events = storage
+            .open_run_reader(id)
+            .await
+            .unwrap()
+            .read_run_events()
+            .await
+            .unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::OutcomeReported { .. }
+                | EventPayload::HumanInputRequested { .. }
+                | EventPayload::StageToolReceipt { .. }
+        )));
+    }
+    root.close().unwrap();
 }
 
 fn kill_mcp_helper(root: &std::path::Path) {

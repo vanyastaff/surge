@@ -378,7 +378,7 @@ mod tests {
             ProviderSessionDescriptor, ProviderSessionId, SessionOpening,
             SessionRestoreCapabilities,
         };
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -428,6 +428,10 @@ mod tests {
                 .any(|call| matches!(call, RecordedCall::SendMessage { .. }))
         );
         assert!(mock.last_prompt().await.is_none());
+        drop(calls);
+        drop(bridge);
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test]

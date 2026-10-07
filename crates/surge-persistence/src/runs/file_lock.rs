@@ -1,5 +1,6 @@
 //! Cross-process advisory lock around per-run events.sqlite.lock.
 
+#[cfg(not(windows))]
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
@@ -15,7 +16,10 @@ use crate::runs::error::OpenError;
 ///
 /// The owned file closes on every failed acquisition and on final lease drop.
 pub struct FileLock {
+    #[cfg(not(windows))]
     _file: File,
+    #[cfg(windows)]
+    _native: crate::state_home::NativeJournalLock,
 }
 
 impl FileLock {
@@ -37,20 +41,43 @@ impl FileLock {
         run_id: surge_core::RunId,
         create: bool,
     ) -> Result<Self, OpenError> {
-        if create && let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        #[cfg(windows)]
+        {
+            use crate::state_home::NativeError;
+            use windows::Win32::Foundation::{
+                STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+            };
+            let native = crate::state_home::NativeJournalLock::acquire(lock_path, create).map_err(
+                |error| match error {
+                    NativeError::Busy => OpenError::WriterAlreadyHeld { run_id },
+                    NativeError::Open(
+                        STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND,
+                    ) => OpenError::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "journal lock is missing",
+                    )),
+                    other => other.into(),
+                },
+            )?;
+            Ok(Self { _native: native })
         }
-        let file = OpenOptions::new()
-            .create(create)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(lock_path)?;
-        file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => OpenError::WriterAlreadyHeld { run_id },
-            std::fs::TryLockError::Error(error) => OpenError::Io(error),
-        })?;
-        Ok(Self { _file: file })
+        #[cfg(not(windows))]
+        {
+            if create && let Some(parent) = lock_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = OpenOptions::new()
+                .create(create)
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .open(lock_path)?;
+            file.try_lock().map_err(|error| match error {
+                std::fs::TryLockError::WouldBlock => OpenError::WriterAlreadyHeld { run_id },
+                std::fs::TryLockError::Error(error) => OpenError::Io(error),
+            })?;
+            Ok(Self { _file: file })
+        }
     }
 }
 
@@ -62,23 +89,29 @@ mod tests {
 
     #[test]
     fn second_acquire_in_same_process_fails() {
-        let tmp = TempDir::new().unwrap();
-        let lock_path = tmp.path().join("test.lock");
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let lock_path = tmp.path().join("test.lock");
 
-        let _l1 = FileLock::try_acquire(&lock_path, RunId::new()).unwrap();
-        let l2 = FileLock::try_acquire(&lock_path, RunId::new());
-        assert!(l2.is_err(), "second lock acquire should fail");
+            let _l1 = FileLock::try_acquire(&lock_path, RunId::new()).unwrap();
+            let l2 = FileLock::try_acquire(&lock_path, RunId::new());
+            assert!(l2.is_err(), "second lock acquire should fail");
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn release_after_drop_allows_reacquire() {
-        let tmp = TempDir::new().unwrap();
-        let lock_path = tmp.path().join("test.lock");
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let lock_path = tmp.path().join("test.lock");
 
-        let l1 = FileLock::try_acquire(&lock_path, RunId::new()).unwrap();
-        drop(l1);
-        let l2 = FileLock::try_acquire(&lock_path, RunId::new());
-        assert!(l2.is_ok(), "lock should be reacquirable after drop");
+            let l1 = FileLock::try_acquire(&lock_path, RunId::new()).unwrap();
+            drop(l1);
+            let l2 = FileLock::try_acquire(&lock_path, RunId::new());
+            assert!(l2.is_ok(), "lock should be reacquirable after drop");
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
@@ -114,47 +147,50 @@ mod tests {
 
     #[test]
     fn actual_second_process_exclusion_and_death_release() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("events.sqlite.lock");
-        let ready = tmp.path().join("ready");
-        let initial = FileLock::try_acquire(&path, RunId::new()).unwrap();
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "runs::file_lock::tests::lock_probe",
-                "--nocapture",
-            ])
-            .env("SURGE_WRITER_LOCK_PROBE", &path)
-            .env("SURGE_WRITER_LOCK_EXPECT_BUSY", "1")
-            .status()
-            .unwrap();
-        assert!(status.success());
-        drop(initial);
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "runs::file_lock::tests::lock_probe",
-                "--nocapture",
-            ])
-            .env("SURGE_WRITER_LOCK_PROBE", &path)
-            .env("SURGE_WRITER_LOCK_READY", &ready)
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !ready.exists() && std::time::Instant::now() < deadline {
-            assert!(child.try_wait().unwrap().is_none());
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let path = tmp.path().join("events.sqlite.lock");
+            let ready = tmp.path().join("ready");
+            let initial = FileLock::try_acquire(&path, RunId::new()).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runs::file_lock::tests::lock_probe",
+                    "--nocapture",
+                ])
+                .env("SURGE_WRITER_LOCK_PROBE", &path)
+                .env("SURGE_WRITER_LOCK_EXPECT_BUSY", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            drop(initial);
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runs::file_lock::tests::lock_probe",
+                    "--nocapture",
+                ])
+                .env("SURGE_WRITER_LOCK_PROBE", &path)
+                .env("SURGE_WRITER_LOCK_READY", &ready)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !ready.exists() && std::time::Instant::now() < deadline {
+                assert!(child.try_wait().unwrap().is_none());
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let observed_ready = ready.exists();
+            let excluded = matches!(
+                FileLock::try_acquire_existing(&path, RunId::new()),
+                Err(OpenError::WriterAlreadyHeld { .. })
+            );
+            child.kill().unwrap();
+            child.wait().unwrap();
+            assert!(observed_ready);
+            assert!(excluded);
+            let _reacquired = FileLock::try_acquire_existing(&path, RunId::new()).unwrap();
         }
-        let observed_ready = ready.exists();
-        let excluded = matches!(
-            FileLock::try_acquire_existing(&path, RunId::new()),
-            Err(OpenError::WriterAlreadyHeld { .. })
-        );
-        child.kill().unwrap();
-        child.wait().unwrap();
-        assert!(observed_ready);
-        assert!(excluded);
-        let _reacquired = FileLock::try_acquire_existing(&path, RunId::new()).unwrap();
+        tmp.close().unwrap();
     }
 }

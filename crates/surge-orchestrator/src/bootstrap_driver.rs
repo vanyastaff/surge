@@ -434,7 +434,7 @@ mod tests {
         use crate::engine::tools::worktree::WorktreeToolDispatcher;
         use surge_persistence::runs::Storage;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(directory.path()).await.unwrap();
         let run = RunId::new();
         storage.create_run(run, directory.path(), None).await.unwrap().close().await.unwrap();
@@ -461,6 +461,10 @@ mod tests {
         writer.close().await.unwrap();
         let repeated = reader.read_events(EventSeq(0)..EventSeq(u64::MAX)).await.unwrap();
         assert_eq!(repeated.len(), 1);
+        drop(reader);
+        drop(engine);
+        drop(storage);
+        directory.close().unwrap();
         }).await.unwrap();
     }
 
@@ -472,7 +476,7 @@ mod tests {
         use crate::engine::tools::worktree::WorktreeToolDispatcher;
         use surge_persistence::runs::Storage;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(directory.path()).await.unwrap();
         let run = RunId::new();
         storage.create_run(run, directory.path(), None).await.unwrap().close().await.unwrap();
@@ -491,6 +495,10 @@ mod tests {
         writer.close().await.unwrap();
         let events = storage.open_run_reader(run).await.unwrap().read_events(EventSeq(0)..EventSeq(u64::MAX)).await.unwrap();
         assert!(events.is_empty());
+        drop(connection);
+        drop(engine);
+        drop(storage);
+        directory.close().unwrap();
         }).await.unwrap();
     }
 

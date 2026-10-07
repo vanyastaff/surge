@@ -1,6 +1,10 @@
 //! Opt-in real daemon/ACP/MCP journey. Never runs a provider in ordinary CI.
 //! Build surge + mock_acp_agent first, then run the ignored controlled test.
 //! SURGE_LIVE_CODEX=1 enables exactly one bounded live invocation.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -48,7 +52,11 @@ fn watchdog(live: bool) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(journey(PathBuf::from(root), live));
+            .block_on(journey(
+                PathBuf::from(root),
+                PathBuf::from(std::env::var_os("SURGE_HOME").unwrap()),
+                live,
+            ));
         assert!(
             result.is_ok(),
             "smoke failed: {}",
@@ -60,6 +68,7 @@ fn watchdog(live: bool) {
         .prefix("surge-live-")
         .tempdir()
         .unwrap();
+    let home = FixtureHome::new().unwrap();
     let test = if live {
         "live_codex_daemon_mcp_smoke"
     } else {
@@ -69,7 +78,7 @@ fn watchdog(live: bool) {
     command
         .args(["--ignored", "--exact", test, "--nocapture"])
         .env("SURGE_SMOKE_CHILD", root.path())
-        .env("SURGE_HOME", root.path().join("home"));
+        .env("SURGE_HOME", home.path());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -104,6 +113,7 @@ fn watchdog(live: bool) {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    home.close().unwrap();
 }
 
 fn git(path: &Path, args: &[&str]) {
@@ -116,7 +126,11 @@ fn git(path: &Path, args: &[&str]) {
     assert!(output.status.success(), "temporary Git preparation failed");
 }
 
-fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<ProfileRegistry>) {
+fn prepare(
+    root: &Path,
+    home: &Path,
+    live: bool,
+) -> (PathBuf, surge_core::SurgeConfig, Arc<ProfileRegistry>) {
     let repo = root.join("repository");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(repo.join("sentinel.txt"), SENTINEL).unwrap();
@@ -164,7 +178,7 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     })).unwrap();
     config.agents.insert("live-smoke".into(), agent);
     std::fs::write(repo.join("surge.toml"), toml::to_string(&config).unwrap()).unwrap();
-    let profiles = root.join("home/profiles");
+    let profiles = home.join("profiles");
     std::fs::create_dir_all(&profiles).unwrap();
     let mut profile: surge_core::profile::Profile = toml::from_str(include_str!(
         "../../surge-core/bundled/profiles/mock-1.0.toml"
@@ -279,16 +293,14 @@ async fn connect(socket: PathBuf) -> Result<DaemonEngineFacade, String> {
     .map_err(|_| "daemon connection timeout".into())
 }
 
-async fn journey(root: PathBuf, live: bool) -> Result<(), String> {
+async fn journey(root: PathBuf, home: PathBuf, live: bool) -> Result<(), String> {
     let nonce = RunId::new().to_string();
-    let (worktree, config, profiles) = prepare(&root, live);
+    let (worktree, config, profiles) = prepare(&root, &home, live);
     let pins = [
         CheckoutPin::capture(root.join("repository")),
         CheckoutPin::capture(worktree.clone()),
     ];
-    let storage = Storage::open(root.join("home"))
-        .await
-        .map_err(|_| "storage open")?;
+    let storage = Storage::open(&home).await.map_err(|_| "storage open")?;
     let bridge = Arc::new(AcpBridge::with_defaults().map_err(|_| "bridge open")?);
     let engine = Arc::new(Engine::new_full(
         bridge.clone(),

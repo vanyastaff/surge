@@ -318,7 +318,7 @@ mod tests {
     /// `PipelineMaterialized`; resuming must keep the run's own graph.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_keeps_the_runs_own_graph_after_a_generated_flow() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = RunId::new();
         let writer = storage
@@ -345,13 +345,17 @@ mod tests {
         let replayed = replay(&reader).await.expect("replay");
         assert_eq!(replayed.graph.metadata.name, own.metadata.name);
         assert!(replayed.graph.nodes.contains_key(&replayed.cursor.node));
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// Persist a `RunStarted` event with non-empty `mcp_servers`, then call
     /// `replay` and assert that `run_config` comes back with the same servers.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_returns_persisted_mcp_servers() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -419,13 +423,17 @@ mod tests {
             rc.mcp_servers[0].allowed_tools,
             Some(vec!["browser_navigate".into()])
         );
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// Old runs without `mcp_servers` in `RunConfig` must not cause errors;
     /// `run_config.mcp_servers` is empty after deserialization via `#[serde(default)]`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_run_config_mcp_servers_empty_when_not_persisted() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -478,11 +486,15 @@ mod tests {
             rc.mcp_servers.is_empty(),
             "expected empty mcp_servers for run without MCP"
         );
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_uses_latest_graph_revision_with_snapshot_cursor() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -572,5 +584,9 @@ mod tests {
             .expect("graph revision memory");
         assert_eq!(revision.graph_hash, graph_hash);
         assert_eq!(revision.previous_graph_hash, previous_graph_hash);
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 }

@@ -6,6 +6,10 @@
 //! asserts the resumable run was resumed and the worktree-lost run was
 //! marked `Failed` in the registry.
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -106,7 +110,8 @@ impl EngineFacade for RecoveryStubFacade {
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
     let tmp = tempdir().unwrap();
-    let storage = Storage::open(tmp.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let worktrees_root = tmp.path().join("worktrees");
 
     // Run A — worktree present → must be resumed. Recovery checks the run's
@@ -157,6 +162,10 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
     assert_eq!(outcome.resumed, 1);
     assert_eq!(outcome.failed_worktree, 1);
     assert_eq!(outcome.errors, 0);
+    _wa.close().await.unwrap();
+    _wb.close().await.unwrap();
+    drop(storage);
+    home.close().unwrap();
 }
 
 /// Idempotency: a second recovery pass after the first must be a no-op
@@ -165,7 +174,8 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
 #[tokio::test(flavor = "multi_thread")]
 async fn second_recovery_pass_does_not_refail_terminal_run() {
     let tmp = tempdir().unwrap();
-    let storage = Storage::open(tmp.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let worktrees_root = tmp.path().join("worktrees");
 
     let run_b = RunId::new();
@@ -210,6 +220,9 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
     );
     assert_eq!(second.resumed, 0);
     assert_eq!(second.skipped, 0, "terminal runs are filtered out entirely");
+    _wb.close().await.unwrap();
+    drop(storage);
+    home.close().unwrap();
 }
 
 fn run_config() -> RunConfig {
@@ -250,7 +263,8 @@ fn helpers() -> (
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_reconciles_log_terminal_run() {
     let tmp = tempdir().unwrap();
-    let storage = Storage::open(tmp.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let worktrees_root = tmp.path().join("worktrees");
 
     let run = RunId::new();
@@ -292,6 +306,8 @@ async fn recover_reconciles_log_terminal_run() {
         storage.get_run(&run).await.unwrap().unwrap().status,
         RunStatus::Completed
     );
+    drop(storage);
+    home.close().unwrap();
 }
 
 /// A non-terminal run with a present worktree but no new events for longer
@@ -299,7 +315,8 @@ async fn recover_reconciles_log_terminal_run() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_flags_stuck_run_instead_of_resuming() {
     let tmp = tempdir().unwrap();
-    let storage = Storage::open(tmp.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let worktrees_root = tmp.path().join("worktrees");
 
     let run = RunId::new();
@@ -347,4 +364,6 @@ async fn recover_flags_stuck_run_instead_of_resuming() {
         storage.get_run(&run).await.unwrap().unwrap().status,
         RunStatus::Bootstrapping
     );
+    drop(storage);
+    home.close().unwrap();
 }

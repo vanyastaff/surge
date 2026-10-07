@@ -9,6 +9,14 @@ use thiserror::Error;
 /// Failure modes for opening or creating a `Storage`, run reader, or run writer.
 #[derive(Debug, Error)]
 pub enum OpenError {
+    /// Native ownership refused before a pathname-based consumer could run.
+    #[error("state-home {category}: {message}")]
+    StateHome {
+        /// Stable failure category without private object content.
+        category: &'static str,
+        /// SDK status or structural refusal reason.
+        message: String,
+    },
     /// The in-process writer ownership registry is poisoned.
     #[error("writer ownership registry is poisoned")]
     WriterOwnershipPoisoned,

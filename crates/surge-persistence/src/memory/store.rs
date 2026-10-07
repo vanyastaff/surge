@@ -29,7 +29,7 @@ fn surge_home_dir() -> Result<PathBuf> {
 /// contexts using SQLite with FTS5 full-text search. Handles schema creation,
 /// migrations, and CRUD operations.
 pub struct MemoryStore {
-    conn: Connection,
+    conn: crate::runs::connection::ManagedConnection,
     #[allow(dead_code)]
     path: PathBuf,
 }
@@ -40,11 +40,21 @@ impl MemoryStore {
     /// Creates the database file and initializes the schema if it doesn't exist.
     /// If the database exists, verifies the schema version.
     pub fn open(path: &Path) -> Result<Self> {
-        // Ensure parent directory exists
+        #[cfg(windows)]
+        let namespace = crate::state_home::SqliteNamespaceOwner::standalone(path)?;
+        // Unix parent policy is unchanged.
+        #[cfg(not(windows))]
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::open_owned(
+            path,
+            rusqlite::OpenFlags::default(),
+            namespace.clone(),
+        )?;
+        #[cfg(not(windows))]
         let conn = Connection::open(path)?;
         // Same hardening the run and registry databases get. Without it this
         // store runs on the default rollback journal with no busy timeout,
@@ -64,6 +74,9 @@ impl MemoryStore {
 
     /// Create an in-memory store (for testing).
     pub fn in_memory() -> Result<Self> {
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory()?;
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory()?;
         let mut store = Self {
             conn,
@@ -2091,7 +2104,10 @@ mod tests {
 
     #[test]
     fn migration_v1_to_v2_backfills_all_four_legacy_tables_with_and_without_optional_fields() {
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory().unwrap();
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         seed_v1_legacy_tables(&conn);
 
         let discovery_id = Ulid::new().to_string();
@@ -2216,7 +2232,10 @@ mod tests {
 
     #[test]
     fn migration_v1_to_v2_reuses_legacy_ulid_and_records_legacy_source() {
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory().unwrap();
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         seed_v1_legacy_tables(&conn);
 
         let legacy_id = Ulid::new().to_string();
@@ -2253,7 +2272,10 @@ mod tests {
         // processes `discoveries` first (succeeds, inserting a claim) and
         // then hits a genuine SQL error scanning the missing `patterns`
         // table, partway through the same migration step.
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory().unwrap();
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         conn.execute(crate::memory::schema::CREATE_SCHEMA_VERSION_TABLE, [])
             .unwrap();
         conn.execute(crate::memory::schema::CREATE_DISCOVERIES_TABLE, [])
@@ -2311,7 +2333,10 @@ mod tests {
         // Two different legacy rows, in different tables, that happen to
         // share a ULID (simulating the astronomically unlikely but
         // possible case of two independently generated ids colliding).
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory().unwrap();
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory().unwrap();
         seed_v1_legacy_tables(&conn);
 
         let shared_id = Ulid::new().to_string();
@@ -2534,77 +2559,80 @@ mod fts_regression_tests {
 
     #[test]
     fn v2_upgrade_repairs_stale_and_orphan_postings_and_reopens() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("memory.db");
-        let store = MemoryStore::open(&path).unwrap();
-        store
-            .conn
-            .execute("DELETE FROM schema_version WHERE version=3", [])
-            .unwrap();
-        store
-            .conn
-            .execute("INSERT INTO schema_version VALUES(2)", [])
-            .unwrap();
-        for &(table, column, insert) in CASES {
-            store.conn.execute(insert, []).unwrap();
-            // Simulate the historical trigger's stale postings without relying on it.
-            store
-                .conn
-                .execute_batch(&format!(
-                    "DROP TRIGGER {table}_fts_update; DROP TRIGGER {table}_fts_delete;"
-                ))
-                .unwrap();
-            store
-                .conn
-                .execute(
-                    &format!("UPDATE {table} SET {column}='newtoken' WHERE id='fixed'"),
-                    [],
-                )
-                .unwrap();
-            // Add and remove a distinct row with insert indexing still enabled.
-            store
-                .conn
-                .execute(
-                    &insert
-                        .replace("'fixed'", "'deleted'")
-                        .replace("src/lib.rs", "src/other.rs"),
-                    [],
-                )
-                .unwrap();
-            store
-                .conn
-                .execute(&format!("DELETE FROM {table} WHERE id='deleted'"), [])
-                .unwrap();
-            // Restore legacy trigger names; the migration replaces their bodies.
-            store.conn.execute_batch(&format!("CREATE TRIGGER {table}_fts_update AFTER UPDATE ON {table} BEGIN SELECT 1; END; CREATE TRIGGER {table}_fts_delete AFTER DELETE ON {table} BEGIN SELECT 1; END;")).unwrap();
-        }
-        drop(store);
-        for _ in 0..2 {
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let path = dir.path().join("memory.db");
             let store = MemoryStore::open(&path).unwrap();
-            for &(table, _, _) in CASES {
-                assert!(matches(&store.conn, table, "oldtoken").is_empty());
-                assert_eq!(matches(&store.conn, table, "newtoken"), ["fixed"]);
+            store
+                .conn
+                .execute("DELETE FROM schema_version WHERE version=3", [])
+                .unwrap();
+            store
+                .conn
+                .execute("INSERT INTO schema_version VALUES(2)", [])
+                .unwrap();
+            for &(table, column, insert) in CASES {
+                store.conn.execute(insert, []).unwrap();
+                // Simulate the historical trigger's stale postings without relying on it.
+                store
+                    .conn
+                    .execute_batch(&format!(
+                        "DROP TRIGGER {table}_fts_update; DROP TRIGGER {table}_fts_delete;"
+                    ))
+                    .unwrap();
+                store
+                    .conn
+                    .execute(
+                        &format!("UPDATE {table} SET {column}='newtoken' WHERE id='fixed'"),
+                        [],
+                    )
+                    .unwrap();
+                // Add and remove a distinct row with insert indexing still enabled.
+                store
+                    .conn
+                    .execute(
+                        &insert
+                            .replace("'fixed'", "'deleted'")
+                            .replace("src/lib.rs", "src/other.rs"),
+                        [],
+                    )
+                    .unwrap();
+                store
+                    .conn
+                    .execute(&format!("DELETE FROM {table} WHERE id='deleted'"), [])
+                    .unwrap();
+                // Restore legacy trigger names; the migration replaces their bodies.
+                store.conn.execute_batch(&format!("CREATE TRIGGER {table}_fts_update AFTER UPDATE ON {table} BEGIN SELECT 1; END; CREATE TRIGGER {table}_fts_delete AFTER DELETE ON {table} BEGIN SELECT 1; END;")).unwrap();
+            }
+            drop(store);
+            for _ in 0..2 {
+                let store = MemoryStore::open(&path).unwrap();
+                for &(table, _, _) in CASES {
+                    assert!(matches(&store.conn, table, "oldtoken").is_empty());
+                    assert_eq!(matches(&store.conn, table, "newtoken"), ["fixed"]);
+                    integrity(&store.conn, table);
+                }
+            }
+            let store = MemoryStore::open(&path).unwrap();
+            for &(table, column, _) in CASES {
+                store
+                    .conn
+                    .execute(
+                        &format!("UPDATE {table} SET {column}='finaltoken' WHERE id='fixed'"),
+                        [],
+                    )
+                    .unwrap();
+                assert!(matches(&store.conn, table, "newtoken").is_empty());
+                assert_eq!(matches(&store.conn, table, "finaltoken"), ["fixed"]);
+                store
+                    .conn
+                    .execute(&format!("DELETE FROM {table} WHERE id='fixed'"), [])
+                    .unwrap();
+                assert!(matches(&store.conn, table, "finaltoken").is_empty());
                 integrity(&store.conn, table);
             }
         }
-        let store = MemoryStore::open(&path).unwrap();
-        for &(table, column, _) in CASES {
-            store
-                .conn
-                .execute(
-                    &format!("UPDATE {table} SET {column}='finaltoken' WHERE id='fixed'"),
-                    [],
-                )
-                .unwrap();
-            assert!(matches(&store.conn, table, "newtoken").is_empty());
-            assert_eq!(matches(&store.conn, table, "finaltoken"), ["fixed"]);
-            store
-                .conn
-                .execute(&format!("DELETE FROM {table} WHERE id='fixed'"), [])
-                .unwrap();
-            assert!(matches(&store.conn, table, "finaltoken").is_empty());
-            integrity(&store.conn, table);
-        }
+        dir.close().unwrap();
     }
 
     #[test]

@@ -10,8 +10,8 @@
 
 use std::path::PathBuf;
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use surge_core::{RoadmapStatus, RunId};
@@ -336,11 +336,11 @@ mod tests {
     use crate::runs::clock::MockClock;
     use crate::runs::registry::open_registry_pool;
 
-    fn store() -> TaskLedgerStore {
-        let tmp = tempfile::tempdir().unwrap();
+    fn store() -> (crate::runtime_home_fixture::FixtureHome, TaskLedgerStore) {
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let clock = MockClock::new(1_700_000_000_000);
         let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        TaskLedgerStore::new(pool)
+        (tmp, TaskLedgerStore::new(pool))
     }
 
     fn upsert(
@@ -367,45 +367,53 @@ mod tests {
 
     #[test]
     fn upsert_then_get_roundtrips() {
-        let store = store();
-        let run = RunId::new();
-        let record = store
-            .upsert(&upsert(run, "m1-t1", RoadmapStatus::Completed, true, None))
-            .unwrap();
-        assert!(record.verified);
-        assert_eq!(record.status, RoadmapStatus::Completed);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            let record = store
+                .upsert(&upsert(run, "m1-t1", RoadmapStatus::Completed, true, None))
+                .unwrap();
+            assert!(record.verified);
+            assert_eq!(record.status, RoadmapStatus::Completed);
 
-        let fetched = store.get(run, "m1-t1").unwrap().unwrap();
-        assert_eq!(fetched, record);
+            let fetched = store.get(run, "m1-t1").unwrap().unwrap();
+            assert_eq!(fetched, record);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn is_evidence_backed_requires_current_completed_and_verified() {
-        let store = store();
-        let run = RunId::new();
-        let mut verified = store
-            .upsert(&upsert(run, "backed", RoadmapStatus::Completed, true, None))
-            .unwrap();
-        assert!(
-            !verified.is_evidence_backed(),
-            "raw registry bit has no current observation"
-        );
-        verified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
-        assert!(verified.is_evidence_backed());
-        verified.freshness = surge_core::verification_evidence::ProofFreshness::Stale;
-        assert!(!verified.is_evidence_backed());
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            let mut verified = store
+                .upsert(&upsert(run, "backed", RoadmapStatus::Completed, true, None))
+                .unwrap();
+            assert!(
+                !verified.is_evidence_backed(),
+                "raw registry bit has no current observation"
+            );
+            verified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
+            assert!(verified.is_evidence_backed());
+            verified.freshness = surge_core::verification_evidence::ProofFreshness::Stale;
+            assert!(!verified.is_evidence_backed());
 
-        let mut unverified = store
-            .upsert(&upsert(
-                run,
-                "unbacked",
-                RoadmapStatus::ReadyForVerification,
-                false,
-                None,
-            ))
-            .unwrap();
-        unverified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
-        assert!(!unverified.is_evidence_backed());
+            let mut unverified = store
+                .upsert(&upsert(
+                    run,
+                    "unbacked",
+                    RoadmapStatus::ReadyForVerification,
+                    false,
+                    None,
+                ))
+                .unwrap();
+            unverified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
+            assert!(!unverified.is_evidence_backed());
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     /// `surge ledger --json`/`surge ready --json` must not disagree with
@@ -418,120 +426,136 @@ mod tests {
     /// table for.
     #[test]
     fn with_verified_normalized_matches_the_table_on_the_boundary_case() {
-        let store = store();
-        let run = RunId::new();
-        let stale_flag = store
-            .upsert(&upsert(
-                run,
-                "stale",
-                RoadmapStatus::FailedVerification,
-                true,
-                None,
-            ))
-            .unwrap();
-        assert!(
-            stale_flag.verified,
-            "the raw field this test exercises must actually be set"
-        );
-        let normalized = stale_flag.clone().with_verified_normalized();
-        assert!(
-            !normalized.verified,
-            "a verified:true row that never reached Completed must serialize as \
-             verified:false, matching the table's is_evidence_backed() column"
-        );
-        assert_eq!(
-            normalized.status, stale_flag.status,
-            "only verified changes"
-        );
-        assert_eq!(normalized.task_id, stale_flag.task_id);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            let stale_flag = store
+                .upsert(&upsert(
+                    run,
+                    "stale",
+                    RoadmapStatus::FailedVerification,
+                    true,
+                    None,
+                ))
+                .unwrap();
+            assert!(
+                stale_flag.verified,
+                "the raw field this test exercises must actually be set"
+            );
+            let normalized = stale_flag.clone().with_verified_normalized();
+            assert!(
+                !normalized.verified,
+                "a verified:true row that never reached Completed must serialize as \
+                 verified:false, matching the table's is_evidence_backed() column"
+            );
+            assert_eq!(
+                normalized.status, stale_flag.status,
+                "only verified changes"
+            );
+            assert_eq!(normalized.task_id, stale_flag.task_id);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn upsert_is_idempotent_on_run_task_key() {
-        let store = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(
-                run,
-                "t1",
-                RoadmapStatus::ReadyForVerification,
-                false,
-                None,
-            ))
-            .unwrap();
-        store
-            .upsert(&upsert(run, "t1", RoadmapStatus::Completed, true, None))
-            .unwrap();
-        let all = store.list(&TaskLedgerIndexFilter::default()).unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].status, RoadmapStatus::Completed);
-        assert!(all[0].verified);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            store
+                .upsert(&upsert(
+                    run,
+                    "t1",
+                    RoadmapStatus::ReadyForVerification,
+                    false,
+                    None,
+                ))
+                .unwrap();
+            store
+                .upsert(&upsert(run, "t1", RoadmapStatus::Completed, true, None))
+                .unwrap();
+            let all = store.list(&TaskLedgerIndexFilter::default()).unwrap();
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].status, RoadmapStatus::Completed);
+            assert!(all[0].verified);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn list_filters_by_status_and_discovered() {
-        let store = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(run, "t1", RoadmapStatus::Pending, false, None))
-            .unwrap();
-        store
-            .upsert(&upsert(
-                run,
-                "t2",
-                RoadmapStatus::Pending,
-                false,
-                Some("t1"),
-            ))
-            .unwrap();
-        store
-            .upsert(&upsert(run, "t3", RoadmapStatus::Completed, true, None))
-            .unwrap();
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            store
+                .upsert(&upsert(run, "t1", RoadmapStatus::Pending, false, None))
+                .unwrap();
+            store
+                .upsert(&upsert(
+                    run,
+                    "t2",
+                    RoadmapStatus::Pending,
+                    false,
+                    Some("t1"),
+                ))
+                .unwrap();
+            store
+                .upsert(&upsert(run, "t3", RoadmapStatus::Completed, true, None))
+                .unwrap();
 
-        let pending = store
-            .list(&TaskLedgerIndexFilter {
-                status: Some(RoadmapStatus::Pending),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(pending.len(), 2);
+            let pending = store
+                .list(&TaskLedgerIndexFilter {
+                    status: Some(RoadmapStatus::Pending),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(pending.len(), 2);
 
-        let discovered = store
-            .list(&TaskLedgerIndexFilter {
-                discovered_only: true,
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0].task_id, "t2");
-        assert_eq!(discovered[0].discovered_from.as_deref(), Some("t1"));
+            let discovered = store
+                .list(&TaskLedgerIndexFilter {
+                    discovered_only: true,
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(discovered.len(), 1);
+            assert_eq!(discovered[0].task_id, "t2");
+            assert_eq!(discovered[0].discovered_from.as_deref(), Some("t1"));
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn discovered_from_is_preserved_across_later_status_upserts() {
-        let store = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(
-                run,
-                "t2",
-                RoadmapStatus::Pending,
-                false,
-                Some("t1"),
-            ))
-            .unwrap();
-        // A later status-only upsert (COALESCE keeps the origin).
-        store
-            .upsert(&upsert(
-                run,
-                "t2",
-                RoadmapStatus::ReadyForVerification,
-                false,
-                None,
-            ))
-            .unwrap();
-        let record = store.get(run, "t2").unwrap().unwrap();
-        assert_eq!(record.discovered_from.as_deref(), Some("t1"));
-        assert_eq!(record.status, RoadmapStatus::ReadyForVerification);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            store
+                .upsert(&upsert(
+                    run,
+                    "t2",
+                    RoadmapStatus::Pending,
+                    false,
+                    Some("t1"),
+                ))
+                .unwrap();
+            // A later status-only upsert (COALESCE keeps the origin).
+            store
+                .upsert(&upsert(
+                    run,
+                    "t2",
+                    RoadmapStatus::ReadyForVerification,
+                    false,
+                    None,
+                ))
+                .unwrap();
+            let record = store.get(run, "t2").unwrap().unwrap();
+            assert_eq!(record.discovered_from.as_deref(), Some("t1"));
+            assert_eq!(record.status, RoadmapStatus::ReadyForVerification);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 }

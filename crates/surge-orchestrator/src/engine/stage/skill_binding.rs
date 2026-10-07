@@ -533,7 +533,7 @@ mod tests {
         registry: Arc<GateResolutions>,
         node: NodeKey,
         outcome: &'static str,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 let mut guard = registry.lock().await;
@@ -549,7 +549,7 @@ mod tests {
                 drop(guard);
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
-        });
+        })
     }
 
     async fn payload_kinds(
@@ -591,7 +591,7 @@ mod tests {
         };
         let (_, real) = catalog.resolve(&probe).unwrap();
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -656,6 +656,10 @@ mod tests {
             },
             other => panic!("expected SkillBound, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -669,7 +673,7 @@ mod tests {
         );
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -683,7 +687,7 @@ mod tests {
         }];
 
         let registry = empty_registry();
-        spawn_operator_response(registry.clone(), node.clone(), "approve");
+        let operator = spawn_operator_response(registry.clone(), node.clone(), "approve");
 
         let result = bind_skills(SkillBindingParams {
             node: &node,
@@ -704,6 +708,10 @@ mod tests {
             vec!["HumanInputRequested", "HumanInputResolved", "SkillBound"],
         );
         assert!(registry.lock().await.is_empty());
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -717,7 +725,7 @@ mod tests {
         );
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -731,7 +739,7 @@ mod tests {
         }];
 
         let registry = empty_registry();
-        spawn_operator_response(registry.clone(), node.clone(), "reject");
+        let operator = spawn_operator_response(registry.clone(), node.clone(), "reject");
 
         let result = bind_skills(SkillBindingParams {
             node: &node,
@@ -754,6 +762,10 @@ mod tests {
             !kinds.contains(&"SkillBound"),
             "a denied skill must never be bound, got {kinds:?}"
         );
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -771,7 +783,7 @@ mod tests {
         );
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -803,6 +815,9 @@ mod tests {
             registry.lock().await.is_empty(),
             "the timed-out entry must be removed, not left stale in the registry"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -820,7 +835,7 @@ mod tests {
         );
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -847,6 +862,9 @@ mod tests {
         assert!(matches!(result, Err(StageError::SkillApprovalRejected)));
         let kinds = payload_kinds(&storage, run_id).await;
         assert_eq!(kinds, vec!["HumanInputRequested", "HumanInputTimedOut"]);
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -882,7 +900,7 @@ mod tests {
             "editing the pack must change its hash for this test to mean anything"
         );
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -896,7 +914,7 @@ mod tests {
         }];
 
         let registry = empty_registry();
-        spawn_operator_response(registry.clone(), node.clone(), "approve");
+        let operator = spawn_operator_response(registry.clone(), node.clone(), "approve");
 
         let result = bind_skills(SkillBindingParams {
             node: &node,
@@ -939,6 +957,11 @@ mod tests {
             bound_hash, fresh.hash,
             "the bound hash must be the freshly-resolved content, not the stale pin"
         );
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -956,7 +979,7 @@ mod tests {
         );
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1009,6 +1032,10 @@ mod tests {
             },
             other => panic!("expected SkillBound, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1017,7 +1044,7 @@ mod tests {
         // Root exists but has no packs at all.
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1047,6 +1074,9 @@ mod tests {
             kinds.is_empty(),
             "no events for a node that never resolved its skills"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// R17 / "test reads the log back": binds two different nodes in the
@@ -1081,7 +1111,7 @@ mod tests {
             .1
             .hash;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1155,6 +1185,10 @@ mod tests {
             Some(&("planning-guide".to_string(), planner_hash)),
             "the log alone must attribute the planning skill to plan_1"
         );
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// Real corpus shape (measured on `~/.claude/plugins`: 49 names, each
@@ -1197,7 +1231,7 @@ mod tests {
             .and_then(|s| s.hash)
             .unwrap();
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1230,6 +1264,9 @@ mod tests {
             vec!["SkillBound"],
             "a matching pin must never prompt, even amid ambiguous siblings"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1251,7 +1288,7 @@ mod tests {
         );
         let expected_choice = candidate_hashes[0];
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1265,7 +1302,7 @@ mod tests {
         }];
 
         let registry = empty_registry();
-        spawn_operator_response(registry.clone(), node.clone(), "approve");
+        let operator = spawn_operator_response(registry.clone(), node.clone(), "approve");
 
         let result = bind_skills(SkillBindingParams {
             node: &node,
@@ -1316,6 +1353,11 @@ mod tests {
             kinds,
             vec!["HumanInputRequested", "HumanInputResolved", "SkillBound"],
         );
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1324,7 +1366,7 @@ mod tests {
         write_two_differing_packs_with_shared_name(skills_dir.path(), "tech-debt");
         let catalog = SkillCatalog::discover(&[project_root(skills_dir.path())]);
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1338,7 +1380,7 @@ mod tests {
         }];
 
         let registry = empty_registry();
-        spawn_operator_response(registry.clone(), node.clone(), "reject");
+        let operator = spawn_operator_response(registry.clone(), node.clone(), "reject");
 
         let result = bind_skills(SkillBindingParams {
             node: &node,
@@ -1354,6 +1396,10 @@ mod tests {
         assert!(matches!(result, Err(StageError::SkillApprovalRejected)));
         let kinds = payload_kinds(&storage, run_id).await;
         assert!(!kinds.contains(&"SkillBound"));
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1405,7 +1451,7 @@ mod tests {
             Err(SkillError::Ambiguous { .. })
         ));
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1419,7 +1465,7 @@ mod tests {
         }];
 
         let registry = empty_registry();
-        spawn_operator_response(registry.clone(), node.clone(), "approve");
+        let operator = spawn_operator_response(registry.clone(), node.clone(), "approve");
 
         let result = bind_skills(SkillBindingParams {
             node: &node,
@@ -1441,5 +1487,9 @@ mod tests {
             kinds,
             vec!["HumanInputRequested", "HumanInputResolved", "SkillBound"],
         );
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 }

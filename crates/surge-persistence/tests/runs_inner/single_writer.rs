@@ -32,6 +32,7 @@ async fn second_in_process_writer_fails_with_writer_already_held() {
         .await
         .expect("re-open after close");
     writer2.close().await.expect("close 2");
+    t.close().expect("close runtime home");
 }
 
 /// Cross-process exclusion via fd-lock. Stubbed under #[ignore] on Windows

@@ -441,7 +441,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn crashed_run_remains_actionable_when_done_history_is_capped() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let id = RunId::new();
         let writer = storage.create_run(id, dir.path(), None).await.unwrap();
@@ -459,11 +459,14 @@ mod tests {
         );
         assert_eq!(entries[0].attention.as_str(), "recovery");
         assert!(entries[0].done_reason.is_none());
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unreadable_peer_is_unknown_and_durable_terminal_overrides_crash() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let broken = RunId::new();
         let writer = storage.create_run(broken, dir.path(), None).await.unwrap();
@@ -505,11 +508,14 @@ mod tests {
         assert_eq!(done.attention, AttentionGroup::Done);
         assert_eq!(done.done_reason, Some(DoneReason::Aborted));
         assert_eq!(std::fs::read(db).unwrap(), b"corrupt journal");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn registry_terminal_without_journal_is_unconfirmed_not_done() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         for status in [RunStatus::Completed, RunStatus::Failed, RunStatus::Aborted] {
             let id = RunId::new();
@@ -541,6 +547,8 @@ mod tests {
             assert_eq!(std::fs::read(path).unwrap(), b"unreadable terminal journal");
         }
         assert_eq!(collect_entries(&storage, None, 0).await.unwrap().len(), 3);
+        drop(storage);
+        dir.close().unwrap();
     }
     use std::collections::BTreeMap;
     use surge_core::approvals::ApprovalPolicy;
@@ -619,7 +627,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn inbox_groups_runs_by_attention() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -693,6 +701,11 @@ mod tests {
         // `Some(false)`, never `None` — "success without proof" is a known
         // fact, not an unanswered question.
         assert_eq!(d.evidence_backed, Some(false));
+        w.close().await.unwrap();
+        w2.close().await.unwrap();
+        w3.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// Spec §10/R30's three-surface requirement, the `surge inbox` third:
@@ -706,7 +719,7 @@ mod tests {
     /// copy of the rule.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn legacy_unbound_completion_and_registry_flags_do_not_prove_success() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -832,6 +845,11 @@ mod tests {
         assert_ne!(find(verified_run).evidence_backed, Some(true));
         assert_eq!(find(unverified_run).evidence_backed, Some(false));
         assert_eq!(find(boundary_run).evidence_backed, Some(false));
+        wv.close().await.unwrap();
+        wu.close().await.unwrap();
+        wb.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// The aggregation the review round asked to pin: a run with one
@@ -843,7 +861,7 @@ mod tests {
     /// ledger row, so none of them can catch that mutation.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn evidence_backed_requires_every_task_verified_not_just_one() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -907,6 +925,9 @@ mod tests {
             .find(|e| e.run_id == mixed_run)
             .unwrap_or_else(|| panic!("missing {mixed_run}"));
         assert_eq!(entry.evidence_backed, Some(false));
+        wm.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// `classify`'s own doc names a race window: a run whose event log
@@ -920,7 +941,7 @@ mod tests {
     /// every test until this one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn evidence_backed_is_computed_on_the_fold_path_too_when_registry_status_lags() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -958,6 +979,9 @@ mod tests {
             Some(false),
             "no verifier ran, so this must read Some(false), not None"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -969,7 +993,7 @@ mod tests {
         // only be visible via `--json`).
         use surge_core::capacity::WakeBasis;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1007,6 +1031,9 @@ mod tests {
         // it from the run's event log.
         assert_eq!(entry.wake_at, Some(wake_at));
         assert_eq!(entry.wake_basis, Some(WakeBasis::ObservedReset));
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1018,7 +1045,7 @@ mod tests {
         // in the serialized entry.
         use surge_core::capacity::WakeBasis;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1056,6 +1083,9 @@ mod tests {
         assert_eq!(entry["attention"], "waiting");
         assert_eq!(entry["wake_at"], serde_json::json!(wake_at));
         assert_eq!(entry["wake_basis"], serde_json::json!("PolicyBackoff"));
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1066,7 +1096,7 @@ mod tests {
         // while it is actually executing again.
         use surge_core::capacity::WakeBasis;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1104,6 +1134,9 @@ mod tests {
             "RunWokeFromPark must clear the parked state — a resumed run must not still show \
              as \"waiting\" in the inbox"
         );
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1116,7 +1149,7 @@ mod tests {
         // moved rather than merely asserting it did.
         use surge_core::capacity::{CapacityWindow, WakeBasis};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1164,6 +1197,9 @@ mod tests {
         );
         assert_eq!(window.runtime(), "claude-acp");
         assert!(window.is_exhausted());
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1178,7 +1214,7 @@ mod tests {
         // trusting the journal's own string.
         use surge_core::capacity::{CapacityWindow, WakeBasis};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1245,6 +1281,10 @@ mod tests {
             "two runs parked on the same runtime must read the identical registry fact, not \
              two independently-derived ones"
         );
+        wa.close().await.unwrap();
+        wb.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1256,7 +1296,7 @@ mod tests {
         // *other* runtime.
         use surge_core::capacity::{CapacityWindow, WakeBasis};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1298,6 +1338,9 @@ mod tests {
             .expect("run present");
         assert_eq!(entry.attention, AttentionGroup::Waiting);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1313,7 +1356,7 @@ mod tests {
         // a terminal run too.
         use surge_core::capacity::CapacityWindow;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1366,6 +1409,9 @@ mod tests {
             "a terminal run must never surface a registry row, even one that matches its own \
              last-known runtime"
         );
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1380,7 +1426,7 @@ mod tests {
         // `Bootstrapping`/`Running` classes for.
         use surge_core::capacity::CapacityWindow;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1407,13 +1453,16 @@ mod tests {
             .expect("run present");
         assert_eq!(entry.attention, AttentionGroup::Working);
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn inbox_capacity_is_never_observed_when_no_failure_occurred() {
         // The primary case (R35.1): an ordinary run carries no rate-limit
         // signal, and this must read as absent, never a guess.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let project = dir.path().join("proj");
         let storage = Storage::open(dir.path()).await.unwrap();
 
@@ -1430,5 +1479,8 @@ mod tests {
             .find(|e| e.run_id == run)
             .expect("run present");
         assert_eq!(entry.capacity, CapacityStatus::NeverObserved);
+        w.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 }

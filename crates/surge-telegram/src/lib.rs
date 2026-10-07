@@ -24,3 +24,13 @@ pub use error::{Result, TelegramCockpitError};
 
 /// Runtime-only redacted credentials.
 pub mod credentials;
+
+#[cfg(test)]
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}

@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use surge_core::RunId;
 use tokio::runtime::{Handle, RuntimeFlavor};
 
@@ -21,6 +21,8 @@ use crate::runs::writer_slot::{ActiveWriters, WriterLease};
 /// Top-level storage facade. Holds registry pool, active-writers, config.
 pub struct Storage {
     pub(crate) home: PathBuf,
+    #[cfg(windows)]
+    pub(crate) state_home_owner: Arc<crate::state_home::StateHomeOwner>,
     pub(crate) registry_pool: Pool<SqliteConnectionManager>,
     pub(crate) active_writers: Arc<ActiveWriters>,
     pub(crate) config: StorageConfig,
@@ -64,8 +66,13 @@ impl Storage {
         }
 
         let home = home.as_ref().to_path_buf();
-        std::fs::create_dir_all(home.join("db"))?;
-        std::fs::create_dir_all(home.join("runs"))?;
+        #[cfg(windows)]
+        let state_home_owner = crate::state_home::StateHomeOwner::open(&home)?;
+        #[cfg(not(windows))]
+        {
+            std::fs::create_dir_all(home.join("db"))?;
+            std::fs::create_dir_all(home.join("runs"))?;
+        }
 
         let config = load_or_default(&home);
         let registry_pool = crate::runs::registry::open_registry_pool(&home, clock.as_ref())?;
@@ -73,6 +80,8 @@ impl Storage {
         Ok(Arc::new(Self {
             home,
             registry_pool,
+            #[cfg(windows)]
+            state_home_owner,
             active_writers: Arc::new(ActiveWriters::default()),
             config,
             clock,
@@ -175,7 +184,7 @@ impl Storage {
     /// duration of one logical operation; do not hold it across awaits.
     pub fn acquire_registry_conn(
         &self,
-    ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, r2d2::Error> {
+    ) -> Result<r2d2::PooledConnection<crate::SqliteConnectionManager>, r2d2::Error> {
         self.registry_pool.get()
     }
 
@@ -221,6 +230,28 @@ pub struct ActiveRunRow {
 }
 
 impl Storage {
+    #[cfg(windows)]
+    fn native_run_namespace(
+        &self,
+        run_id: &RunId,
+        create: bool,
+    ) -> Result<Arc<crate::state_home::SqliteNamespaceOwner>, OpenError> {
+        use crate::state_home::NativeError;
+        use windows::Win32::Foundation::{
+            STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+        };
+        self.state_home_owner
+            .run_database(std::ffi::OsStr::new(&run_id.to_string()), create)
+            .map_err(|error| match error {
+                NativeError::Open(STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND)
+                    if !create =>
+                {
+                    OpenError::RunNotFound(*run_id)
+                },
+                other => other.into(),
+            })
+    }
+
     /// Create a new run: insert into registry, init per-run DB with migrations,
     /// open the worktree-anchored writer.
     pub async fn create_run(
@@ -236,13 +267,29 @@ impl Storage {
         let artifacts_dir = self.artifacts_dir(&run_id);
         let events_path = self.events_db_path(&run_id);
         let clock = self.clock.clone();
+        #[cfg(windows)]
+        let namespace = self.native_run_namespace(&run_id, true)?;
         tokio::task::spawn_blocking(move || -> Result<(), OpenError> {
-            std::fs::create_dir_all(&run_dir)?;
-            std::fs::create_dir_all(&artifacts_dir)?;
+            #[cfg(windows)]
+            namespace.verify()?;
+            #[cfg(not(windows))]
+            {
+                std::fs::create_dir_all(&run_dir)?;
+                std::fs::create_dir_all(&artifacts_dir)?;
+            }
+            #[cfg(windows)]
+            let _ = (&run_dir, &artifacts_dir);
+            #[cfg(windows)]
+            let mut conn = super::connection::RetainedConnection::open_owned(
+                &events_path,
+                rusqlite::OpenFlags::default(),
+                namespace,
+            )?;
+            #[cfg(not(windows))]
             let mut conn = rusqlite::Connection::open(&events_path)?;
             apply_pragmas(&conn, PER_RUN_PRAGMAS)?;
             crate::runs::migrations::apply(
-                &mut conn,
+                super::connection::raw_mut(&mut conn),
                 crate::runs::migrations::PER_RUN_MIGRATIONS,
                 clock.as_ref(),
             )
@@ -279,14 +326,19 @@ impl Storage {
     pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
         let events_path = self.events_db_path(&run_id);
         let reader_pool_size = self.config.reader_pool_size;
+        #[cfg(windows)]
+        let namespace = self.native_run_namespace(&run_id, false)?;
         // r2d2 `build` blocks until its initial connections open and apply
         // PRAGMAs, which can enter SQLite's busy handler.
         let pool = tokio::task::spawn_blocking(move || {
             if !events_path.exists() {
                 return Ok(None);
             }
-            let manager = SqliteConnectionManager::file(&events_path)
-                .with_init(|c| apply_pragmas(c, PER_RUN_PRAGMAS));
+            #[cfg(windows)]
+            let manager = SqliteConnectionManager::file(&events_path, namespace);
+            #[cfg(not(windows))]
+            let manager = SqliteConnectionManager::file(&events_path);
+            let manager = manager.with_init(move |c| apply_pragmas(c, PER_RUN_PRAGMAS));
             super::pool::sqlite_pool_builder()
                 .max_size(reader_pool_size)
                 .build(manager)
@@ -319,6 +371,8 @@ impl Storage {
                 run_id: run_id.clone(),
             })?;
 
+        #[cfg(windows)]
+        let namespace = self.native_run_namespace(&run_id, false)?;
         let lock_path = self.lock_path(&run_id);
         let file_lock = FileLock::try_acquire(&lock_path, run_id.clone())?;
 
@@ -341,6 +395,8 @@ impl Storage {
         let lease = Arc::new(WriterLease {
             _token: token,
             _file_lock: file_lock,
+            #[cfg(windows)]
+            namespace,
         });
         let (writer_tx, writer_join) =
             spawn_writer(cfg, self.config.writer_channel_capacity, lease.clone());
@@ -358,6 +414,15 @@ impl Storage {
     fn upgrade_existing_run(&self, events_path: &Path) -> Result<(), OpenError> {
         use crate::runs::migrations::{PER_RUN_MIGRATIONS, apply};
 
+        #[cfg(windows)]
+        let namespace = crate::state_home::SqliteNamespaceOwner::existing(events_path)?;
+        #[cfg(windows)]
+        let mut conn = super::connection::RetainedConnection::open_owned(
+            events_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            namespace,
+        )?;
+        #[cfg(not(windows))]
         let mut conn = rusqlite::Connection::open_with_flags(
             events_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -380,8 +445,12 @@ impl Storage {
         }
         // Validate before WAL configuration: an unsupported schema is never upgraded.
         apply_pragmas(&conn, PER_RUN_PRAGMAS)?;
-        apply(&mut conn, PER_RUN_MIGRATIONS, self.clock.as_ref())
-            .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
+        apply(
+            super::connection::raw_mut(&mut conn),
+            PER_RUN_MIGRATIONS,
+            self.clock.as_ref(),
+        )
+        .map_err(|error| OpenError::MigrationFailed(error.to_string()))?;
         tracing::debug!(path = %events_path.display(), "run database schema validated before writer startup");
         Ok(())
     }
@@ -724,31 +793,34 @@ fn sweep_stale_pid(
 #[cfg(test)]
 mod set_run_status_tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn set_run_status_updates_registry() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        let run_id = RunId::new();
-        let _writer = storage
-            .create_run(run_id.clone(), "/proj", None)
-            .await
-            .unwrap();
+            let run_id = RunId::new();
+            let writer = storage
+                .create_run(run_id.clone(), "/proj", None)
+                .await
+                .unwrap();
 
-        // Freshly created run is Bootstrapping.
-        let before = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(before.status, RunStatus::Bootstrapping);
+            // Freshly created run is Bootstrapping.
+            let before = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(before.status, RunStatus::Bootstrapping);
 
-        storage
-            .set_run_status(&run_id, RunStatus::Failed, Some(1_700_000_000_500))
-            .await
-            .unwrap();
+            storage
+                .set_run_status(&run_id, RunStatus::Failed, Some(1_700_000_000_500))
+                .await
+                .unwrap();
 
-        let after = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(after.status, RunStatus::Failed);
-        assert_eq!(after.ended_at_ms, Some(1_700_000_000_500));
+            let after = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(after.status, RunStatus::Failed);
+            assert_eq!(after.ended_at_ms, Some(1_700_000_000_500));
+            writer.close().await.unwrap();
+        }
+        dir.close().unwrap();
     }
 }
 
@@ -756,7 +828,6 @@ mod set_run_status_tests {
 mod capacity_door_tests {
     use super::*;
     use surge_core::capacity::{CapacityStatus, CapacityWindow};
-    use tempfile::tempdir;
 
     /// Task 12 M3: proves the `Storage`-level doors this milestone adds
     /// (`observe_capacity`/`capacity_status`/`set_run_parked`) actually
@@ -768,133 +839,144 @@ mod capacity_door_tests {
     /// write lock: every successful stage clears, usually with nothing to do.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn clear_capacity_without_row_does_not_wait_on_registry_lock() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-        let holder = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
-        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let holder = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
+            holder.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            storage.clear_capacity("claude-acp"),
-        )
-        .await
-        .expect("absent-row clear waited on the registry write lock")
-        .unwrap();
-        holder.execute_batch("ROLLBACK").unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                storage.clear_capacity("claude-acp"),
+            )
+            .await
+            .expect("absent-row clear waited on the registry write lock")
+            .unwrap();
+            holder.execute_batch("ROLLBACK").unwrap();
+        }
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn observe_capacity_then_capacity_status_round_trips_through_storage() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        assert_eq!(
-            storage.capacity_status("claude-acp").await.unwrap(),
-            CapacityStatus::NeverObserved
-        );
+            assert_eq!(
+                storage.capacity_status("claude-acp").await.unwrap(),
+                CapacityStatus::NeverObserved
+            );
 
-        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let window = CapacityWindow::observed_429(
-            "claude-acp",
-            Some(std::time::Duration::from_secs(30)),
-            observed_at,
-        );
-        storage.observe_capacity(&window).await.unwrap();
+            let observed_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let window = CapacityWindow::observed_429(
+                "claude-acp",
+                Some(std::time::Duration::from_secs(30)),
+                observed_at,
+            );
+            storage.observe_capacity(&window).await.unwrap();
 
-        let CapacityStatus::Known(got) = storage.capacity_status("claude-acp").await.unwrap()
-        else {
-            panic!("expected Known after observe_capacity");
-        };
-        assert_eq!(got.runtime(), "claude-acp");
-        assert_eq!(
-            got.resets_at(),
-            Some(observed_at + chrono::Duration::seconds(30))
-        );
+            let CapacityStatus::Known(got) = storage.capacity_status("claude-acp").await.unwrap()
+            else {
+                panic!("expected Known after observe_capacity");
+            };
+            assert_eq!(got.runtime(), "claude-acp");
+            assert_eq!(
+                got.resets_at(),
+                Some(observed_at + chrono::Duration::seconds(30))
+            );
+        }
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn set_run_parked_transitions_status_and_records_wake_at_ms() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        let run_id = RunId::new();
-        let _writer = storage
-            .create_run(run_id.clone(), "/proj", None)
-            .await
-            .unwrap();
+            let run_id = RunId::new();
+            let writer = storage
+                .create_run(run_id.clone(), "/proj", None)
+                .await
+                .unwrap();
 
-        storage
-            .set_run_parked(&run_id, 1_700_000_100_000)
-            .await
-            .unwrap();
+            storage
+                .set_run_parked(&run_id, 1_700_000_100_000)
+                .await
+                .unwrap();
 
-        let after = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(after.status, RunStatus::Parked);
-        assert_eq!(after.wake_at_ms, Some(1_700_000_100_000));
+            let after = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(after.status, RunStatus::Parked);
+            assert_eq!(after.wake_at_ms, Some(1_700_000_100_000));
+            writer.close().await.unwrap();
+        }
+        dir.close().unwrap();
     }
 }
 
 #[cfg(test)]
 mod snapshot_active_runs_tests {
     use super::*;
-    use tempfile::tempdir;
 
     /// Rows are written by the production path (`registry::insert_run`,
     /// which stores `RunStatus::as_str`), not hand-written status strings,
     /// so the filter is checked against the form the registry actually holds.
     #[tokio::test(flavor = "multi_thread")]
     async fn snapshot_returns_active_runs_only() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-
-        let mut expected = Vec::new();
-        for (offset, status) in [
-            RunStatus::Running,
-            RunStatus::Bootstrapping,
-            RunStatus::Completed,
-            RunStatus::Parked,
-            RunStatus::Crashed,
-            RunStatus::Running,
-        ]
-        .into_iter()
-        .enumerate()
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let summary = RunSummary {
-                id: RunId::new(),
-                project_path: "/tmp/proj".into(),
-                pipeline_template: None,
-                status,
-                started_at_ms: 1_700_000_000_000 + offset as i64,
-                ended_at_ms: None,
-                daemon_pid: None,
-                wake_at_ms: None,
-            };
-            registry::insert_run(&storage.registry_pool, &summary).unwrap();
-            if matches!(status, RunStatus::Running | RunStatus::Bootstrapping) {
-                expected.push((summary.id.to_string(), status.as_str().to_owned()));
+            let storage = Storage::open(dir.path()).await.unwrap();
+
+            let mut expected = Vec::new();
+            for (offset, status) in [
+                RunStatus::Running,
+                RunStatus::Bootstrapping,
+                RunStatus::Completed,
+                RunStatus::Parked,
+                RunStatus::Crashed,
+                RunStatus::Running,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let summary = RunSummary {
+                    id: RunId::new(),
+                    project_path: "/tmp/proj".into(),
+                    pipeline_template: None,
+                    status,
+                    started_at_ms: 1_700_000_000_000 + offset as i64,
+                    ended_at_ms: None,
+                    daemon_pid: None,
+                    wake_at_ms: None,
+                };
+                registry::insert_run(&storage.registry_pool, &summary).unwrap();
+                if matches!(status, RunStatus::Running | RunStatus::Bootstrapping) {
+                    expected.push((summary.id.to_string(), status.as_str().to_owned()));
+                }
             }
+            expected.reverse();
+
+            let snap = storage.snapshot_active_runs(32).await.unwrap();
+            let got: Vec<_> = snap
+                .iter()
+                .map(|row| (row.run_id.clone(), row.status.clone()))
+                .collect();
+            assert_eq!(got, expected, "active runs only, newest first");
+
+            let limited = storage.snapshot_active_runs(1).await.unwrap();
+            assert_eq!(limited.len(), 1);
+            assert_eq!(limited[0].run_id, expected[0].0);
         }
-        expected.reverse();
-
-        let snap = storage.snapshot_active_runs(32).await.unwrap();
-        let got: Vec<_> = snap
-            .iter()
-            .map(|row| (row.run_id.clone(), row.status.clone()))
-            .collect();
-        assert_eq!(got, expected, "active runs only, newest first");
-
-        let limited = storage.snapshot_active_runs(1).await.unwrap();
-        assert_eq!(limited.len(), 1);
-        assert_eq!(limited[0].run_id, expected[0].0);
+        dir.close().unwrap();
     }
 }
 
 #[cfg(test)]
 mod parked_survives_stale_pid_tests {
     use super::*;
-    use tempfile::tempdir;
 
     /// Task 12 M2: pinned as intent, not a red→green fix — the stale-pid
     /// probe in `list_runs`/`get_run` is already an allowlist
@@ -907,39 +989,42 @@ mod parked_survives_stale_pid_tests {
     /// are waiting on purpose.
     #[tokio::test(flavor = "multi_thread")]
     async fn parked_run_with_dead_pid_stays_parked() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-
-        let run_id = RunId::new();
-        let writer = storage
-            .create_run(run_id.clone(), "/proj", None)
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-
-        // A parked run has no owning daemon by design; fake one with a pid
-        // that cannot possibly be alive (i32::MAX, same fixture as
-        // `stale_pid.rs`'s existing Running/Bootstrapping regression test).
-        registry::set_run_parked(&storage.registry_pool, &run_id, 1_700_000_100_000).unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = storage.registry_pool.get().unwrap();
-            conn.execute(
-                "UPDATE runs SET daemon_pid = ? WHERE id = ?",
-                rusqlite::params![i32::MAX, run_id.to_string()],
-            )
-            .unwrap();
+            let storage = Storage::open(dir.path()).await.unwrap();
+
+            let run_id = RunId::new();
+            let writer = storage
+                .create_run(run_id.clone(), "/proj", None)
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+
+            // A parked run has no owning daemon by design; fake one with a pid
+            // that cannot possibly be alive (i32::MAX, same fixture as
+            // `stale_pid.rs`'s existing Running/Bootstrapping regression test).
+            registry::set_run_parked(&storage.registry_pool, &run_id, 1_700_000_100_000).unwrap();
+            {
+                let conn = storage.registry_pool.get().unwrap();
+                conn.execute(
+                    "UPDATE runs SET daemon_pid = ? WHERE id = ?",
+                    rusqlite::params![i32::MAX, run_id.to_string()],
+                )
+                .unwrap();
+            }
+
+            let listed = storage.list_runs(RunFilter::default()).await.unwrap();
+            let row = listed.iter().find(|r| r.id == run_id).unwrap();
+            assert_eq!(
+                row.status,
+                RunStatus::Parked,
+                "a dead pid must not rewrite a parked run to Crashed"
+            );
+
+            let single = storage.get_run(&run_id).await.unwrap().unwrap();
+            assert_eq!(single.status, RunStatus::Parked);
         }
-
-        let listed = storage.list_runs(RunFilter::default()).await.unwrap();
-        let row = listed.iter().find(|r| r.id == run_id).unwrap();
-        assert_eq!(
-            row.status,
-            RunStatus::Parked,
-            "a dead pid must not rewrite a parked run to Crashed"
-        );
-
-        let single = storage.get_run(&run_id).await.unwrap().unwrap();
-        assert_eq!(single.status, RunStatus::Parked);
+        dir.close().unwrap();
     }
 }
 
@@ -952,7 +1037,21 @@ mod existing_run_upgrade_tests {
     use surge_core::{EventPayload, VersionedEventPayload};
 
     fn seed_legacy_run(storage: &Storage, run_id: &RunId) {
+        #[cfg(not(windows))]
         std::fs::create_dir_all(storage.run_dir(run_id)).unwrap();
+        #[cfg(windows)]
+        let run_namespace = crate::RuntimeHomeOwner::prepare(&storage.home)
+            .unwrap()
+            .reserve_run_directory(*run_id)
+            .unwrap();
+        #[cfg(windows)]
+        {
+            let database = run_namespace
+                .open_append(std::ffi::OsStr::new("events.sqlite"))
+                .unwrap();
+            database.flush().unwrap();
+        }
+
         let mut conn = rusqlite::Connection::open(storage.events_db_path(run_id)).unwrap();
         apply(&mut conn, &PER_RUN_MIGRATIONS[..6], &MockClock::new(100)).unwrap();
         let payload = VersionedEventPayload::new(EventPayload::RunAborted {
@@ -970,109 +1069,124 @@ mod existing_run_upgrade_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn writer_upgrades_legacy_run_before_current_reads_and_preserves_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-        let run_id = RunId::new();
-        seed_legacy_run(&storage, &run_id);
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let run_id = RunId::new();
+            seed_legacy_run(&storage, &run_id);
 
-        for _ in 0..2 {
-            let writer = storage.open_run_writer(run_id.clone()).await.unwrap();
-            let reader = writer.reader();
-            let stages = reader.stage_executions().await.unwrap();
-            assert_eq!(stages.len(), 1);
-            let stage = &stages[0];
-            assert_eq!(stage.node_id.to_string(), "worker");
-            assert_eq!(stage.attempt, 2);
-            assert_eq!(stage.started_seq, EventSeq(1));
-            assert_eq!(stage.started_at_ms, 42);
-            assert_eq!(
-                (stage.cost_usd, stage.tokens_in, stage.tokens_out),
-                (1.25, 11, 7)
-            );
-            assert_eq!(stage.known_cost_usd, None);
-            assert!(!stage.cost_unknown);
-            let event = reader.read_event(EventSeq(1)).await.unwrap().unwrap();
-            assert_eq!(event.timestamp_ms, 42);
-            assert_eq!(event.kind, "RunAborted");
-            assert!(
-                matches!(event.payload.payload(), EventPayload::RunAborted { reason } if reason == "historical reason")
-            );
-            let session = surge_core::SessionId::new();
-            writer
-                .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
-                    handoff: None,
-                    opened: None,
-                    node: "worker".parse().unwrap(),
-                    session,
-                    agent: "legacy-profile".into(),
-                    agent_id: None,
-                }))
-                .await
-                .unwrap();
-            let conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
-            let recorded_session: String = conn
-                .query_row("SELECT session_id FROM stage_executions", [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            assert_eq!(recorded_session, session.as_ulid().to_string());
-            let applied: usize = conn
-                .query_row("SELECT COUNT(*) FROM _migrations", [], |row| row.get(0))
-                .unwrap();
-            assert_eq!(applied, PER_RUN_MIGRATIONS.len());
-            writer.close().await.unwrap();
+            for _ in 0..2 {
+                let writer = storage.open_run_writer(run_id.clone()).await.unwrap();
+                let reader = writer.reader();
+                let stages = reader.stage_executions().await.unwrap();
+                assert_eq!(stages.len(), 1);
+                let stage = &stages[0];
+                assert_eq!(stage.node_id.to_string(), "worker");
+                assert_eq!(stage.attempt, 2);
+                assert_eq!(stage.started_seq, EventSeq(1));
+                assert_eq!(stage.started_at_ms, 42);
+                assert_eq!(
+                    (stage.cost_usd, stage.tokens_in, stage.tokens_out),
+                    (1.25, 11, 7)
+                );
+                assert_eq!(stage.known_cost_usd, None);
+                assert!(!stage.cost_unknown);
+                let event = reader.read_event(EventSeq(1)).await.unwrap().unwrap();
+                assert_eq!(event.timestamp_ms, 42);
+                assert_eq!(event.kind, "RunAborted");
+                assert!(
+                    matches!(event.payload.payload(), EventPayload::RunAborted { reason } if reason == "historical reason")
+                );
+                let session = surge_core::SessionId::new();
+                writer
+                    .append_event(VersionedEventPayload::new(EventPayload::SessionOpened {
+                        handoff: None,
+                        opened: None,
+                        node: "worker".parse().unwrap(),
+                        session,
+                        agent: "legacy-profile".into(),
+                        agent_id: None,
+                    }))
+                    .await
+                    .unwrap();
+                let conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
+                let recorded_session: String = conn
+                    .query_row("SELECT session_id FROM stage_executions", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(recorded_session, session.as_ulid().to_string());
+                let applied: usize = conn
+                    .query_row("SELECT COUNT(*) FROM _migrations", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(applied, PER_RUN_MIGRATIONS.len());
+                writer.close().await.unwrap();
+            }
         }
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn writer_missing_run_does_not_create_events_database() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-        let run_id = RunId::new();
-        std::fs::create_dir_all(storage.run_dir(&run_id)).unwrap();
-        assert!(matches!(
-            storage.open_run_writer(run_id.clone()).await,
-            Err(OpenError::RunNotFound(_))
-        ));
-        assert!(!storage.events_db_path(&run_id).exists());
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let run_id = RunId::new();
+            #[cfg(not(windows))]
+            std::fs::create_dir_all(storage.run_dir(&run_id)).unwrap();
+            #[cfg(windows)]
+            let _run_namespace = crate::RuntimeHomeOwner::prepare(&storage.home)
+                .unwrap()
+                .reserve_run_directory(run_id)
+                .unwrap();
+            assert!(matches!(
+                storage.open_run_writer(run_id.clone()).await,
+                Err(OpenError::RunNotFound(_))
+            ));
+            assert!(!storage.events_db_path(&run_id).exists());
+        }
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn writer_refuses_unknown_schema_without_upgrade_and_releases_ownership() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-        let run_id = RunId::new();
-        seed_legacy_run(&storage, &run_id);
-        let conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
-        conn.execute(
-            "INSERT INTO _migrations(id,applied_at) VALUES('per-run-9999-future',100)",
-            [],
-        )
-        .unwrap();
-        let before: String = conn
-            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let run_id = RunId::new();
+            seed_legacy_run(&storage, &run_id);
+            let conn = rusqlite::Connection::open(storage.events_db_path(&run_id)).unwrap();
+            conn.execute(
+                "INSERT INTO _migrations(id,applied_at) VALUES('per-run-9999-future',100)",
+                [],
+            )
             .unwrap();
-        let result = storage.open_run_writer(run_id.clone()).await;
-        assert!(
-            matches!(result, Err(OpenError::MigrationFailed(message)) if message.contains("per-run-9999-future"))
-        );
-        let after: String = conn
-            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(before, after);
-        let applied: usize = conn
-            .query_row("SELECT COUNT(*) FROM _migrations", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(applied, 7);
-        conn.execute("DELETE FROM _migrations WHERE id='per-run-9999-future'", [])
-            .unwrap();
-        storage
-            .open_run_writer(run_id)
-            .await
-            .unwrap()
-            .close()
-            .await
-            .unwrap();
+            let before: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .unwrap();
+            let result = storage.open_run_writer(run_id.clone()).await;
+            assert!(
+                matches!(result, Err(OpenError::MigrationFailed(message)) if message.contains("per-run-9999-future"))
+            );
+            let after: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(before, after);
+            let applied: usize = conn
+                .query_row("SELECT COUNT(*) FROM _migrations", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(applied, 7);
+            conn.execute("DELETE FROM _migrations WHERE id='per-run-9999-future'", [])
+                .unwrap();
+            storage
+                .open_run_writer(run_id)
+                .await
+                .unwrap()
+                .close()
+                .await
+                .unwrap();
+        }
+        dir.close().unwrap();
     }
 }
 

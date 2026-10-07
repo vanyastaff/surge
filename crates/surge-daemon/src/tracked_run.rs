@@ -455,32 +455,36 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn final_flush_delivers_persisted_rows_even_without_tap_delivery() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let id = RunId::new();
-        let writer = storage.create_run(id, "/worktree", None).await.unwrap();
-        for reason in ["first", "second"] {
-            writer
-                .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
-                    reason: reason.into(),
-                }))
-                .await
-                .unwrap();
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let id = RunId::new();
+            let writer = storage.create_run(id, "/worktree", None).await.unwrap();
+            for reason in ["first", "second"] {
+                writer
+                    .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
+                        reason: reason.into(),
+                    }))
+                    .await
+                    .unwrap();
+            }
+            let (sender, mut receiver) = broadcast::channel(8);
+            let mut seq = 0;
+            final_flush(&storage, id, &mut seq, &sender).await.unwrap();
+            assert_eq!(seq, 2);
+            for expected in 1..=2 {
+                assert!(
+                    matches!(receiver.recv().await.unwrap(), EngineRunEvent::Persisted { seq, .. } if seq == expected)
+                );
+            }
+            final_flush(&storage, id, &mut seq, &sender).await.unwrap();
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ));
+            writer.close().await.unwrap();
         }
-        let (sender, mut receiver) = broadcast::channel(8);
-        let mut seq = 0;
-        final_flush(&storage, id, &mut seq, &sender).await.unwrap();
-        assert_eq!(seq, 2);
-        for expected in 1..=2 {
-            assert!(
-                matches!(receiver.recv().await.unwrap(), EngineRunEvent::Persisted { seq, .. } if seq == expected)
-            );
-        }
-        final_flush(&storage, id, &mut seq, &sender).await.unwrap();
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
+        root.close().unwrap();
     }
 
     #[tokio::test]

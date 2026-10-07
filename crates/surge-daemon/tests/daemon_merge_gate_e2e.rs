@@ -10,6 +10,10 @@
 //! `arm_merge_outcome` pins what the real `merge_pr` call returns — both
 //! deterministic, no real HTTP.
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -161,7 +165,28 @@ struct Setup {
     // itself — and the config flag gating it — gets one end-to-end check.
     // Kept alive by `_home` for the lifetime of the `Storage` handle.
     runs: Arc<surge_persistence::runs::Storage>,
-    _home: tempfile::TempDir,
+    _home: FixtureHome,
+}
+
+impl Setup {
+    async fn finish(self, handle: tokio::task::JoinHandle<()>) {
+        let Self {
+            tx, runs, _home, ..
+        } = self;
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(10), handle)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(runs);
+        _home.close().unwrap();
+    }
+
+    fn close(self) {
+        let Self { runs, _home, .. } = self;
+        drop(runs);
+        _home.close().unwrap();
+    }
 }
 
 async fn make_setup() -> Setup {
@@ -172,7 +197,7 @@ async fn make_setup() -> Setup {
     let conn = Arc::new(TokioMutex::new(db_with_schema()));
     let notifier = Arc::new(RecordingNotifier::new());
     let (tx, _rx0) = broadcast::channel(8);
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let runs = surge_persistence::runs::Storage::open(home.path())
         .await
         .unwrap();
@@ -336,6 +361,7 @@ async fn l3_ready_merges_and_posts_merged_comment_and_label() {
             .any(|(sev, _, _)| matches!(sev, NotifySeverity::Success)),
         "expected a success escalation, got: {escalations:?}"
     );
+    setup.finish(_handle).await;
 }
 
 /// Spec §10/R31: the merge gate's success comment optionally carries the
@@ -368,6 +394,7 @@ async fn l3_merged_comment_attaches_the_run_report_and_flags_it_unverified() {
         .await
         .unwrap();
     writer.flush().await.unwrap();
+    writer.close().await.unwrap();
 
     {
         let guard = setup.conn.lock().await;
@@ -389,6 +416,7 @@ async fn l3_merged_comment_attaches_the_run_report_and_flags_it_unverified() {
         body.contains("UNVERIFIED SUCCESS"),
         "a run with no verifier verdict must be flagged, got: {body}"
     );
+    setup.finish(_handle).await;
 }
 
 /// Spec §10/R31 says the attachment is *optional* — off by default
@@ -420,6 +448,7 @@ async fn l3_merged_comment_omits_the_run_report_when_publishing_is_disabled() {
         .await
         .unwrap();
     writer.flush().await.unwrap();
+    writer.close().await.unwrap();
 
     {
         let guard = setup.conn.lock().await;
@@ -437,6 +466,7 @@ async fn l3_merged_comment_omits_the_run_report_when_publishing_is_disabled() {
         body, "Surge L3 auto-merge: PR merged ✓ (checks green + review approved).",
         "publish_run_report=false must post exactly the plain success comment, no attachment"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -473,6 +503,7 @@ async fn l3_merge_is_pinned_to_readiness_head() {
         Some("approved-sha-abc123".to_string()),
         "merge must be pinned to the readiness-approved head SHA"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -524,6 +555,7 @@ async fn l3_blocked_posts_merge_blocked_comment_and_escalates() {
             .any(|(sev, title, _)| matches!(sev, NotifySeverity::Warn) && title.contains("blocked")),
         "expected a warn escalation for the block, got: {escalations:?}"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -578,6 +610,7 @@ async fn l3_merge_conflict_escalates() {
             .any(|(sev, _, _)| matches!(sev, NotifySeverity::Warn)),
         "merge conflict must escalate, got: {escalations:?}"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -628,6 +661,7 @@ async fn l3_already_merged_is_success() {
             .any(|(sev, _, _)| matches!(sev, NotifySeverity::Success)),
         "AlreadyMerged must escalate success, got: {escalations:?}"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -661,6 +695,7 @@ async fn l3_default_readiness_blocks_when_provider_does_not_implement() {
             .any(|(_, label, _)| label == automation_merge_gate::labels::MERGE_BLOCKED),
         "default-Blocked path must apply merge-blocked, got: {labels:?}"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -700,6 +735,7 @@ async fn non_l3_task_is_a_no_op() {
         ),
         "non-L3 must not apply merge gate labels, got: {labels:?}"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -735,6 +771,7 @@ async fn idempotent_double_merge() {
         1,
         "re-fired completion must not double-merge"
     );
+    setup.finish(_handle).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -771,6 +808,7 @@ async fn failed_run_outcome_does_not_trigger_gate() {
         setup.src.merge_calls().await.is_empty(),
         "failed run must not merge"
     );
+    setup.finish(_handle).await;
 }
 
 /// Durable completion survives a subscriber starting after broadcast delivery,
@@ -803,6 +841,7 @@ async fn startup_recovers_completed_terminal_ticket_without_broadcast() {
     );
     assert_eq!(setup.src.merge_calls().await.len(), 1);
     handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
     let restarted = spawn_gate(&setup, setup.tx.subscribe(), false);
     assert_no_new_comments_for(&setup.src, Duration::from_millis(100)).await;
     assert_eq!(
@@ -811,6 +850,8 @@ async fn startup_recovers_completed_terminal_ticket_without_broadcast() {
         "durable merged receipt suppresses restart"
     );
     restarted.abort();
+    assert!(restarted.await.unwrap_err().is_cancelled());
+    setup.close();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -841,6 +882,7 @@ async fn merge_receipt_storage_failure_never_calls_provider() {
         setup.src.merge_calls().await.is_empty(),
         "missing durable receipt must fail closed"
     );
+    setup.close();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -877,6 +919,7 @@ async fn interrupted_merge_attempt_escalates_without_retrying_provider() {
         "uncertain published attempt cannot be replayed"
     );
     handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
     let (tx, rx) = broadcast::channel(1);
     let restarted = spawn_gate(&setup, rx, false);
     tx.send(completed_event(run_id)).unwrap();
@@ -891,6 +934,7 @@ async fn interrupted_merge_attempt_escalates_without_retrying_provider() {
         "durable uncertainty classification suppresses repeated warnings"
     );
     assert!(setup.src.merge_calls().await.is_empty());
+    setup.close();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -926,6 +970,7 @@ async fn rejected_merge_reservation_never_calls_provider() {
         "RPC requires a successfully inserted reservation"
     );
     assert!(setup.src.posted_comments().await.is_empty());
+    setup.close();
 }
 
 async fn seed_completed_journal(setup: &Setup, run_id: RunId) {
@@ -961,6 +1006,7 @@ async fn seed_completed_journal(setup: &Setup, run_id: RunId) {
         .await
         .unwrap();
     writer.flush().await.unwrap();
+    writer.close().await.unwrap();
 }
 
 /// Storage is opened on its required multi-thread runtime. Only the receiving
@@ -1005,6 +1051,8 @@ async fn lag_recovers_dropped_completion_from_journal() {
                 assert_eq!(comments.len(), 1, "lag must recover the durable completion");
                 assert_eq!(setup.src.merge_calls().await.len(), 1);
                 handle.abort();
+                assert!(handle.await.unwrap_err().is_cancelled());
+                setup.close();
             });
     })
     .await
@@ -1070,4 +1118,5 @@ async fn published_merge_error_is_durable_uncertainty_and_never_replayed() {
         "uncertain merge cannot be replayed after restart"
     );
     assert_eq!(setup.notifier.snapshot().await.len(), 1);
+    setup.close();
 }

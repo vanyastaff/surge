@@ -268,7 +268,7 @@ fn trusted_stage_opening(
             "quota stage has no live trusted journal".into(),
         ));
     }
-    let journal = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
     let (schema, payload): (u32, Vec<u8>) = journal.query_row(
         "SELECT schema_version,payload FROM events WHERE seq=?",
         [opening_seq],

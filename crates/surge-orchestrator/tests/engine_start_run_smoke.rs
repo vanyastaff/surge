@@ -1,6 +1,8 @@
 //! Smoke test: start_run constructs the handle and the stub task fires.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -49,30 +51,33 @@ fn minimal_graph() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_run_smoke_completes_terminal_node() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
+        let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            minimal_graph(),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                minimal_graph(),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    let outcome = handle.await_completion().await.unwrap();
-    match outcome {
-        RunOutcome::Completed { terminal } => {
-            assert_eq!(terminal.as_ref(), "end");
-        },
-        other => panic!("expected Completed, got {other:?}"),
+        let outcome = handle.await_completion().await.unwrap();
+        match outcome {
+            RunOutcome::Completed { terminal } => {
+                assert_eq!(terminal.as_ref(), "end");
+            },
+            other => panic!("expected Completed, got {other:?}"),
+        }
     }
+    dir.close().unwrap();
 }

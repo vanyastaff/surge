@@ -4,6 +4,8 @@
 //! attempt sees why — instead of failing the run.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -141,73 +143,77 @@ async fn run_two_attempts(
     guard: ToolCallLoopGuardConfig,
     first: impl FnOnce(SessionId) -> Vec<BridgeEvent>,
 ) -> (RunOutcome, String, Vec<EventPayload>) {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
-    std::fs::write(dir.path().join("b.txt"), b"b").unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let engine = Engine::new(
-        mock.clone(),
-        storage.clone(),
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
-        EngineConfig::default(),
-    );
-    let (one, two) = (SessionId::new(), SessionId::new());
-    mock.pin_session_ids(vec![one, two]).await;
-    for event in first(one) {
-        mock.enqueue_event(event).await;
-    }
-    let driver_mock = mock.clone();
-    let driver = tokio::spawn(async move {
-        wait_for_prompts(&driver_mock, 1).await;
-        driver_mock.pump_scripted_events().await;
-        wait_for_prompts(&driver_mock, 2).await;
-        let prompt = driver_mock.last_prompt().await.unwrap_or_default();
-        driver_mock
-            .enqueue_event(BridgeEvent::OutcomeReported {
-                session: two,
-                outcome: OutcomeKey::try_from("done").unwrap(),
-                summary: "done on the second attempt".into(),
-                artifacts_produced: vec![],
-                verification_report: None,
-            })
-            .await;
-        driver_mock.pump_scripted_events().await;
-        prompt
-    });
-    let run = RunId::new();
-    let handle = engine
-        .start_run(
-            run,
-            retrying_implementer_graph(),
-            dir.path().into(),
-            EngineRunConfig {
-                tool_call_loop_guard: Some(guard),
-                ..EngineRunConfig::default()
-            },
-        )
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .expect("run finishes")
-        .unwrap();
-    let prompt = driver.await.unwrap();
-    storage
-        .inspect_folded_run(run)
-        .await
-        .expect("a journal with a loop-protection retry stays trusted");
-    let events = storage
-        .open_run_reader(run)
-        .await
-        .unwrap()
-        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|event| event.payload.payload)
-        .collect();
-    (outcome, prompt, events)
+    let dir = FixtureHome::new().unwrap();
+    let fixture_result = {
+        std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"b").unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let engine = Engine::new(
+            mock.clone(),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
+            EngineConfig::default(),
+        );
+        let (one, two) = (SessionId::new(), SessionId::new());
+        mock.pin_session_ids(vec![one, two]).await;
+        for event in first(one) {
+            mock.enqueue_event(event).await;
+        }
+        let driver_mock = mock.clone();
+        let driver = tokio::spawn(async move {
+            wait_for_prompts(&driver_mock, 1).await;
+            driver_mock.pump_scripted_events().await;
+            wait_for_prompts(&driver_mock, 2).await;
+            let prompt = driver_mock.last_prompt().await.unwrap_or_default();
+            driver_mock
+                .enqueue_event(BridgeEvent::OutcomeReported {
+                    session: two,
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                    summary: "done on the second attempt".into(),
+                    artifacts_produced: vec![],
+                    verification_report: None,
+                })
+                .await;
+            driver_mock.pump_scripted_events().await;
+            prompt
+        });
+        let run = RunId::new();
+        let handle = engine
+            .start_run(
+                run,
+                retrying_implementer_graph(),
+                dir.path().into(),
+                EngineRunConfig {
+                    tool_call_loop_guard: Some(guard),
+                    ..EngineRunConfig::default()
+                },
+            )
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("run finishes")
+            .unwrap();
+        let prompt = driver.await.unwrap();
+        storage
+            .inspect_folded_run(run)
+            .await
+            .expect("a journal with a loop-protection retry stays trusted");
+        let events = storage
+            .open_run_reader(run)
+            .await
+            .unwrap()
+            .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        (outcome, prompt, events)
+    };
+    dir.close().unwrap();
+    fixture_result
 }
 
 fn assert_retried_after(
@@ -307,7 +313,7 @@ async fn the_tool_call_cap_ends_the_attempt_and_retries() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wall_clock_trips_climb_the_ladder_to_the_human_gate() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let mock = Arc::new(MockBridge::new());
     let engine = Engine::new(
@@ -349,7 +355,10 @@ async fn wall_clock_trips_climb_the_ladder_to_the_human_gate() {
     .expect("the exhausted ladder asks a human instead of failing the run");
     assert_eq!(gate.as_str(), "implement_escalation");
     engine.stop_run(run, "test done".into()).await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_secs(10), handle.await_completion()).await;
+    tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+        .await
+        .expect("stopped run must settle before fixture cleanup")
+        .unwrap();
     let events: Vec<EventPayload> = storage
         .open_run_reader(run)
         .await
@@ -379,4 +388,7 @@ async fn wall_clock_trips_climb_the_ladder_to_the_human_gate() {
             .iter()
             .any(|event| matches!(event, EventPayload::RunFailed { .. }))
     );
+    drop(engine);
+    drop(storage);
+    dir.close().unwrap();
 }

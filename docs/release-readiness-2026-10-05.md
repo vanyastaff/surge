@@ -387,3 +387,23 @@ the actual SYSTEM-owned profile ancestor; they remain setup failures, not backen
 RED. The unsafe-home refusal assertion remains genuine RED.
 [Full receipt](release-evidence/2026-10-05/windows-ci-23460aa/README.md) preserves
 those results and the focused trusted-ancestor fixture correction.
+
+Working Stage 1 candidate (not yet native accepted): retained Windows state-home
+and SQLite owners, protected runtime fixtures and caller lifetime corrections are
+implemented. [Local ownership receipts](release-evidence/2026-10-05/windows-stage1-local/README.md)
+record five fork and four daemon behavioral RED failures followed by focused
+17/17 and 24/24 GREEN runs. A separately reviewed daemon test signal repair passes
+all three affected cases. Strict persistence checks pass on macOS; the actual
+Windows module harness passes cross-target Clippy. Remaining caller gates, native
+security cases and independent acceptance stay open. Private/preparation guards
+remain closed; process guardian implementation remains outstanding.
+
+Native source `0350d4a`, run `37695764909`: **3,654 Windows tests run,
+3,619 passed, 35 failed, 37 skipped**. All other jobs pass. Configuration reader
+diagnostics did not reproduce AccessDenied; the additional failure instead reports
+an MCP helper missing its endpoint-revocation settlement deadline. Both remain
+under investigation. All three standalone ownership cases now reach real backend
+assertions after successful fixture setup: unprotected creation, missing manager
+fence and accepted unsafe home. The standard-user flush probe remains 1/1 PASS.
+[Native baseline receipt](release-evidence/2026-10-05/windows-ci-0350d4a/README.md)
+separates these genuine RED results from prior fixture setup failures.

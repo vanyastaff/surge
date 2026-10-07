@@ -17,9 +17,9 @@
 //! needs an answer that outlives the process that observed the failure —
 //! this table is that answer.
 
+use crate::SqliteConnectionManager;
 use chrono::DateTime;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::types::Value;
 use rusqlite::{OptionalExtension, params};
 use surge_core::capacity::{CapacitySource, CapacityStatus, CapacityWindow, RemainingShare};
@@ -288,7 +288,6 @@ mod tests {
     use crate::runs::clock::MockClock;
     use crate::runs::registry::open_registry_pool;
     use crate::runs::storage::Storage;
-    use tempfile::TempDir;
 
     fn observed_at() -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
@@ -315,40 +314,46 @@ mod tests {
 
     #[test]
     fn status_is_never_observed_for_a_fresh_runtime() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        assert_eq!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::NeverObserved
-        );
+            assert_eq!(
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::NeverObserved
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn observe_then_status_round_trips_a_known_window() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        let window = full_window("claude-acp");
-        observe(&pool, &window).unwrap();
+            let window = full_window("claude-acp");
+            observe(&pool, &window).unwrap();
 
-        let got = status(&pool, "claude-acp").unwrap();
-        let CapacityStatus::Known(got_window) = got else {
-            panic!("expected Known, got {got:?}");
-        };
-        assert_eq!(got_window.runtime(), "claude-acp");
-        assert_eq!(got_window.remaining(), Some(RemainingShare::EXHAUSTED));
-        assert_eq!(
-            got_window.resets_at(),
-            Some(observed_at() + chrono::Duration::seconds(3600))
-        );
-        assert_eq!(
-            got_window.window(),
-            Some(std::time::Duration::from_secs(3600))
-        );
-        assert_eq!(got_window.source(), CapacitySource::Observed429);
+            let got = status(&pool, "claude-acp").unwrap();
+            let CapacityStatus::Known(got_window) = got else {
+                panic!("expected Known, got {got:?}");
+            };
+            assert_eq!(got_window.runtime(), "claude-acp");
+            assert_eq!(got_window.remaining(), Some(RemainingShare::EXHAUSTED));
+            assert_eq!(
+                got_window.resets_at(),
+                Some(observed_at() + chrono::Duration::seconds(3600))
+            );
+            assert_eq!(
+                got_window.window(),
+                Some(std::time::Duration::from_secs(3600))
+            );
+            assert_eq!(got_window.source(), CapacitySource::Observed429);
+        }
+        tmp.close().unwrap();
     }
 
     /// Review finding: every other test in this file writes `remaining` as
@@ -361,34 +366,37 @@ mod tests {
     /// `RemainingShare` and `AcpUsage` closes all three at once.
     #[test]
     fn fractional_remaining_and_acp_usage_source_round_trip() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        let window = CapacityWindow::from_parts(
-            "claude-acp",
-            Some(std::time::Duration::from_secs(3600)),
-            Some(RemainingShare::new(0.25).unwrap()),
-            Some(observed_at()),
-            CapacitySource::AcpUsage,
-        );
-        observe(&pool, &window).unwrap();
+            let window = CapacityWindow::from_parts(
+                "claude-acp",
+                Some(std::time::Duration::from_secs(3600)),
+                Some(RemainingShare::new(0.25).unwrap()),
+                Some(observed_at()),
+                CapacitySource::AcpUsage,
+            );
+            observe(&pool, &window).unwrap();
 
-        let got = status(&pool, "claude-acp").unwrap();
-        let CapacityStatus::Known(got_window) = got else {
-            panic!("expected Known, got {got:?}");
-        };
-        assert_eq!(got_window.runtime(), "claude-acp");
-        assert_eq!(
-            got_window.remaining(),
-            Some(RemainingShare::new(0.25).unwrap())
-        );
-        assert_eq!(got_window.resets_at(), Some(observed_at()));
-        assert_eq!(
-            got_window.window(),
-            Some(std::time::Duration::from_secs(3600))
-        );
-        assert_eq!(got_window.source(), CapacitySource::AcpUsage);
+            let got = status(&pool, "claude-acp").unwrap();
+            let CapacityStatus::Known(got_window) = got else {
+                panic!("expected Known, got {got:?}");
+            };
+            assert_eq!(got_window.runtime(), "claude-acp");
+            assert_eq!(
+                got_window.remaining(),
+                Some(RemainingShare::new(0.25).unwrap())
+            );
+            assert_eq!(got_window.resets_at(), Some(observed_at()));
+            assert_eq!(
+                got_window.window(),
+                Some(std::time::Duration::from_secs(3600))
+            );
+            assert_eq!(got_window.source(), CapacitySource::AcpUsage);
+        }
+        tmp.close().unwrap();
     }
 
     /// Task 12 M2 acceptance criterion 7: an observation must outlive the
@@ -400,31 +408,33 @@ mod tests {
     /// `Option` field populated, same as the round-trip test above.
     #[tokio::test(flavor = "multi_thread")]
     async fn observation_survives_a_new_storage_open_of_the_same_home() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage_a = Storage::open(tmp.path()).await.unwrap();
+            let window = full_window("claude-acp");
+            observe(&storage_a.registry_pool, &window).unwrap();
+            drop(storage_a);
 
-        let storage_a = Storage::open(tmp.path()).await.unwrap();
-        let window = full_window("claude-acp");
-        observe(&storage_a.registry_pool, &window).unwrap();
-        drop(storage_a);
-
-        let storage_b = Storage::open(tmp.path()).await.unwrap();
-        let got = status(&storage_b.registry_pool, "claude-acp").unwrap();
-        let CapacityStatus::Known(got_window) = got else {
-            panic!(
-                "observation must still be Known after a fresh Storage::open of the same home, got {got:?}"
+            let storage_b = Storage::open(tmp.path()).await.unwrap();
+            let got = status(&storage_b.registry_pool, "claude-acp").unwrap();
+            let CapacityStatus::Known(got_window) = got else {
+                panic!(
+                    "observation must still be Known after a fresh Storage::open of the same home, got {got:?}"
+                );
+            };
+            assert_eq!(got_window.runtime(), "claude-acp");
+            assert_eq!(got_window.remaining(), Some(RemainingShare::EXHAUSTED));
+            assert_eq!(
+                got_window.resets_at(),
+                Some(observed_at() + chrono::Duration::seconds(3600))
             );
-        };
-        assert_eq!(got_window.runtime(), "claude-acp");
-        assert_eq!(got_window.remaining(), Some(RemainingShare::EXHAUSTED));
-        assert_eq!(
-            got_window.resets_at(),
-            Some(observed_at() + chrono::Duration::seconds(3600))
-        );
-        assert_eq!(
-            got_window.window(),
-            Some(std::time::Duration::from_secs(3600))
-        );
-        assert_eq!(got_window.source(), CapacitySource::Observed429);
+            assert_eq!(
+                got_window.window(),
+                Some(std::time::Duration::from_secs(3600))
+            );
+            assert_eq!(got_window.source(), CapacitySource::Observed429);
+        }
+        tmp.close().unwrap();
     }
 
     /// **Empirically NOT what the M2 plan assumed** (verified here, not
@@ -442,38 +452,41 @@ mod tests {
     /// generic out-of-range test below.)
     #[test]
     fn nan_written_to_remaining_is_stored_as_null_by_sqlite_itself() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-
-        let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
-        observe(&pool, &window).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = pool.get().unwrap();
-            conn.execute(
-                "UPDATE runtime_capacity SET remaining = ? WHERE runtime = ?",
-                params![f64::NAN, "claude-acp"],
-            )
-            .unwrap();
-            let stored_type: String = conn
-                .query_row(
-                    "SELECT typeof(remaining) FROM runtime_capacity WHERE runtime = ?",
-                    params!["claude-acp"],
-                    |r| r.get(0),
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+
+            let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
+            observe(&pool, &window).unwrap();
+            {
+                let conn = pool.get().unwrap();
+                conn.execute(
+                    "UPDATE runtime_capacity SET remaining = ? WHERE runtime = ?",
+                    params![f64::NAN, "claude-acp"],
                 )
                 .unwrap();
-            assert_eq!(
-                stored_type, "null",
-                "SQLite must have rewritten NaN to NULL"
-            );
-        }
+                let stored_type: String = conn
+                    .query_row(
+                        "SELECT typeof(remaining) FROM runtime_capacity WHERE runtime = ?",
+                        params!["claude-acp"],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    stored_type, "null",
+                    "SQLite must have rewritten NaN to NULL"
+                );
+            }
 
-        let CapacityStatus::Known(got) = status(&pool, "claude-acp").unwrap() else {
-            panic!(
-                "a NULL remaining column is a known window with no remaining share, not Unclassified"
-            );
-        };
-        assert_eq!(got.remaining(), None);
+            let CapacityStatus::Known(got) = status(&pool, "claude-acp").unwrap() else {
+                panic!(
+                    "a NULL remaining column is a known window with no remaining share, not Unclassified"
+                );
+            };
+            assert_eq!(got.remaining(), None);
+        }
+        tmp.close().unwrap();
     }
 
     /// The corruption `status` actually has to guard against: an
@@ -482,26 +495,29 @@ mod tests {
     /// case `RemainingShare::new`'s range check exists to catch on read.
     #[test]
     fn out_of_range_remaining_column_reads_as_unclassified_not_never_observed() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-
-        let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
-        observe(&pool, &window).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = pool.get().unwrap();
-            conn.execute(
-                "UPDATE runtime_capacity SET remaining = ? WHERE runtime = ?",
-                params![1.5_f64, "claude-acp"],
-            )
-            .unwrap();
-        }
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        assert_eq!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::Unclassified,
-            "an out-of-range remaining column must never read as capacity available"
-        );
+            let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
+            observe(&pool, &window).unwrap();
+            {
+                let conn = pool.get().unwrap();
+                conn.execute(
+                    "UPDATE runtime_capacity SET remaining = ? WHERE runtime = ?",
+                    params![1.5_f64, "claude-acp"],
+                )
+                .unwrap();
+            }
+
+            assert_eq!(
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::Unclassified,
+                "an out-of-range remaining column must never read as capacity available"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     /// A wrong-*type* column value, not just a wrong-*range* one: SQLite
@@ -514,139 +530,154 @@ mod tests {
     /// out-of-range one.
     #[test]
     fn non_numeric_remaining_column_reads_as_unclassified() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-
-        let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
-        observe(&pool, &window).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = pool.get().unwrap();
-            conn.execute(
-                "UPDATE runtime_capacity SET remaining = 'not-a-number' WHERE runtime = ?",
-                params!["claude-acp"],
-            )
-            .unwrap();
-            let stored_type: String = conn
-                .query_row(
-                    "SELECT typeof(remaining) FROM runtime_capacity WHERE runtime = ?",
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+
+            let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
+            observe(&pool, &window).unwrap();
+            {
+                let conn = pool.get().unwrap();
+                conn.execute(
+                    "UPDATE runtime_capacity SET remaining = 'not-a-number' WHERE runtime = ?",
                     params!["claude-acp"],
-                    |r| r.get(0),
                 )
                 .unwrap();
+                let stored_type: String = conn
+                    .query_row(
+                        "SELECT typeof(remaining) FROM runtime_capacity WHERE runtime = ?",
+                        params!["claude-acp"],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    stored_type, "text",
+                    "non-numeric text must round-trip as TEXT, not be rejected by SQLite itself"
+                );
+            }
+
             assert_eq!(
-                stored_type, "text",
-                "non-numeric text must round-trip as TEXT, not be rejected by SQLite itself"
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::Unclassified,
+                "a wrong-type column must degrade to Unclassified, not a hard error"
             );
         }
-
-        assert_eq!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::Unclassified,
-            "a wrong-type column must degrade to Unclassified, not a hard error"
-        );
+        tmp.close().unwrap();
     }
 
     #[test]
     fn unrecognized_source_label_reads_as_unclassified() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-
-        let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
-        observe(&pool, &window).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = pool.get().unwrap();
-            conn.execute(
-                "UPDATE runtime_capacity SET source = 'a_future_source_this_binary_predates' \
-                 WHERE runtime = ?",
-                params!["claude-acp"],
-            )
-            .unwrap();
-        }
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        assert_eq!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::Unclassified
-        );
+            let window = CapacityWindow::observed_429("claude-acp", None, observed_at());
+            observe(&pool, &window).unwrap();
+            {
+                let conn = pool.get().unwrap();
+                conn.execute(
+                    "UPDATE runtime_capacity SET source = 'a_future_source_this_binary_predates' \
+                     WHERE runtime = ?",
+                    params!["claude-acp"],
+                )
+                .unwrap();
+            }
+
+            assert_eq!(
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::Unclassified
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn observe_upserts_in_place_not_a_history() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        observe(
-            &pool,
-            &CapacityWindow::observed_429("claude-acp", None, observed_at()),
-        )
-        .unwrap();
-        observe(
-            &pool,
-            &CapacityWindow::observed_429(
-                "claude-acp",
-                Some(std::time::Duration::from_secs(90)),
-                observed_at(),
-            ),
-        )
-        .unwrap();
-
-        let row_count: i64 = pool
-            .get()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM runtime_capacity", [], |r| r.get(0))
+            observe(
+                &pool,
+                &CapacityWindow::observed_429("claude-acp", None, observed_at()),
+            )
             .unwrap();
-        assert_eq!(row_count, 1, "one runtime must stay one row");
+            observe(
+                &pool,
+                &CapacityWindow::observed_429(
+                    "claude-acp",
+                    Some(std::time::Duration::from_secs(90)),
+                    observed_at(),
+                ),
+            )
+            .unwrap();
 
-        let CapacityStatus::Known(window) = status(&pool, "claude-acp").unwrap() else {
-            panic!("expected Known");
-        };
-        assert_eq!(
-            window.resets_at(),
-            Some(observed_at() + chrono::Duration::seconds(90)),
-            "the second observation must replace the first, not merge with it"
-        );
+            let row_count: i64 = pool
+                .get()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM runtime_capacity", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(row_count, 1, "one runtime must stay one row");
+
+            let CapacityStatus::Known(window) = status(&pool, "claude-acp").unwrap() else {
+                panic!("expected Known");
+            };
+            assert_eq!(
+                window.resets_at(),
+                Some(observed_at() + chrono::Duration::seconds(90)),
+                "the second observation must replace the first, not merge with it"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn clear_removes_the_row_and_status_reads_never_observed_again() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        observe(
-            &pool,
-            &CapacityWindow::observed_429("claude-acp", None, observed_at()),
-        )
-        .unwrap();
-        assert!(matches!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::Known(_)
-        ));
+            observe(
+                &pool,
+                &CapacityWindow::observed_429("claude-acp", None, observed_at()),
+            )
+            .unwrap();
+            assert!(matches!(
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::Known(_)
+            ));
 
-        clear(&pool, "claude-acp").unwrap();
+            clear(&pool, "claude-acp").unwrap();
 
-        assert_eq!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::NeverObserved,
-            "a cleared runtime must read back as never observed, not as a stale Known"
-        );
+            assert_eq!(
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::NeverObserved,
+                "a cleared runtime must read back as never observed, not as a stale Known"
+            );
+        }
+        tmp.close().unwrap();
     }
 
     #[test]
     fn clear_on_a_runtime_with_no_row_is_a_harmless_no_op() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        // No `observe` call at all for this runtime.
-        clear(&pool, "claude-acp").unwrap();
+            // No `observe` call at all for this runtime.
+            clear(&pool, "claude-acp").unwrap();
 
-        assert_eq!(
-            status(&pool, "claude-acp").unwrap(),
-            CapacityStatus::NeverObserved
-        );
+            assert_eq!(
+                status(&pool, "claude-acp").unwrap(),
+                CapacityStatus::NeverObserved
+            );
+        }
+        tmp.close().unwrap();
     }
 
     /// Task 12 plan point (3c)/(3f): the three registry aliases for one
@@ -657,27 +688,30 @@ mod tests {
     /// without depending on `surge-acp::Registry::normalize_agent_id`.
     #[test]
     fn repeated_observation_of_the_same_canonical_runtime_stays_one_row() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        // Simulates a caller that already normalized `claude`, `claude-code`,
-        // and `claude-acp` down to the one canonical id before calling
-        // `observe` -- three observations of the same key, not three keys.
-        for _ in 0..3 {
-            observe(
-                &pool,
-                &CapacityWindow::observed_429("claude-acp", None, observed_at()),
-            )
-            .unwrap();
+            // Simulates a caller that already normalized `claude`, `claude-code`,
+            // and `claude-acp` down to the one canonical id before calling
+            // `observe` -- three observations of the same key, not three keys.
+            for _ in 0..3 {
+                observe(
+                    &pool,
+                    &CapacityWindow::observed_429("claude-acp", None, observed_at()),
+                )
+                .unwrap();
+            }
+
+            let row_count: i64 = pool
+                .get()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM runtime_capacity", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(row_count, 1);
         }
-
-        let row_count: i64 = pool
-            .get()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM runtime_capacity", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(row_count, 1);
+        tmp.close().unwrap();
     }
 
     /// The other half of the same guarantee, made explicit rather than left
@@ -689,28 +723,31 @@ mod tests {
     /// normalizer) in even one case -- so the guard stays here, not there.
     #[test]
     fn unnormalized_aliases_are_not_collapsed_by_this_store_alone() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        for alias in ["claude", "claude-code", "claude-acp"] {
-            observe(
-                &pool,
-                &CapacityWindow::observed_429(alias, None, observed_at()),
-            )
-            .unwrap();
+            for alias in ["claude", "claude-code", "claude-acp"] {
+                observe(
+                    &pool,
+                    &CapacityWindow::observed_429(alias, None, observed_at()),
+                )
+                .unwrap();
+            }
+
+            let row_count: i64 = pool
+                .get()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM runtime_capacity", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                row_count, 3,
+                "normalization is the caller's job (Registry::normalize_agent_id, \
+                 a surge-acp concern) -- this store keys on whatever string it is given"
+            );
         }
-
-        let row_count: i64 = pool
-            .get()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM runtime_capacity", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(
-            row_count, 3,
-            "normalization is the caller's job (Registry::normalize_agent_id, \
-             a surge-acp concern) -- this store keys on whatever string it is given"
-        );
+        tmp.close().unwrap();
     }
 
     /// Write-side counterpart to the read-side `u64::try_from` guard
@@ -722,26 +759,29 @@ mod tests {
     /// anywhere near this magnitude.
     #[test]
     fn absurdly_large_window_duration_writes_null_not_a_wrapped_value() {
-        let tmp = TempDir::new().unwrap();
-        let clock = MockClock::new(1_700_000_000_000);
-        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let clock = MockClock::new(1_700_000_000_000);
+            let pool = open_registry_pool(tmp.path(), &clock).unwrap();
 
-        let window = CapacityWindow::from_parts(
-            "claude-acp",
-            Some(std::time::Duration::from_secs(u64::MAX)),
-            None,
-            None,
-            CapacitySource::Observed429,
-        );
-        observe(&pool, &window).unwrap();
+            let window = CapacityWindow::from_parts(
+                "claude-acp",
+                Some(std::time::Duration::from_secs(u64::MAX)),
+                None,
+                None,
+                CapacitySource::Observed429,
+            );
+            observe(&pool, &window).unwrap();
 
-        let CapacityStatus::Known(got) = status(&pool, "claude-acp").unwrap() else {
-            panic!("expected Known");
-        };
-        assert_eq!(
-            got.window(),
-            None,
-            "an unrepresentable Duration must degrade to NULL, not a wrapped/negative value"
-        );
+            let CapacityStatus::Known(got) = status(&pool, "claude-acp").unwrap() else {
+                panic!("expected Known");
+            };
+            assert_eq!(
+                got.window(),
+                None,
+                "an unrepresentable Duration must degrade to NULL, not a wrapped/negative value"
+            );
+        }
+        tmp.close().unwrap();
     }
 }

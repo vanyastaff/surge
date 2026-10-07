@@ -1,4 +1,7 @@
 //! Controlled ACP protocol oracle; it does not establish production containment.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 #[path = "support/cold_host.rs"]
 mod cold_host;
 #[path = "support/host_budget_bridge.rs"]
@@ -464,6 +467,47 @@ async fn quota_dispatch_fixture_source(
     budget_cap: Option<u64>,
     source_options: SourceFixtureOptions,
 ) {
+    let home_owner = std::env::var_os("SURGE_QUOTA_FIXTURE_HOME")
+        .is_none()
+        .then(|| FixtureHome::new().unwrap());
+    let project_owner = std::env::var_os("SURGE_QUOTA_FIXTURE_PROJECT")
+        .is_none()
+        .then(|| tempfile::tempdir().unwrap());
+    let home = home_owner.as_ref().map_or_else(
+        || std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_FIXTURE_HOME").unwrap()),
+        |owner| owner.path().to_owned(),
+    );
+    let project = project_owner.as_ref().map_or_else(
+        || std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_FIXTURE_PROJECT").unwrap()),
+        |owner| owner.path().to_owned(),
+    );
+    quota_dispatch_in_home(
+        &home,
+        &project,
+        check_predispatch,
+        all_exhausted,
+        mixed,
+        budget_cap,
+        source_options,
+    )
+    .await;
+    if let Some(owner) = home_owner {
+        owner.close().unwrap();
+    }
+    if let Some(owner) = project_owner {
+        owner.close().unwrap();
+    }
+}
+
+async fn quota_dispatch_in_home(
+    home: &Path,
+    project: &Path,
+    check_predispatch: bool,
+    all_exhausted: bool,
+    mixed: bool,
+    budget_cap: Option<u64>,
+    source_options: SourceFixtureOptions,
+) {
     let SourceFixtureOptions {
         source_changed,
         change_after_warmup,
@@ -476,17 +520,16 @@ async fn quota_dispatch_fixture_source(
         id::{WorkItemId, WorkItemOperationId},
         work_item::{WorkItemCommand, WorkItemRequirements, WorkItemResult},
     };
-    let home = tempfile::tempdir().unwrap();
-    let project = tempfile::tempdir().unwrap();
-    initialize_project(project.path());
+
+    initialize_project(project);
     let other_project = tempfile::tempdir().unwrap();
     if cross_project {
         initialize_project(other_project.path());
     }
     if relative_cwd {
-        std::fs::write(project.path().join(".git/info/exclude"), b".surge-auth/\n").unwrap();
+        std::fs::write(project.join(".git/info/exclude"), b".surge-auth/\n").unwrap();
     }
-    let storage = Storage::open(home.path()).await.unwrap();
+    let storage = Storage::open(home).await.unwrap();
     let cancel = CancellationToken::new();
     let bridge = Arc::new(ObservedBridge {
         bridge: AcpBridge::with_defaults().unwrap(),
@@ -498,26 +541,26 @@ async fn quota_dispatch_fixture_source(
         b_closes: AtomicUsize::new(0),
         warmup_sessions: tokio::sync::Mutex::new(std::collections::HashSet::new()),
         change_after_warmup: tokio::sync::Mutex::new(
-            change_after_warmup.map(|runtime| home.path().join(format!("{runtime}-auth-source"))),
+            change_after_warmup.map(|runtime| home.join(format!("{runtime}-auth-source"))),
         ),
-        reset_b_on_second_close: mixed.then(|| home.path().join("quota-b-failed-once")),
+        reset_b_on_second_close: mixed.then(|| home.join("quota-b-failed-once")),
     });
     let host_budget =
         host_budget_bridge::HostBudgetBridge::new(bridge.clone(), storage.clone(), cancel.clone());
     let engine = Arc::new(Engine::new_full(
         host_budget.clone(),
         storage.clone(),
-        Arc::new(WorktreeToolDispatcher::new(project.path().into())),
+        Arc::new(WorktreeToolDispatcher::new(project.into())),
         Arc::new(surge_notify::MultiplexingNotifier::new()),
         None,
         None,
         if relative_cwd {
-            relative_source_engine_config(home.path(), all_exhausted)
+            relative_source_engine_config(home, all_exhausted)
         } else {
-            engine_config(home.path(), all_exhausted)
+            engine_config(home, all_exhausted)
         },
     ));
-    let socket = home.path().join("quota.sock");
+    let socket = home.join("quota.sock");
     let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
@@ -558,7 +601,7 @@ async fn quota_dispatch_fixture_source(
         } else {
             WorkItemOperationId::new()
         },
-        project: project.path().into(),
+        project: project.into(),
         title: "Quota task".into(),
         requirements: requirements.clone(),
     };
@@ -594,13 +637,11 @@ async fn quota_dispatch_fixture_source(
                 "--scenario".to_owned(),
                 scenario.to_owned(),
                 "--session-store".into(),
-                home.path()
-                    .join(format!("{runtime}-sessions.json"))
+                home.join(format!("{runtime}-sessions.json"))
                     .display()
                     .to_string(),
                 "--wire-log".into(),
-                home.path()
-                    .join(format!("{runtime}-wire.jsonl"))
+                home.join(format!("{runtime}-wire.jsonl"))
                     .display()
                     .to_string(),
             ];
@@ -718,7 +759,7 @@ async fn quota_dispatch_fixture_source(
         std::fs::write(
             &temporary,
             serde_json::to_vec(
-                &json!({"home":home.path(),"project":project.path(),"socket":socket,"item":item,"command":start}),
+                &json!({"home":home,"project":project,"socket":socket,"item":item,"command":start}),
             )
             .unwrap(),
         )
@@ -728,8 +769,8 @@ async fn quota_dispatch_fixture_source(
     let started = request(&socket, serde_json::to_value(start).unwrap()).await;
     if let Some(failure) = preparation_failure {
         assert_eq!(started["method"], "error", "{started}");
-        assert!(wire(home.path(), "quota-a").is_empty());
-        assert!(wire(home.path(), "quota-b").is_empty());
+        assert!(wire(home, "quota-a").is_empty());
+        assert!(wire(home, "quota-b").is_empty());
         assert!(
             storage
                 .work_items()
@@ -772,6 +813,7 @@ async fn quota_dispatch_fixture_source(
             .unwrap()
             .unwrap()
             .unwrap();
+        host_budget.shutdown().await;
         return;
     }
     assert_eq!(started["method"], "work_item_ok", "{started}");
@@ -797,7 +839,7 @@ async fn quota_dispatch_fixture_source(
         serde_json::from_value(host_config["quota_recovery"].clone()).unwrap();
     if std::env::var("SURGE_QUOTA_PARK_PHASE").as_deref() == Ok("opening") {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !wire(home.path(), "quota-a")
+            while !wire(home, "quota-a")
                 .iter()
                 .any(|row| row["operation"] == "new_session")
             {
@@ -806,15 +848,7 @@ async fn quota_dispatch_fixture_source(
         })
         .await
         .unwrap();
-        publish_selected_crash_boundary(
-            &storage,
-            home.path(),
-            project.path(),
-            item,
-            &attempt,
-            "opening",
-        )
-        .await;
+        publish_selected_crash_boundary(&storage, home, project, item, &attempt, "opening").await;
         std::future::pending::<()>().await;
     }
     if tokio::time::timeout(Duration::from_secs(5), bridge.primary_ready.notified())
@@ -854,15 +888,7 @@ async fn quota_dispatch_fixture_source(
         );
     }
     if std::env::var("SURGE_QUOTA_PARK_PHASE").as_deref() == Ok("opened") {
-        publish_selected_crash_boundary(
-            &storage,
-            home.path(),
-            project.path(),
-            item,
-            &attempt,
-            "opened",
-        )
-        .await;
+        publish_selected_crash_boundary(&storage, home, project, item, &attempt, "opened").await;
         std::future::pending::<()>().await;
     }
     assert!(
@@ -899,7 +925,7 @@ async fn quota_dispatch_fixture_source(
             if relative_cwd {
                 workspace.path.join(".surge-auth/quota-a")
             } else {
-                home.path().join("quota-a-auth-source")
+                home.join("quota-a-auth-source")
             },
             b"changed-file-secret-sentinel-quota-a",
         )
@@ -946,8 +972,8 @@ async fn quota_dispatch_fixture_source(
                 "changed declared source cannot publish a reusable pin"
             );
         }
-        let before_a = wire(home.path(), "quota-a").len();
-        let before_b = wire(home.path(), "quota-b").len();
+        let before_a = wire(home, "quota-a").len();
+        let before_b = wire(home, "quota-b").len();
         let created = request(
             &socket,
             serde_json::to_value(WorkItemCommand::Create {
@@ -955,7 +981,7 @@ async fn quota_dispatch_fixture_source(
                 project: if cross_project {
                     other_project.path()
                 } else {
-                    project.path()
+                    project
                 }
                 .into(),
                 title: "Second ordinary task".into(),
@@ -1090,8 +1116,8 @@ async fn quota_dispatch_fixture_source(
             }
         })
         .await;
-        let a = wire(home.path(), "quota-a");
-        let b = wire(home.path(), "quota-b");
+        let a = wire(home, "quota-a");
+        let b = wire(home, "quota-b");
         let next_journal = storage.inspect_run(next.run).await.unwrap();
         let failures = match &next_journal.database {
             surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
@@ -1152,6 +1178,7 @@ async fn quota_dispatch_fixture_source(
                 .unwrap()
                 .unwrap()
                 .unwrap();
+            host_budget.shutdown().await;
             return;
         }
         assert!(
@@ -1189,9 +1216,9 @@ async fn quota_dispatch_fixture_source(
             let retained = parked_workspace.path.join("planned-wake-retained.txt");
             std::fs::write(&retained, b"preserve all-skipped workspace").unwrap();
             let before_control = storage.work_items().execution_control(next.run).unwrap();
-            assert_eq!(wire(home.path(), "quota-a").len(), before_a);
+            assert_eq!(wire(home, "quota-a").len(), before_a);
             assert_eq!(
-                wire(home.path(), "quota-b")
+                wire(home, "quota-b")
                     .iter()
                     .skip(before_b)
                     .filter(|row| row["operation"] == "new_session")
@@ -1225,7 +1252,7 @@ async fn quota_dispatch_fixture_source(
                 let ready =
                     std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_PARK_READY").unwrap());
                 let temporary = ready.with_extension("publishing");
-                std::fs::write(&temporary,serde_json::to_vec(&json!({"home":home.path(),"project":project.path(),"item":next_item,"run":next.run,"attempt":parked,"control":before_control,"due":due,"workspace":parked_workspace,"a_count":before_a,"b_count":before_b})).unwrap()).unwrap();
+                std::fs::write(&temporary,serde_json::to_vec(&json!({"home":home,"project":project,"item":next_item,"run":next.run,"attempt":parked,"control":before_control,"due":due,"workspace":parked_workspace,"a_count":before_a,"b_count":before_b})).unwrap()).unwrap();
                 std::fs::rename(temporary, ready).unwrap();
                 std::future::pending::<()>().await;
             }
@@ -1244,13 +1271,13 @@ async fn quota_dispatch_fixture_source(
                     .unwrap();
             }
             let restored_engine = Arc::new(Engine::new_full(
-                restored_budget,
+                restored_budget.clone(),
                 storage.clone(),
-                Arc::new(WorktreeToolDispatcher::new(project.path().into())),
+                Arc::new(WorktreeToolDispatcher::new(project.into())),
                 Arc::new(surge_notify::MultiplexingNotifier::new()),
                 None,
                 None,
-                engine_config(home.path(), true),
+                engine_config(home, true),
             ));
             let clock = Arc::new(MockClock::new(due));
             let scheduler = surge_daemon::wake_scheduler::WakeScheduler {
@@ -1324,8 +1351,8 @@ async fn quota_dispatch_fixture_source(
                 std::fs::read(&retained).unwrap(),
                 b"preserve all-skipped workspace"
             );
-            let a_now = wire(home.path(), "quota-a");
-            let b_now = wire(home.path(), "quota-b");
+            let a_now = wire(home, "quota-a");
+            let b_now = wire(home, "quota-b");
             assert_eq!(
                 a_now[before_a..]
                     .iter()
@@ -1350,6 +1377,7 @@ async fn quota_dispatch_fixture_source(
             );
             cancel.cancel();
             scheduler_task.await.unwrap();
+            restored_budget.shutdown().await;
         }
         let _ = engine
             .stop_run(next.run, "predispatch fixture cleanup".into())
@@ -1435,10 +1463,7 @@ async fn quota_dispatch_fixture_source(
             finished.is_ok(),
             "normal start must finish or durably park according to exact capacity proof: {failures:?}"
         );
-        if std::env::var_os("SURGE_START_PREPARATION_MANIFEST").is_some() {
-            let _ = home.keep();
-            let _ = project.keep();
-        }
+        host_budget.shutdown().await;
         return;
     }
     let _ = engine
@@ -1450,8 +1475,8 @@ async fn quota_dispatch_fixture_source(
         .unwrap()
         .unwrap()
         .unwrap();
-    let a = wire(home.path(), "quota-a");
-    let b = wire(home.path(), "quota-b");
+    let a = wire(home, "quota-a");
+    let b = wire(home, "quota-b");
     assert_eq!(
         bridge.quota_errors.load(Ordering::SeqCst),
         1,
@@ -1557,10 +1582,21 @@ async fn quota_dispatch_fixture_source(
         .entries;
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].run, attempt.run);
+    host_budget.shutdown().await;
+    drop(engine);
+    drop(host_budget);
+    drop(bridge);
+    drop(storage);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
+    let home = FixtureHome::new().unwrap();
+    exhausted_candidates_park_and_scheduler_wakes_the_same_task_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task_in_home(home: &FixtureHome) {
     use surge_core::{
         ContentHash, Graph,
         id::{WorkItemId, WorkItemOperationId},
@@ -1571,8 +1607,6 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
         AccountEvidence, FrozenQuotaCandidate, FrozenQuotaPolicy, FrozenQuotaStage,
         QuotaRoutingMode, RecoveryCandidate,
     };
-
-    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     initialize_project(project.path());
     let storage = Storage::open(home.path()).await.unwrap();
@@ -1760,31 +1794,31 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
     };
 
     tokio::time::timeout(Duration::from_secs(12), async {
-        loop {
-            let current = storage.work_items().for_run(attempt.run).unwrap().unwrap();
-            let still_active = engine
-                .snapshot_active_runs()
-                .await
-                .iter()
-                .any(|run| run.run_id == attempt.run);
-            if current.state == WorkItemAttemptState::Suspended
-                && !still_active
-            {
-                break;
-            }
-            assert_ne!(
-                current.state,
-                WorkItemAttemptState::Attention,
-                "exhausted quota recovery must not become manual attention; diagnostic={:?}, control={:?}, journal={:?}",
-                current.diagnostic,
-                storage.work_items().execution_control(attempt.run).unwrap(),
-                storage.inspect_run(attempt.run).await.unwrap().database
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
+    loop {
+        let current = storage.work_items().for_run(attempt.run).unwrap().unwrap();
+        let still_active = engine
+            .snapshot_active_runs()
+            .await
+            .iter()
+            .any(|run| run.run_id == attempt.run);
+        if current.state == WorkItemAttemptState::Suspended
+            && !still_active
+        {
+            break;
         }
-    })
-    .await
-    .expect("both real ACP providers should exhaust and park the task");
+        assert_ne!(
+            current.state,
+            WorkItemAttemptState::Attention,
+            "exhausted quota recovery must not become manual attention; diagnostic={:?}, control={:?}, journal={:?}",
+            current.diagnostic,
+            storage.work_items().execution_control(attempt.run).unwrap(),
+            storage.inspect_run(attempt.run).await.unwrap().database
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+})
+.await
+.expect("both real ACP providers should exhaust and park the task");
     let parked_cycles = storage
         .work_items()
         .due_recovery_wakes_for_run(attempt.run, i64::MAX, 10)
@@ -2158,10 +2192,33 @@ async fn child_planned_park_restart_probe() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process() {
+    let home_owner = FixtureHome::new().unwrap();
+    let project_owner = tempfile::tempdir().unwrap();
+    planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process_in_home(
+        &home_owner,
+        &project_owner,
+    )
+    .await;
+    home_owner.close().unwrap();
+    project_owner.close().unwrap();
+}
+
+async fn planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process_in_home(
+    home_owner: &FixtureHome,
+    project_owner: &tempfile::TempDir,
+) {
     let diagnostics = tempfile::tempdir().unwrap();
     let ready = diagnostics.path().join("park.json");
     let vars = |phase: &str| {
         vec![
+            (
+                "SURGE_QUOTA_FIXTURE_HOME".into(),
+                home_owner.path().as_os_str().to_owned(),
+            ),
+            (
+                "SURGE_QUOTA_FIXTURE_PROJECT".into(),
+                project_owner.path().as_os_str().to_owned(),
+            ),
             (
                 std::ffi::OsString::from("SURGE_QUOTA_PARK_PHASE"),
                 std::ffi::OsString::from(phase),
@@ -2193,6 +2250,9 @@ async fn planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_proc
     first.stop_and_wait().unwrap();
     let home = std::path::PathBuf::from(proof["home"].as_str().unwrap());
     let project = std::path::PathBuf::from(proof["project"].as_str().unwrap());
+    assert_eq!(home, home_owner.path());
+    assert_eq!(project, project_owner.path());
+    #[cfg(unix)]
     std::fs::remove_file(home.join("quota.sock")).unwrap();
     let mut second = cold_host::ColdHost::spawn(
         "child_planned_park_restart_probe",
@@ -2212,13 +2272,18 @@ async fn planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_proc
         );
     }
     second.stop_and_wait().unwrap();
-    std::fs::remove_dir_all(home).unwrap();
-    std::fs::remove_dir_all(project).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_freeze_rejects_different_declared_families_before_provider_effects() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    host_freeze_rejects_different_declared_families_before_provider_effects_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn host_freeze_rejects_different_declared_families_before_provider_effects_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     initialize_project(project.path());
     let storage = Storage::open(home.path()).await.unwrap();
@@ -2505,10 +2570,31 @@ async fn selected_opened_before_wire_prompt_crash_does_not_open_or_prompt_again(
 
 #[cfg(unix)]
 async fn selected_crash_fixture(phase: &str) {
+    let home_owner = FixtureHome::new().unwrap();
+    let project_owner = tempfile::tempdir().unwrap();
+    selected_crash_fixture_in_home(&home_owner, &project_owner, phase).await;
+    home_owner.close().unwrap();
+    project_owner.close().unwrap();
+}
+
+#[cfg(unix)]
+async fn selected_crash_fixture_in_home(
+    home_owner: &FixtureHome,
+    project_owner: &tempfile::TempDir,
+    phase: &str,
+) {
     let diagnostics = tempfile::tempdir().unwrap();
     let ready = diagnostics.path().join("selected.json");
     let vars = |phase: &str| {
         vec![
+            (
+                "SURGE_QUOTA_FIXTURE_HOME".into(),
+                home_owner.path().as_os_str().to_owned(),
+            ),
+            (
+                "SURGE_QUOTA_FIXTURE_PROJECT".into(),
+                project_owner.path().as_os_str().to_owned(),
+            ),
             (
                 std::ffi::OsString::from("SURGE_QUOTA_PARK_PHASE"),
                 std::ffi::OsString::from(phase),
@@ -2538,6 +2624,8 @@ async fn selected_crash_fixture(phase: &str) {
     };
     let home = std::path::PathBuf::from(proof["home"].as_str().unwrap());
     let project = std::path::PathBuf::from(proof["project"].as_str().unwrap());
+    assert_eq!(home, home_owner.path());
+    assert_eq!(project, project_owner.path());
     let pid: u32 = std::fs::read_to_string(home.join("quota-a-provider.pid"))
         .unwrap()
         .trim()
@@ -2556,6 +2644,7 @@ async fn selected_crash_fixture(phase: &str) {
             Err(error) => panic!("kill surviving provider {pid}: {error}"),
         }
     }
+    #[cfg(unix)]
     std::fs::remove_file(home.join("quota.sock")).unwrap();
     let mut second = cold_host::ColdHost::spawn(
         "child_planned_park_restart_probe",
@@ -2572,8 +2661,6 @@ async fn selected_crash_fixture(phase: &str) {
         );
     }
     second.stop_and_wait().unwrap();
-    std::fs::remove_dir_all(home).unwrap();
-    std::fs::remove_dir_all(project).unwrap();
 }
 
 async fn wait_for_durable_capacity_wake(storage: &Storage, run: surge_core::RunId) -> i64 {
@@ -2712,21 +2799,18 @@ fn committed_reentry_graph() -> surge_core::Graph {
 async fn cold_committed_reentry_probe(first: bool) {
     use surge_core::work_item::{WorkItemCommand, WorkItemRequirements, WorkItemResult};
     let ready = std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_PARK_READY").unwrap());
-    let home_owner = first.then(|| tempfile::tempdir().unwrap());
-    let project_owner = first.then(|| tempfile::tempdir().unwrap());
     let proof: Value = if first {
         json!({})
     } else {
         serde_json::from_slice(&std::fs::read(&ready).unwrap()).unwrap()
     };
-    let home = home_owner.as_ref().map_or_else(
-        || Path::new(proof["home"].as_str().unwrap()).to_owned(),
-        |owner| owner.path().to_owned(),
-    );
-    let project = project_owner.as_ref().map_or_else(
-        || Path::new(proof["project"].as_str().unwrap()).to_owned(),
-        |owner| owner.path().to_owned(),
-    );
+    let home = std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_FIXTURE_HOME").unwrap());
+    let project =
+        std::path::PathBuf::from(std::env::var_os("SURGE_QUOTA_FIXTURE_PROJECT").unwrap());
+    if !first {
+        assert_eq!(home, Path::new(proof["home"].as_str().unwrap()));
+        assert_eq!(project, Path::new(proof["project"].as_str().unwrap()));
+    }
     if first {
         initialize_project(&project);
     }
@@ -2878,10 +2962,34 @@ async fn cold_committed_reentry_probe(first: bool) {
 #[cfg(all(unix, debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_committed_same_node_route_runs_only_the_next_occurrence() {
+    let home_owner = FixtureHome::new().unwrap();
+    let project_owner = tempfile::tempdir().unwrap();
+    cold_committed_same_node_route_runs_only_the_next_occurrence_in_home(
+        &home_owner,
+        &project_owner,
+    )
+    .await;
+    home_owner.close().unwrap();
+    project_owner.close().unwrap();
+}
+
+#[cfg(all(unix, debug_assertions))]
+async fn cold_committed_same_node_route_runs_only_the_next_occurrence_in_home(
+    home_owner: &FixtureHome,
+    project_owner: &tempfile::TempDir,
+) {
     let diagnostics = tempfile::tempdir().unwrap();
     let ready = diagnostics.path().join("reentry.json");
     let vars = |phase: &str| {
         vec![
+            (
+                "SURGE_QUOTA_FIXTURE_HOME".into(),
+                home_owner.path().as_os_str().to_owned(),
+            ),
+            (
+                "SURGE_QUOTA_FIXTURE_PROJECT".into(),
+                project_owner.path().as_os_str().to_owned(),
+            ),
             (
                 "SURGE_QUOTA_PARK_PHASE".into(),
                 std::ffi::OsString::from(phase),
@@ -2922,6 +3030,8 @@ async fn cold_committed_same_node_route_runs_only_the_next_occurrence() {
     assert!(first.pid().is_none(), "old exact child must be reaped");
     let home = std::path::PathBuf::from(proof["home"].as_str().unwrap());
     let project = std::path::PathBuf::from(proof["project"].as_str().unwrap());
+    assert_eq!(home, home_owner.path());
+    assert_eq!(project, project_owner.path());
     let run: surge_core::RunId = serde_json::from_value(proof["run"].clone()).unwrap();
     let storage = Storage::open(&home).await.unwrap();
     let inspection = storage.inspect_run(run).await.unwrap();
@@ -3020,6 +3130,7 @@ async fn cold_committed_same_node_route_runs_only_the_next_occurrence() {
         Some(&1)
     );
     drop(reader);
+    #[cfg(unix)]
     std::fs::remove_file(home.join("quota.sock")).unwrap();
     drop(storage);
     let mut second = cold_host::ColdHost::spawn(
@@ -3070,19 +3181,17 @@ async fn cold_committed_same_node_route_runs_only_the_next_occurrence() {
     );
     assert_ne!(opened[0].session, opened[1].session);
     let plans: Vec<_> = events.iter().filter_map(|row|match &row.payload.payload {
-        surge_core::EventPayload::QuotaStagePlanned {node,logical_invocation,stage_entry_seq,..} => {
-            assert_eq!(node.as_str(),"impl_1");
-            assert!(events.iter().any(|entry|entry.seq.as_u64()==*stage_entry_seq && matches!(&entry.payload.payload,surge_core::EventPayload::StageEntered {node:actual,..} if actual==node)));
-            Some((logical_invocation,stage_entry_seq))
-        },
-        _=>None,
-    }).collect();
+    surge_core::EventPayload::QuotaStagePlanned {node,logical_invocation,stage_entry_seq,..} => {
+        assert_eq!(node.as_str(),"impl_1");
+        assert!(events.iter().any(|entry|entry.seq.as_u64()==*stage_entry_seq && matches!(&entry.payload.payload,surge_core::EventPayload::StageEntered {node:actual,..} if actual==node)));
+        Some((logical_invocation,stage_entry_seq))
+    },
+    _=>None,
+}).collect();
     assert_eq!(plans.len(), 2);
     assert_ne!(plans[0].0, plans[1].0);
     assert_ne!(plans[0].1, plans[1].1);
     drop(storage);
-    std::fs::remove_dir_all(home).unwrap();
-    std::fs::remove_dir_all(project).unwrap();
 }
 
 fn relative_source_engine_config(home: &Path, all_exhausted: bool) -> EngineConfig {
@@ -3298,6 +3407,22 @@ async fn child_start_preparation_worker_probe() {
 #[cfg(all(unix, debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_responsive() {
+    let home_owner = FixtureHome::new().unwrap();
+    let project_owner = tempfile::tempdir().unwrap();
+    configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_responsive_in_home(
+        &home_owner,
+        &project_owner,
+    )
+    .await;
+    home_owner.close().unwrap();
+    project_owner.close().unwrap();
+}
+
+#[cfg(all(unix, debug_assertions))]
+async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_responsive_in_home(
+    home_owner: &FixtureHome,
+    project_owner: &tempfile::TempDir,
+) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     use surge_core::id::{WorkItemId, WorkItemOperationId};
@@ -3310,6 +3435,14 @@ async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_res
     let operation = WorkItemOperationId::new();
     let item: WorkItemId = operation.as_ulid().to_string().parse().unwrap();
     let vars = vec![
+        (
+            "SURGE_QUOTA_FIXTURE_HOME".into(),
+            home_owner.path().as_os_str().to_owned(),
+        ),
+        (
+            "SURGE_QUOTA_FIXTURE_PROJECT".into(),
+            project_owner.path().as_os_str().to_owned(),
+        ),
         (
             "SURGE_START_PREPARATION_ACCEPTED".into(),
             accepted.as_os_str().to_owned(),
@@ -3352,6 +3485,8 @@ async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_res
     .unwrap();
     let home = std::path::PathBuf::from(proof["home"].as_str().unwrap());
     let project = std::path::PathBuf::from(proof["project"].as_str().unwrap());
+    assert_eq!(home, home_owner.path());
+    assert_eq!(project, project_owner.path());
     let socket = std::path::PathBuf::from(proof["socket"].as_str().unwrap());
     let storage = Storage::open(&home).await.unwrap();
     assert!(
@@ -3475,6 +3610,4 @@ async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_res
         2
     );
     drop(storage);
-    std::fs::remove_dir_all(home).unwrap();
-    std::fs::remove_dir_all(project).unwrap();
 }

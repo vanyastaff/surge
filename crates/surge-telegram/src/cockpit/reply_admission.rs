@@ -46,7 +46,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn revoked_command_reply_never_reaches_bot_endpoint() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let admission = PairingsAdmission {
             storage: storage.clone(),
@@ -78,6 +78,9 @@ mod tests {
             Err(TelegramCockpitError::Persistence(_))
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        drop(admission);
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

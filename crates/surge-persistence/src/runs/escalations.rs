@@ -381,40 +381,44 @@ mod tests {
         use crate::runs::storage::Storage;
         use surge_core::run_event::VersionedEventPayload;
 
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
-        let run_id = surge_core::RunId::new();
-        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
+            let run_id = surge_core::RunId::new();
+            let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
 
-        let node = NodeKey::try_from("implement").unwrap();
-        writer
-            .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
-                node: node.clone(),
-                attempt: 1,
-            }))
-            .await
-            .unwrap();
-        writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::EscalationRequested {
-                    stage: None,
-                    reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
-                              budget; escalating"
-                        .into(),
-                    cause: EscalationCause::LoopGuardNodeDeadline,
-                },
-            ))
-            .await
-            .unwrap();
-        writer.flush().await.unwrap();
+            let node = NodeKey::try_from("implement").unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
+                    node: node.clone(),
+                    attempt: 1,
+                }))
+                .await
+                .unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
+                                  budget; escalating"
+                            .into(),
+                        cause: EscalationCause::LoopGuardNodeDeadline,
+                    },
+                ))
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
 
-        let reader = storage.open_run_reader(run_id).await.unwrap();
-        let found = read_escalations(&reader).await.unwrap();
+            let reader = storage.open_run_reader(run_id).await.unwrap();
+            let found = read_escalations(&reader).await.unwrap();
 
-        assert_eq!(found.len(), 1, "expected exactly one escalation row");
-        assert_eq!(found[0].cause, EscalationCause::LoopGuardNodeDeadline);
-        assert_eq!(found[0].node.as_ref(), Some(&node));
-        assert!(is_loop_guard_cause(found[0].cause));
+            assert_eq!(found.len(), 1, "expected exactly one escalation row");
+            assert_eq!(found[0].cause, EscalationCause::LoopGuardNodeDeadline);
+            assert_eq!(found[0].node.as_ref(), Some(&node));
+            assert!(is_loop_guard_cause(found[0].cause));
+            writer.close().await.unwrap();
+        }
+        dir.close().unwrap();
     }
 
     /// The cross-run entry point: across three real runs (one plain, one
@@ -428,74 +432,77 @@ mod tests {
         use crate::runs::storage::Storage;
         use surge_core::run_event::VersionedEventPayload;
 
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        let plain_run = surge_core::RunId::new();
-        let plain_writer = storage
-            .create_run(plain_run, dir.path(), None)
-            .await
-            .unwrap();
-        drop(plain_writer);
+            let plain_run = surge_core::RunId::new();
+            let plain_writer = storage
+                .create_run(plain_run, dir.path(), None)
+                .await
+                .unwrap();
+            plain_writer.close().await.unwrap();
 
-        let guard_tripped_run = surge_core::RunId::new();
-        let guard_writer = storage
-            .create_run(guard_tripped_run, dir.path(), None)
-            .await
-            .unwrap();
-        guard_writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::EscalationRequested {
-                    stage: None,
-                    reason: "node loop guard: tool 'shell_exec' called 4 times in a row \
-                              (threshold 3); escalating instead of dispatching it again"
-                        .into(),
-                    cause: EscalationCause::LoopGuardRepeatedToolCall,
-                },
-            ))
-            .await
-            .unwrap();
-        guard_writer.flush().await.unwrap();
-        drop(guard_writer);
+            let guard_tripped_run = surge_core::RunId::new();
+            let guard_writer = storage
+                .create_run(guard_tripped_run, dir.path(), None)
+                .await
+                .unwrap();
+            guard_writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: "node loop guard: tool 'shell_exec' called 4 times in a row \
+                                  (threshold 3); escalating instead of dispatching it again"
+                            .into(),
+                        cause: EscalationCause::LoopGuardRepeatedToolCall,
+                    },
+                ))
+                .await
+                .unwrap();
+            guard_writer.flush().await.unwrap();
+            guard_writer.close().await.unwrap();
 
-        let bootstrap_escalated_run = surge_core::RunId::new();
-        let bootstrap_writer = storage
-            .create_run(bootstrap_escalated_run, dir.path(), None)
-            .await
-            .unwrap();
-        bootstrap_writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::EscalationRequested {
-                    stage: Some(surge_core::run_event::BootstrapStage::Flow),
-                    reason: "edit-loop cap exceeded".into(),
-                    cause: EscalationCause::BootstrapEditLoopExhausted,
-                },
-            ))
-            .await
-            .unwrap();
-        bootstrap_writer.flush().await.unwrap();
-        drop(bootstrap_writer);
+            let bootstrap_escalated_run = surge_core::RunId::new();
+            let bootstrap_writer = storage
+                .create_run(bootstrap_escalated_run, dir.path(), None)
+                .await
+                .unwrap();
+            bootstrap_writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::EscalationRequested {
+                        stage: Some(surge_core::run_event::BootstrapStage::Flow),
+                        reason: "edit-loop cap exceeded".into(),
+                        cause: EscalationCause::BootstrapEditLoopExhausted,
+                    },
+                ))
+                .await
+                .unwrap();
+            bootstrap_writer.flush().await.unwrap();
+            bootstrap_writer.close().await.unwrap();
 
-        let runs = storage.list_runs(RunFilter::default()).await.unwrap();
-        assert_eq!(runs.len(), 3, "all three seeded runs must be listed");
+            let runs = storage.list_runs(RunFilter::default()).await.unwrap();
+            assert_eq!(runs.len(), 3, "all three seeded runs must be listed");
 
-        let (stopped, skipped) = list_loop_guard_stopped_runs(&storage, &runs).await;
+            let (stopped, skipped) = list_loop_guard_stopped_runs(&storage, &runs).await;
 
-        assert!(
-            skipped.is_empty(),
-            "every seeded run has a readable log: {skipped:?}"
-        );
-        assert_eq!(
-            stopped.len(),
-            1,
-            "only the guard-tripped run may be reported: {stopped:?}"
-        );
-        assert_eq!(
-            stopped.get(&guard_tripped_run),
-            Some(&EscalationCause::LoopGuardRepeatedToolCall)
-        );
-        assert!(!stopped.contains_key(&plain_run));
-        assert!(!stopped.contains_key(&bootstrap_escalated_run));
+            assert!(
+                skipped.is_empty(),
+                "every seeded run has a readable log: {skipped:?}"
+            );
+            assert_eq!(
+                stopped.len(),
+                1,
+                "only the guard-tripped run may be reported: {stopped:?}"
+            );
+            assert_eq!(
+                stopped.get(&guard_tripped_run),
+                Some(&EscalationCause::LoopGuardRepeatedToolCall)
+            );
+            assert!(!stopped.contains_key(&plain_run));
+            assert!(!stopped.contains_key(&bootstrap_escalated_run));
+        }
+        dir.close().unwrap();
     }
 
     /// Blocker regression: a registry row with no per-run directory behind
@@ -509,58 +516,61 @@ mod tests {
         use surge_core::RunStatus;
         use surge_core::run_event::VersionedEventPayload;
 
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        let good_run = surge_core::RunId::new();
-        let writer = storage
-            .create_run(good_run, dir.path(), None)
-            .await
-            .unwrap();
-        writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::EscalationRequested {
-                    stage: None,
-                    reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
-                              budget; escalating"
-                        .into(),
-                    cause: EscalationCause::LoopGuardNodeDeadline,
+            let good_run = surge_core::RunId::new();
+            let writer = storage
+                .create_run(good_run, dir.path(), None)
+                .await
+                .unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
+                                  budget; escalating"
+                            .into(),
+                        cause: EscalationCause::LoopGuardNodeDeadline,
+                    },
+                ))
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            writer.close().await.unwrap();
+
+            // A registry row with no per-run directory at all — `insert_run`
+            // directly, bypassing `create_run`'s directory setup.
+            let orphaned_run = surge_core::RunId::new();
+            registry::insert_run(
+                &storage.registry_pool,
+                &RunSummary {
+                    id: orphaned_run,
+                    project_path: dir.path().to_path_buf(),
+                    pipeline_template: None,
+                    status: RunStatus::Failed,
+                    started_at_ms: 1,
+                    ended_at_ms: Some(2),
+                    daemon_pid: None,
+                    wake_at_ms: None,
                 },
-            ))
-            .await
+            )
             .unwrap();
-        writer.flush().await.unwrap();
-        drop(writer);
 
-        // A registry row with no per-run directory at all — `insert_run`
-        // directly, bypassing `create_run`'s directory setup.
-        let orphaned_run = surge_core::RunId::new();
-        registry::insert_run(
-            &storage.registry_pool,
-            &RunSummary {
-                id: orphaned_run,
-                project_path: dir.path().to_path_buf(),
-                pipeline_template: None,
-                status: RunStatus::Failed,
-                started_at_ms: 1,
-                ended_at_ms: Some(2),
-                daemon_pid: None,
-                wake_at_ms: None,
-            },
-        )
-        .unwrap();
+            let runs = storage.list_runs(RunFilter::default()).await.unwrap();
+            assert_eq!(runs.len(), 2);
 
-        let runs = storage.list_runs(RunFilter::default()).await.unwrap();
-        assert_eq!(runs.len(), 2);
+            let (stopped, skipped) = list_loop_guard_stopped_runs(&storage, &runs).await;
 
-        let (stopped, skipped) = list_loop_guard_stopped_runs(&storage, &runs).await;
-
-        assert_eq!(
-            stopped.get(&good_run),
-            Some(&EscalationCause::LoopGuardNodeDeadline),
-            "the orphaned run must not block scanning the good one: {stopped:?}"
-        );
-        assert_eq!(skipped.len(), 1, "{skipped:?}");
-        assert_eq!(skipped[0].run_id, orphaned_run);
+            assert_eq!(
+                stopped.get(&good_run),
+                Some(&EscalationCause::LoopGuardNodeDeadline),
+                "the orphaned run must not block scanning the good one: {stopped:?}"
+            );
+            assert_eq!(skipped.len(), 1, "{skipped:?}");
+            assert_eq!(skipped[0].run_id, orphaned_run);
+        }
+        dir.close().unwrap();
     }
 }

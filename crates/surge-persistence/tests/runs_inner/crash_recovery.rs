@@ -60,4 +60,5 @@ async fn dropped_writer_can_be_reopened_with_intact_log() {
     assert_eq!(next, EventSeq(seq.as_u64() + 1));
 
     writer2.close().await.expect("close");
+    t.close().expect("close runtime home");
 }

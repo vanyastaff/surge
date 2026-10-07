@@ -46,4 +46,5 @@ async fn store_artifact_dedups_and_roundtrips() {
     assert_eq!(rows[0].id, r1.id);
 
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }

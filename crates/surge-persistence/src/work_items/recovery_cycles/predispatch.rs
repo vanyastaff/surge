@@ -75,8 +75,7 @@ impl WorkItemStore {
                 "planned stage requires live journal".into(),
             ));
         }
-        let journal =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let EventPayload::QuotaStagePlanned {
             node,
             attempt: stage_attempt,
@@ -352,8 +351,7 @@ impl WorkItemStore {
             .join("runs")
             .join(claim.run.to_string())
             .join("events.sqlite");
-        let journal =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let EventPayload::QuotaStagePlanned {
             node,
             stage_entry_seq,
@@ -574,8 +572,7 @@ impl WorkItemStore {
         if policy.content_hash()? != *expected_policy || policy.stage(&cursor.node).is_none() {
             return Err(WorkItemError::Conflict("cold quota policy changed".into()));
         }
-        let journal =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let entry = memory.stage_occurrences.get(&cursor.node).copied();
         let mut bound:Option<(String,Option<u64>,Option<u64>)>=tx.query_row("SELECT invocation,plan_seq,opening_seq FROM work_item_quota_stages WHERE run=? AND node=? ORDER BY COALESCE(plan_seq,opening_seq) DESC LIMIT 1",params![claim.run.to_string(),cursor.node.to_string()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
         let Some(entry) = entry else {

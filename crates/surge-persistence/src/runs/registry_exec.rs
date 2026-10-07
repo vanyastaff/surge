@@ -35,8 +35,8 @@
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::runs::error::StorageError;
@@ -219,48 +219,54 @@ mod tests {
     /// leave no effect, even after the lock is released.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn write_abandoned_while_busy_never_commits() {
-        let home = tempfile::tempdir().unwrap();
-        let pool = registry(home.path());
-        let holder = lock_registry(home.path());
-        let (finished, task_done) = tokio::sync::oneshot::channel();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let pool = registry(home.path());
+            let holder = lock_registry(home.path());
+            let (finished, task_done) = tokio::sync::oneshot::channel();
 
-        let pending = observe_write(pool.clone(), finished);
-        let timed_out = tokio::time::timeout(Duration::from_millis(200), pending).await;
-        assert!(
-            timed_out.is_err(),
-            "write must still be waiting on the lock"
-        );
+            let pending = observe_write(pool.clone(), finished);
+            let timed_out = tokio::time::timeout(Duration::from_millis(200), pending).await;
+            assert!(
+                timed_out.is_err(),
+                "write must still be waiting on the lock"
+            );
 
-        holder.execute_batch("ROLLBACK").unwrap();
-        drop(holder);
-        // The closure (and its sender) drops when the blocking task decides.
-        tokio::time::timeout(Duration::from_secs(10), task_done)
-            .await
-            .expect("abandoned blocking task must settle")
-            .expect_err("abandoned closure must never run");
-        assert_eq!(capacity_rows(&pool), 0, "abandoned write committed late");
+            holder.execute_batch("ROLLBACK").unwrap();
+            drop(holder);
+            // The closure (and its sender) drops when the blocking task decides.
+            tokio::time::timeout(Duration::from_secs(10), task_done)
+                .await
+                .expect("abandoned blocking task must settle")
+                .expect_err("abandoned closure must never run");
+            assert_eq!(capacity_rows(&pool), 0, "abandoned write committed late");
+        }
+        home.close().unwrap();
     }
 
     /// A write whose caller stays put commits once contention clears, and
     /// waiting does not occupy an async worker.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn write_waiting_on_lock_leaves_async_worker_free() {
-        let home = tempfile::tempdir().unwrap();
-        let pool = registry(home.path());
-        let holder = lock_registry(home.path());
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let pool = registry(home.path());
+            let holder = lock_registry(home.path());
 
-        let (finished, _task_done) = tokio::sync::oneshot::channel();
-        let pending = tokio::spawn(observe_write(pool.clone(), finished));
-        // With one worker, this timer only fires if the write is not
-        // blocking it inside the busy handler.
-        let started = std::time::Instant::now();
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(started.elapsed() < Duration::from_secs(1));
+            let (finished, _task_done) = tokio::sync::oneshot::channel();
+            let pending = tokio::spawn(observe_write(pool.clone(), finished));
+            // With one worker, this timer only fires if the write is not
+            // blocking it inside the busy handler.
+            let started = std::time::Instant::now();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(started.elapsed() < Duration::from_secs(1));
 
-        holder.execute_batch("ROLLBACK").unwrap();
-        drop(holder);
-        pending.await.unwrap().unwrap();
-        assert_eq!(capacity_rows(&pool), 1);
+            holder.execute_batch("ROLLBACK").unwrap();
+            drop(holder);
+            pending.await.unwrap().unwrap();
+            assert_eq!(capacity_rows(&pool), 1);
+        }
+        home.close().unwrap();
     }
 
     #[test]

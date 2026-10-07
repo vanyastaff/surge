@@ -6,6 +6,8 @@
 //! trusted by the fold.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -224,7 +226,7 @@ async fn next_gate(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restarted_host_reissues_the_escalation_gate_and_honours_stop() {
     tokio::time::timeout(Duration::from_secs(60), async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let build = |storage, mock: Arc<fixtures::mock_bridge::MockBridge>| {
             Engine::new(
@@ -290,55 +292,60 @@ async fn a_restarted_host_reissues_the_escalation_gate_and_honours_stop() {
             .inspect_folded_run(run)
             .await
             .expect("a resumed journal through the default gate stays trusted");
-    })
+
+        drop(engine);
+        drop(storage);
+        dir.close().unwrap();
+})
     .await
     .expect("restart fixture exceeded watchdog");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
-    let engine = Engine::new(
-        mock.clone(),
-        storage.clone(),
-        dispatcher,
-        EngineConfig::default(),
-    );
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
+        let engine = Engine::new(
+            mock.clone(),
+            storage.clone(),
+            dispatcher,
+            EngineConfig::default(),
+        );
 
-    // Six agent turns: implement, verify(failed) twice before the first gate,
-    // then one retry round before the second gate.
-    // Eight agent turns: two loop rounds, the automatic extra attempt, a
-    // rejection that reaches the gate, then one human retry round.
-    let script = [
-        ("done", "first implementation"),
-        ("failed", "Login criterion unmet."),
-        ("done", "second implementation"),
-        ("failed", "Login criterion still unmet."),
-        ("done", "extra attempt"),
-        ("failed", "Unmet after the extra attempt."),
-        ("done", "human retry"),
-        ("failed", "Still unmet after retry."),
-    ];
-    let driver = drive_agent_turns(mock.clone(), &script).await;
+        // Six agent turns: implement, verify(failed) twice before the first gate,
+        // then one retry round before the second gate.
+        // Eight agent turns: two loop rounds, the automatic extra attempt, a
+        // rejection that reaches the gate, then one human retry round.
+        let script = [
+            ("done", "first implementation"),
+            ("failed", "Login criterion unmet."),
+            ("done", "second implementation"),
+            ("failed", "Login criterion still unmet."),
+            ("done", "extra attempt"),
+            ("failed", "Unmet after the extra attempt."),
+            ("done", "human retry"),
+            ("failed", "Still unmet after retry."),
+        ];
+        let driver = drive_agent_turns(mock.clone(), &script).await;
 
-    let run = RunId::new();
-    let mut tap = engine.subscribe_tap();
-    let handle = engine
-        .start_run(
-            run,
-            retry_loop_graph(),
-            dir.path().into(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
-    let mut completion = handle.completion;
-    let mut answers = ["retry", "stop"].into_iter();
-    let mut gate_prompts = Vec::new();
-    let outcome = tokio::time::timeout(Duration::from_secs(60), async {
+        let run = RunId::new();
+        let mut tap = engine.subscribe_tap();
+        let handle = engine
+            .start_run(
+                run,
+                retry_loop_graph(),
+                dir.path().into(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
+        let mut completion = handle.completion;
+        let mut answers = ["retry", "stop"].into_iter();
+        let mut gate_prompts = Vec::new();
+        let outcome = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             tokio::select! {
                 outcome = &mut completion => break outcome.unwrap(),
@@ -364,87 +371,89 @@ async fn exhausted_loop_asks_then_retries_with_findings_then_stops() {
     })
     .await
     .expect("run finishes");
-    let prompts = driver.await.unwrap();
+        let prompts = driver.await.unwrap();
 
-    let RunOutcome::Failed { error } = &outcome else {
-        panic!("stop must fail the run, got {outcome:?}");
-    };
-    assert!(
-        error.contains("stopped by the operator after `verify` reached its attempt limit"),
-        "{error}"
-    );
-    assert_eq!(gate_prompts.len(), 2);
-    for (node, prompt) in &gate_prompts {
-        assert_eq!(node.as_str(), "verify_escalation");
+        let RunOutcome::Failed { error } = &outcome else {
+            panic!("stop must fail the run, got {outcome:?}");
+        };
         assert!(
-            prompt.contains("Attempt limit reached at verify"),
-            "{prompt}"
+            error.contains("stopped by the operator after `verify` reached its attempt limit"),
+            "{error}"
         );
-        assert!(prompt.contains("`verify` reported `failed` more than 1 times"));
-        assert!(prompt.contains("One extra attempt of `implement`"));
-    }
-    // The extra attempt and the human retry both see the verifier's findings,
-    // not the gate's decision.
-    assert!(
-        prompts[4].starts_with("## Feedback from the previous attempt"),
-        "{}",
-        prompts[4]
-    );
-    assert!(prompts[4].contains("Stage `verify` sent this work back with outcome `failed`"));
-    assert!(prompts[4].contains("Summary: Login criterion still unmet."));
-    assert!(prompts[6].contains("Summary: Unmet after the extra attempt."));
-    assert!(prompts[2].contains("Summary: Login criterion unmet."));
-    assert!(!prompts[0].contains("Feedback from the previous attempt"));
+        assert_eq!(gate_prompts.len(), 2);
+        for (node, prompt) in &gate_prompts {
+            assert_eq!(node.as_str(), "verify_escalation");
+            assert!(
+                prompt.contains("Attempt limit reached at verify"),
+                "{prompt}"
+            );
+            assert!(prompt.contains("`verify` reported `failed` more than 1 times"));
+            assert!(prompt.contains("One extra attempt of `implement`"));
+        }
+        // The extra attempt and the human retry both see the verifier's findings,
+        // not the gate's decision.
+        assert!(
+            prompts[4].starts_with("## Feedback from the previous attempt"),
+            "{}",
+            prompts[4]
+        );
+        assert!(prompts[4].contains("Stage `verify` sent this work back with outcome `failed`"));
+        assert!(prompts[4].contains("Summary: Login criterion still unmet."));
+        assert!(prompts[6].contains("Summary: Unmet after the extra attempt."));
+        assert!(prompts[2].contains("Summary: Login criterion unmet."));
+        assert!(!prompts[0].contains("Feedback from the previous attempt"));
 
-    storage
-        .inspect_folded_run(run)
-        .await
-        .expect("a journal through the default gate stays trusted");
-    let events: Vec<EventPayload> = storage
-        .open_run_reader(run)
-        .await
-        .unwrap()
-        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|event| event.payload.payload)
-        .collect();
-    let traversed = |from: &str, to: &str, kind: EdgeKind| {
-        events
-            .iter()
-            .filter(|event| {
-                matches!(event, EventPayload::EdgeTraversed { from: f, to: t, kind: k, .. }
+        storage
+            .inspect_folded_run(run)
+            .await
+            .expect("a journal through the default gate stays trusted");
+        let events: Vec<EventPayload> = storage
+            .open_run_reader(run)
+            .await
+            .unwrap()
+            .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        let traversed = |from: &str, to: &str, kind: EdgeKind| {
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(event, EventPayload::EdgeTraversed { from: f, to: t, kind: k, .. }
                     if f.as_str() == from && t.as_str() == to && *k == kind)
+                })
+                .count()
+        };
+        assert_eq!(traversed("verify", "implement", EdgeKind::Escalate), 1);
+        assert_eq!(
+            traversed("verify", "verify_escalation", EdgeKind::Escalate),
+            2
+        );
+        assert_eq!(
+            traversed("verify_escalation", "implement", EdgeKind::Backtrack),
+            1
+        );
+        assert_eq!(
+            traversed("verify_escalation", "verify_stopped", EdgeKind::Forward),
+            1
+        );
+        // The persisted graph is the flow as written; gates are derived.
+        let persisted = events
+            .iter()
+            .find_map(|event| match event {
+                EventPayload::PipelineMaterialized { graph, .. } => Some(graph),
+                _ => None,
             })
-            .count()
-    };
-    assert_eq!(traversed("verify", "implement", EdgeKind::Escalate), 1);
-    assert_eq!(
-        traversed("verify", "verify_escalation", EdgeKind::Escalate),
-        2
-    );
-    assert_eq!(
-        traversed("verify_escalation", "implement", EdgeKind::Backtrack),
-        1
-    );
-    assert_eq!(
-        traversed("verify_escalation", "verify_stopped", EdgeKind::Forward),
-        1
-    );
-    // The persisted graph is the flow as written; gates are derived.
-    let persisted = events
-        .iter()
-        .find_map(|event| match event {
-            EventPayload::PipelineMaterialized { graph, .. } => Some(graph),
-            _ => None,
-        })
-        .unwrap();
-    assert!(
-        !persisted
-            .nodes
-            .contains_key(&NodeKey::try_from("verify_escalation").unwrap())
-    );
+            .unwrap();
+        assert!(
+            !persisted
+                .nodes
+                .contains_key(&NodeKey::try_from("verify_escalation").unwrap())
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// task_loop over two task items; body: implement --done--> verify;
@@ -549,64 +558,103 @@ acceptance_criteria = ["Empty passwords are rejected"]
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_exhausted_task_is_split_and_its_subtasks_run_in_its_place() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let engine = Engine::new(
-        mock.clone(),
-        storage.clone(),
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
-        EngineConfig::default(),
-    );
-    let turn = |outcome, summary| Turn {
-        outcome,
-        summary,
-        file: None,
-    };
-    let script = vec![
-        // `login`: two loop rounds, the extra attempt, then the split planner.
-        turn("done", "login 1"),
-        turn("failed", "Empty passwords still sign in."),
-        turn("done", "login 2"),
-        turn("failed", "Empty passwords still sign in."),
-        turn("done", "login extra"),
-        turn(
-            "failed",
-            "Empty passwords still sign in after the extra attempt.",
-        ),
-        Turn {
-            outcome: "split",
-            summary: "Separated the rejected criterion.",
-            file: Some(("discovered-tasks.toml", SPLIT_TASKS)),
-        },
-        // `login-a`: one rejection on a fresh budget, then a pass.
-        turn("done", "login-a 1"),
-        turn("failed", "Redirect missing."),
-        turn("done", "login-a 2"),
-        turn("passed", "ok"),
-        // `login-b`, then the original `logout`.
-        turn("done", "login-b"),
-        turn("passed", "ok"),
-        turn("done", "logout"),
-        turn("passed", "ok"),
-    ];
-    let driver = drive_turns(mock.clone(), dir.path().to_path_buf(), script).await;
-    let run = RunId::new();
-    let handle = engine
-        .start_run(
-            run,
-            task_loop_graph(),
-            dir.path().into(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
-    let outcome = tokio::time::timeout(Duration::from_secs(60), handle.await_completion())
-        .await
-        .expect("run finishes")
-        .unwrap();
-    if !matches!(&outcome, RunOutcome::Completed { .. }) {
-        let kinds: Vec<String> = storage
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let engine = Engine::new(
+            mock.clone(),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
+            EngineConfig::default(),
+        );
+        let turn = |outcome, summary| Turn {
+            outcome,
+            summary,
+            file: None,
+        };
+        let script = vec![
+            // `login`: two loop rounds, the extra attempt, then the split planner.
+            turn("done", "login 1"),
+            turn("failed", "Empty passwords still sign in."),
+            turn("done", "login 2"),
+            turn("failed", "Empty passwords still sign in."),
+            turn("done", "login extra"),
+            turn(
+                "failed",
+                "Empty passwords still sign in after the extra attempt.",
+            ),
+            Turn {
+                outcome: "split",
+                summary: "Separated the rejected criterion.",
+                file: Some(("discovered-tasks.toml", SPLIT_TASKS)),
+            },
+            // `login-a`: one rejection on a fresh budget, then a pass.
+            turn("done", "login-a 1"),
+            turn("failed", "Redirect missing."),
+            turn("done", "login-a 2"),
+            turn("passed", "ok"),
+            // `login-b`, then the original `logout`.
+            turn("done", "login-b"),
+            turn("passed", "ok"),
+            turn("done", "logout"),
+            turn("passed", "ok"),
+        ];
+        let driver = drive_turns(mock.clone(), dir.path().to_path_buf(), script).await;
+        let run = RunId::new();
+        let handle = engine
+            .start_run(
+                run,
+                task_loop_graph(),
+                dir.path().into(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
+        let outcome = tokio::time::timeout(Duration::from_secs(60), handle.await_completion())
+            .await
+            .expect("run finishes")
+            .unwrap();
+        if !matches!(&outcome, RunOutcome::Completed { .. }) {
+            let kinds: Vec<String> = storage
+                .open_run_reader(run)
+                .await
+                .unwrap()
+                .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|event| {
+                    format!("{:?}", event.payload.payload)
+                        .chars()
+                        .take(160)
+                        .collect()
+                })
+                .collect();
+            panic!("run did not complete: {outcome:?}\n{}", kinds.join("\n"));
+        }
+        let prompts = driver.await.unwrap();
+        assert!(
+            matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
+            "{outcome:?}"
+        );
+
+        // The split planner saw the task and the verifier's findings.
+        assert!(
+            prompts[6].contains("Feedback from the previous attempt"),
+            "{}",
+            prompts[6]
+        );
+        assert!(prompts[6].contains("after the extra attempt"));
+        assert!(prompts[6].contains("Empty passwords are rejected"));
+        // The first subtask runs with its own item.
+        assert!(prompts[7].contains("Sign in valid users"), "{}", prompts[7]);
+
+        storage
+            .inspect_folded_run(run)
+            .await
+            .expect("a journal with a task split stays trusted");
+        let events: Vec<EventPayload> = storage
             .open_run_reader(run)
             .await
             .unwrap()
@@ -614,95 +662,59 @@ async fn an_exhausted_task_is_split_and_its_subtasks_run_in_its_place() {
             .await
             .unwrap()
             .into_iter()
-            .map(|event| {
-                format!("{:?}", event.payload.payload)
-                    .chars()
-                    .take(160)
-                    .collect()
+            .map(|event| event.payload.payload)
+            .collect();
+        let splits: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                EventPayload::TaskSplit {
+                    loop_id,
+                    index,
+                    task,
+                    into,
+                } => Some((
+                    loop_id.as_str().to_owned(),
+                    *index,
+                    task.clone(),
+                    into.clone(),
+                )),
+                _ => None,
             })
             .collect();
-        panic!("run did not complete: {outcome:?}\n{}", kinds.join("\n"));
-    }
-    let prompts = driver.await.unwrap();
-    assert!(
-        matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
-        "{outcome:?}"
-    );
-
-    // The split planner saw the task and the verifier's findings.
-    assert!(
-        prompts[6].contains("Feedback from the previous attempt"),
-        "{}",
-        prompts[6]
-    );
-    assert!(prompts[6].contains("after the extra attempt"));
-    assert!(prompts[6].contains("Empty passwords are rejected"));
-    // The first subtask runs with its own item.
-    assert!(prompts[7].contains("Sign in valid users"), "{}", prompts[7]);
-
-    storage
-        .inspect_folded_run(run)
-        .await
-        .expect("a journal with a task split stays trusted");
-    let events: Vec<EventPayload> = storage
-        .open_run_reader(run)
-        .await
-        .unwrap()
-        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|event| event.payload.payload)
-        .collect();
-    let splits: Vec<_> = events
-        .iter()
-        .filter_map(|event| match event {
-            EventPayload::TaskSplit {
-                loop_id,
-                index,
-                task,
-                into,
-            } => Some((
-                loop_id.as_str().to_owned(),
-                *index,
-                task.clone(),
-                into.clone(),
-            )),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(splits.len(), 1);
-    let (loop_id, index, task, into) = &splits[0];
-    assert_eq!(
-        (loop_id.as_str(), *index, task.as_deref()),
-        ("task_loop", 0, Some("login"))
-    );
-    let ids: Vec<&str> = into
-        .iter()
-        .filter_map(|item| item.get("id").and_then(toml::Value::as_str))
-        .collect();
-    assert_eq!(ids, ["login-a", "login-b"]);
-    assert_eq!(
-        into[1].get("discovered_from").and_then(toml::Value::as_str),
-        Some("login")
-    );
-    let started: Vec<String> = events
-        .iter()
-        .filter_map(|event| match event {
-            EventPayload::LoopIterationStarted { item, .. } => item
-                .get("id")
-                .and_then(toml::Value::as_str)
-                .map(str::to_owned),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(started, ["login", "login-a", "login-b", "logout"]);
-    assert!(
-        !events
+        assert_eq!(splits.len(), 1);
+        let (loop_id, index, task, into) = &splits[0];
+        assert_eq!(
+            (loop_id.as_str(), *index, task.as_deref()),
+            ("task_loop", 0, Some("login"))
+        );
+        let ids: Vec<&str> = into
             .iter()
-            .any(|event| matches!(event, EventPayload::HumanInputRequested { .. })),
-        "the split rung resolves the task without asking"
-    );
+            .filter_map(|item| item.get("id").and_then(toml::Value::as_str))
+            .collect();
+        assert_eq!(ids, ["login-a", "login-b"]);
+        assert_eq!(
+            into[1].get("discovered_from").and_then(toml::Value::as_str),
+            Some("login")
+        );
+        let started: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                EventPayload::LoopIterationStarted { item, .. } => item
+                    .get("id")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started, ["login", "login-a", "login-b", "logout"]);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, EventPayload::HumanInputRequested { .. })),
+            "the split rung resolves the task without asking"
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// Run `retry_loop_graph` to its escalation gate (two rounds plus the extra
@@ -711,69 +723,73 @@ async fn answer_gate_once(
     answer: serde_json::Value,
     after: Vec<Turn>,
 ) -> (RunOutcome, Vec<String>, Vec<EventPayload>) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let engine = Engine::new(
-        mock.clone(),
-        storage.clone(),
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
-        EngineConfig::default(),
-    );
-    let turn = |outcome, summary| Turn {
-        outcome,
-        summary,
-        file: None,
+    let dir = FixtureHome::new().unwrap();
+    let fixture_result = {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let engine = Engine::new(
+            mock.clone(),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())),
+            EngineConfig::default(),
+        );
+        let turn = |outcome, summary| Turn {
+            outcome,
+            summary,
+            file: None,
+        };
+        let mut script = vec![
+            turn("done", "first"),
+            turn("failed", "Empty passwords sign in."),
+            turn("done", "second"),
+            turn("failed", "Empty passwords sign in."),
+            turn("done", "extra"),
+            turn("failed", "Empty passwords still sign in."),
+        ];
+        script.extend(after);
+        let driver = drive_turns(mock.clone(), dir.path().to_path_buf(), script).await;
+        let run = RunId::new();
+        let mut tap = engine.subscribe_tap();
+        let handle = engine
+            .start_run(
+                run,
+                retry_loop_graph(),
+                dir.path().into(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        let gate = tokio::time::timeout(Duration::from_secs(30), next_gate(&mut tap, run))
+            .await
+            .expect("gate raised");
+        assert_eq!(gate.0.as_str(), "verify_escalation");
+        engine
+            .resolve_gate_input(run, gate.0, gate.1, answer)
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("run finishes")
+            .unwrap();
+        let prompts = driver.await.unwrap();
+        storage
+            .inspect_folded_run(run)
+            .await
+            .expect("a journal with a human override stays trusted");
+        let events = storage
+            .open_run_reader(run)
+            .await
+            .unwrap()
+            .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        (outcome, prompts, events)
     };
-    let mut script = vec![
-        turn("done", "first"),
-        turn("failed", "Empty passwords sign in."),
-        turn("done", "second"),
-        turn("failed", "Empty passwords sign in."),
-        turn("done", "extra"),
-        turn("failed", "Empty passwords still sign in."),
-    ];
-    script.extend(after);
-    let driver = drive_turns(mock.clone(), dir.path().to_path_buf(), script).await;
-    let run = RunId::new();
-    let mut tap = engine.subscribe_tap();
-    let handle = engine
-        .start_run(
-            run,
-            retry_loop_graph(),
-            dir.path().into(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .unwrap();
-    let gate = tokio::time::timeout(Duration::from_secs(30), next_gate(&mut tap, run))
-        .await
-        .expect("gate raised");
-    assert_eq!(gate.0.as_str(), "verify_escalation");
-    engine
-        .resolve_gate_input(run, gate.0, gate.1, answer)
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .expect("run finishes")
-        .unwrap();
-    let prompts = driver.await.unwrap();
-    storage
-        .inspect_folded_run(run)
-        .await
-        .expect("a journal with a human override stays trusted");
-    let events = storage
-        .open_run_reader(run)
-        .await
-        .unwrap()
-        .read_events(EventSeq::ZERO..EventSeq(u64::MAX))
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|event| event.payload.payload)
-        .collect();
-    (outcome, prompts, events)
+    dir.close().unwrap();
+    fixture_result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

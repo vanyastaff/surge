@@ -1536,7 +1536,7 @@ mod with_project_context_seed_memory_claims_tests {
 
     #[test]
     fn with_project_context_seed_freezes_candidates_for_per_node_selection() {
-        let memory_dir = tempfile::tempdir().unwrap();
+        let memory_dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let store_path = memory_dir.path().join("memory.db");
         let project_root = tempfile::tempdir().unwrap();
 
@@ -1590,6 +1590,7 @@ mod with_project_context_seed_memory_claims_tests {
         assert_eq!(receipt.dropped, vec![asserted.id()]);
         assert_eq!(receipt.budget, 25);
         assert_eq!(receipt.used, 25);
+        memory_dir.close().unwrap();
     }
 
     #[test]

@@ -55,6 +55,7 @@ async fn subscriber_yields_events_appended_after_subscription() {
 
     drop(stream);
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }
 
 /// [P2.X4] After dropping the source storage, the subscribe stream may still
@@ -101,4 +102,6 @@ async fn subscribe_outlives_storage_handle() {
         Ok(None) => {},         // stream ended cleanly — fine
         Err(_) => {},           // timed out (no new events) — fine, no panic
     }
+    drop(stream);
+    t.home_fixture.close().expect("close runtime home");
 }

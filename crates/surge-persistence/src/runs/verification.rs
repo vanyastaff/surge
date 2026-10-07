@@ -173,10 +173,8 @@ impl super::Storage {
         &self,
         run: surge_core::RunId,
     ) -> Result<Vec<VerificationProofRecord>, super::StorageError> {
-        let mut conn = rusqlite::Connection::open_with_flags(
-            self.events_db_path(&run),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
+        let mut conn =
+            super::connection::RetainedConnection::read_only(&self.events_db_path(&run))?;
         let tx = conn.transaction()?;
         let mut statement = tx.prepare("SELECT p.task_id,l.verified,p.binding_json,p.report_path,p.evidence FROM verification_proofs p JOIN task_ledger l USING(task_id)")?;
         let rows = statement.query_map([], |row| {

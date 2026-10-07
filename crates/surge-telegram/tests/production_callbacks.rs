@@ -1,4 +1,8 @@
 //! Production routes against a real Engine, SQLite, and a local Bot API.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use surge_core::{EventPayload, id::RunId};
@@ -147,7 +151,6 @@ fn routes(storage: &Arc<Storage>, engine: Arc<Engine>, bot: teloxide::Bot) -> Pr
 }
 
 struct Fixture {
-    _home: tempfile::TempDir,
     storage: Arc<Storage>,
     engine: Arc<Engine>,
     id: RunId,
@@ -155,10 +158,11 @@ struct Fixture {
     tap: tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
     routes: ProductionRoutes,
     server: MockServer,
+    _home: FixtureHome,
 }
 impl Fixture {
     async fn new() -> Self {
-        let home = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
@@ -273,11 +277,27 @@ impl Fixture {
             .collect()
     }
     async fn finish(self) -> surge_orchestrator::engine::RunOutcome {
-        let _ = self.engine.stop_run(self.id, "test cleanup".into()).await;
-        tokio::time::timeout(Duration::from_secs(3), self.handle.await_completion())
+        let Self {
+            storage,
+            engine,
+            id,
+            handle,
+            tap,
+            routes,
+            server,
+            _home: home,
+        } = self;
+        match engine.stop_run(id, "test cleanup".into()).await {
+            Ok(()) | Err(surge_orchestrator::engine::EngineError::RunNotFound(_)) => {},
+            Err(error) => panic!("fixture stop failed: {error}"),
+        }
+        let outcome = tokio::time::timeout(Duration::from_secs(3), handle.await_completion())
             .await
             .unwrap()
-            .unwrap()
+            .unwrap();
+        drop((routes, tap, server, engine, storage));
+        home.close().unwrap();
+        outcome
     }
 }
 
@@ -634,6 +654,7 @@ async fn force_reply_correlation_survives_reopened_storage_and_routes() {
             .contains("Feedback accepted")
     );
     f.action(42, "approve", &next).await;
+    drop(reopened);
     f.finish().await;
 }
 

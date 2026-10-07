@@ -2,6 +2,17 @@
 //! `Storage::sync_task_ledger_index` mirrors that view into the cross-run
 //! registry index (`surge ready` / `surge ledger` read path — Phase 1 M5).
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+
+use runtime_home_fixture::FixtureHome;
+
 use std::path::PathBuf;
 
 use surge_core::RoadmapStatus;
@@ -16,7 +27,7 @@ use surge_persistence::task_ledger::TaskLedgerIndexFilter;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sync_mirrors_run_ledger_into_registry_index() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let project = dir.path().join("project");
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = RunId::new();
@@ -114,11 +125,15 @@ async fn sync_mirrors_run_ledger_into_registry_index() {
         .expect("discovered list");
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0].task_id, "m1-t2");
+    drop(store);
+    writer.close().await.expect("close writer");
+    drop(storage);
+    dir.close().expect("close runtime home");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn human_overrides_reach_the_run_view_and_the_registry_index() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let project = dir.path().join("project");
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = RunId::new();
@@ -186,4 +201,8 @@ async fn human_overrides_reach_the_run_view_and_the_registry_index() {
         !index.is_evidence_backed(),
         "a human acceptance is never evidence"
     );
+    drop(reader);
+    writer.close().await.expect("close writer");
+    drop(storage);
+    dir.close().expect("close runtime home");
 }

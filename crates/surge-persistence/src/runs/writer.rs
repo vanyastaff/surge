@@ -158,6 +158,18 @@ async fn writer_loop(
     let span = tracing::info_span!("writer_task", run_id = %cfg.run_id);
     let _enter = span.enter();
 
+    #[cfg(windows)]
+    lease
+        .namespace
+        .verify()
+        .map_err(|error| WriterError::Io(std::io::Error::other(error.to_string())))?;
+    #[cfg(windows)]
+    let mut conn = super::connection::RetainedConnection::open_owned(
+        &cfg.events_db_path,
+        rusqlite::OpenFlags::default(),
+        lease.namespace.clone(),
+    )?;
+    #[cfg(not(windows))]
     let mut conn = Connection::open(&cfg.events_db_path)?;
     crate::runs::pragmas::apply(&conn, crate::runs::pragmas::PER_RUN_PRAGMAS)?;
 
@@ -172,7 +184,7 @@ async fn writer_loop(
             biased;
             cmd = rx.recv() => {
                 let Some(cmd) = cmd else { break };
-                if !handle_command(&mut conn, &cfg, cmd).await {
+                if !handle_command(super::connection::raw_mut(&mut conn), &cfg, cmd).await {
                     break;
                 }
             }

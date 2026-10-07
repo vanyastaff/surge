@@ -1104,7 +1104,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn real_hook_commits_writer_intent_before_its_first_side_effect() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -1184,11 +1184,13 @@ mod tests {
             "a real hook wrote without durable pre-dispatch ownership"
         );
         writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rejected_hook_journal_write_prevents_shell_side_effect() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -1219,5 +1221,7 @@ mod tests {
             !marker.exists(),
             "a hook escaped rejected durable ownership intent"
         );
+        drop(storage);
+        home.close().unwrap();
     }
 }

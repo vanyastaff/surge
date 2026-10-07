@@ -3,6 +3,8 @@
 //! "M8" or "Parallel".
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -83,38 +85,41 @@ fn build_multi_edge_graph() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_edge_same_port_rejected_with_m8_pointer() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
 
-    let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
+        let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let result = engine
-        .start_run(
-            run_id,
-            build_multi_edge_graph(),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await;
-    let err = match result {
-        Err(e) => e,
-        Ok(_) => panic!("start_run should fail with GraphInvalid but succeeded"),
-    };
+        let run_id = RunId::new();
+        let result = engine
+            .start_run(
+                run_id,
+                build_multi_edge_graph(),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("start_run should fail with GraphInvalid but succeeded"),
+        };
 
-    match err {
-        EngineError::GraphInvalid(msg) => {
-            assert!(
-                msg.contains("multiple edges") || msg.contains("multi-edge"),
-                "error message should mention multiple edges: {msg}"
-            );
-            assert!(
-                msg.contains("M8") || msg.contains("Parallel"),
-                "error message should mention M8 or Parallel: {msg}"
-            );
-        },
-        other => panic!("expected GraphInvalid, got {other:?}"),
+        match err {
+            EngineError::GraphInvalid(msg) => {
+                assert!(
+                    msg.contains("multiple edges") || msg.contains("multi-edge"),
+                    "error message should mention multiple edges: {msg}"
+                );
+                assert!(
+                    msg.contains("M8") || msg.contains("Parallel"),
+                    "error message should mention M8 or Parallel: {msg}"
+                );
+            },
+            other => panic!("expected GraphInvalid, got {other:?}"),
+        }
     }
+    dir.close().unwrap();
 }

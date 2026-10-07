@@ -1002,7 +1002,7 @@ mod tests {
             SessionRestoreCapabilities,
         };
         use surge_core::run_event::{SessionDisposition, VersionedEventPayload};
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -1083,6 +1083,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(events.len(), 253);
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
         let mut stream = RunStreamState::default();
         for _ in 0..2 {
             stream.begin_display_history(run, None);

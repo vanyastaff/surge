@@ -96,14 +96,16 @@ impl ClaimedComment {
 /// when this call changed the ticket. Existing emission acknowledgment suppresses
 /// enqueue but never suppresses repairing the ticket state. No historical backfill.
 pub fn enqueue_terminal(
-    conn: &mut Connection,
+    conn: &Connection,
     task_id: &str,
     run_id: &str,
     kind: TerminalCommentKind,
     body: &str,
     now_ms: i64,
 ) -> rusqlite::Result<bool> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // SQLite still rejects BEGIN inside an active transaction. Borrowing only
+    // &Connection keeps the caller's native owner intact without raw extraction.
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let source: Option<String> = tx
         .query_row(
             "SELECT source_id FROM ticket_index WHERE task_id = ?1 AND run_id = ?2
@@ -149,8 +151,10 @@ pub fn enqueue_terminal(
 
 /// Exclusively claim the oldest due delivery, including an expired claim.
 /// Database ownership is released before the caller performs external I/O.
-pub fn claim(conn: &mut Connection, now_ms: i64) -> rusqlite::Result<Option<ClaimedComment>> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+pub fn claim(conn: &Connection, now_ms: i64) -> rusqlite::Result<Option<ClaimedComment>> {
+    // SQLite still rejects BEGIN inside an active transaction. Borrowing only
+    // &Connection keeps the caller's native owner intact without raw extraction.
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let id: Option<i64> = tx
         .query_row(
             "SELECT id FROM terminal_comment_outbox WHERE delivered_at IS NULL
@@ -225,11 +229,13 @@ pub fn claim(conn: &mut Connection, now_ms: i64) -> rusqlite::Result<Option<Clai
 /// Acknowledge delivery and emission identity atomically, only for a current,
 /// unexpired lease. Existing emission rows also allow this delivery to settle.
 pub fn acknowledge(
-    conn: &mut Connection,
+    conn: &Connection,
     comment: &ClaimedComment,
     now_ms: i64,
 ) -> rusqlite::Result<bool> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // SQLite still rejects BEGIN inside an active transaction. Borrowing only
+    // &Connection keeps the caller's native owner intact without raw extraction.
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let changed = tx.execute(
         "UPDATE terminal_comment_outbox SET delivered_at = ?1, lease_token = NULL,
          lease_until = NULL, last_error = NULL WHERE id = ?2 AND lease_token = ?3
@@ -289,7 +295,7 @@ mod tests {
         conn
     }
 
-    fn enqueue(conn: &mut Connection, now_ms: i64) {
+    fn enqueue(conn: &Connection, now_ms: i64) {
         assert!(
             enqueue_terminal(
                 conn,
@@ -304,12 +310,56 @@ mod tests {
     }
 
     #[test]
+    fn shared_connection_entry_preserves_nested_transaction_refusal() {
+        let conn = db();
+        let outer = conn.unchecked_transaction().unwrap();
+        let result = enqueue_terminal(
+            &conn,
+            "mock:test#1",
+            "run-1",
+            TerminalCommentKind::Completed,
+            "completed",
+            1000,
+        );
+        assert!(result.is_err());
+        assert!(
+            !conn.is_autocommit(),
+            "failed nested admission cannot end the outer transaction"
+        );
+        assert_eq!(
+            conn.query_row("SELECT state FROM ticket_index", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            "RunStarted"
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        outer.rollback().unwrap();
+        assert!(
+            enqueue_terminal(
+                &conn,
+                "mock:test#1",
+                "run-1",
+                TerminalCommentKind::Completed,
+                "completed",
+                1000
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn enqueue_failure_rolls_back_ticket_and_identity_is_immutable() {
-        let mut conn = db();
+        let conn = db();
         conn.execute_batch("CREATE TRIGGER reject_outbox BEFORE INSERT ON terminal_comment_outbox BEGIN SELECT RAISE(ABORT, 'full'); END;").unwrap();
         assert!(
             enqueue_terminal(
-                &mut conn,
+                &conn,
                 "mock:test#1",
                 "run-1",
                 TerminalCommentKind::Completed,
@@ -325,10 +375,10 @@ mod tests {
             "RunStarted"
         );
         conn.execute_batch("DROP TRIGGER reject_outbox;").unwrap();
-        enqueue(&mut conn, 1000);
+        enqueue(&conn, 1000);
         assert!(
             !enqueue_terminal(
-                &mut conn,
+                &conn,
                 "mock:test#1",
                 "run-1",
                 TerminalCommentKind::Failed,
@@ -341,41 +391,37 @@ mod tests {
             conn.execute("UPDATE terminal_comment_outbox SET body = 'changed'", [])
                 .is_err()
         );
-        let comment = claim(&mut conn, 1000).unwrap().unwrap();
+        let comment = claim(&conn, 1000).unwrap().unwrap();
         assert_eq!(comment.body, "completed\n\nSurge run: `run-1`.");
-        assert!(claim(&mut conn, 1000).unwrap().is_none());
+        assert!(claim(&conn, 1000).unwrap().is_none());
     }
 
     #[test]
     fn retry_backoff_expiry_and_stale_owners_are_fenced() {
-        let mut conn = db();
+        let conn = db();
         let clock = MockClock::new(1000);
-        enqueue(&mut conn, clock.now_ms());
-        let first = claim(&mut conn, clock.now_ms()).unwrap().unwrap();
+        enqueue(&conn, clock.now_ms());
+        let first = claim(&conn, clock.now_ms()).unwrap().unwrap();
         clock.advance(30_000);
-        assert!(!acknowledge(&mut conn, &first, clock.now_ms()).unwrap());
+        assert!(!acknowledge(&conn, &first, clock.now_ms()).unwrap());
         assert!(!retry(&conn, &first, clock.now_ms(), "expired failure").unwrap());
-        let replacement = claim(&mut conn, clock.now_ms()).unwrap().unwrap();
-        assert!(!acknowledge(&mut conn, &first, clock.now_ms()).unwrap());
+        let replacement = claim(&conn, clock.now_ms()).unwrap().unwrap();
+        assert!(!acknowledge(&conn, &first, clock.now_ms()).unwrap());
         assert!(!retry(&conn, &first, clock.now_ms(), "stale failure").unwrap());
         assert!(retry(&conn, &replacement, clock.now_ms(), "network down").unwrap());
-        assert!(claim(&mut conn, clock.now_ms()).unwrap().is_none());
+        assert!(claim(&conn, clock.now_ms()).unwrap().is_none());
         clock.advance(10_000);
-        let third = claim(&mut conn, clock.now_ms()).unwrap().unwrap();
+        let third = claim(&conn, clock.now_ms()).unwrap().unwrap();
         assert_eq!(third.attempts, 3);
         assert_eq!(third.body, first.body);
-        assert!(acknowledge(&mut conn, &third, clock.now_ms()).unwrap());
+        assert!(acknowledge(&conn, &third, clock.now_ms()).unwrap());
         assert!(intake_emit_log::has(&conn, third.key()).unwrap());
-        assert!(
-            claim(&mut conn, clock.now_ms() + 1_000_000)
-                .unwrap()
-                .is_none()
-        );
+        assert!(claim(&conn, clock.now_ms() + 1_000_000).unwrap().is_none());
     }
 
     #[test]
     fn prior_ack_repairs_active_state_without_enqueue_and_ack_is_idempotent() {
-        let mut conn = db();
+        let conn = db();
         let key = EmitKey {
             source_id: "mock:test",
             task_id: "mock:test#1",
@@ -383,8 +429,8 @@ mod tests {
             event_kind: EmitEventKind::RunCompleted,
         };
         intake_emit_log::record(&conn, key).unwrap();
-        enqueue(&mut conn, 1000);
-        assert!(claim(&mut conn, 1000).unwrap().is_none());
+        enqueue(&conn, 1000);
+        assert!(claim(&conn, 1000).unwrap().is_none());
         assert_eq!(
             conn.query_row("SELECT state FROM ticket_index", [], |row| row
                 .get::<_, String>(0))
@@ -395,11 +441,11 @@ mod tests {
             "DELETE FROM intake_emit_log; UPDATE ticket_index SET state = 'Active';",
         )
         .unwrap();
-        enqueue(&mut conn, 1000);
-        let comment = claim(&mut conn, 1000).unwrap().unwrap();
+        enqueue(&conn, 1000);
+        let comment = claim(&conn, 1000).unwrap().unwrap();
         intake_emit_log::record(&conn, comment.key()).unwrap();
-        assert!(acknowledge(&mut conn, &comment, 1001).unwrap());
-        assert!(!acknowledge(&mut conn, &comment, 1002).unwrap());
+        assert!(acknowledge(&conn, &comment, 1001).unwrap());
+        assert!(!acknowledge(&conn, &comment, 1002).unwrap());
     }
 
     #[test]
@@ -407,7 +453,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("registry.sqlite");
         let source = db();
-        let mut conn = Connection::open(&path).unwrap();
+        let conn = Connection::open(&path).unwrap();
         drop(source);
         conn.execute_batch("CREATE TABLE ticket_index(task_id TEXT PRIMARY KEY, source_id TEXT, run_id TEXT, state TEXT);
             INSERT INTO ticket_index VALUES ('mock:test#1', 'mock:test', 'run-1', 'RunStarted');").unwrap();
@@ -419,7 +465,7 @@ mod tests {
             "runs/migrations/registry/0020_terminal_comment_outbox.sql"
         ))
         .unwrap();
-        enqueue(&mut conn, 1000);
+        enqueue(&conn, 1000);
         drop(conn);
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
         let threads: Vec<_> = (0..2)
@@ -427,11 +473,11 @@ mod tests {
                 let path = path.clone();
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
-                    let mut conn = Connection::open(path).unwrap();
+                    let conn = Connection::open(path).unwrap();
                     conn.busy_timeout(std::time::Duration::from_secs(2))
                         .unwrap();
                     barrier.wait();
-                    claim(&mut conn, 1000).unwrap().is_some()
+                    claim(&conn, 1000).unwrap().is_some()
                 })
             })
             .collect();
@@ -441,16 +487,16 @@ mod tests {
             .filter(|won| *won)
             .count();
         assert_eq!(winners, 1);
-        let mut conn = Connection::open(path).unwrap();
-        assert!(claim(&mut conn, 1001).unwrap().is_none());
-        let recovered = claim(&mut conn, 31_000).unwrap().unwrap();
+        let conn = Connection::open(path).unwrap();
+        assert!(claim(&conn, 1001).unwrap().is_none());
+        let recovered = claim(&conn, 31_000).unwrap().unwrap();
         assert_eq!(recovered.body, "completed\n\nSurge run: `run-1`.");
-        assert!(acknowledge(&mut conn, &recovered, 31_001).unwrap());
+        assert!(acknowledge(&conn, &recovered, 31_001).unwrap());
     }
     #[test]
     fn malformed_due_row_is_retained_without_starving_the_next_job() {
-        let mut conn = db();
-        enqueue(&mut conn, 1000);
+        let conn = db();
+        enqueue(&conn, 1000);
         conn.execute_batch(
             "DROP TRIGGER terminal_comment_outbox_immutable;
             PRAGMA ignore_check_constraints = ON;
@@ -460,7 +506,7 @@ mod tests {
         .unwrap();
         assert!(
             enqueue_terminal(
-                &mut conn,
+                &conn,
                 "mock:test#2",
                 "run-2",
                 TerminalCommentKind::Aborted,
@@ -469,8 +515,8 @@ mod tests {
             )
             .unwrap()
         );
-        assert!(claim(&mut conn, 1000).unwrap().is_none());
-        let healthy = claim(&mut conn, 1000).unwrap().unwrap();
+        assert!(claim(&conn, 1000).unwrap().is_none());
+        let healthy = claim(&conn, 1000).unwrap().unwrap();
         assert_eq!(healthy.run_id(), "run-2");
         let diagnostic: String = conn
             .query_row(
@@ -516,6 +562,6 @@ mod tests {
                 .unwrap(),
             1
         );
-        assert!(claim(&mut conn, clock.now_ms()).unwrap().is_none());
+        assert!(claim(&conn, clock.now_ms()).unwrap().is_none());
     }
 }

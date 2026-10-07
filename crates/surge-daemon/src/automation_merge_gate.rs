@@ -1072,44 +1072,49 @@ mod tests {
     /// genuinely 60000-byte report.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_report_attachment_omits_when_reserved_len_pushes_it_over_the_cap() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = surge_persistence::runs::Storage::open(dir.path())
-            .await
-            .unwrap();
-        let run_id = RunId::new();
-        let project = dir.path().join("proj");
-        let writer = storage.create_run(run_id, &project, None).await.unwrap();
-        writer
-            .append_event(surge_core::run_event::VersionedEventPayload::new(
-                surge_core::run_event::EventPayload::RunCompleted {
-                    terminal_node: NodeKey::try_new("end").unwrap(),
-                },
-            ))
-            .await
-            .unwrap();
-        writer.flush().await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = surge_persistence::runs::Storage::open(dir.path())
+                .await
+                .unwrap();
+            let run_id = RunId::new();
+            let project = dir.path().join("proj");
+            let writer = storage.create_run(run_id, &project, None).await.unwrap();
+            writer
+                .append_event(surge_core::run_event::VersionedEventPayload::new(
+                    surge_core::run_event::EventPayload::RunCompleted {
+                        terminal_node: NodeKey::try_new("end").unwrap(),
+                    },
+                ))
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
 
-        let unreserved = run_report_attachment(&storage, run_id, "github_issues", 0)
-            .await
-            .expect("a small report with no reservation must fit under the cap");
-        assert!(unreserved.len() < MAX_ATTACHMENT_BODY_LEN);
+            let unreserved = run_report_attachment(&storage, run_id, "github_issues", 0)
+                .await
+                .expect("a small report with no reservation must fit under the cap");
+            assert!(unreserved.len() < MAX_ATTACHMENT_BODY_LEN);
 
-        // Reserve exactly enough that the total lands one byte over the cap.
-        let reserved_len = MAX_ATTACHMENT_BODY_LEN - unreserved.len() + 1;
-        let omitted = run_report_attachment(&storage, run_id, "github_issues", reserved_len).await;
-        assert!(
-            omitted.is_none(),
-            "a reserved_len that pushes the total one byte over the cap must omit the attachment"
-        );
+            // Reserve exactly enough that the total lands one byte over the cap.
+            let reserved_len = MAX_ATTACHMENT_BODY_LEN - unreserved.len() + 1;
+            let omitted =
+                run_report_attachment(&storage, run_id, "github_issues", reserved_len).await;
+            assert!(
+                omitted.is_none(),
+                "a reserved_len that pushes the total one byte over the cap must omit the attachment"
+            );
 
-        // One byte under the cap must still fit — pins the check as a
-        // strict `>`, not `>=`.
-        let reserved_len_fits = MAX_ATTACHMENT_BODY_LEN - unreserved.len();
-        let fits =
-            run_report_attachment(&storage, run_id, "github_issues", reserved_len_fits).await;
-        assert!(
-            fits.is_some(),
-            "landing exactly at the cap must still be posted, not omitted"
-        );
+            // One byte under the cap must still fit — pins the check as a
+            // strict `>`, not `>=`.
+            let reserved_len_fits = MAX_ATTACHMENT_BODY_LEN - unreserved.len();
+            let fits =
+                run_report_attachment(&storage, run_id, "github_issues", reserved_len_fits).await;
+            assert!(
+                fits.is_some(),
+                "landing exactly at the cap must still be posted, not omitted"
+            );
+            writer.close().await.unwrap();
+        }
+        dir.close().unwrap();
     }
 }

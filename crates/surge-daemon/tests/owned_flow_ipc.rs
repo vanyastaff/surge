@@ -1,6 +1,10 @@
 //! Ordinary Flow submission is a durable host-owned operation.
 #[path = "../../surge-orchestrator/tests/fixtures/mock_bridge.rs"]
 mod mock_bridge;
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use interprocess::local_socket::tokio::prelude::*;
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -34,7 +38,7 @@ async fn request(socket: &Path, body: &Value) -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn locator_replay_survives_missing_source_and_changed_configuration() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let project = tempfile::tempdir().unwrap();
     let repo = git2::Repository::init(project.path()).unwrap();
     let graph = include_str!("../../../examples/flow_terminal_only.toml");
@@ -149,6 +153,8 @@ async fn locator_replay_survives_missing_source_and_changed_configuration() {
         panic!("attempt history")
     };
     assert_eq!(attempts.entries.len(), 1);
+    drop(storage);
+    home.close().unwrap();
 }
 
 async fn wait_terminal_history(

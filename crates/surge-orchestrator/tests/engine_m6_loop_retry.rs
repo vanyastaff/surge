@@ -1,5 +1,6 @@
 //! Retry exhaustion must stop the loop after the configured attempt budget.
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 #[path = "fixtures/loop_failure.rs"]
 mod scenario;
 

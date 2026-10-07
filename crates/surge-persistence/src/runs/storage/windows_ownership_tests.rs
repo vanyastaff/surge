@@ -403,8 +403,10 @@ async fn derived_pool_retains_original_database_until_every_owner_drops() {
         );
         let original = std::mem::replace(
             &mut *connection,
-            rusqlite::Connection::open_in_memory().unwrap(),
+            crate::runs::connection::RetainedConnection::in_memory().unwrap(),
         );
+        // Close the complete disk owner. Empty replacement slots retain no namespace,
+        // so the rename assertion below depends on the actual manager's own fence.
         original.close().unwrap();
         assert_eq!(
             connection.path(),

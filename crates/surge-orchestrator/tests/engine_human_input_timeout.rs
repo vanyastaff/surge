@@ -19,6 +19,8 @@
 //! is deferred to M5.1.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,13 +76,16 @@ async fn request_human_input_timeout_halts_run() {
     // halt rather than block forever. MockBridge is used here to avoid the
     // AcpBridge Drop-join hang until the M5.1 real body lands.
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge: Arc<dyn BridgeFacade> = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge: Arc<dyn BridgeFacade> = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    // Just exercise construction; real test body deferred to M5.1.
-    let _engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
-    // Construction succeeded — the let binding above is the assertion.
+        // Just exercise construction; real test body deferred to M5.1.
+        let _engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
+        // Construction succeeded — the let binding above is the assertion.
+    }
+    dir.close().unwrap();
 }

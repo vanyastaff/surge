@@ -4,6 +4,8 @@
 //! fits, the run parks and wakes as before.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -185,150 +187,156 @@ fn opened_agents(events: &[EventPayload]) -> Vec<Option<String>> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rate_limited_stage_moves_to_the_fallback_agent_and_finishes() {
     let (_profiles, registry) = profiles();
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: Some(Duration::from_secs(3600)),
-        details: "usage limit reached".into(),
-    })
-    .await;
-    let (first, second) = (SessionId::new(), SessionId::new());
-    mock.pin_session_ids(vec![first, second]).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: second,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "done on codex".into(),
-        artifacts_produced: vec![],
-        verification_report: None,
-    })
-    .await;
-    let pump_mock = mock.clone();
-    let pump = tokio::spawn(async move {
-        pump_mock.wait_for_subscribe_count(2).await;
-        pump_mock.pump_scripted_events().await;
-    });
-    let engine = engine(&mock, &storage, registry, vec!["codex-acp".into()]);
-    let run = RunId::new();
-    let handle = engine
-        .start_run(run, graph(), dir.path().into(), EngineRunConfig::default())
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
-        .await
-        .expect("run finishes")
-        .unwrap();
-    pump.await.unwrap();
-    assert!(
-        matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
-        "{outcome:?}"
-    );
-
-    let events = journal(&storage, run).await;
-    let rotations: Vec<_> = events
-        .iter()
-        .filter_map(|event| match event {
-            EventPayload::StageRuntimeRotated { node, from, to, .. } => {
-                Some((node.as_str().to_owned(), from.clone(), to.clone()))
-            },
-            _ => None,
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: Some(Duration::from_secs(3600)),
+            details: "usage limit reached".into(),
         })
-        .collect();
-    assert_eq!(
-        rotations,
-        [(
-            "implement".to_owned(),
-            "claude-acp".to_owned(),
-            "codex-acp".to_owned()
-        )]
-    );
-    assert_eq!(
-        opened_agents(&events),
-        [Some("claude-acp".into()), Some("codex-acp".into())]
-    );
-    assert!(
-        !events
+        .await;
+        let (first, second) = (SessionId::new(), SessionId::new());
+        mock.pin_session_ids(vec![first, second]).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: second,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "done on codex".into(),
+            artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        let pump_mock = mock.clone();
+        let pump = tokio::spawn(async move {
+            pump_mock.wait_for_subscribe_count(2).await;
+            pump_mock.pump_scripted_events().await;
+        });
+        let engine = engine(&mock, &storage, registry, vec!["codex-acp".into()]);
+        let run = RunId::new();
+        let handle = engine
+            .start_run(run, graph(), dir.path().into(), EngineRunConfig::default())
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+            .await
+            .expect("run finishes")
+            .unwrap();
+        pump.await.unwrap();
+        assert!(
+            matches!(&outcome, RunOutcome::Completed { terminal } if terminal.as_str() == "end"),
+            "{outcome:?}"
+        );
+
+        let events = journal(&storage, run).await;
+        let rotations: Vec<_> = events
             .iter()
-            .any(|event| matches!(event, EventPayload::RunParked { .. }))
-    );
-    storage
-        .inspect_folded_run(run)
-        .await
-        .expect("a journal with an agent rotation stays trusted");
+            .filter_map(|event| match event {
+                EventPayload::StageRuntimeRotated { node, from, to, .. } => {
+                    Some((node.as_str().to_owned(), from.clone(), to.clone()))
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rotations,
+            [(
+                "implement".to_owned(),
+                "claude-acp".to_owned(),
+                "codex-acp".to_owned()
+            )]
+        );
+        assert_eq!(
+            opened_agents(&events),
+            [Some("claude-acp".into()), Some("codex-acp".into())]
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, EventPayload::RunParked { .. }))
+        );
+        storage
+            .inspect_folded_run(run)
+            .await
+            .expect("a journal with an agent rotation stays trusted");
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn with_every_fallback_exhausted_the_run_parks_and_wakes() {
     let (_profiles, registry) = profiles();
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    storage
-        .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
-            "codex-acp",
-            Some(Duration::from_secs(3600)),
-            chrono::Utc::now(),
-        ))
-        .await
-        .unwrap();
-    let mock = Arc::new(MockBridge::new());
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached".into(),
-    })
-    .await;
-    let engine = engine(&mock, &storage, registry, vec!["codex-acp".into()]);
-    let run = RunId::new();
-    let handle = engine
-        .start_run(run, graph(), dir.path().into(), EngineRunConfig::default())
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
-        .await
-        .expect("run parks")
-        .unwrap();
-    assert!(matches!(outcome, RunOutcome::Parked { .. }), "{outcome:?}");
-    assert!(
-        !journal(&storage, run)
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        storage
+            .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
+                "codex-acp",
+                Some(Duration::from_secs(3600)),
+                chrono::Utc::now(),
+            ))
+            .await
+            .unwrap();
+        let mock = Arc::new(MockBridge::new());
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached".into(),
+        })
+        .await;
+        let engine = engine(&mock, &storage, registry, vec!["codex-acp".into()]);
+        let run = RunId::new();
+        let handle = engine
+            .start_run(run, graph(), dir.path().into(), EngineRunConfig::default())
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+            .await
+            .expect("run parks")
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Parked { .. }), "{outcome:?}");
+        assert!(
+            !journal(&storage, run)
+                .await
+                .iter()
+                .any(|event| matches!(event, EventPayload::StageRuntimeRotated { .. })),
+            "an exhausted fallback is never chosen"
+        );
+
+        // Wake: the resumed attempt runs and finishes.
+        let session = SessionId::new();
+        mock.pin_next_session_id(session).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "done after waking".into(),
+            artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        let resumed = engine.resume_run(run, dir.path().into()).await.unwrap();
+        let pump_mock = mock.clone();
+        let pump = tokio::spawn(async move {
+            pump_mock.wait_for_subscribe_count(2).await;
+            pump_mock.pump_scripted_events().await;
+        });
+        let outcome = tokio::time::timeout(Duration::from_secs(10), resumed.await_completion())
+            .await
+            .expect("resumed run finishes")
+            .unwrap();
+        pump.await.unwrap();
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        let sends = mock
+            .recorded_calls
+            .lock()
             .await
             .iter()
-            .any(|event| matches!(event, EventPayload::StageRuntimeRotated { .. })),
-        "an exhausted fallback is never chosen"
-    );
-
-    // Wake: the resumed attempt runs and finishes.
-    let session = SessionId::new();
-    mock.pin_next_session_id(session).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "done after waking".into(),
-        artifacts_produced: vec![],
-        verification_report: None,
-    })
-    .await;
-    let resumed = engine.resume_run(run, dir.path().into()).await.unwrap();
-    let pump_mock = mock.clone();
-    let pump = tokio::spawn(async move {
-        pump_mock.wait_for_subscribe_count(2).await;
-        pump_mock.pump_scripted_events().await;
-    });
-    let outcome = tokio::time::timeout(Duration::from_secs(10), resumed.await_completion())
-        .await
-        .expect("resumed run finishes")
-        .unwrap();
-    pump.await.unwrap();
-    assert!(
-        matches!(outcome, RunOutcome::Completed { .. }),
-        "{outcome:?}"
-    );
-    let sends = mock
-        .recorded_calls
-        .lock()
-        .await
-        .iter()
-        .filter(|call| matches!(call, RecordedCall::SendMessage { .. }))
-        .count();
-    assert_eq!(sends, 2);
+            .filter(|call| matches!(call, RecordedCall::SendMessage { .. }))
+            .count();
+        assert_eq!(sends, 2);
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -378,65 +386,69 @@ async fn a_rotation_onto_the_partner_agent_is_flagged() {
     retry.policy.max_traversals = Some(2);
     g.edges.push(retry);
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    // implement succeeds; verify's first attempt hits the limit.
-    mock.pass_next_send_message().await;
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: Some(Duration::from_secs(3600)),
-        details: "usage limit reached".into(),
-    })
-    .await;
-    let (implemented, limited, checked) = (SessionId::new(), SessionId::new(), SessionId::new());
-    mock.pin_session_ids(vec![implemented, limited, checked])
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        // implement succeeds; verify's first attempt hits the limit.
+        mock.pass_next_send_message().await;
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: Some(Duration::from_secs(3600)),
+            details: "usage limit reached".into(),
+        })
         .await;
-    let pump_mock = mock.clone();
-    let pump = tokio::spawn(async move {
-        pump_mock.wait_for_subscribe_count(1).await;
-        pump_mock
-            .enqueue_event(BridgeEvent::OutcomeReported {
-                session: implemented,
-                outcome: OutcomeKey::try_from("done").unwrap(),
-                summary: "implemented on codex".into(),
-                artifacts_produced: vec![],
-                verification_report: None,
-            })
+        let (implemented, limited, checked) =
+            (SessionId::new(), SessionId::new(), SessionId::new());
+        mock.pin_session_ids(vec![implemented, limited, checked])
             .await;
-        pump_mock.pump_scripted_events().await;
-        pump_mock.wait_for_subscribe_count(3).await;
-        pump_mock
-            .enqueue_event(BridgeEvent::OutcomeReported {
-                session: checked,
-                outcome: OutcomeKey::try_from("done").unwrap(),
-                summary: "checked on codex".into(),
-                artifacts_produced: vec![],
-                verification_report: None,
-            })
-            .await;
-        pump_mock.pump_scripted_events().await;
-    });
-    let engine = engine(&mock, &storage, registry, vec!["codex-acp".into()]);
-    let run = RunId::new();
-    let handle = engine
-        .start_run(run, g, dir.path().into(), EngineRunConfig::default())
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
-        .await
-        .expect("run finishes")
-        .unwrap();
-    pump.await.unwrap();
-    assert!(
-        matches!(outcome, RunOutcome::Completed { .. }),
-        "{outcome:?}"
-    );
-    assert!(
-        journal(&storage, run)
+        let pump_mock = mock.clone();
+        let pump = tokio::spawn(async move {
+            pump_mock.wait_for_subscribe_count(1).await;
+            pump_mock
+                .enqueue_event(BridgeEvent::OutcomeReported {
+                    session: implemented,
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                    summary: "implemented on codex".into(),
+                    artifacts_produced: vec![],
+                    verification_report: None,
+                })
+                .await;
+            pump_mock.pump_scripted_events().await;
+            pump_mock.wait_for_subscribe_count(3).await;
+            pump_mock
+                .enqueue_event(BridgeEvent::OutcomeReported {
+                    session: checked,
+                    outcome: OutcomeKey::try_from("done").unwrap(),
+                    summary: "checked on codex".into(),
+                    artifacts_produced: vec![],
+                    verification_report: None,
+                })
+                .await;
+            pump_mock.pump_scripted_events().await;
+        });
+        let engine = engine(&mock, &storage, registry, vec!["codex-acp".into()]);
+        let run = RunId::new();
+        let handle = engine
+            .start_run(run, g, dir.path().into(), EngineRunConfig::default())
             .await
-            .iter()
-            .any(|event| matches!(event,
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+            .await
+            .expect("run finishes")
+            .unwrap();
+        pump.await.unwrap();
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        assert!(
+            journal(&storage, run)
+                .await
+                .iter()
+                .any(|event| matches!(event,
         EventPayload::StageRuntimeRotated { node, to, same_as_partner: true, .. }
             if node.as_str() == "verify" && to == "codex-acp"))
-    );
+        );
+    }
+    dir.close().unwrap();
 }

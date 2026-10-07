@@ -516,7 +516,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn closed_writer_prevents_real_shell_tool_effect() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -544,6 +544,8 @@ mod tests {
             "{result:?}"
         );
         assert!(!home.path().join("forbidden-effect").exists());
+        drop(storage);
+        home.close().unwrap();
     }
 
     fn ctx<'a>(

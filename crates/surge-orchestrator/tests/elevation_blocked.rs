@@ -10,6 +10,8 @@
 //!   option_id.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::sync::Arc;
 
@@ -33,23 +35,26 @@ fn deny_decision() -> EngineElevationDecision {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resolve_elevation_returns_run_not_found_for_unknown_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
 
-    let unknown_run = RunId::new();
-    let result = engine
-        .resolve_elevation(
-            unknown_run,
-            SessionId::new(),
-            "req-1".into(),
-            deny_decision(),
-        )
-        .await;
-    assert!(matches!(result, Err(EngineError::RunNotFound(_))));
+        let unknown_run = RunId::new();
+        let result = engine
+            .resolve_elevation(
+                unknown_run,
+                SessionId::new(),
+                "req-1".into(),
+                deny_decision(),
+            )
+            .await;
+        assert!(matches!(result, Err(EngineError::RunNotFound(_))));
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

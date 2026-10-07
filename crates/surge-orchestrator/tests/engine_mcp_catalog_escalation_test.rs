@@ -9,6 +9,8 @@
 #![cfg(unix)]
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -123,76 +125,79 @@ fn stalled_server() -> McpServerRef {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_server_catalog_failure_escalates_and_stage_still_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
-        verification_report: None,
-    })
-    .await;
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
-    let run_id = RunId::new();
-    let run_config = EngineRunConfig {
-        mcp_servers: vec![stalled_server()],
-        ..EngineRunConfig::default()
-    };
-    let handle = engine
-        .start_run(
-            run_id,
-            agent_selecting_mcp_graph(),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await
-        .expect("start_run");
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .expect("run terminates")
-        .unwrap();
-    pump.await.unwrap();
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("stage must still run without the server's tools, got {other:?}"),
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let run_id = RunId::new();
+        let run_config = EngineRunConfig {
+            mcp_servers: vec![stalled_server()],
+            ..EngineRunConfig::default()
+        };
+        let handle = engine
+            .start_run(
+                run_id,
+                agent_selecting_mcp_graph(),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await
+            .expect("start_run");
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("run terminates")
+            .unwrap();
+        pump.await.unwrap();
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => panic!("stage must still run without the server's tools, got {other:?}"),
+        }
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let escalations = surge_persistence::runs::read_escalations(&reader)
+            .await
+            .unwrap();
+        let catalog: Vec<_> = escalations
+            .iter()
+            .filter(|e| e.cause == EscalationCause::McpSelectedCatalogUnavailable)
+            .collect();
+        assert_eq!(
+            catalog.len(),
+            1,
+            "exactly one typed catalog escalation, got {escalations:?}"
+        );
+        assert_eq!(
+            catalog[0].node.as_ref().map(|n| n.as_str()),
+            Some("implement")
+        );
+        assert!(
+            catalog[0].reason.contains(&format!("'{SERVER}'"))
+                && catalog[0]
+                    .reason
+                    .contains("did not complete MCP startup within 100ms"),
+            "reason must name the server and the startup deadline: {}",
+            catalog[0].reason
+        );
     }
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let escalations = surge_persistence::runs::read_escalations(&reader)
-        .await
-        .unwrap();
-    let catalog: Vec<_> = escalations
-        .iter()
-        .filter(|e| e.cause == EscalationCause::McpSelectedCatalogUnavailable)
-        .collect();
-    assert_eq!(
-        catalog.len(),
-        1,
-        "exactly one typed catalog escalation, got {escalations:?}"
-    );
-    assert_eq!(
-        catalog[0].node.as_ref().map(|n| n.as_str()),
-        Some("implement")
-    );
-    assert!(
-        catalog[0].reason.contains(&format!("'{SERVER}'"))
-            && catalog[0]
-                .reason
-                .contains("did not complete MCP startup within 100ms"),
-        "reason must name the server and the startup deadline: {}",
-        catalog[0].reason
-    );
+    dir.close().unwrap();
 }

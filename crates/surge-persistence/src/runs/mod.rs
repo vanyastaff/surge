@@ -47,6 +47,7 @@ pub mod busy;
 pub mod capacity;
 pub mod clock;
 pub mod config;
+pub(crate) mod connection;
 pub mod error;
 pub mod escalations;
 pub(crate) mod file_lock;

@@ -9,14 +9,22 @@ use windows::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum NativeError {
+pub(crate) enum NativeError {
+    #[error("runtime file ownership is busy")]
+    Busy,
     #[error("native complete flush failed with {0:?}")]
     Flush(NTSTATUS),
+    #[error("native Windows API failed: {0}")]
+    Windows(#[from] windows::core::Error),
+    #[error("native security validation refused: {0}")]
+    Security(&'static str),
+    #[error("native object open failed with {0:?}")]
+    Open(NTSTATUS),
+    #[error("native filesystem I/O failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 pub(super) type NativeResult<T> = Result<T, NativeError>;
 
-// Integration is deliberately closed until the native durability design probe passes.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(super) fn flush_complete(file: &File) -> NativeResult<()> {
     let mut io = IO_STATUS_BLOCK::default();
     // SAFETY: borrowed live handle and initialized SDK output stay live throughout

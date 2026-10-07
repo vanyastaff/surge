@@ -14,6 +14,8 @@
 #![allow(clippy::too_many_lines)]
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -297,307 +299,330 @@ async fn drive_run(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn clean_run_writes_no_memory_claim() {
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    let dir = tempfile::tempdir().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    let dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
 
-    let mock = Arc::new(MockBridge::new());
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "all good".into(),
-        artifacts_produced: vec![],
+        let mock = Arc::new(MockBridge::new());
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "all good".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let (_run_id, _storage, outcome) = drive_run(
-        dir.path(),
-        agent_to_terminal_graph(),
-        run_config_with_memory_store(store_path.clone()),
-        mock,
-    )
-    .await;
-    assert!(
-        matches!(outcome, RunOutcome::Completed { .. }),
-        "expected a clean completion, got {outcome:?}"
-    );
+        let (_run_id, _storage, outcome) = drive_run(
+            dir.path(),
+            agent_to_terminal_graph(),
+            run_config_with_memory_store(store_path.clone()),
+            mock,
+        )
+        .await;
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected a clean completion, got {outcome:?}"
+        );
 
-    let claims = list_claims(&store_path);
-    assert!(
-        claims.is_empty(),
-        "a clean run must not write any memory claim, got {claims:?}"
-    );
+        let claims = list_claims(&store_path);
+        assert!(
+            claims.is_empty(),
+            "a clean run must not write any memory claim, got {claims:?}"
+        );
+    }
+    dir.close().unwrap();
+    memory_dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failing_run_records_a_claim_visible_to_the_audit() {
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    // Kept alive for the whole test (not just the run) — `storage`'s
-    // registry lives under it, and `run_audit` below needs to open that
-    // same, still-live registry after the run completes.
-    let dir = tempfile::tempdir().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    let dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
+        // Kept alive for the whole test (not just the run) — `storage`'s
+        // registry lives under it, and `run_audit` below needs to open that
+        // same, still-live registry after the run completes.
 
-    let mock = Arc::new(MockBridge::new());
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    // No scripted events at all — matches ticket 17's own deterministic
-    // wall-clock-trip harness (`engine_guard_spill_harness_test.rs`):
-    // the timer-driven poll inside the stage's event loop fails the
-    // node before any tool call or outcome is ever needed.
+        let mock = Arc::new(MockBridge::new());
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        // No scripted events at all — matches ticket 17's own deterministic
+        // wall-clock-trip harness (`engine_guard_spill_harness_test.rs`):
+        // the timer-driven poll inside the stage's event loop fails the
+        // node before any tool call or outcome is ever needed.
 
-    let (run_id, storage, outcome) = drive_run(
-        dir.path(),
-        agent_to_terminal_graph(),
-        instant_wall_clock_trip(store_path.clone()),
-        mock,
-    )
-    .await;
-    assert!(
-        matches!(outcome, RunOutcome::Failed { .. }),
-        "expected the wall-clock trip to fail the run, got {outcome:?}"
-    );
-
-    // Mirrors what a real caller (daemon/CLI, `surge-daemon::recovery` /
-    // `surge-cli::commands::daemon`) does on a terminal outcome — wiring
-    // that up end to end is out of this ticket's zone, but it must
-    // happen here to prove the claim this module wrote is genuinely
-    // found by `run_audit` against the run's real registry status, not
-    // merely shaped like its contract.
-    storage
-        .set_run_status(&run_id, RunStatus::Failed, Some(1))
-        .await
-        .unwrap();
-
-    let claims = list_claims(&store_path);
-
-    assert_eq!(
-        claims.len(),
-        1,
-        "expected exactly one memory claim, got {claims:?}"
-    );
-    let claim = &claims[0];
-    assert!(
-        claim.text().contains("implement"),
-        "claim text should name the failing node: {}",
-        claim.text()
-    );
-    assert!(
-        claim.text().contains("wall-clock"),
-        "claim text should carry the wall-clock cause: {}",
-        claim.text()
-    );
-    assert_eq!(claim.confidence(), Confidence::Asserted);
-    assert_eq!(claim.status(), ClaimStatus::Unverified);
-
-    let expected_source_prefix = format!("transcript:{run_id}#turn-");
-    assert!(
-        claim
-            .provenance()
-            .source
-            .starts_with(&expected_source_prefix),
-        "source must be the transcript locator the memory-locator contract requires \
-         (interfaces.md \"Контракт локаторов памяти\"): {}",
-        claim.provenance().source
-    );
-
-    // The real audit, unmodified — not a reimplementation of its parsing.
-    // The claim's source is a `transcript:` locator (asserted above), so
-    // `project_root` never enters a path resolution here — `dir` (this
-    // run's own worktree root) is passed as the honest value regardless.
-    let report = run_audit(&claims, &storage, dir.path()).await.unwrap();
-    let correlated = report
-        .run_correlated
-        .iter()
-        .find(|finding| finding.claim_id == claim.id())
-        .expect(
-            "the write-back claim must be found by the real memory audit, not just shaped \
-             like its contract",
+        let (run_id, storage, outcome) = drive_run(
+            dir.path(),
+            agent_to_terminal_graph(),
+            instant_wall_clock_trip(store_path.clone()),
+            mock,
+        )
+        .await;
+        assert!(
+            matches!(outcome, RunOutcome::Failed { .. }),
+            "expected the wall-clock trip to fail the run, got {outcome:?}"
         );
-    assert_eq!(correlated.run_id, run_id);
-    assert_eq!(correlated.run_status, RunStatus::Failed);
+
+        // Mirrors what a real caller (daemon/CLI, `surge-daemon::recovery` /
+        // `surge-cli::commands::daemon`) does on a terminal outcome — wiring
+        // that up end to end is out of this ticket's zone, but it must
+        // happen here to prove the claim this module wrote is genuinely
+        // found by `run_audit` against the run's real registry status, not
+        // merely shaped like its contract.
+        storage
+            .set_run_status(&run_id, RunStatus::Failed, Some(1))
+            .await
+            .unwrap();
+
+        let claims = list_claims(&store_path);
+
+        assert_eq!(
+            claims.len(),
+            1,
+            "expected exactly one memory claim, got {claims:?}"
+        );
+        let claim = &claims[0];
+        assert!(
+            claim.text().contains("implement"),
+            "claim text should name the failing node: {}",
+            claim.text()
+        );
+        assert!(
+            claim.text().contains("wall-clock"),
+            "claim text should carry the wall-clock cause: {}",
+            claim.text()
+        );
+        assert_eq!(claim.confidence(), Confidence::Asserted);
+        assert_eq!(claim.status(), ClaimStatus::Unverified);
+
+        let expected_source_prefix = format!("transcript:{run_id}#turn-");
+        assert!(
+            claim
+                .provenance()
+                .source
+                .starts_with(&expected_source_prefix),
+            "source must be the transcript locator the memory-locator contract requires \
+         (interfaces.md \"Контракт локаторов памяти\"): {}",
+            claim.provenance().source
+        );
+
+        // The real audit, unmodified — not a reimplementation of its parsing.
+        // The claim's source is a `transcript:` locator (asserted above), so
+        // `project_root` never enters a path resolution here — `dir` (this
+        // run's own worktree root) is passed as the honest value regardless.
+        let report = run_audit(&claims, &storage, dir.path()).await.unwrap();
+        let correlated = report
+            .run_correlated
+            .iter()
+            .find(|finding| finding.claim_id == claim.id())
+            .expect(
+                "the write-back claim must be found by the real memory audit, not just shaped \
+             like its contract",
+            );
+        assert_eq!(correlated.run_id, run_id);
+        assert_eq!(correlated.run_status, RunStatus::Failed);
+    }
+    dir.close().unwrap();
+    memory_dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn records_the_first_rejecting_hook_not_the_last_one() {
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    let dir = tempfile::tempdir().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    let dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
 
-    let mock = Arc::new(MockBridge::new());
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("pass").unwrap(),
-        summary: "first try".into(),
-        artifacts_produced: vec![],
+        let mock = Arc::new(MockBridge::new());
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("pass").unwrap(),
+            summary: "first try".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
-        summary: "second try".into(),
-        artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
+            summary: "second try".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let (_run_id, _storage, outcome) = drive_run(
-        dir.path(),
-        two_outcome_agent_graph(),
-        run_config_with_memory_store(store_path.clone()),
-        mock,
-    )
-    .await;
-    let claims = list_claims(&store_path);
+        let (_run_id, _storage, outcome) = drive_run(
+            dir.path(),
+            two_outcome_agent_graph(),
+            run_config_with_memory_store(store_path.clone()),
+            mock,
+        )
+        .await;
+        let claims = list_claims(&store_path);
 
-    match &outcome {
-        RunOutcome::Failed { error } => assert!(
-            error.contains("rejection budget exhausted"),
-            "unexpected failure reason: {error}"
-        ),
-        other => panic!("expected the rejection budget to fail the run, got {other:?}"),
-    }
+        match &outcome {
+            RunOutcome::Failed { error } => assert!(
+                error.contains("rejection budget exhausted"),
+                "unexpected failure reason: {error}"
+            ),
+            other => panic!("expected the rejection budget to fail the run, got {other:?}"),
+        }
 
-    assert_eq!(
-        claims.len(),
-        1,
-        "expected exactly one memory claim, got {claims:?}"
-    );
-    let text = claims[0].text();
-    assert!(
-        text.contains("deny-pass"),
-        "root cause must name the *first* rejecting hook ('deny-pass'), not the last: {text}"
-    );
-    assert!(
-        !text.contains("deny-fixes"),
-        "the last rejecting hook ('deny-fixes') is the symptom `resolve_stage_error` already \
+        assert_eq!(
+            claims.len(),
+            1,
+            "expected exactly one memory claim, got {claims:?}"
+        );
+        let text = claims[0].text();
+        assert!(
+            text.contains("deny-pass"),
+            "root cause must name the *first* rejecting hook ('deny-pass'), not the last: {text}"
+        );
+        assert!(
+            !text.contains("deny-fixes"),
+            "the last rejecting hook ('deny-fixes') is the symptom `resolve_stage_error` already \
          named in `StageFailed`; write-back must prefer the root cause over it: {text}"
-    );
+        );
+    }
+    dir.close().unwrap();
+    memory_dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn second_failure_of_the_same_node_updates_the_claim_in_place() {
     async fn trip_once(store_path: &Path) -> (RunId, MemoryClaimId, String) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = FixtureHome::new().unwrap();
+        let fixture_result = {
+            let mock = Arc::new(MockBridge::new());
+            let session_id = SessionId::new();
+            mock.pin_next_session_id(session_id).await;
+
+            let (run_id, _storage, outcome) = drive_run(
+                dir.path(),
+                agent_to_terminal_graph(),
+                instant_wall_clock_trip(store_path.to_path_buf()),
+                mock,
+            )
+            .await;
+            assert!(matches!(outcome, RunOutcome::Failed { .. }));
+
+            let claims = list_claims(store_path);
+            assert_eq!(
+                claims.len(),
+                1,
+                "expected exactly one claim about the failing node after this run, got {claims:?}"
+            );
+            let claim = &claims[0];
+            (run_id, claim.id(), claim.provenance().source.clone())
+        };
+        dir.close().unwrap();
+        fixture_result
+    }
+
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
+        let (first_run, first_id, first_source) = trip_once(&store_path).await;
+        let (second_run, second_id, second_source) = trip_once(&store_path).await;
+
+        assert_ne!(
+            first_run, second_run,
+            "test setup bug: the two runs must have distinct ids"
+        );
+        assert_eq!(
+            first_id, second_id,
+            "a second failure of the same node must update the existing claim in place \
+         (same claim id), not insert a near-duplicate"
+        );
+        assert_ne!(
+            first_source, second_source,
+            "the updated claim must be refreshed to point at the newest run, not left stale"
+        );
+        assert!(
+            second_source.contains(&second_run.to_string()),
+            "the updated claim's source should name the second run: {second_source}"
+        );
+    }
+    memory_dir.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_verified_claim_covering_the_same_node_is_left_untouched() {
+    let memory_dir = FixtureHome::new().unwrap();
+    let dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
+
+        // Seed a `Verified` claim tagged for the same node the harness below
+        // fails on, using write-back's own tag (`node 'implement' failed: `) so
+        // it is a genuine "covering" candidate — the only reason it must be
+        // skipped is that it is `Verified`, not that its text never matched.
+        let verified_text = "node 'implement' failed: known transient CI flake, already triaged";
+        let verified_id = {
+            let store = MemoryStore::open(&store_path).unwrap();
+            let hash = ContentHash::compute(verified_text.as_bytes());
+            let claim = MemoryClaim::new(
+                MemoryClaimId::new(),
+                verified_text,
+                Provenance::verified("docs/runbook.md", hash, "manual review", 1_700_000_000_000),
+                Confidence::Verified,
+                ClaimStatus::Verified,
+            )
+            .expect("verified provenance is complete");
+            store.add_claim(&claim).unwrap();
+            claim.id()
+        };
+
         let mock = Arc::new(MockBridge::new());
         let session_id = SessionId::new();
         mock.pin_next_session_id(session_id).await;
 
-        let (run_id, _storage, outcome) = drive_run(
+        let (_run_id, _storage, outcome) = drive_run(
             dir.path(),
             agent_to_terminal_graph(),
-            instant_wall_clock_trip(store_path.to_path_buf()),
+            instant_wall_clock_trip(store_path.clone()),
             mock,
         )
         .await;
         assert!(matches!(outcome, RunOutcome::Failed { .. }));
 
-        let claims = list_claims(store_path);
+        let claims = list_claims(&store_path);
+
         assert_eq!(
             claims.len(),
-            1,
-            "expected exactly one claim about the failing node after this run, got {claims:?}"
-        );
-        let claim = &claims[0];
-        (run_id, claim.id(), claim.provenance().source.clone())
-    }
-
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    let (first_run, first_id, first_source) = trip_once(&store_path).await;
-    let (second_run, second_id, second_source) = trip_once(&store_path).await;
-
-    assert_ne!(
-        first_run, second_run,
-        "test setup bug: the two runs must have distinct ids"
-    );
-    assert_eq!(
-        first_id, second_id,
-        "a second failure of the same node must update the existing claim in place \
-         (same claim id), not insert a near-duplicate"
-    );
-    assert_ne!(
-        first_source, second_source,
-        "the updated claim must be refreshed to point at the newest run, not left stale"
-    );
-    assert!(
-        second_source.contains(&second_run.to_string()),
-        "the updated claim's source should name the second run: {second_source}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_verified_claim_covering_the_same_node_is_left_untouched() {
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-
-    // Seed a `Verified` claim tagged for the same node the harness below
-    // fails on, using write-back's own tag (`node 'implement' failed: `) so
-    // it is a genuine "covering" candidate — the only reason it must be
-    // skipped is that it is `Verified`, not that its text never matched.
-    let verified_text = "node 'implement' failed: known transient CI flake, already triaged";
-    let verified_id = {
-        let store = MemoryStore::open(&store_path).unwrap();
-        let hash = ContentHash::compute(verified_text.as_bytes());
-        let claim = MemoryClaim::new(
-            MemoryClaimId::new(),
-            verified_text,
-            Provenance::verified("docs/runbook.md", hash, "manual review", 1_700_000_000_000),
-            Confidence::Verified,
-            ClaimStatus::Verified,
-        )
-        .expect("verified provenance is complete");
-        store.add_claim(&claim).unwrap();
-        claim.id()
-    };
-
-    let dir = tempfile::tempdir().unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-
-    let (_run_id, _storage, outcome) = drive_run(
-        dir.path(),
-        agent_to_terminal_graph(),
-        instant_wall_clock_trip(store_path.clone()),
-        mock,
-    )
-    .await;
-    assert!(matches!(outcome, RunOutcome::Failed { .. }));
-
-    let claims = list_claims(&store_path);
-
-    assert_eq!(
-        claims.len(),
-        2,
-        "the verified claim must stay and a fresh unverified one must be added \
+            2,
+            "the verified claim must stay and a fresh unverified one must be added \
          alongside it, got {claims:?}"
-    );
+        );
 
-    let kept = claims
-        .iter()
-        .find(|c| c.id() == verified_id)
-        .expect("the pre-existing verified claim must not be deleted");
-    assert_eq!(
-        kept.text(),
-        verified_text,
-        "the verified claim's content must be completely untouched"
-    );
-    assert_eq!(kept.status(), ClaimStatus::Verified);
+        let kept = claims
+            .iter()
+            .find(|c| c.id() == verified_id)
+            .expect("the pre-existing verified claim must not be deleted");
+        assert_eq!(
+            kept.text(),
+            verified_text,
+            "the verified claim's content must be completely untouched"
+        );
+        assert_eq!(kept.status(), ClaimStatus::Verified);
 
-    let fresh = claims
-        .iter()
-        .find(|c| c.id() != verified_id)
-        .expect("a new claim about the failing node must still be recorded");
-    assert_eq!(fresh.status(), ClaimStatus::Unverified);
-    assert!(fresh.text().starts_with("node 'implement' failed: "));
+        let fresh = claims
+            .iter()
+            .find(|c| c.id() != verified_id)
+            .expect("a new claim about the failing node must still be recorded");
+        assert_eq!(fresh.status(), ClaimStatus::Unverified);
+        assert!(fresh.text().starts_with("node 'implement' failed: "));
+    }
+    dir.close().unwrap();
+    memory_dir.close().unwrap();
 }

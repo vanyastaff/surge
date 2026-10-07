@@ -2,7 +2,9 @@
 
 use crate::models::{CircuitBreakerState, SessionUsage, SpecUsage, SubtaskUsage};
 use crate::{PersistenceError, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+#[cfg(not(windows))]
+use rusqlite::Connection;
+use rusqlite::{OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_core::state::TaskState;
@@ -127,7 +129,7 @@ where
 /// usage data using SQLite. Handles schema creation, migrations, and CRUD
 /// operations.
 pub struct Store {
-    conn: Connection,
+    conn: crate::runs::connection::ManagedConnection,
     path: PathBuf,
 }
 
@@ -137,11 +139,21 @@ impl Store {
     /// Creates the database file and initializes the schema if it doesn't exist.
     /// If the database exists, verifies the schema version.
     pub fn open(path: &Path) -> Result<Self> {
-        // Ensure parent directory exists
+        #[cfg(windows)]
+        let namespace = crate::state_home::SqliteNamespaceOwner::standalone(path)?;
+        // Unix parent policy is unchanged.
+        #[cfg(not(windows))]
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::open_owned(
+            path,
+            rusqlite::OpenFlags::default(),
+            namespace,
+        )?;
+        #[cfg(not(windows))]
         let conn = Connection::open(path)?;
         let mut store = Self {
             conn,
@@ -154,6 +166,9 @@ impl Store {
 
     /// Create an in-memory store (for testing).
     pub fn in_memory() -> Result<Self> {
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory()?;
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory()?;
         let mut store = Self {
             conn,

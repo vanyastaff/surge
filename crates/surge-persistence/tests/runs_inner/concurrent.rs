@@ -37,4 +37,6 @@ async fn five_parallel_run_writers_complete_independently() {
         let seq = h.await.expect("task join");
         assert_eq!(seq, EventSeq(1000));
     }
+    drop(storage);
+    t.close().expect("close runtime home");
 }

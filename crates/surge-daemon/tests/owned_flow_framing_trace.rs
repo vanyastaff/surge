@@ -2,6 +2,10 @@
 #[path = "../../surge-orchestrator/tests/fixtures/mock_bridge.rs"]
 mod mock_bridge;
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use interprocess::local_socket::tokio::prelude::*;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -47,7 +51,7 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let home = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
         let project = tempfile::tempdir().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let bridge = Arc::new(mock_bridge::MockBridge::new());
@@ -106,5 +110,7 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
         assert!(public.contains("read_request_frame failed; closing connection"), "real framing warning missing");
         assert!(public.contains("invalid JSON frame"), "typed safe framing metadata missing");
         assert!(!public.contains(sentinel), "private socket input escaped host TRACE diagnostics");
+        drop(storage);
+        home.close().unwrap();
     });
 }

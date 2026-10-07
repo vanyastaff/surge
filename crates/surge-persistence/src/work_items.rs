@@ -9,11 +9,13 @@ pub use owned_flow::{
 };
 pub use start_preparation::StartPreparation;
 pub mod recovery_cycles;
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, path::PathBuf};
+#[cfg(not(windows))]
+use std::fs::File;
+use std::path::PathBuf;
 use surge_core::{
     ContentHash, Graph, RunId,
     id::{WorkItemId, WorkItemProjectId},
@@ -23,6 +25,14 @@ use surge_core::{
 /// Task mutation or durable storage failure.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkItemError {
+    /// Retained native storage ownership could not be established or validated.
+    #[error("task state-home {category}: {message}")]
+    StateHome {
+        /// Stable native failure category without private bytes.
+        category: &'static str,
+        /// SDK status or structural refusal.
+        message: String,
+    },
     /// SQLite operation failed.
     #[error("task storage: {0}")]
     Sql(#[from] rusqlite::Error),
@@ -102,9 +112,14 @@ pub struct WorkItemLaunchClaim {
 }
 #[derive(Clone)]
 enum LaunchLock {
+    #[cfg(not(windows))]
     Legacy {
         file: std::sync::Arc<File>,
         path: PathBuf,
+    },
+    #[cfg(windows)]
+    LegacyWindows {
+        file: std::sync::Arc<crate::RuntimeControlFile>,
     },
     OwnedFlow {
         guard: std::sync::Arc<start_preparation::secure_lock::PreparationLock>,
@@ -115,7 +130,10 @@ enum LaunchLock {
 impl WorkItemLaunchClaim {
     fn verify_lock(&self) -> Result<()> {
         match &self.lock {
+            #[cfg(not(windows))]
             LaunchLock::Legacy { file, path } => verify_lock_identity(file, path),
+            #[cfg(windows)]
+            LaunchLock::LegacyWindows { file } => file.verify().map_err(runtime_ownership_error),
             LaunchLock::OwnedFlow {
                 guard, identity, ..
             } => {
@@ -149,6 +167,7 @@ impl crate::runs::Storage {
         }
     }
 }
+#[cfg(not(windows))]
 fn verify_lock_identity(file: &File, path: &std::path::Path) -> Result<()> {
     let opened = file.metadata()?;
     let current = std::fs::symlink_metadata(path)?;
@@ -167,6 +186,20 @@ fn verify_lock_identity(file: &File, path: &std::path::Path) -> Result<()> {
     #[cfg(not(unix))]
     let _ = opened;
     Ok(())
+}
+#[cfg(windows)]
+fn runtime_ownership_error(error: crate::PersistenceError) -> WorkItemError {
+    match error {
+        crate::PersistenceError::OwnershipBusy => WorkItemError::Busy,
+        crate::PersistenceError::StateHome { category, message } => {
+            WorkItemError::StateHome { category, message }
+        },
+        crate::PersistenceError::Io(error) => WorkItemError::Io(error),
+        other => WorkItemError::StateHome {
+            category: "runtime ownership",
+            message: other.to_string(),
+        },
+    }
 }
 fn json<T: serde::de::DeserializeOwned>(text: String) -> rusqlite::Result<T> {
     serde_json::from_str(&text).map_err(|error| {
@@ -750,24 +783,48 @@ impl WorkItemStore {
                 return self.claim_owned_flow(run);
             }
         }
-        let locks = self.home.join("work-items/locks");
-        std::fs::create_dir_all(&locks)?;
-        let path = locks.join(format!("{run}.lock"));
-        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-            return Err(WorkItemError::Invalid(
-                "launch lock cannot be a symlink".into(),
-            ));
-        }
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)?;
-        lock.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => WorkItemError::Busy,
-            std::fs::TryLockError::Error(error) => WorkItemError::Io(error),
-        })?;
+        #[cfg(windows)]
+        let lock = {
+            let owner =
+                crate::RuntimeHomeOwner::prepare(&self.home).map_err(runtime_ownership_error)?;
+            let directory = owner
+                .directory(crate::RuntimeDirectory::Lifecycle)
+                .map_err(runtime_ownership_error)?;
+            let mut lock = directory
+                .open_control(std::ffi::OsStr::new(&format!("{run}.lock")))
+                .map_err(runtime_ownership_error)?;
+            if !lock.try_lock_exclusive().map_err(runtime_ownership_error)? {
+                return Err(WorkItemError::Busy);
+            }
+            LaunchLock::LegacyWindows {
+                file: std::sync::Arc::new(lock),
+            }
+        };
+        #[cfg(not(windows))]
+        let lock = {
+            let locks = self.home.join("work-items/locks");
+            std::fs::create_dir_all(&locks)?;
+            let path = locks.join(format!("{run}.lock"));
+            if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err(WorkItemError::Invalid(
+                    "launch lock cannot be a symlink".into(),
+                ));
+            }
+            let lock = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)?;
+            lock.try_lock().map_err(|error| match error {
+                std::fs::TryLockError::WouldBlock => WorkItemError::Busy,
+                std::fs::TryLockError::Error(error) => WorkItemError::Io(error),
+            })?;
+            LaunchLock::Legacy {
+                file: std::sync::Arc::new(lock),
+                path,
+            }
+        };
         let mut conn = self.pool.get()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value = attempt(&tx, run)?;
@@ -786,16 +843,14 @@ impl WorkItemStore {
             params![token, run.to_string(), item.generation],
         )?;
         tx.commit()?;
-        verify_lock_identity(&lock, &path)?;
-        Ok(WorkItemLaunchClaim {
-            lock: LaunchLock::Legacy {
-                file: std::sync::Arc::new(lock),
-                path,
-            },
+        let claim = WorkItemLaunchClaim {
+            lock,
             run,
             token,
             binding: value.binding,
-        })
+        };
+        claim.verify_lock()?;
+        Ok(claim)
     }
     /// Validate host ownership at every engine boundary, never caller configuration.
     pub fn validate_claim(&self, claim: &WorkItemLaunchClaim) -> Result<WorkItemAttempt> {
@@ -1120,10 +1175,7 @@ impl WorkItemStore {
         db: &std::path::Path,
         value: &WorkItemAttempt,
     ) -> Result<(u64, u64, u64, f64, bool, bool)> {
-        let conn = Connection::open_with_flags(
-            db,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        let conn = crate::runs::connection::RetainedConnection::read_only_no_mutex(db)?;
         let mut binding_statement=conn.prepare("SELECT payload,schema_version FROM events WHERE kind='WorkItemAttemptBound' ORDER BY seq LIMIT 2")?;
         let bindings = binding_statement
             .query_map([], |row| {
@@ -1238,18 +1290,36 @@ impl WorkItemStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_home_fixture::FixtureHome;
     use surge_core::id::WorkItemOperationId;
     async fn fixture() -> (
+        FixtureHome,
+        (std::sync::Arc<crate::runs::Storage>, WorkItemDetail),
+    ) {
+        let home = FixtureHome::new().unwrap();
+        let owners = fixture_at(home.path()).await;
+        (home, owners)
+    }
+
+    // Namespace adversarial tests retain their original raw directory setup.
+    async fn namespace_fixture() -> (
         tempfile::TempDir,
         std::sync::Arc<crate::runs::Storage>,
         WorkItemDetail,
     ) {
         let home = tempfile::tempdir().unwrap();
-        let storage = crate::runs::Storage::open(home.path()).await.unwrap();
+        let (storage, detail) = fixture_at(home.path()).await;
+        (home, storage, detail)
+    }
+
+    async fn fixture_at(
+        home: &std::path::Path,
+    ) -> (std::sync::Arc<crate::runs::Storage>, WorkItemDetail) {
+        let storage = crate::runs::Storage::open(home).await.unwrap();
         let intent = WorkItemWorkspace {
-            repository: home.path().join("repo/.git"),
-            checkout: home.path().join("repo"),
-            path: home.path().join("retained"),
+            repository: home.join("repo/.git"),
+            checkout: home.join("repo"),
+            path: home.join("retained"),
             ownership: RunId::new().to_string(),
             branch: "retained".into(),
             base_commit: "a".repeat(40),
@@ -1267,45 +1337,49 @@ mod tests {
         else {
             panic!("detail")
         };
-        (home, storage, *detail)
+        (storage, *detail)
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_start_preparation_refuses_generic_reservation() {
-        let (_home, storage, detail) = fixture().await;
-        let store = storage.work_items();
-        let command = start(&detail.item);
-        let _guard = store.begin_start_preparation(&command).unwrap();
-        assert!(matches!(
-            store.mutate(&command, None, Some("{}"), "host", 2),
-            Err(WorkItemError::Busy)
-        ));
-        let mut conn = store.pool.get().unwrap();
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .unwrap();
-        let WorkItemCommand::Start { graph, .. } = &command else {
-            panic!("Start");
-        };
-        assert!(matches!(
-            store.reserve(&tx, detail.item.id, detail.item.version, graph, "{}"),
-            Err(WorkItemError::Busy)
-        ));
-        drop(tx);
-        drop(conn);
-        assert!(store.replay(&command).unwrap().is_none());
-        assert!(
-            store
-                .show(detail.item.id)
-                .unwrap()
-                .item
-                .active_run
-                .is_none()
-        );
-        assert!(!store.workspace_prepared(detail.item.id).unwrap());
+        let (home, owners) = fixture().await;
+        {
+            let (storage, detail) = owners;
+            let store = storage.work_items();
+            let command = start(&detail.item);
+            let _guard = store.begin_start_preparation(&command).unwrap();
+            assert!(matches!(
+                store.mutate(&command, None, Some("{}"), "host", 2),
+                Err(WorkItemError::Busy)
+            ));
+            let mut conn = store.pool.get().unwrap();
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let WorkItemCommand::Start { graph, .. } = &command else {
+                panic!("Start");
+            };
+            assert!(matches!(
+                store.reserve(&tx, detail.item.id, detail.item.version, graph, "{}"),
+                Err(WorkItemError::Busy)
+            ));
+            drop(tx);
+            drop(conn);
+            assert!(store.replay(&command).unwrap().is_none());
+            assert!(
+                store
+                    .show(detail.item.id)
+                    .unwrap()
+                    .item
+                    .active_run
+                    .is_none()
+            );
+            assert!(!store.workspace_prepared(detail.item.id).unwrap());
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_consumes_once_and_replay_does_no_filesystem_work() {
-        let (home, storage, detail) = fixture().await;
+        let (home, storage, detail) = namespace_fixture().await;
         let store = storage.work_items();
         let command = start(&detail.item);
         let guard = store.begin_start_preparation(&command).unwrap();
@@ -1342,67 +1416,71 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_lifecycle_busy_discussion_drift_and_drop_release() {
-        let (_home, storage, detail) = fixture().await;
-        let store = storage.work_items();
-        let command = start(&detail.item);
-        let guard = store.begin_start_preparation(&command).unwrap();
-        for command in [
-            WorkItemCommand::Archive {
+        let (home, owners) = fixture().await;
+        {
+            let (storage, detail) = owners;
+            let store = storage.work_items();
+            let command = start(&detail.item);
+            let guard = store.begin_start_preparation(&command).unwrap();
+            for command in [
+                WorkItemCommand::Archive {
+                    operation_id: WorkItemOperationId::new(),
+                    item: detail.item.id,
+                    expected_version: 1,
+                },
+                WorkItemCommand::Edit {
+                    operation_id: WorkItemOperationId::new(),
+                    item: detail.item.id,
+                    expected_version: 1,
+                    expected_revision: 1,
+                    requirements: req("Changed"),
+                },
+                WorkItemCommand::Continue {
+                    operation_id: WorkItemOperationId::new(),
+                    item: detail.item.id,
+                    expected_version: 1,
+                    new_session: false,
+                },
+            ] {
+                assert!(matches!(
+                    store.mutate(&command, None, None, "host", 2),
+                    Err(WorkItemError::Busy)
+                ));
+            }
+            let discussion = WorkItemCommand::Discuss {
                 operation_id: WorkItemOperationId::new(),
                 item: detail.item.id,
                 expected_version: 1,
-            },
-            WorkItemCommand::Edit {
-                operation_id: WorkItemOperationId::new(),
-                item: detail.item.id,
-                expected_version: 1,
-                expected_revision: 1,
-                requirements: req("Changed"),
-            },
-            WorkItemCommand::Continue {
-                operation_id: WorkItemOperationId::new(),
-                item: detail.item.id,
-                expected_version: 1,
-                new_session: false,
-            },
-        ] {
+                body: "Clarification".into(),
+                proposal: None,
+            };
+            store.mutate(&discussion, None, None, "human", 2).unwrap();
             assert!(matches!(
-                store.mutate(&command, None, None, "host", 2),
-                Err(WorkItemError::Busy)
+                guard.finalize(&command, "frozen"),
+                Err(WorkItemError::Conflict(_))
+            ));
+            assert!(store.replay(&command).unwrap().is_none());
+            assert!(
+                store
+                    .show(detail.item.id)
+                    .unwrap()
+                    .item
+                    .active_run
+                    .is_none()
+            );
+            let updated = store.show(detail.item.id).unwrap().item;
+            let archive = WorkItemCommand::Archive {
+                operation_id: WorkItemOperationId::new(),
+                item: updated.id,
+                expected_version: updated.version,
+            };
+            store.mutate(&archive, None, None, "host", 3).unwrap();
+            assert!(matches!(
+                store.begin_start_preparation(&start(&updated)),
+                Err(WorkItemError::Conflict(_))
             ));
         }
-        let discussion = WorkItemCommand::Discuss {
-            operation_id: WorkItemOperationId::new(),
-            item: detail.item.id,
-            expected_version: 1,
-            body: "Clarification".into(),
-            proposal: None,
-        };
-        store.mutate(&discussion, None, None, "human", 2).unwrap();
-        assert!(matches!(
-            guard.finalize(&command, "frozen"),
-            Err(WorkItemError::Conflict(_))
-        ));
-        assert!(store.replay(&command).unwrap().is_none());
-        assert!(
-            store
-                .show(detail.item.id)
-                .unwrap()
-                .item
-                .active_run
-                .is_none()
-        );
-        let updated = store.show(detail.item.id).unwrap().item;
-        let archive = WorkItemCommand::Archive {
-            operation_id: WorkItemOperationId::new(),
-            item: updated.id,
-            expected_version: updated.version,
-        };
-        store.mutate(&archive, None, None, "host", 3).unwrap();
-        assert!(matches!(
-            store.begin_start_preparation(&start(&updated)),
-            Err(WorkItemError::Conflict(_))
-        ));
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_snapshot_drift_never_creates_an_attempt() {
@@ -1413,61 +1491,69 @@ mod tests {
             "UPDATE work_items SET archived_at_ms=9 WHERE id=?",
             "UPDATE work_items SET workspace='{}' WHERE id=?",
         ] {
-            let (_home, storage, detail) = fixture().await;
-            let store = storage.work_items();
-            let command = start(&detail.item);
-            let guard = store.begin_start_preparation(&command).unwrap();
-            store
-                .pool
-                .get()
-                .unwrap()
-                .execute(sql, [detail.item.id.to_string()])
-                .unwrap();
-            assert!(guard.finalize(&command, "frozen").is_err(), "{sql}");
-            assert!(store.replay(&command).unwrap().is_none());
-            let count: u64 = store
-                .pool
-                .get()
-                .unwrap()
-                .query_row("SELECT COUNT(*) FROM work_item_attempts", [], |r| r.get(0))
-                .unwrap();
-            assert_eq!(count, 0, "{sql}");
+            let (home, owners) = fixture().await;
+            {
+                let (storage, detail) = owners;
+                let store = storage.work_items();
+                let command = start(&detail.item);
+                let guard = store.begin_start_preparation(&command).unwrap();
+                store
+                    .pool
+                    .get()
+                    .unwrap()
+                    .execute(sql, [detail.item.id.to_string()])
+                    .unwrap();
+                assert!(guard.finalize(&command, "frozen").is_err(), "{sql}");
+                assert!(store.replay(&command).unwrap().is_none());
+                let count: u64 = store
+                    .pool
+                    .get()
+                    .unwrap()
+                    .query_row("SELECT COUNT(*) FROM work_item_attempts", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(count, 0, "{sql}");
+            }
+            home.close().expect("close runtime home");
         }
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_dead_row_is_reclaimed_by_lifecycle_under_the_lock() {
-        let (_home, storage, detail) = fixture().await;
-        let store = storage.work_items();
-        let command = start(&detail.item);
-        drop(store.begin_start_preparation(&command).unwrap());
-        // A crash leaves exactly the same row state but releases the kernel lock.
-        store
-            .pool
-            .get()
-            .unwrap()
-            .execute(
-                "UPDATE work_item_start_preparations SET state='preparing' WHERE item=?",
-                [detail.item.id.to_string()],
-            )
-            .unwrap();
-        let archive = WorkItemCommand::Archive {
-            operation_id: WorkItemOperationId::new(),
-            item: detail.item.id,
-            expected_version: 1,
-        };
-        store.mutate(&archive, None, None, "host", 3).unwrap();
-        let state: String = store
-            .pool
-            .get()
-            .unwrap()
-            .query_row(
-                "SELECT state FROM work_item_start_preparations WHERE item=?",
-                [detail.item.id.to_string()],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(state, "abandoned");
-        assert!(store.replay(&command).unwrap().is_none());
+        let (home, owners) = fixture().await;
+        {
+            let (storage, detail) = owners;
+            let store = storage.work_items();
+            let command = start(&detail.item);
+            drop(store.begin_start_preparation(&command).unwrap());
+            // A crash leaves exactly the same row state but releases the kernel lock.
+            store
+                .pool
+                .get()
+                .unwrap()
+                .execute(
+                    "UPDATE work_item_start_preparations SET state='preparing' WHERE item=?",
+                    [detail.item.id.to_string()],
+                )
+                .unwrap();
+            let archive = WorkItemCommand::Archive {
+                operation_id: WorkItemOperationId::new(),
+                item: detail.item.id,
+                expected_version: 1,
+            };
+            store.mutate(&archive, None, None, "host", 3).unwrap();
+            let state: String = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT state FROM work_item_start_preparations WHERE item=?",
+                    [detail.item.id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(state, "abandoned");
+            assert!(store.replay(&command).unwrap().is_none());
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn preparation_owner_child() {
@@ -1495,7 +1581,8 @@ mod tests {
                 let _ = self.0.wait();
             }
         }
-        let (home, storage, detail) = fixture().await;
+        let (home, owners) = fixture().await;
+        let (storage, detail) = owners;
         let command = start(&detail.item);
         std::fs::write(
             home.path().join("command.json"),
@@ -1559,62 +1646,71 @@ mod tests {
             expected_version: 1,
         };
         store.mutate(&archive, None, None, "host", 3).unwrap();
+        drop(child);
+        drop(store);
+        drop(storage);
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_does_not_hold_registry_lock_while_external_work_is_blocked() {
-        let (_home, storage, detail) = fixture().await;
-        let store = storage.work_items();
-        let command = WorkItemCommand::Create {
-            operation_id: WorkItemOperationId::new(),
-            project: detail.item.workspace.checkout.clone(),
-            title: "Independent".into(),
-            requirements: req("Other"),
-        };
-        let WorkItemResult::Detail(other) = store
-            .mutate(&command, Some(&detail.item.workspace), None, "host", 2)
-            .unwrap()
-        else {
-            panic!("detail");
-        };
-        let (held_tx, held_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let preparer = store.clone();
-        let start = start(&detail.item);
-        let blocked = std::thread::spawn(move || {
-            let _guard = preparer.begin_start_preparation(&start).unwrap();
-            held_tx.send(()).unwrap();
-            release_rx
+        let (home, owners) = fixture().await;
+        {
+            let (storage, detail) = owners;
+            let store = storage.work_items();
+            let command = WorkItemCommand::Create {
+                operation_id: WorkItemOperationId::new(),
+                project: detail.item.workspace.checkout.clone(),
+                title: "Independent".into(),
+                requirements: req("Other"),
+            };
+            let WorkItemResult::Detail(other) = store
+                .mutate(&command, Some(&detail.item.workspace), None, "host", 2)
+                .unwrap()
+            else {
+                panic!("detail");
+            };
+            let (held_tx, held_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let preparer = store.clone();
+            let start = start(&detail.item);
+            let blocked = std::thread::spawn(move || {
+                let _guard = preparer.begin_start_preparation(&start).unwrap();
+                held_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+            });
+            held_rx
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .unwrap();
-        });
-        held_rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .unwrap();
-        let archive = WorkItemCommand::Archive {
-            operation_id: WorkItemOperationId::new(),
-            item: other.item.id,
-            expected_version: other.item.version,
-        };
-        let independent = store.clone();
-        let control = tokio::task::spawn_blocking(move || {
-            independent.mutate(&archive, None, None, "host", 3)
-        });
-        let result = tokio::time::timeout(std::time::Duration::from_secs(2), control).await;
-        release_tx.send(()).unwrap();
-        blocked.join().unwrap();
-        result.unwrap().unwrap().unwrap();
-        assert!(
-            store
-                .show(other.item.id)
-                .unwrap()
-                .item
-                .archived_at_ms
-                .is_some()
-        );
+            let archive = WorkItemCommand::Archive {
+                operation_id: WorkItemOperationId::new(),
+                item: other.item.id,
+                expected_version: other.item.version,
+            };
+            let independent = store.clone();
+            let control = tokio::task::spawn_blocking(move || {
+                independent.mutate(&archive, None, None, "host", 3)
+            });
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), control).await;
+            release_tx.send(()).unwrap();
+            blocked.join().unwrap();
+            result.unwrap().unwrap().unwrap();
+            assert!(
+                store
+                    .show(other.item.id)
+                    .unwrap()
+                    .item
+                    .archived_at_ms
+                    .is_some()
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_concurrent_exact_operation_has_one_attempt_and_receipt() {
-        let (_home, storage, detail) = fixture().await;
+        let (home, owners) = fixture().await;
+        let (storage, detail) = owners;
         let store = storage.work_items();
         let command = start(&detail.item);
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -1649,10 +1745,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!((attempts, receipts), (1, 1));
+        drop(conn);
+        drop(store);
+        drop(storage);
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_relocated_live_lock_never_proves_dead_ownership() {
-        let (home, storage, detail) = fixture().await;
+        let (home, storage, detail) = namespace_fixture().await;
         let store = storage.work_items();
         let command = start(&detail.item);
         let old = store.begin_start_preparation(&command).unwrap();
@@ -1726,188 +1826,208 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn accepted_revision_is_immutable_and_replay_precedes_stale_cas() {
-        let (_home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let edit = WorkItemCommand::Edit {
-            operation_id: WorkItemOperationId::new(),
-            item: created.item.id,
-            expected_version: created.item.version,
-            expected_revision: 1,
-            requirements: req("Accepted amendment"),
-        };
-        let edited = store.mutate(&edit, None, None, "human", 2).unwrap();
-        assert_eq!(
-            serde_json::to_value(&edited).unwrap(),
-            serde_json::to_value(store.mutate(&edit, None, None, "human", 3).unwrap()).unwrap()
-        );
-        assert_eq!(
-            store
-                .requirements(&WorkItemAttempt {
-                    binding: WorkItemBinding {
-                        item: created.item.id,
-                        revision: 1,
-                        requirements_hash: created.revision.hash,
-                        generation: 1
-                    },
-                    ..reserve(&store, &store.show(created.item.id).unwrap().item)
-                })
-                .unwrap()
-                .origin
-                .requirements()
-                .unwrap()
-                .text(),
-            "Original"
-        );
-        let changed = match edit {
-            WorkItemCommand::Edit {
-                operation_id,
-                item,
-                expected_version,
-                expected_revision,
-                ..
-            } => WorkItemCommand::Edit {
-                operation_id,
-                item,
-                expected_version,
-                expected_revision,
-                requirements: req("Different"),
-            },
-            _ => unreachable!(),
-        };
-        assert!(matches!(
-            store.replay(&changed),
-            Err(WorkItemError::Conflict(_))
-        ));
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let edit = WorkItemCommand::Edit {
+                operation_id: WorkItemOperationId::new(),
+                item: created.item.id,
+                expected_version: created.item.version,
+                expected_revision: 1,
+                requirements: req("Accepted amendment"),
+            };
+            let edited = store.mutate(&edit, None, None, "human", 2).unwrap();
+            assert_eq!(
+                serde_json::to_value(&edited).unwrap(),
+                serde_json::to_value(store.mutate(&edit, None, None, "human", 3).unwrap()).unwrap()
+            );
+            assert_eq!(
+                store
+                    .requirements(&WorkItemAttempt {
+                        binding: WorkItemBinding {
+                            item: created.item.id,
+                            revision: 1,
+                            requirements_hash: created.revision.hash,
+                            generation: 1
+                        },
+                        ..reserve(&store, &store.show(created.item.id).unwrap().item)
+                    })
+                    .unwrap()
+                    .origin
+                    .requirements()
+                    .unwrap()
+                    .text(),
+                "Original"
+            );
+            let changed = match edit {
+                WorkItemCommand::Edit {
+                    operation_id,
+                    item,
+                    expected_version,
+                    expected_revision,
+                    ..
+                } => WorkItemCommand::Edit {
+                    operation_id,
+                    item,
+                    expected_version,
+                    expected_revision,
+                    requirements: req("Different"),
+                },
+                _ => unreachable!(),
+            };
+            assert!(matches!(
+                store.replay(&changed),
+                Err(WorkItemError::Conflict(_))
+            ));
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn active_attempt_blocks_acceptance_and_archive_but_allows_discussion() {
-        let (_home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let attempt = reserve(&store, &created.item);
-        let current = store.show(created.item.id).unwrap();
-        assert!(
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let attempt = reserve(&store, &created.item);
+            let current = store.show(created.item.id).unwrap();
+            assert!(
+                store
+                    .mutate(
+                        &WorkItemCommand::Archive {
+                            operation_id: WorkItemOperationId::new(),
+                            item: current.item.id,
+                            expected_version: current.item.version
+                        },
+                        None,
+                        None,
+                        "human",
+                        2
+                    )
+                    .is_err()
+            );
+            assert!(
+                store
+                    .mutate(
+                        &WorkItemCommand::Edit {
+                            operation_id: WorkItemOperationId::new(),
+                            item: current.item.id,
+                            expected_version: current.item.version,
+                            expected_revision: 1,
+                            requirements: req("wrong")
+                        },
+                        None,
+                        None,
+                        "human",
+                        2
+                    )
+                    .is_err()
+            );
             store
                 .mutate(
-                    &WorkItemCommand::Archive {
-                        operation_id: WorkItemOperationId::new(),
-                        item: current.item.id,
-                        expected_version: current.item.version
-                    },
-                    None,
-                    None,
-                    "human",
-                    2
-                )
-                .is_err()
-        );
-        assert!(
-            store
-                .mutate(
-                    &WorkItemCommand::Edit {
+                    &WorkItemCommand::Discuss {
                         operation_id: WorkItemOperationId::new(),
                         item: current.item.id,
                         expected_version: current.item.version,
-                        expected_revision: 1,
-                        requirements: req("wrong")
+                        body: "Proposed only".into(),
+                        proposal: Some(req("Proposed")),
                     },
                     None,
                     None,
-                    "human",
-                    2
+                    "agent",
+                    2,
                 )
-                .is_err()
-        );
-        store
-            .mutate(
-                &WorkItemCommand::Discuss {
-                    operation_id: WorkItemOperationId::new(),
-                    item: current.item.id,
-                    expected_version: current.item.version,
-                    body: "Proposed only".into(),
-                    proposal: Some(req("Proposed")),
-                },
-                None,
-                None,
-                "agent",
-                2,
-            )
-            .unwrap();
-        assert_eq!(
-            store
-                .requirements(&attempt)
-                .unwrap()
-                .origin
-                .requirements()
-                .unwrap()
-                .text(),
-            "Original"
-        );
+                .unwrap();
+            assert_eq!(
+                store
+                    .requirements(&attempt)
+                    .unwrap()
+                    .origin
+                    .requirements()
+                    .unwrap()
+                    .text(),
+                "Original"
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn lock_fences_second_host_and_reacquire_invalidates_old_sql_claim() {
-        let (_home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let attempt = reserve(&store, &created.item);
-        let claim = store.claim(attempt.run).unwrap();
-        assert!(matches!(store.claim(attempt.run), Err(WorkItemError::Busy)));
-        store.validate_claim(&claim).unwrap();
-        drop(claim);
-        let second = store.claim(attempt.run).unwrap();
-        store.validate_claim(&second).unwrap();
-        assert!(
-            store
-                .home
-                .join("work-items/locks")
-                .join(format!("{}.lock", attempt.run))
-                .exists()
-        );
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let attempt = reserve(&store, &created.item);
+            let claim = store.claim(attempt.run).unwrap();
+            assert!(matches!(store.claim(attempt.run), Err(WorkItemError::Busy)));
+            store.validate_claim(&claim).unwrap();
+            drop(claim);
+            let second = store.claim(attempt.run).unwrap();
+            store.validate_claim(&second).unwrap();
+            assert!(
+                store
+                    .home
+                    .join("work-items/locks")
+                    .join(format!("{}.lock", attempt.run))
+                    .exists()
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shared_launch_owner_keeps_os_lock_until_last_clone_drops() {
-        let (_home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let attempt = reserve(&store, &created.item);
-        let supervisor = store.claim(attempt.run).unwrap();
-        let task = supervisor.clone();
-        drop(supervisor);
-        store.validate_claim(&task).unwrap();
-        assert!(matches!(store.claim(attempt.run), Err(WorkItemError::Busy)));
-        drop(task);
-        let replacement = store.claim(attempt.run).unwrap();
-        store.validate_claim(&replacement).unwrap();
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let attempt = reserve(&store, &created.item);
+            let supervisor = store.claim(attempt.run).unwrap();
+            let task = supervisor.clone();
+            drop(supervisor);
+            store.validate_claim(&task).unwrap();
+            assert!(matches!(store.claim(attempt.run), Err(WorkItemError::Busy)));
+            drop(task);
+            let replacement = store.claim(attempt.run).unwrap();
+            store.validate_claim(&replacement).unwrap();
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn interprocess_launch_lock_blocks_other_host_and_releases_on_exit() {
-        let (home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let attempt = reserve(&store, &created.item);
-        let claim = store.claim(attempt.run).unwrap();
-        let run_probe = |expected: &str| {
-            std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "work_items::tests::cross_process_claim_probe",
-                    "--nocapture",
-                ])
-                .env("SURGE_TEST_LOCK_HOME", home.path())
-                .env("SURGE_TEST_LOCK_RUN", attempt.run.to_string())
-                .env("SURGE_TEST_LOCK_EXPECT", expected)
-                .output()
-                .unwrap()
-        };
-        let blocked = run_probe("busy");
-        assert!(
-            blocked.status.success(),
-            "{}",
-            String::from_utf8_lossy(&blocked.stderr)
-        );
-        drop(claim);
-        let released = run_probe("free");
-        assert!(
-            released.status.success(),
-            "{}",
-            String::from_utf8_lossy(&released.stderr)
-        );
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let attempt = reserve(&store, &created.item);
+            let claim = store.claim(attempt.run).unwrap();
+            let run_probe = |expected: &str| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "work_items::tests::cross_process_claim_probe",
+                        "--nocapture",
+                    ])
+                    .env("SURGE_TEST_LOCK_HOME", home.path())
+                    .env("SURGE_TEST_LOCK_RUN", attempt.run.to_string())
+                    .env("SURGE_TEST_LOCK_EXPECT", expected)
+                    .output()
+                    .unwrap()
+            };
+            let blocked = run_probe("busy");
+            assert!(
+                blocked.status.success(),
+                "{}",
+                String::from_utf8_lossy(&blocked.stderr)
+            );
+            drop(claim);
+            let released = run_probe("free");
+            assert!(
+                released.status.success(),
+                "{}",
+                String::from_utf8_lossy(&released.stderr)
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_process_claim_probe() {
@@ -1930,64 +2050,69 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn old_terminal_settlement_cannot_release_new_attempt_and_workspace_is_retained() {
-        let (_home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let old = reserve(&store, &created.item);
-        std::fs::create_dir_all(&created.item.workspace.path).unwrap();
-        std::fs::write(created.item.workspace.path.join("untracked"), "keep").unwrap();
-        store
-            .settle(
-                old.run,
-                old.binding.generation,
-                WorkItemAttemptState::Completed,
-                None,
-            )
-            .unwrap();
-        let next = reserve(&store, &store.show(created.item.id).unwrap().item);
-        store
-            .settle(
-                old.run,
-                old.binding.generation,
-                WorkItemAttemptState::Failed,
-                None,
-            )
-            .unwrap();
-        assert_eq!(
-            store.show(created.item.id).unwrap().item.active_run,
-            Some(next.run)
-        );
-        assert_eq!(next.ordinal, 2);
-        assert_eq!(next.binding.revision, 1);
-        store
-            .settle(
-                next.run,
-                next.binding.generation,
-                WorkItemAttemptState::Aborted,
-                None,
-            )
-            .unwrap();
-        let item = store.show(created.item.id).unwrap().item;
-        store
-            .mutate(
-                &WorkItemCommand::Archive {
-                    operation_id: WorkItemOperationId::new(),
-                    item: item.id,
-                    expected_version: item.version,
-                },
-                None,
-                None,
-                "human",
-                4,
-            )
-            .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(item.workspace.path.join("untracked")).unwrap(),
-            "keep"
-        );
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let old = reserve(&store, &created.item);
+            std::fs::create_dir_all(&created.item.workspace.path).unwrap();
+            std::fs::write(created.item.workspace.path.join("untracked"), "keep").unwrap();
+            store
+                .settle(
+                    old.run,
+                    old.binding.generation,
+                    WorkItemAttemptState::Completed,
+                    None,
+                )
+                .unwrap();
+            let next = reserve(&store, &store.show(created.item.id).unwrap().item);
+            store
+                .settle(
+                    old.run,
+                    old.binding.generation,
+                    WorkItemAttemptState::Failed,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                store.show(created.item.id).unwrap().item.active_run,
+                Some(next.run)
+            );
+            assert_eq!(next.ordinal, 2);
+            assert_eq!(next.binding.revision, 1);
+            store
+                .settle(
+                    next.run,
+                    next.binding.generation,
+                    WorkItemAttemptState::Aborted,
+                    None,
+                )
+                .unwrap();
+            let item = store.show(created.item.id).unwrap().item;
+            store
+                .mutate(
+                    &WorkItemCommand::Archive {
+                        operation_id: WorkItemOperationId::new(),
+                        item: item.id,
+                        expected_version: item.version,
+                    },
+                    None,
+                    None,
+                    "human",
+                    4,
+                )
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(item.workspace.path.join("untracked")).unwrap(),
+                "keep"
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn histories_have_stable_bounded_cursors_and_no_guess_backfill() {
-        let (_home, storage, created) = fixture().await;
+        let (home, owners) = fixture().await;
+        let (storage, created) = owners;
         let store = storage.work_items();
         for _ in 0..205 {
             let current = store.show(created.item.id).unwrap().item;
@@ -2040,53 +2165,61 @@ mod tests {
         assert_eq!(store.show(created.item.id).unwrap().usage.unknown_runs, 0);
         reserve(&store, &store.show(created.item.id).unwrap().item);
         assert_eq!(store.show(created.item.id).unwrap().usage.unknown_runs, 1);
+        drop(store);
+        drop(storage);
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn suspension_intent_does_not_authorize_continue_without_confirmed_journal_fence() {
         use surge_core::execution_recovery::ExecutionControlState;
-        let (_home, storage, created) = fixture().await;
-        let store = storage.work_items();
-        let original = reserve(&store, &created.item);
-        let request = WorkItemCommand::Suspend {
-            operation_id: WorkItemOperationId::new(),
-            item: created.item.id,
-            expected_version: store.show(created.item.id).unwrap().item.version,
-        };
-        let result = store.mutate(&request, None, None, "operator", 3).unwrap();
-        let WorkItemResult::Control(control) = result else {
-            panic!("durable suspend intent")
-        };
-        assert_eq!(control.state, ExecutionControlState::SuspendRequested);
-        assert_eq!(control.run, original.run);
-        assert!(control.fence.is_none());
-        let continued = WorkItemCommand::Continue {
-            operation_id: WorkItemOperationId::new(),
-            item: created.item.id,
-            expected_version: store.show(created.item.id).unwrap().item.version,
-            new_session: false,
-        };
-        assert!(store.mutate(&continued, None, None, "operator", 4).is_err());
-        let WorkItemResult::Control(replayed) = store.replay(&request).unwrap().unwrap() else {
-            panic!("replay")
-        };
-        assert_eq!(*replayed, *control);
-        assert_eq!(
-            store.show(created.item.id).unwrap().item.active_run,
-            Some(original.run)
-        );
+        let (home, owners) = fixture().await;
+        {
+            let (storage, created) = owners;
+            let store = storage.work_items();
+            let original = reserve(&store, &created.item);
+            let request = WorkItemCommand::Suspend {
+                operation_id: WorkItemOperationId::new(),
+                item: created.item.id,
+                expected_version: store.show(created.item.id).unwrap().item.version,
+            };
+            let result = store.mutate(&request, None, None, "operator", 3).unwrap();
+            let WorkItemResult::Control(control) = result else {
+                panic!("durable suspend intent")
+            };
+            assert_eq!(control.state, ExecutionControlState::SuspendRequested);
+            assert_eq!(control.run, original.run);
+            assert!(control.fence.is_none());
+            let continued = WorkItemCommand::Continue {
+                operation_id: WorkItemOperationId::new(),
+                item: created.item.id,
+                expected_version: store.show(created.item.id).unwrap().item.version,
+                new_session: false,
+            };
+            assert!(store.mutate(&continued, None, None, "operator", 4).is_err());
+            let WorkItemResult::Control(replayed) = store.replay(&request).unwrap().unwrap() else {
+                panic!("replay")
+            };
+            assert_eq!(*replayed, *control);
+            assert_eq!(
+                store.show(created.item.id).unwrap().item.active_run,
+                Some(original.run)
+            );
+        }
+        home.close().expect("close runtime home");
     }
 }
 
 #[cfg(test)]
 mod usage_tests {
     use super::*;
+    use crate::runtime_home_fixture::FixtureHome;
     use surge_core::{
         EventPayload, SessionId, VersionedEventPayload, approvals::ApprovalPolicy,
         id::WorkItemOperationId, run_event::RunConfig, sandbox::SandboxMode,
     };
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn durable_usage_pages_are_charged_once_and_unknown_pricing_stays_unknown() {
-        let home = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
         let requirements =
@@ -2193,6 +2326,9 @@ mod usage_tests {
         assert_eq!(usage.known_cost_usd, 150.0);
         assert_eq!(usage.unknown_runs, 1);
         writer.close().await.unwrap();
+        drop(store);
+        drop(storage);
+        home.close().expect("close runtime home");
     }
 }
 
