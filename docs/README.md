@@ -19,6 +19,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Telegram cockpit](telegram.md) | Setup, pairing, command reference, card lifecycle, snooze re-emission, recovery |
 | [MCP restart recovery](adr/0021-mcp-restart-recovery.md) | Group cleanup and restart from the frozen manifest; supersedes the managed VM/broker direction of [ADR-0020](adr/0020-managed-mcp-recovery.md) |
 | [Step/task model](adr/0022-step-task-model.md) | Proposed: steps own tasks; tasks own agent assignment, attempts/sessions and PR |
+| [Windows process guardian](adr/0023-windows-owned-process-guardian.md) | Candidate: bundled retained Job owner and authenticated daemon-restart settlement; implementation not approved |
 | [MCP server lifecycle](mcp.md) | `[[mcp_servers]]` config, connection/restart/health lifecycle, stderr redaction, sandbox boundary, `surge mcp` |
 | [Product strategy](product-strategy.md) | Positioning, research-backed bets (completion machinery, fleet interaction), build-don't-bridge principle, sequencing, metrics |
 | [Developer Vibe Coding Harness](vibe-coding-harness.md) | Agentlas source audit, Factory documentation comparison, application-creation journey and measurable completion criteria |
