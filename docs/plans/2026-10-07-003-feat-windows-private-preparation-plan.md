@@ -375,3 +375,150 @@ flags-zero flush return synchronous success; access-denied flush is propagated i
 negative control; production primitive used directly; current private unsupported
 guards remain unchanged. Process-death or power-loss proof is not claimed by this
 slice. After success proceed through the full Stage 1-4 dependency closure.
+
+
+## Stage 1 refinement: retained SQLite routing and distinct ACL policies
+
+This refinement is a review candidate. It does not establish native probe success
+or authorize private guard removal. The complete production boundary must retain
+owners through SQLite operations, not return a boolean path validation.
+
+### Concrete owners and policy distinctions
+
+- StateHomeOwner retains the root-to-home chain and protected current-user home.
+  LocalSystem/Administrators are trusted only for ancestor maintenance, not valid
+  owners of the private state home itself. An existing administrator-owned state
+  home refuses; never repair it to the user SID.
+- SqliteNamespaceOwner retains protected current-user db/run directories and one
+  DbIdentityFence per permanent database. Its policy explicitly provides user-only
+  inheritable grants for SQLite-created side files, unlike private object leaf ACLs.
+- PreparationOwner retains original preparation-directory and OS lock identities;
+  a restricted marker is constructed only after its independent ACL validation.
+- SourceOwner retains a read-only source file with no write/delete sharing.
+- PrivateNamespaceOwner retains strict protected private directories and verifies
+  private objects; it does not lend authority to SQLite or provider admission.
+
+Exact ACL policy shapes are separate and must be tested independently:
+
+| Object | Owner | Allowed ACE flags/grants |
+|---|---|---|
+| Ancestor | user/System/Administrators | Known validated ACEs; trusted maintenance grants, outsider read/traverse and narrowly allowed sticky-equivalent sibling creation |
+| State home/preparation | current user | Protected DACL; current-user-only grant; explicitly selected inheritance flags for the owned descendant policy |
+| SQLite directory | current user | Protected DACL; current-user allow with OBJECT_INHERIT_ACE and CONTAINER_INHERIT_ACE; no inherit-only omission of directory access |
+| Permanent DB | current user | Explicit protected current-user-only ACL; ordinary read/write SQLite rights |
+| SQLite-created WAL/SHM/journal | user or trusted default-owner Admin/System | Known user-only effective grants inherited from retained private SQLite directory; trusted owner exception is explicit for this policy only |
+| Private input directory/file | current user | Exact protected current-user-only ACL and explicit non-inherited leaf policy; no SQLite/default-owner exception |
+
+Normalize generic masks before comparison. Reject unknown rights/flags and forbidden
+allow grants independently of deny ACEs; deny ordering cannot justify a broad grant.
+Inherited SQLite side-file grants do not qualify as strict private-input ACLs.
+SQLite side-file trusted default ownership does not grant outsiders authority: the
+trusted administrators/system threat boundary already exists on ancestors, but the
+effective DACL must remain user-only. Independently review this explicit distinction
+before implementation; if rejected, creation must move into an actual custom VFS,
+not silently adopt token-default ACLs.
+
+Native root opens parse only drive/share root and then resolve every component by
+retained RootDirectory using NtCreateFile, OBJ_DONT_REPARSE, FILE_OPEN_REPARSE_POINT,
+synchronous completion and verified type/identity. Shared production modules own
+raw handle conversions exactly once. Separate desired-access profiles:
+
+- Traversal: FILE_TRAVERSE|FILE_READ_ATTRIBUTES|READ_CONTROL|SYNCHRONIZE,
+  FILE_SHARE_READ|FILE_SHARE_WRITE, no FILE_SHARE_DELETE.
+- Modified owned directory: the preceding profile plus actual write/add rights
+  needed for flags-zero directory flush; no delete sharing.
+- Permanent DB fence: FILE_READ_DATA|FILE_READ_ATTRIBUTES|READ_CONTROL|SYNCHRONIZE,
+  read/write sharing, no delete sharing. No SQLite byte-range lock is taken by this
+  fence, and it does not write data or pretend to perform SQLite durability.
+- Source: existing FILE_GENERIC_READ, read-only sharing, no delete sharing.
+- Preparation lock: existing compatible read/write lock handle plus READ_CONTROL;
+  no delete sharing and actual OS lock acquisition.
+- Private publisher/reader: separately reviewed writable flush profiles described
+  in Stage 2; file delete sharing never leaks into directory/DB/lock/source fences.
+
+### Permanent DB routing compatible with stock SQLite
+
+Before the first Connection::open, the owner securely creates a missing permanent
+DB file with explicit protected user security, or validates the existing file:
+regular disk file, no reparse/delete-pending, one link, current-user owner, expected
+ACL. It retains a share-participating DbIdentityFence before handing SQLite the
+canonical frozen absolute pathname. Native held-versus-named reopens verify that
+same permanent object. Retained ancestor no-delete fences block path relocation;
+private parent mutation ACLs exclude untrusted child replacement. The guarantee is
+not containment against a malicious process using the same user credentials.
+
+The bundled SQLite source used by this repository confirms ordinary win32 open
+requests GENERIC_READ|GENERIC_WRITE and shares FILE_SHARE_READ|FILE_SHARE_WRITE,
+with no FILE_SHARE_DELETE and NULL security attributes. A read-data DB fence with
+read/write sharing is therefore compatible with ordinary SQLite connections while
+blocking replacement. This requires native multi-connection and migration tests;
+source inspection alone is insufficient. Do not use SQLite URI exclusive=1 here.
+
+Keep DbIdentityFence and directory owners for the entire migration, pool and all
+outstanding derived stores. open_registry_pool currently returns a bare Pool:
+its SqliteConnectionManager with_init closure can retain an Arc<SqliteNamespaceOwner>
+for pool-manager lifetime, and verify before pragmas. The migration connection
+retains a local clone from before open until after close. Each run DB owner is
+retained by its actual writer lifecycle. Direct Store and MemoryStore own their
+corresponding guards in the structs. Verify r2d2 drop/lifetime behavior so dropping
+Storage while a derived store/pool remains cannot release fences early.
+
+### WAL/SHM/journal lifecycle
+
+Do not retain permanent no-delete handles to WAL, SHM or rollback journals. SQLite
+normally removes WAL/SHM when its final connection closes; retained no-delete
+side-file handles would alter cleanup and fail normal database lifecycle.
+
+Instead retain the protected SQLite directory with inheritable user-only grants
+through all connections and final close. Pre-existing side files are independently
+inspected before SQLite opens: regular file, no reparse/delete-pending/hardlink,
+expected narrowly permitted owner and user-only effective ACL. Validation handles
+are temporary and must close before operations that require SQLite side-file
+cleanup. Native creation by stock SQLite inherits the controlled parent grants;
+known side-file recreation cannot revert to a broad default DACL. This inheritance
+is an explicit SQL namespace policy and must be verified on actual owner/default-
+owner tokens, including administrator-default-owner fixtures.
+
+If real native tests show stock SQLite creates a side file with outsiders granted
+access, do not chmod it after creation or bypass the guard. Resolve creation using
+a genuine VFS boundary or leave private capability unavailable. Do not enable
+PERSIST_WAL solely to hide lifecycle interference.
+
+### Caller closure and fixtures
+
+Storage::open_with owns secure home/db/runs before config load or SQL. Registry
+opening, run writer creation, legacy Store/MemoryStore parent creation, lifecycle
+locks, daemon runtime directory and CLI daemon/engine/bootstrap pre-Storage paths
+must all receive retained capabilities from the same state-home boundary.
+General standalone Store paths need an explicit safe-parent policy rather than an
+unsupported claim that every arbitrary path belongs to the managed state home.
+No caller may create the state home through create_dir_all first and validate later.
+
+Fixtures receive a protected child home created at first creation by the production
+helper under an inspected TempDir parent. They never mutate the parent ACL/owner.
+Apply this to every affected preparation, private-input, daemon, Storage, registry,
+run-writer, CLI and cold-recovery fixture. Default TempDir owner is read evidence;
+it is never assumed to equal TokenUser or accepted as a private home by shape.
+
+Acceptance: DB fence compatible with two read/write connections, migration and
+pool reuse; parent and permanent DB rename/reparse attempts refuse; WAL/SHM create,
+checkpoint, final-close cleanup and later reopen succeed; owner/DACL of side files
+matches explicit SQL policy; dropping Storage before a derived pool/store does not
+release ownership; default-owner Admin fixture creates a user-owned protected child
+home without changing the parent; unsafe existing home/sidefile is unchanged after
+refusal. Record native statuses and actual identities, not just fixture setup success.
+
+Primary evidence: [SQLite WAL lifecycle](https://www.sqlite.org/wal.html),
+[SQLite VFS contract](https://www.sqlite.org/vfs.html),
+[Microsoft new-object security](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptors-for-new-objects),
+[Microsoft file ACL inheritance](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
+Local version-pinned inspection: libsqlite3-sys 0.30.1 bundled sqlite3.c winOpen
+(ordinary desired access/share/create/security parameters); r2d2_sqlite manager
+stores the initialization closure, whose retained owner still requires lifetime tests.
+
+Refined Stage 1 owning-lead, independent architecture, critic and security verdicts:
+ACCEPTABLE for staged implementation. Native standard-user flags-zero durability
+gate remains pending on source 493c292; no backend integration or guard removal is
+authorized by a missing result. Acceptance still requires real two-connection DB
+compatibility, derived-store/pool lifetime, side-file default-owner ACL and cleanup,
+all pre-Storage creators, protected-child fixtures and unchanged refusal objects.
