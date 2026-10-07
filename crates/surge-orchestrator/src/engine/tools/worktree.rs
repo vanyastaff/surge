@@ -667,7 +667,7 @@ mod tests {
         let executable = cwd.join("quoted command.exe");
         std::fs::copy(std::env::var_os("ComSpec").unwrap(), &executable).unwrap();
         let command = format!(
-            "\"{}\" /D /C echo \"quoted argument\" > \"output file.txt\" & type \"output file.txt\" & echo compound",
+            "\"{}\" /D /C echo \"quoted argument\">\"output file.txt\"&type \"output file.txt\"&echo compound",
             executable.display()
         );
         let dispatcher = WorktreeToolDispatcher::new(cwd.clone());
@@ -684,10 +684,10 @@ mod tests {
             panic!("quoted shell failed: {result:?}");
         };
         assert_eq!(content["exit_code"], 0, "{content}");
-        assert_eq!(content["stdout"], "\"quoted argument\" \r\ncompound\r\n");
+        assert_eq!(content["stdout"], "\"quoted argument\"\r\ncompound\r\n");
         assert_eq!(
             std::fs::read(cwd.join("output file.txt")).unwrap(),
-            b"\"quoted argument\" \r\n"
+            b"\"quoted argument\"\r\n"
         );
     }
 

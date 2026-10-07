@@ -27,3 +27,5 @@ source and original compressed receipts. Native execution is required; these
 macOS checks cannot prove Windows shell escaping or named-pipe behavior.
 
 Native eb5ed49 Clippy exposed `items_after_statements` in the Windows-only hook branch. The Windows CommandExt import is now before statements; behavior and shell assertions are unchanged, with no suppression. Native revalidation remains pending. Raw failing job output is retained in native-clippy-eb5ed49.log.gz.
+
+Native eb5ed49 confirmed production quoted hook ownership, bootstrap materialization and all archetypes PASS. The two new fixture programs retained spaces around cmd redirection and compound operators, producing two trailing spaces while their oracle expected one. Independent lead/critic ACCEPTABLE: remove those incidental program spaces and retain exact quoted stdout/file bytes, redirection and compound assertions, with no trim/normalization or production change. Both files pass rustfmt/diff-check; native GREEN remains pending.

@@ -1048,7 +1048,7 @@ mod tests {
         let executable = cwd.join("quoted command.exe");
         std::fs::copy(std::env::var_os("ComSpec").unwrap(), &executable).unwrap();
         let command = format!(
-            "\"{}\" /D /C echo \"quoted argument\" > \"output file.txt\" & type \"output file.txt\" & echo compound",
+            "\"{}\" /D /C echo \"quoted argument\">\"output file.txt\"&type \"output file.txt\"&echo compound",
             executable.display()
         );
         let node = NodeKey::try_from("quoted_hook").unwrap();
@@ -1063,10 +1063,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.exit_status, 0, "{}", result.stderr);
-        assert_eq!(result.stdout, "\"quoted argument\" \r\ncompound\r\n");
+        assert_eq!(result.stdout, "\"quoted argument\"\r\ncompound\r\n");
         assert_eq!(
             std::fs::read(cwd.join("output file.txt")).unwrap(),
-            b"\"quoted argument\" \r\n"
+            b"\"quoted argument\"\r\n"
         );
         assert!(!result.timed_out);
     }
