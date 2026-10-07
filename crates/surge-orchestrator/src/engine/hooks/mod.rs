@@ -307,12 +307,13 @@ async fn spawn_via_shell(
     env: &[(&'static str, String)],
     ctx: &HookContext<'_>,
 ) -> Result<HookCommandResult, std::io::Error> {
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
     use tokio::process::Command;
 
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = Command::new("cmd");
-        use std::os::windows::process::CommandExt;
         c.args(["/D", "/S", "/C"]);
         // cmd parses shell programs itself; standard argv escaping changes quotes.
         c.as_std_mut().raw_arg(format!("\"{command}\""));

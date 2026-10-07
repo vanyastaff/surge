@@ -25,3 +25,5 @@ Local macOS, CARGO_INCREMENTAL=0: 122 scoped tests passed.
 Scoped final rustfmt and diff checks passed. [Manifest](manifest.json) binds
 source and original compressed receipts. Native execution is required; these
 macOS checks cannot prove Windows shell escaping or named-pipe behavior.
+
+Native eb5ed49 Clippy exposed `items_after_statements` in the Windows-only hook branch. The Windows CommandExt import is now before statements; behavior and shell assertions are unchanged, with no suppression. Native revalidation remains pending. Raw failing job output is retained in native-clippy-eb5ed49.log.gz.
