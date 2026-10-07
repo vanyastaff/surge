@@ -236,3 +236,40 @@ earlier cleanup assumption. Private File-first/TempPath-second wrapper is freshl
 spec/unsafe-reviewed and cross-lint/MSRV-checked; native old/new cleanup evidence
 remains pending. Stage E implementation independently spec/APIsecurity COMPLETE,
 122 local macOS tests and strict scoped lint pass; native acceptance remains open.
+
+## Native checkpoint and completed repair stages
+
+Source 77fff58 native run 37676179568 ran 3,640 Windows tests: 3,589 passed,
+51 failed, 33 skipped. All platform Clippy jobs and macOS/Ubuntu suites passed.
+The retained terminated-child regression, historical Git inspection and both
+persisted-gate tests pass natively. Atomic configuration oracles exposed sharing
+violations and old temporary cleanup leaks. [Raw receipt](../release-evidence/2026-10-05/windows-ci-77fff58/README.md)
+retains that result rather than declaring Windows readiness.
+
+Stage C repair 2 supersedes the earlier READ-only publisher and deny-DELETE
+reader replacement assumption. Windows DELETE sharing cannot be overridden by
+POSIX rename. Denying readers must cause byte-preserving refusal; cooperative
+readers retain their old snapshots during replacement. Publisher shares READ|DELETE
+while denying content writes; cleanup targets its actual descriptor, never a
+replaceable temporary pathname. Independent pre-code/spec/unsafe reviews are
+COMPLETE. [Repair receipts](../release-evidence/2026-10-05/windows-atomic-config/repair2/README.md)
+record Windows core strict cross-Clippy/MSRV, four macOS save tests and strict
+macOS lint; native execution remains pending.
+
+Stage E native eb5ed49 Clippy found a Windows-only items-after-statements import.
+The import is moved before statements without suppression or behavior changes.
+Native readiness/shell results must be retained before claiming acceptance.
+
+Bootstrap telemetry writer settlement is independently spec/API/security COMPLETE:
+actual single-worker RED tests reproduce WriterAlreadyHeld, followed by six
+passing bootstrap tests and MSRV. Await close on successful and failed writes;
+retain both typed failures. [Receipts](../release-evidence/2026-10-05/bootstrap-writer-settlement/README.md)
+record ENOSPC and successful retry. Native supervisor GREEN remains pending.
+
+The next private-backend design gate is [plan 003](2026-10-07-003-feat-windows-private-preparation-plan.md):
+actual flags-zero native durability under a dedicated standard user. Only the
+primitive and mandatory probe are implemented; full private authority guards stay
+closed. Windows owned-process [plan 004](2026-10-07-004-feat-windows-process-ownership-plan.md)
+and proposed [ADR-0023](../adr/0023-windows-owned-process-guardian.md) describe the
+retained guardian needed for daemon-death recovery. No guardian runtime or Windows
+release GO is claimed by those documents.

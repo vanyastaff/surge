@@ -346,3 +346,16 @@ production repair. macOS/Ubuntu tests and Clippy on all platforms pass.
 [Native receipt](release-evidence/2026-10-05/windows-ci-precursor/README.md)
 preserves this result; atomic configuration and revised integration fixtures
 have local/cross-target evidence and await the next native run.
+
+Native source 77fff58 subsequently ran 3,640 Windows tests: 3,589 passed,
+51 failed, 33 skipped. The process exit-259, Git history and persisted-gate
+regressions pass. macOS/Ubuntu suites and all platform Clippy jobs pass.
+[Raw native receipt](release-evidence/2026-10-05/windows-ci-77fff58/README.md)
+records atomic-save failures, now addressed by descriptor-owned cleanup and the
+documented cooperative/denied-reader sharing contract.
+
+The following reviewed commits repair bootstrap telemetry writer settlement and
+the Windows-only shell import lint, and add a mandatory isolated non-admin NTFS
+durability probe. Local tests, strict checks and MSRV receipts are retained; native
+GREEN remains required. Full Windows private preparation and owned-process recovery
+are still open under plans 003/004; the guardian ADR remains proposed.
