@@ -312,10 +312,8 @@ mod save_tests {
 
     #[cfg(windows)]
     #[test]
-    fn replacement_preserves_retained_reader_without_delete_sharing() {
+    fn replacement_preserves_cooperative_retained_reader() {
         use std::io::Read;
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("surge.toml");
         let old = SurgeConfig {
@@ -323,11 +321,7 @@ mod save_tests {
             ..SurgeConfig::default()
         };
         old.save(&destination).unwrap();
-        let mut retained = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
-            .open(&destination)
-            .unwrap();
+        let mut retained = std::fs::File::open(&destination).unwrap();
         let new = SurgeConfig {
             default_agent: "new".into(),
             ..SurgeConfig::default()
@@ -343,6 +337,25 @@ mod save_tests {
             "new"
         );
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reader_denying_delete_sharing_blocks_save_without_losing_old_bytes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        std::fs::write(&destination, b"original bytes").unwrap();
+        let retained = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+            .open(&destination)
+            .unwrap();
+        assert!(SurgeConfig::default().save(&destination).is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original bytes");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        drop(retained);
     }
 
     #[cfg(windows)]
