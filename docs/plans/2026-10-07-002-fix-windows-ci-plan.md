@@ -195,3 +195,38 @@ lint targets. Revised gate 2/2 now passes; final gate lint and scoped formatting
 pass. Revised independent spec and quality/security review COMPLETE.
 [Receipts](../release-evidence/2026-10-05/windows-integration-fixtures/README.md)
 preserve the old failure and new GREEN. Native acceptance remains pending.
+
+## Stage E — real pipe readiness and Windows shell command forwarding
+
+Current native source `14884ff` confirms 50 failures. Read-only lead ACCEPTABLE
+for this closure; independent pre-code reviews required. Test readiness must use
+actual bounded connections rather than filesystem entries (Windows named pipes
+create no socket file). Scope: four quota helper readiness sites, framing-trace
+and owned-flow IPC helpers, remaining work-item route readiness. Preserve each
+existing deadline including awaited connect attempts; observe/report server
+completion errors. Issue no mutation RPCs. Unix stale-socket removal alone remains
+Unix-specific; never remove a Windows pipe pathname. Tests/assertions remain.
+
+Production shell-program forwarding in both engine hooks and worktree shell_exec
+uses `/D /S /C` followed by an outer-quoted raw command on Windows, via
+std CommandExt::raw_arg through Tokio as_std_mut. Convert runtime cfg! branch
+to compile-time cfg where required. Unix forwarding unchanged. Do not concatenate
+structured ACP program/args: transport has a different contract and is outside
+this shell-program repair. Preserve cwd, env, writer-before-effect ownership,
+process handling, timeout and output/redaction semantics. Native regression must
+cover quoted executable/path with spaces, quoted argument, redirection and
+compound commands through the actual production paths; fixture quote avoidance
+is not a repair. Local affected tests and strict lint required; native acceptance
+remains pending.
+
+[Rust CommandExt](https://doc.rust-lang.org/std/os/windows/process/trait.CommandExt.html)
+was read with Firecrawl: cmd /c does not follow standard C argument escaping.
+Remaining Windows process-container identity and complete private preparation
+require full native implementations; missing capabilities are not disguised with
+optional-value fallbacks or test suppression.
+
+Stage A2 implementation is independently spec/unsafe/API/security COMPLETE after
+native retained-child RED. Local macOS checks and exact-module Windows compile
+checks pass; [receipts](../release-evidence/2026-10-05/windows-process-liveness/README.md)
+record the full-ACP cross-build MSVC-header limitation honestly. Native GREEN
+remains pending. Stage E independent adversarial/APIsecurity pre-code ACCEPTABLE.

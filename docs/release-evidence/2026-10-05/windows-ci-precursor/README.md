@@ -28,3 +28,10 @@ runtime data and release artifacts were retained. The retry passed.
 Windows GREEN is claimed here; Windows-only regression execution is pending.
 
 Receipts use gzip to preserve original output bytes without Git whitespace normalization.
+
+Native precursor run [37672477232](https://github.com/vanyastaff/surge/actions/runs/37672477232),
+source `14884ff`: Windows 3636 tests run, 3586 passed, 50 failed, 33 skipped.
+[Raw native receipt](windows-14884ff.log.gz) captures retained-child exit-259 RED
+before the production repair. The existing held-parent rename/routing test passed,
+confirming Stage B behavior. macOS/Ubuntu tests and all three Clippy checks passed.
+Remaining Windows defects stay open; this native result is not Windows GO.

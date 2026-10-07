@@ -1,0 +1,25 @@
+{
+  "base": "fe7bc83",
+  "source_sha256": {
+    "crates/surge-acp/src/process_tracker.rs": "d980fe7be28db2f88450cb5737c69e855a514dd091c1368e53d5c3c660f8f7b2"
+  },
+  "receipt_sha256": {
+    "msrv-mac.log.gz": "75db2acaf21d7a313dca5b4ac1f99ee1056d963f081f773f39df7914cbd6a87d",
+    "mac-clippy.log.gz": "e2ab487af673e611844bf00209188653118424782115af227801be1c07f17ea3",
+    "cross-clippy.log.gz": "0ef5d4d561771dbe7ba7f28edacbe515e1741a961d9b5e4fe7dba0aaef3500d9",
+    "fmt.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "process-mac.log.gz": "31475b3e9647b48ac69a3a4cd1e3ee5df27620c633ee04a5033f63cd79b64183",
+    "source-cross-clippy.log.gz": "eca47f14ad55245aa13054d546cb3e50b796f98bcf7a1387cecd8f2740964d74",
+    "source-msrv-cross.log.gz": "4bb840501f5e91343be72223f32d3c94776a7d3aac8f29fae5cea1e7d04bfc96"
+  },
+  "native_RED": {
+    "source": "14884ff",
+    "run": 37672477232,
+    "job": 112967493599,
+    "test": "terminated_child_with_retained_handle_is_not_alive",
+    "result": "failed intended liveness assertion after child exit259"
+  },
+  "native_GREEN": "pending",
+  "reviews": "spec and unsafe/API/security COMPLETE",
+  "whole_windows_acp_cross_compile": "unavailable: ring needs MSVC headers absent on macOS"
+}

@@ -338,3 +338,11 @@ Windows atomic configuration publication is implemented and independently
 reviewed, with strict macOS/Windows cross-target lint and MSRV checks;
 [receipts](release-evidence/2026-10-05/windows-atomic-config/README.md) distinguish
 compilation from native execution. Native Windows acceptance remains pending.
+
+Native Windows follow-up source `14884ff`, run `37672477232`: 3636 tests run,
+3586 passed, 50 failed, 33 skipped. Existing directory rename-fence regression
+passes; retained terminated-process regression supplies native RED before the
+production repair. macOS/Ubuntu tests and Clippy on all platforms pass.
+[Native receipt](release-evidence/2026-10-05/windows-ci-precursor/README.md)
+preserves this result; atomic configuration and revised integration fixtures
+have local/cross-target evidence and await the next native run.

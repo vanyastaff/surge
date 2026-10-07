@@ -181,23 +181,58 @@ impl ProcessTracker {
 
         #[cfg(windows)]
         {
-            // On Windows, try to open the process handle
-            use windows::Win32::Foundation::CloseHandle;
+            use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+            use windows::Win32::Foundation::{
+                ERROR_INVALID_PARAMETER, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            };
             use windows::Win32::System::Threading::{
-                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
             };
 
-            unsafe {
-                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-
-                if let Ok(handle) = handle
-                    && !handle.is_invalid()
+            if pid == 0 {
+                warn!(pid, "PID zero cannot establish process termination");
+                return true;
+            }
+            // SAFETY: OpenProcess accepts a PID, a named synchronization access
+            // right and a non-inheritable flag; no borrowed pointers are passed.
+            // The SDK returns only a valid handle on success.
+            let handle = match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+                Ok(handle) => handle,
+                Err(error)
+                    if error.code()
+                        == windows::core::HRESULT::from_win32(ERROR_INVALID_PARAMETER.0) =>
                 {
-                    let _ = CloseHandle(handle);
+                    return false;
+                },
+                Err(error) => {
+                    warn!(pid, %error, "process liveness is unknown; conservatively retaining ownership");
                     return true;
-                }
-
-                false
+                },
+            };
+            // SAFETY: OpenProcess transferred one valid owned process handle.
+            // OwnedHandle becomes its sole owner and closes it exactly once on
+            // every path below; no manual CloseHandle or borrowed conversion.
+            let owned = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+            // SAFETY: owned retains a valid process handle with SYNCHRONIZE
+            // access through this synchronous zero-time poll. A process object
+            // is signaled after termination, regardless of its application exit
+            // code (including 259) and other retained handles.
+            match unsafe { WaitForSingleObject(HANDLE(owned.as_raw_handle()), 0) } {
+                WAIT_OBJECT_0 => false,
+                WAIT_TIMEOUT => true,
+                WAIT_FAILED => {
+                    let error = std::io::Error::last_os_error();
+                    warn!(pid, %error, "process wait failed; conservatively retaining ownership");
+                    true
+                },
+                status => {
+                    warn!(
+                        pid,
+                        status = status.0,
+                        "unexpected process wait status; conservatively retaining ownership"
+                    );
+                    true
+                },
             }
         }
 

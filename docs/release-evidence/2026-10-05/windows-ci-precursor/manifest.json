@@ -21,9 +21,22 @@
     "hooks.log.gz": "9a23e72b4379a9cc5ffb320e1ba579fd94146b0dd8747e1dcd8d75abb3273bdf",
     "facade.log.gz": "2e8ee62109c0c6f3e24cedfb3bf49dea56b02c14ac9a934779bcef9a77354236",
     "core-green.log.gz": "9aed836ac3edc8730cf58181710fd1c8dde6da5e01ffa7663e9e7ba232536c54",
-    "shared-mock.log.gz": "558215bdf222c1f760b0d83507944cad1a8e731d1b694ef2029719d8c104add5"
+    "shared-mock.log.gz": "558215bdf222c1f760b0d83507944cad1a8e731d1b694ef2029719d8c104add5",
+    "windows-14884ff.log.gz": "0e91e2d935a82b9664aa44418ff67d69df23c25463450172413d32bdd13a4d15"
   },
   "native_windows_precursor": "pending",
   "initial_clippy": "exit 101 ENOSPC; generated incremental cache removed; successful retry CARGO_INCREMENTAL=0",
-  "receipt_encoding": "gzip; decompress for original local receipt bytes"
+  "receipt_encoding": "gzip; decompress for original local receipt bytes",
+  "native_precursor_execution": {
+    "source": "14884ff0e71685caba38794c11fa227bf426693c",
+    "run": 37672477232,
+    "job": 112967493599,
+    "tests": 3636,
+    "passed": 3586,
+    "failed": 50,
+    "skipped": 33,
+    "retained_child_259": "RED captured before production fix",
+    "held_parent_rename": "PASS",
+    "other_ci": "macOS/Ubuntu tests and all three Clippy passed"
+  }
 }
