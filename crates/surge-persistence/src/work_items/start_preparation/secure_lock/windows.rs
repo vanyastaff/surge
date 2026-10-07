@@ -29,7 +29,7 @@ use windows::{
             FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
             FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TYPE_DISK,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK,
             FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS,
             GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW, SYNCHRONIZE,
             VOLUME_NAME_DOS,
@@ -184,7 +184,9 @@ fn native_open(
     let mut output = HANDLE::default();
     let mut io = IO_STATUS_BLOCK::default();
     let access = match kind {
-        Kind::Directory => FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        // Metadata-only opens do not enforce delete sharing; traversal makes the
+        // retained directory handle's omission of FILE_SHARE_DELETE fence renames.
+        Kind::Directory => FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
         Kind::Lock => FILE_GENERIC_READ | FILE_GENERIC_WRITE,
         Kind::Source => FILE_GENERIC_READ,
     };
@@ -282,7 +284,9 @@ fn open_root(path: &Path) -> Result<File> {
     // Only the parsed OS volume/share root uses a Win32 absolute open. No untrusted
     // descendant is concatenated here. All subsequent routing is native-relative.
     let file = OpenOptions::new()
-        .access_mode((FILE_READ_ATTRIBUTES | SYNCHRONIZE).0)
+        // Include traversal so this retained root participates in delete sharing,
+        // just like native-relative directory opens; metadata-only access does not.
+        .access_mode((FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE).0)
         .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
         .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
         .open(path)
