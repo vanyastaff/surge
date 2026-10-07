@@ -13,29 +13,39 @@ use windows::Win32::Storage::FileSystem::{
     SetFileInformationByHandle,
 };
 
+// Rust drops struct fields in declaration order. Keep FILE FIRST: its close
+// releases the delete-sharing fence before TempPath attempts failure cleanup.
+// NamedTempFile declares path first, so retaining it would leak error temporaries
+// while our exclusively retained file still denies DELETE sharing.
+struct OwnedTemporary {
+    file: std::fs::File,
+    path: tempfile::TempPath,
+}
+
 pub(super) fn publish(parent: &Path, destination: &Path, contents: &[u8]) -> io::Result<()> {
     // READ sharing permits readers of the new published object before this
     // descriptor closes. Denying WRITE/DELETE sharing fences its identity,
     // content, and armed temporary pathname from competing opens.
-    let mut temporary =
-        tempfile::Builder::new()
-            .prefix(".surge-config-")
-            .make_in(parent, |path| {
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .access_mode(GENERIC_READ.0 | GENERIC_WRITE.0 | DELETE.0)
-                    .share_mode(FILE_SHARE_READ.0)
-                    .attributes(FILE_ATTRIBUTE_NORMAL.0)
-                    .open(path)
-            })?;
-    temporary.write_all(contents)?;
-    temporary.as_file().sync_all()?;
-    rename_retained(temporary.as_file(), destination)?;
+    let temporary = tempfile::Builder::new()
+        .prefix(".surge-config-")
+        .make_in(parent, |path| {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .access_mode(GENERIC_READ.0 | GENERIC_WRITE.0 | DELETE.0)
+                .share_mode(FILE_SHARE_READ.0)
+                .attributes(FILE_ATTRIBUTE_NORMAL.0)
+                .open(path)
+        })?;
+    let (file, path) = temporary.into_parts();
+    let mut temporary = OwnedTemporary { file, path };
+    temporary.file.write_all(contents)?;
+    temporary.file.sync_all()?;
+    rename_retained(&temporary.file, destination)?;
     // Publication moved the retained object. Disarm cleanup before any other
     // operation: dropping an armed old pathname could delete a replacement.
-    temporary.disable_cleanup(true);
+    temporary.path.disable_cleanup(true);
     drop(temporary);
     Ok(())
 }

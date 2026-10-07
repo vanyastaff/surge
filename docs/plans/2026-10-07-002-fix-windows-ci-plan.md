@@ -230,3 +230,9 @@ native retained-child RED. Local macOS checks and exact-module Windows compile
 checks pass; [receipts](../release-evidence/2026-10-05/windows-process-liveness/README.md)
 record the full-ACP cross-build MSVC-header limitation honestly. Native GREEN
 remains pending. Stage E independent adversarial/APIsecurity pre-code ACCEPTABLE.
+
+Stage C cleanup repair: actual tempfile field-order inspection invalidated the
+earlier cleanup assumption. Private File-first/TempPath-second wrapper is freshly
+spec/unsafe-reviewed and cross-lint/MSRV-checked; native old/new cleanup evidence
+remains pending. Stage E implementation independently spec/APIsecurity COMPLETE,
+122 local macOS tests and strict scoped lint pass; native acceptance remains open.
