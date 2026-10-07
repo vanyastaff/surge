@@ -1,12 +1,15 @@
 # Release and rollback procedure
 
-The 2026-10-05 candidate is NO-GO while productive MCP cold recovery lacks
-complete cleanup evidence and the four-platform native gates remain unverified.
-Local notice source mappings are reviewed; matching build receipts remain required.
-See [readiness](release-readiness-2026-10-05.md).
+The final release remains NO-GO until the remaining
+[macOS v1 acceptance and release gates](plans/2026-10-05-002-feat-v1-release-plan.md)
+pass. MCP restart recovery now follows the implemented ADR-0021 contract;
+managed VM/effect-broker proof is no longer a release prerequisite. A fresh
+candidate needs matching source, native build and notice provenance receipts.
+See [current readiness](release-readiness-2026-10-05.md) for revision-bound evidence.
 
-The release delivers the CLI and sibling daemon. The optional desktop shell is not
-in the archives. Publication requires separate authorization; preparing local
+The existing archive packaging delivers the CLI and sibling daemon; the desktop
+shell is not included in those archives. The macOS v1 plan also requires bundled
+desktop acceptance before its final GO. Publication requires separate authorization; preparing local
 artifacts or running the branch workflow does not authorize a tag or release.
 
 ## Prepare the exact revision

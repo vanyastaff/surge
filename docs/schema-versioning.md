@@ -7,7 +7,7 @@ the memory database version independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **16** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **21** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **3** (see below) |
 
 ## `surge.toml` (config)
