@@ -237,11 +237,15 @@ async fn three_node_branch_run_writes_two_snapshots() {
     std::fs::write(worktree.join("app.txt"), "later version").unwrap();
     let historical = std::process::Command::new("git")
         .arg("--git-dir")
-        .arg(&checkpoint.git_common_dir)
+        .arg(git_cli_path(&checkpoint.git_common_dir))
         .args(["show", &format!("{}:app.txt", checkpoint.commit)])
         .output()
         .unwrap();
-    assert!(historical.status.success());
+    assert!(
+        historical.status.success(),
+        "historical git show failed: {}",
+        String::from_utf8_lossy(&historical.stderr)
+    );
     assert_eq!(historical.stdout, b"boundary version");
     let child = RunId::new();
     let destination = dir.path().canonicalize().unwrap().join("fork");
@@ -348,4 +352,35 @@ async fn count_snapshots(storage: &Arc<Storage>, run_id: RunId) -> usize {
         .expect("open_run_reader");
     let seqs = reader.list_snapshots().await.expect("list_snapshots");
     seqs.len()
+}
+
+// Git CLI cannot consume verbatim Windows paths; checkpoint identity stays exact.
+fn git_cli_path(path: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return path.to_path_buf();
+        };
+        let mut result = match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => {
+                std::path::PathBuf::from(format!("{}:", char::from(drive)))
+            },
+            Prefix::VerbatimUNC(server, share) => {
+                let mut root = std::ffi::OsString::from(r"\\");
+                root.push(server);
+                root.push(r"\");
+                root.push(share);
+                std::path::PathBuf::from(root)
+            },
+            _ => return path.to_path_buf(),
+        };
+        for component in components {
+            result.push(component.as_os_str());
+        }
+        result
+    }
+    #[cfg(not(windows))]
+    path.to_path_buf()
 }

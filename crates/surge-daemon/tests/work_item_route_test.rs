@@ -605,7 +605,15 @@ async fn cold_host_with_config(
         config,
     ));
     let cancel = CancellationToken::new();
-    let socket = home.join("cold.sock");
+    static NEXT_ENDPOINT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let endpoint = NEXT_ENDPOINT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Owned child fixtures publish their first endpoint at the agreed name.
+    // Additional simultaneous hosts must not replace that listener.
+    let socket = home.join(if endpoint == 0 {
+        "cold.sock".to_owned()
+    } else {
+        format!("cold-{endpoint}.sock")
+    });
     let server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
@@ -618,12 +626,19 @@ async fn cold_host_with_config(
         Arc::new(surge_daemon::admission::AdmissionController::new(8, 2)),
         cancel.clone(),
     ));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    })
+    .await
+    .expect("cold host must accept a connection within its readiness deadline");
     (engine, cancel, server, socket)
 }
 async fn write_owned_startup(

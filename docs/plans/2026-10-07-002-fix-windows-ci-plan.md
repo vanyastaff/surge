@@ -191,4 +191,7 @@ consumed that row. Revised lead/adversarial/API/security pre-code ACCEPTABLE:
 append the next unread malformed row atomically without changing triggers;
 prove exact scoped and full decode failure. Preserve all original live-stream
 assertions. Snapshot 8 tests and route 50 tests passed, as did all three strict
-lint targets. Revised gate execution and native acceptance remain pending.
+lint targets. Revised gate 2/2 now passes; final gate lint and scoped formatting
+pass. Revised independent spec and quality/security review COMPLETE.
+[Receipts](../release-evidence/2026-10-05/windows-integration-fixtures/README.md)
+preserve the old failure and new GREEN. Native acceptance remains pending.
