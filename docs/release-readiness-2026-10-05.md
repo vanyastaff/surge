@@ -359,3 +359,12 @@ the Windows-only shell import lint, and add a mandatory isolated non-admin NTFS
 durability probe. Local tests, strict checks and MSRV receipts are retained; native
 GREEN remains required. Full Windows private preparation and owned-process recovery
 are still open under plans 003/004; the guardian ADR remains proposed.
+
+Native source `493c292`, run `37682450589`: **3,646 Windows tests run,
+3,612 passed, 34 failed, 34 skipped**. All platform Clippy and macOS/Ubuntu
+suites pass. Atomic-save, shell-quoting and telemetry-settlement regressions
+now pass natively. The required separate standard-user NTFS probe passes 1/1
+with complete flags-0 file/directory flush and exact read-only failure evidence.
+[Source-bound receipt](release-evidence/2026-10-05/windows-ci-493c292/README.md)
+explains the extra standalone-probe skip and remaining 25 private-preparation
+plus nine process-ownership failures. Full Windows CI acceptance remains open.

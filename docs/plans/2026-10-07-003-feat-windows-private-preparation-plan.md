@@ -522,3 +522,18 @@ gate remains pending on source 493c292; no backend integration or guard removal 
 authorized by a missing result. Acceptance still requires real two-connection DB
 compatibility, derived-store/pool lifetime, side-file default-owner ACL and cleanup,
 all pre-Storage creators, protected-child fixtures and unchanged refusal objects.
+
+### Native prerequisite result and standard-user fixture refinement
+
+Source `493c292`, native run `37682450589`, job `113002217595` passes the
+mandatory non-elevated local fixed NTFS flush probe 1/1: writable file and
+directory complete flags-0 flush, exact read-only access-denied error. This
+unblocks full Stage 1 implementation, without granting a private capability.
+
+For full-backend standard-user acceptance, resolve UserProfile/LocalAppData via
+the current token's Windows Known Folder API and create the protected child
+through production helpers. Do not use inherited runner TEMP or the primitive
+probe's PublicRoot as a trusted private-home ancestor: PublicRoot is runner-owned
+and grants that distinct account full control. The copied test executable may
+stay there; the private namespace must satisfy its own complete ancestor policy.
+No parent ACL repair or enlarged user grant is permitted.
