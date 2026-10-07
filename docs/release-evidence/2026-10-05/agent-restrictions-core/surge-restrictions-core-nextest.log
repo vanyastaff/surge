@@ -1,0 +1,870 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+────────────
+ Nextest run ID af962e99-3f25-4343-8fd6-06fd11cb43fd with nextest profile: default
+    Starting 864 tests across 1 binary
+        PASS [   0.021s] (  1/864) surge-core agent_config::tests::default_limits_match_spec
+        PASS [   0.032s] (  2/864) surge-core agent_config::tests::declared_skills_absent_key_returns_empty
+        PASS [   0.039s] (  3/864) surge-core agent_config::tests::initial_prompt_source_round_trips
+        PASS [   0.040s] (  4/864) surge-core agent_config::tests::binding_with_node_output_source_roundtrips
+        PASS [   0.040s] (  5/864) surge-core agent_config::tests::edit_feedback_source_round_trips
+        PASS [   0.040s] (  6/864) surge-core agent_config::tests::declared_skills_malformed_entry_is_typed_error
+        PASS [   0.045s] (  7/864) surge-core agent_config::tests::declared_skills_parses_toml_declared_list
+        PASS [   0.046s] (  8/864) surge-core agent_config::tests::agent_with_all_optional_fields_set_roundtrips
+        PASS [   0.036s] (  9/864) surge-core agent_config::tests::minimal_agent_config_toml_roundtrips
+        PASS [   0.026s] ( 10/864) surge-core agent_config::tests::runtime_override_reads_node_provider_and_ignores_blank
+        PASS [   0.021s] ( 11/864) surge-core agent_restrictions::tests::effort_floor_retains_legacy_but_required_unknown_fails
+        PASS [   0.026s] ( 12/864) surge-core agent_restrictions::tests::deny_models_and_independent_thinking
+        PASS [   0.026s] ( 13/864) surge-core agent_restrictions::tests::duplicate_route_declarations_are_rejected
+        PASS [   0.027s] ( 14/864) surge-core agent_restrictions::tests::every_allowlist_and_exact_selector_survives_roundtrip
+        PASS [   0.022s] ( 15/864) surge-core agent_restrictions::tests::independent_selectors_cannot_be_merged
+        PASS [   0.028s] ( 16/864) surge-core agent_restrictions::tests::omitted_empty_and_exact_case_are_distinct
+        PASS [   0.019s] ( 17/864) surge-core agent_restrictions::tests::rejects_blank_and_unknown_fields
+        PASS [   0.024s] ( 18/864) surge-core agent_restrictions::tests::rejects_contradictory_declarations
+        PASS [   0.021s] ( 19/864) surge-core agent_restrictions::tests::route_and_family_precede_values
+        PASS [   0.025s] ( 20/864) surge-core agent_rotation::tests::no_available_candidate_means_park
+        PASS [   0.023s] ( 21/864) surge-core agent_rotation::tests::prefers_an_agent_that_differs_from_the_partner_and_flags_otherwise
+        PASS [   0.029s] ( 22/864) surge-core approvals::tests::channel_kind_as_str_matches_serde_repr
+        PASS [   0.035s] ( 23/864) surge-core agent_rotation::tests::picks_the_first_available_agent_that_is_not_the_exhausted_one
+        PASS [   0.026s] ( 24/864) surge-core approvals::tests::channel_toml_roundtrip
+        PASS [   0.031s] ( 25/864) surge-core approvals::tests::channel_kind_extraction
+        PASS [   0.025s] ( 26/864) surge-core approvals::tests::config_toml_roundtrip
+        PASS [   0.026s] ( 27/864) surge-core approvals::tests::default_policy_is_on_request
+        PASS [   0.022s] ( 28/864) surge-core approvals::tests::skill_approval_omitted_from_toml_defaults_to_enabled
+        PASS [   0.019s] ( 29/864) surge-core archetype::tests::archetype_metadata_round_trips_with_optional_fields_omitted
+        PASS [   0.025s] ( 30/864) surge-core archetype::tests::all_lists_every_variant_once
+        PASS [   0.020s] ( 31/864) surge-core archetype::tests::archetype_metadata_round_trips_with_optional_fields_present
+        PASS [   0.025s] ( 32/864) surge-core archetype::tests::archetype_name_round_trips_kebab_case
+        PASS [   0.020s] ( 33/864) surge-core artifact_contract::kinds::description::tests::reports_missing_markdown_sections
+        PASS [   0.025s] ( 34/864) surge-core archetype::tests::missing_archetype_block_deserializes_as_none_on_parent
+        PASS [   0.024s] ( 35/864) surge-core artifact_contract::kinds::adr::tests::validates_adr_toml_frontmatter
+        PASS [   0.020s] ( 36/864) surge-core artifact_contract::kinds::description::tests::validates_description_markdown_sections
+        PASS [   0.021s] ( 37/864) surge-core artifact_contract::kinds::flow::tests::validates_flow_schema_version_without_graph_validation
+        PASS [   0.022s] ( 38/864) surge-core artifact_contract::kinds::roadmap_patch::tests::rejects_roadmap_patch_without_operations
+        PASS [   0.028s] ( 39/864) surge-core artifact_contract::kinds::roadmap_patch::tests::replacement_task_introduces_ref_with_target_milestone_context
+        PASS [   0.024s] ( 40/864) surge-core artifact_contract::kinds::roadmap_patch::tests::validates_roadmap_patch_references_against_context
+        PASS [   0.021s] ( 41/864) surge-core artifact_contract::kinds::spec::tests::placeholder_match_is_case_insensitive_for_ascii
+        PASS [   0.020s] ( 42/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_markdown_empty_checkbox_criterion
+        PASS [   0.022s] ( 43/864) surge-core artifact_contract::kinds::roadmap_patch::tests::validates_roadmap_patch_toml_shape
+        PASS [   0.023s] ( 44/864) surge-core artifact_contract::kinds::spec::tests::accepts_spec_toml_with_table_form_criterion
+        PASS [   0.020s] ( 45/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_markdown_placeholder_criterion
+        PASS [   0.021s] ( 46/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_markdown_single_question_mark_criterion
+        PASS [   0.019s] ( 47/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_toml_when_criterion_is_placeholder_string
+        PASS [   0.023s] ( 48/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_markdown_too_short_criterion
+        PASS [   0.021s] ( 49/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_markdown_when_acceptance_section_is_empty
+        PASS [   0.020s] ( 50/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_toml_when_any_subtask_lacks_acceptance_criteria
+        PASS [   0.021s] ( 51/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_toml_criterion_of_wrong_shape_with_shape_message
+        PASS [   0.022s] ( 52/864) surge-core artifact_contract::kinds::spec::tests::rejects_spec_toml_when_criterion_table_description_is_too_short
+        PASS [   0.022s] ( 53/864) surge-core artifact_contract::kinds::spec::tests::validates_spec_markdown_acceptance_criteria
+        PASS [   0.024s] ( 54/864) surge-core artifact_contract::kinds::spec::tests::validates_spec_toml_when_every_subtask_has_acceptance_criteria
+        PASS [   0.020s] ( 55/864) surge-core artifact_contract::tests::artifact_contract_refs_follow_schema_version_owner
+        PASS [   0.021s] ( 56/864) surge-core artifact_contract::kinds::story::tests::rejects_story_markdown_placeholder_criterion
+        PASS [   0.021s] ( 57/864) surge-core artifact_contract::path::tests::path_patterns_accept_expected_locations
+        PASS [   0.020s] ( 58/864) surge-core artifact_contract::tests::contracts_are_in_stable_order
+        PASS [   0.016s] ( 59/864) surge-core artifact_contract::tests::discovered_tasks_valid_and_invalid
+        PASS [   0.023s] ( 60/864) surge-core artifact_contract::tests::artifact_kind_parses_aliases
+        PASS [   0.015s] ( 61/864) surge-core artifact_contract::tests::toml_paths_with_leading_comments_are_not_markdown
+        PASS [   0.025s] ( 62/864) surge-core artifact_contract::tests::discovered_tasks_empty_id_and_title_produce_correct_codes
+        PASS [   0.016s] ( 63/864) surge-core artifact_contract::tests::validation_report_counts_errors_and_warnings
+        PASS [   0.022s] ( 64/864) surge-core artifact_contract::tests::verification_report_valid_and_invalid
+        PASS [   0.019s] ( 65/864) surge-core bootstrap_operation::tests::intent_deserialization_cannot_bypass_invariants
+        PASS [   0.022s] ( 66/864) surge-core bootstrap_operation::tests::exhausted_budget_is_not_unlimited
+        PASS [   0.023s] ( 67/864) surge-core bootstrap_operation::tests::capture_deserialization_validates_identity_and_rejects_inline_configuration
+        PASS [   0.024s] ( 68/864) surge-core branch_config::tests::branch_with_file_exists_predicate_roundtrips
+        PASS [   0.018s] ( 69/864) surge-core budget::tests::decide_exceeded_aborts_under_abort_policy
+        PASS [   0.030s] ( 70/864) surge-core branch_config::tests::artifact_size_predicate_roundtrips
+        PASS [   0.028s] ( 71/864) surge-core branch_config::tests::nested_and_or_not_predicates_roundtrip
+        PASS [   0.019s] ( 72/864) surge-core budget::tests::decide_warn_only_records_breach_once_independent_of_warn
+        PASS [   0.019s] ( 73/864) surge-core budget::tests::decide_warn_fires_once_then_continues
+        PASS [   0.020s] ( 74/864) surge-core budget::tests::decide_ok_continues
+        PASS [   0.027s] ( 75/864) surge-core budget::tests::exceeded_beats_warn_and_usd_reported_first
+        PASS [   0.020s] ( 76/864) surge-core budget::tests::guard_default_is_unlimited_abort
+        PASS [   0.020s] ( 77/864) surge-core budget::tests::non_positive_limits_are_unset
+        PASS [   0.019s] ( 78/864) surge-core budget::tests::under_threshold_is_ok
+        PASS [   0.026s] ( 79/864) surge-core budget::tests::tokens_warn_and_exceed
+        PASS [   0.020s] ( 80/864) surge-core budget::tests::unlimited_when_no_effective_limits
+        PASS [   0.019s] ( 81/864) surge-core budget::tests::usd_warn_at_threshold
+        PASS [   0.020s] ( 82/864) surge-core budget::tests::usd_exceeded_at_limit
+        PASS [   0.020s] ( 83/864) surge-core budget::tests::warn_threshold_zero_disables_warn_band
+        PASS [   0.057s] ( 84/864) surge-core bundled_flows::tests::bootstrap_resolves_by_exact_version
+        PASS [   0.074s] ( 85/864) surge-core bundled_flows::tests::bootstrap_resolves_by_latest_name
+        PASS [   0.022s] ( 86/864) surge-core capacity::tests::capacity_source_string_form_round_trips
+        PASS [   0.090s] ( 87/864) surge-core bundled_flows::tests::all_returns_expected_count
+        PASS [   0.082s] ( 88/864) surge-core bundled_flows::tests::unknown_flow_is_none
+        PASS [   0.014s] ( 89/864) surge-core capacity::tests::capacity_source_unknown_string_is_error
+        PASS [   0.015s] ( 90/864) surge-core capacity::tests::capacity_status_is_never_observed_distinguishes_from_unclassified
+        PASS [   0.015s] ( 91/864) surge-core capacity::tests::decide_does_not_panic_on_an_absurdly_large_blind_backoff
+        PASS [   0.020s] ( 92/864) surge-core capacity::tests::capacity_status_window_is_some_only_when_known
+        PASS [   0.020s] ( 93/864) surge-core capacity::tests::decide_elapsed_reset_time_dispatches_even_with_blind_backoff_configured
+        PASS [   0.018s] ( 94/864) surge-core capacity::tests::decide_elapsed_vs_never_learned_are_not_interchangeable
+        PASS [   0.019s] ( 95/864) surge-core capacity::tests::decide_never_learned_reset_time_still_parks_on_blind_backoff
+        PASS [   0.019s] ( 96/864) surge-core capacity::tests::decide_rotates_to_configured_profile_when_window_is_exhausted
+        PASS [   0.013s] ( 97/864) surge-core capacity::tests::decide_rule1_exhausted_with_usable_reset_parks_on_observed_reset
+        PASS [   0.012s] ( 98/864) surge-core capacity::tests::decide_rule1_wins_over_blind_backoff_when_reset_time_is_usable
+        PASS [   0.020s] ( 99/864) surge-core capacity::tests::decide_rule2_elapsed_reset_time_blind_backoff_off_still_dispatches_reset_elapsed
+        PASS [   0.018s] (100/864) surge-core capacity::tests::decide_rule3_never_learned_reset_time_with_blind_backoff_parks_on_policy_backoff
+        PASS [   0.017s] (101/864) surge-core capacity::tests::decide_rule5_missing_estimate_never_causes_refusal_on_any_non_exhausted_status
+        PASS [   0.020s] (102/864) surge-core capacity::tests::decide_rule4_never_learned_reset_time_blind_backoff_off_dispatches_degraded
+        PASS [   0.019s] (103/864) surge-core capacity::tests::decide_rule6_comparable_window_estimate_fits_dispatches_cleanly
+        PASS [   0.021s] (104/864) surge-core capacity::tests::decide_rule6_comparable_window_estimate_exceeds_remaining
+        PASS [   0.030s] (105/864) surge-core capacity::tests::decide_rule6_estimate_present_but_never_observed_flags_not_comparable
+        PASS [   0.028s] (106/864) surge-core capacity::tests::decide_rule6_full_window_is_comparable_not_flagged
+        PASS [   0.160s] (107/864) surge-core bundled_flows::tests::wired_archetypes_have_no_unverified_success_warning
+        PASS [   0.031s] (108/864) surge-core capacity::tests::different_run_ids_can_get_different_jitter
+        PASS [   0.028s] (109/864) surge-core capacity::tests::from_parts_accepts_every_field_absent
+        PASS [   0.044s] (110/864) surge-core capacity::tests::from_observed_error_accepts_subscription_quota_but_not_transient_529_overload
+        PASS [   0.035s] (111/864) surge-core capacity::tests::from_observed_error_ignores_non_rate_limit_text
+        PASS [   0.035s] (112/864) surge-core capacity::tests::from_observed_error_resolves_reset_time_through_parse_reset_hint_not_just_retry_after_secs
+        PASS [   0.036s] (113/864) surge-core capacity::tests::from_parts_assembles_every_field
+        PASS [   0.023s] (114/864) surge-core capacity::tests::is_exhausted_true_right_after_observed_429
+        PASS [   0.030s] (115/864) surge-core capacity::tests::has_standalone_429_matches_the_status_code_not_an_embedded_number
+        PASS [   0.026s] (116/864) surge-core capacity::tests::looks_like_rate_limit_matches_pools_pre_existing_patterns
+        PASS [   0.030s] (117/864) surge-core capacity::tests::looks_like_rate_limit_matches_real_provider_shapes
+        PASS [   0.030s] (118/864) surge-core capacity::tests::looks_like_rate_limit_rejects_unrelated_failures
+        PASS [   0.032s] (119/864) surge-core capacity::tests::looks_like_rate_limit_rejects_429_embedded_in_a_longer_number
+        PASS [   0.038s] (120/864) surge-core capacity::tests::observed_429_does_not_panic_on_an_absurdly_large_retry_after_duration
+        PASS [   0.040s] (121/864) surge-core capacity::tests::observed_429_with_retry_after_sets_resets_at
+        PASS [   0.037s] (122/864) surge-core capacity::tests::observed_429_without_retry_after_leaves_resets_at_unknown
+        PASS [   0.025s] (123/864) surge-core capacity::tests::park_jitter_never_moves_wake_at_backward_and_stays_within_jitter_max
+        PASS [   0.030s] (124/864) surge-core capacity::tests::park_jitter_is_deterministic_for_the_same_run_id
+        PASS [   0.027s] (125/864) surge-core capacity::tests::parse_reset_hint_does_not_panic_on_a_retry_after_value_that_overflows_the_datetime_add
+        PASS [   0.032s] (126/864) surge-core capacity::tests::park_jitter_never_panics_on_an_absurdly_large_jitter_max
+        PASS [   0.035s] (127/864) surge-core capacity::tests::parse_reset_hint_delegates_to_parse_retry_after_secs_first
+        PASS [   0.029s] (128/864) surge-core capacity::tests::parse_reset_hint_does_not_panic_on_a_retry_after_value_that_overflows_time_delta_itself
+        PASS [   0.032s] (129/864) surge-core capacity::tests::parse_reset_hint_recognizes_epoch_suffixed_usage_limit_reached
+        PASS [   0.026s] (130/864) surge-core capacity::tests::parse_reset_hint_recognizes_google_retry_delay_field
+        PASS [   0.031s] (131/864) surge-core capacity::tests::parse_reset_hint_recognizes_google_retry_delay_with_fractional_seconds
+        PASS [   0.031s] (132/864) surge-core capacity::tests::parse_reset_hint_recognizes_openai_try_again_in_prose
+        PASS [   0.337s] (133/864) surge-core bundled_flows::tests::legacy_template_aliases_resolve_to_canonical_names
+        PASS [   0.028s] (134/864) surge-core capacity::tests::parse_reset_hint_recognizes_surges_own_rate_limit_display_form
+        PASS [   0.027s] (135/864) surge-core capacity::tests::parse_reset_hint_rejects_epoch_beyond_the_reset_horizon
+        PASS [   0.015s] (136/864) surge-core capacity::tests::parse_reset_hint_rejects_unanchored_numbers_near_retry_vocabulary
+        PASS [   0.023s] (137/864) surge-core capacity::tests::parse_reset_hint_rejects_epoch_in_the_past
+        PASS [   0.017s] (138/864) surge-core capacity::tests::parse_reset_hint_returns_none_for_bare_429_with_no_hint
+        PASS [   0.022s] (139/864) surge-core capacity::tests::parse_reset_hint_returns_none_for_anthropic_rate_limit_error_shape
+        PASS [   0.021s] (140/864) surge-core capacity::tests::parse_reset_hint_returns_none_for_openai_insufficient_quota_shape
+        PASS [   0.014s] (141/864) surge-core capacity::tests::parse_retry_after_secs_does_not_panic_on_multi_byte_case_folding
+        PASS [   0.019s] (142/864) surge-core capacity::tests::parse_reset_hint_returns_none_for_overloaded_error_with_no_timing_info
+        PASS [   0.020s] (143/864) surge-core capacity::tests::parse_retry_after_secs_still_extracts_digits_past_a_multi_byte_case_fold
+        PASS [   0.014s] (144/864) surge-core capacity::tests::rate_limit_exceeded_is_caught_by_the_rate_limit_substring_not_a_dedicated_pattern
+        PASS [   0.012s] (145/864) surge-core capacity::tests::remaining_share_deserialize_accepts_valid_fraction
+        PASS [   0.020s] (146/864) surge-core capacity::tests::parse_retry_after_secs_various_formats
+        PASS [   0.019s] (147/864) surge-core capacity::tests::remaining_share_deserialize_rejects_out_of_range_via_try_from
+        PASS [   0.015s] (148/864) surge-core capacity::tests::remaining_share_rejects_out_of_range
+        PASS [   0.021s] (149/864) surge-core capacity::tests::remaining_share_new_rejects_nan
+        PASS [   0.016s] (150/864) surge-core capacity::tests::seconds_until_reset_positive_before_and_none_after
+        PASS [   0.020s] (151/864) surge-core capacity::tests::rotation_does_not_override_retry_after_observed_reset_elapsed
+        PASS [   0.021s] (152/864) surge-core capacity::tests::with_learned_window_computes_duration_between_two_resets
+        PASS [   0.017s] (153/864) surge-core capacity::tests::zero_jitter_max_disables_jitter_entirely
+        PASS [   0.022s] (154/864) surge-core capacity::tests::with_learned_window_is_a_no_op_without_a_known_reset
+        PASS [   0.015s] (155/864) surge-core capacity_config::tests::absent_section_parses_blind_backoff_as_none_not_the_default
+        PASS [   0.018s] (156/864) surge-core capacity_config::tests::absent_jitter_max_parses_to_the_default_not_zero
+        PASS [   0.016s] (157/864) surge-core capacity_config::tests::absurdly_large_blind_backoff_is_rejected_as_a_config_error
+        PASS [   0.017s] (158/864) surge-core capacity_config::tests::blind_backoff_serializes_as_a_human_readable_duration
+        PASS [   0.020s] (159/864) surge-core capacity_config::tests::blind_backoff_representable_as_a_chrono_duration_but_not_as_a_wake_up_instant_is_rejected
+        PASS [   0.016s] (160/864) surge-core capacity_config::tests::default_is_a_visible_conservative_backoff
+        PASS [   0.015s] (161/864) surge-core capacity_config::tests::from_capacity_config_carries_jitter_max
+        PASS [   0.019s] (162/864) surge-core capacity_config::tests::default_jitter_max_is_visible_and_matches_the_documented_constant
+        PASS [   0.026s] (163/864) surge-core capacity_config::tests::from_capacity_config_carries_blind_backoff_and_rotation_candidate
+        PASS [   0.021s] (164/864) surge-core capacity_config::tests::jitter_max_serializes_as_a_human_readable_duration
+        PASS [   0.023s] (165/864) surge-core capacity_config::tests::from_capacity_config_carries_operator_opt_out
+        PASS [   0.018s] (166/864) surge-core capacity_config::tests::operator_opts_out_of_blind_backoff_by_deleting_the_line
+        PASS [   0.023s] (167/864) surge-core capacity_config::tests::operator_can_disable_jitter_by_setting_it_to_zero
+        PASS [   0.027s] (168/864) surge-core capacity_config::tests::realistic_blind_backoff_values_pass_validation
+        PASS [   0.019s] (169/864) surge-core capacity_config::tests::round_trip_jitter_max_through_toml
+        PASS [   0.016s] (170/864) surge-core capacity_config::tests::round_trip_through_toml
+        PASS [   0.021s] (171/864) surge-core capacity_config::tests::zero_blind_park_limit_is_rejected
+        PASS [   0.017s] (172/864) surge-core config::schema_version_tests::config_without_schema_version_defaults_to_one
+        PASS [   0.012s] (173/864) surge-core config::schema_version_tests::default_config_is_schema_version_one
+        PASS [   0.487s] (174/864) surge-core bundled_flows::tests::archetype_templates_resolve_by_latest_name
+        PASS [   0.015s] (175/864) surge-core config::schema_version_tests::future_schema_version_is_rejected_with_migration_hint
+        PASS [   0.014s] (176/864) surge-core config::tests::analytics_budget_guard_resolves_limits
+        PASS [   0.014s] (177/864) surge-core config::tests::analytics_budget_guard_default_is_unlimited
+        PASS [   0.061s] (178/864) surge-core config::io::save_tests::saved_config_is_private
+        PASS [   0.012s] (179/864) surge-core config::tests::empty_task_sources_is_default
+        PASS [   0.085s] (180/864) surge-core config::io::save_tests::failed_persist_preserves_destination_and_removes_owned_temporary_file
+        PASS [   0.077s] (181/864) surge-core config::io::save_tests::save_ignores_predictable_temporary_symlink
+        PASS [   0.019s] (182/864) surge-core config::tests::github_merge_method_default_is_squash_and_overridable
+        PASS [   0.024s] (183/864) surge-core config::tests::mcp_servers_default_to_empty_vec
+        PASS [   0.017s] (184/864) surge-core config::tests::poll_interval_default_is_60s
+        PASS [   0.016s] (185/864) surge-core config::tests::task_sources_round_trip_toml
+        PASS [   0.541s] (186/864) surge-core bundled_flows::tests::every_archetype_has_a_bundled_flow_that_declares_it
+        PASS [   0.026s] (187/864) surge-core config::tests::mcp_servers_parse_from_toml_array_of_tables
+        PASS [   0.012s] (188/864) surge-core config::tests::telegram_and_inbox_config_default_when_absent
+        PASS [   0.013s] (189/864) surge-core config::tests::telegram_and_inbox_config_round_trip_toml
+        PASS [   0.014s] (190/864) surge-core config::tests::test_agent_config_validation_whitespace_command
+        PASS [   0.017s] (191/864) surge-core config::tests::test_agent_config_validation_whitespace_tcp_host
+        PASS [   0.013s] (192/864) surge-core config::tests::test_agent_config_with_args
+        PASS [   0.014s] (193/864) surge-core config::tests::test_analytics_config_defaults
+        PASS [   0.014s] (194/864) surge-core config::tests::test_analytics_config_optional_fields
+        PASS [   0.015s] (195/864) surge-core config::tests::test_analytics_config_roundtrip
+        PASS [   0.016s] (196/864) surge-core config::tests::test_cleanup_policy_defaults
+        PASS [   0.016s] (197/864) surge-core config::tests::test_config_clone
+        PASS [   0.017s] (198/864) surge-core config::tests::test_config_validation
+        PASS [   0.048s] (199/864) surge-core config::tests::telegram_plaintext_config_is_rejected_without_secret_in_diagnostic
+        PASS [   0.019s] (200/864) surge-core config::tests::test_default_config
+        PASS [   0.023s] (201/864) surge-core config::tests::test_empty_agents_map_validation
+        PASS [   0.014s] (202/864) surge-core config::tests::test_env_overrides
+        PASS [   0.017s] (203/864) surge-core config::tests::test_example_toml_deserializes
+        PASS [   0.014s] (204/864) surge-core config::tests::test_gate_config_defaults
+        PASS [   0.019s] (205/864) surge-core config::tests::test_extended_config_toml_roundtrip
+        PASS [   0.014s] (206/864) surge-core config::tests::test_gate_decision_approved
+        PASS [   0.020s] (207/864) surge-core config::tests::test_extended_config_missing_sections_use_defaults
+        PASS [   0.013s] (208/864) surge-core config::tests::test_gate_decision_aborted
+        PASS [   0.014s] (209/864) surge-core config::tests::test_gate_decision_mutually_exclusive
+        PASS [   0.017s] (210/864) surge-core config::tests::test_gate_decision_rejected
+        PASS [   0.015s] (211/864) surge-core config::tests::test_ide_config_extension_defaults
+        PASS [   0.015s] (212/864) surge-core config::tests::test_gate_decision_terminal_states
+        PASS [   0.020s] (213/864) surge-core config::tests::test_gate_decision_timeout
+        PASS [   0.020s] (214/864) surge-core config::tests::test_load_config_file_invalid_config
+        PASS [   0.070s] (215/864) surge-core config::tests::test_config_discovery
+        PASS [   0.020s] (216/864) surge-core config::tests::test_ide_config_extension_roundtrip
+        PASS [   0.024s] (217/864) surge-core config::tests::test_load_config_file_invalid_toml
+        PASS [   0.014s] (218/864) surge-core config::tests::test_load_config_file_not_found
+        PASS [   0.013s] (219/864) surge-core config::tests::test_log_config_defaults
+        PASS [   0.017s] (220/864) surge-core config::tests::test_log_config_roundtrip
+        PASS [   0.019s] (221/864) surge-core config::tests::test_log_level_validation_invalid
+        PASS [   0.018s] (222/864) surge-core config::tests::test_log_level_validation_valid
+        PASS [   0.011s] (223/864) surge-core config::tests::test_pipeline_budget_omitted_when_none
+        PASS [   0.013s] (224/864) surge-core config::tests::test_pipeline_config_defaults
+        PASS [   0.043s] (225/864) surge-core config::tests::test_load_config_file_success
+        PASS [   0.013s] (226/864) surge-core config::tests::test_pipeline_token_budget_defaults_to_none
+        PASS [   0.013s] (227/864) surge-core config::tests::test_pipeline_config_validation_success
+        PASS [   0.013s] (228/864) surge-core config::tests::test_routing_config_defaults
+        PASS [   0.015s] (229/864) surge-core config::tests::test_pipeline_token_budget_roundtrip
+        PASS [   0.050s] (230/864) surge-core config::tests::test_load_or_default
+        PASS [   0.019s] (231/864) surge-core config::tests::test_toml_serialization_minimal
+        PASS [   0.020s] (232/864) surge-core config::tests::test_toml_serialization_complete
+        PASS [   0.020s] (233/864) surge-core config::tests::test_toml_partial_pipeline
+        PASS [   0.020s] (234/864) surge-core config::tests::test_tcp_transport_valid_port_range
+        PASS [   0.021s] (235/864) surge-core config::tests::test_toml_deserialization_malformed
+        PASS [   0.022s] (236/864) surge-core config::tests::test_transport_clone
+        PASS [   0.021s] (237/864) surge-core config::tests::test_transport_stdio_default
+        PASS [   0.013s] (238/864) surge-core config::tests::test_transport_tcp_serialization
+        PASS [   0.015s] (239/864) surge-core content_hash::tests::deterministic_compute
+        PASS [   0.015s] (240/864) surge-core config::tests::test_transport_stdio_serialization
+        PASS [   0.015s] (241/864) surge-core config::tests::test_websocket_transport_roundtrip
+        PASS [   0.016s] (242/864) surge-core config::tests::test_websocket_transport_validation_error
+        PASS [   0.018s] (243/864) surge-core content_hash::tests::compute_then_display_then_parse_roundtrip
+        PASS [   0.016s] (244/864) surge-core content_hash::tests::known_sha256_of_empty_input
+        PASS [   0.015s] (245/864) surge-core content_hash::tests::parse_rejects_short_input
+        PASS [   0.016s] (246/864) surge-core context_pack::tests::confidence_order_beats_a_cheaper_lower_confidence_candidate
+        PASS [   0.017s] (247/864) surge-core content_hash::tests::serde_roundtrip_via_toml
+        PASS [   0.018s] (248/864) surge-core content_hash::tests::parse_accepts_bare_hex
+        PASS [   0.018s] (249/864) surge-core context_pack::tests::context_pack_config_absent_fields_default_on_parse
+        PASS [   0.018s] (250/864) surge-core context_pack::tests::a_claim_costing_more_than_the_whole_budget_is_dropped_not_truncated
+        PASS [   0.015s] (251/864) surge-core context_pack::tests::context_pack_config_default_is_conservative
+        PASS [   0.018s] (252/864) surge-core context_pack::tests::mixed_confidence_claims_are_ordered_verified_then_name_matched_then_asserted
+        PASS [   0.020s] (253/864) surge-core doctor::tests::matrix_cell_status_serializes_snake_case
+        PASS [   0.020s] (254/864) surge-core context_pack::tests::empty_input_yields_an_empty_pack_and_a_fit_receipt
+        PASS [   0.021s] (255/864) surge-core doctor::tests::report_is_not_clean_with_below_minimum_entry
+        PASS [   0.021s] (256/864) surge-core doctor::tests::empty_report_is_clean
+        PASS [   0.024s] (257/864) surge-core doctor::tests::report_is_not_clean_with_mismatched_entry
+        PASS [   0.015s] (258/864) surge-core doctor::tests::report_is_not_clean_with_unverified_matrix_cell
+        PASS [   0.016s] (259/864) surge-core doctor::tests::serde_round_trip_via_json
+        PASS [   0.015s] (260/864) surge-core doctor::tests::version_status_serializes_snake_case
+        PASS [   0.016s] (261/864) surge-core doctor::tests::version_status_mismatched_serializes_snake_case
+        PASS [   0.016s] (262/864) surge-core edge::tests::backtrack_default_policy_escalates
+        PASS [   0.017s] (263/864) surge-core edge::tests::edge_kind_serializes_snake_case
+        PASS [   0.013s] (264/864) surge-core edge::tests::edge_toml_roundtrip
+        PASS [   0.012s] (265/864) surge-core error::tests::bootstrap_archetype_mismatch_shows_both_sides
+        PASS [   0.012s] (266/864) surge-core error::tests::bootstrap_archetype_missing_renders
+        PASS [   0.015s] (267/864) surge-core error::tests::graph_validation_error_displays_count
+        PASS [   0.015s] (268/864) surge-core error::tests::content_hash_mismatch_shows_both_hashes
+        PASS [   0.016s] (269/864) surge-core error::tests::edit_loop_cap_exceeded_includes_stage_and_cap
+        PASS [   0.017s] (270/864) surge-core error::tests::materialized_graph_invalid_carries_reason
+        PASS [   0.015s] (271/864) surge-core error::tests::schema_too_new_displays_found_and_max
+        PASS [   0.019s] (272/864) surge-core error::tests::schema_too_old_displays_found_and_min
+        PASS [   0.014s] (273/864) surge-core error::tests::test_git_error_display
+        PASS [   0.015s] (274/864) surge-core error::tests::test_git_error_source_chain
+        PASS [   0.015s] (275/864) surge-core error::tests::test_rate_limit_display
+        PASS [   0.017s] (276/864) surge-core error::tests::test_auth_failure_display
+        PASS [   0.046s] (277/864) surge-core escalation::tests::ambiguous_targets_and_taken_names_are_handled
+        PASS [   0.045s] (278/864) surge-core escalation::tests::linear_flow_gets_one_gate_per_capped_source
+        PASS [   0.073s] (279/864) surge-core escalation::tests::a_non_agent_loop_target_escalates_straight_to_the_gate
+        PASS [   0.049s] (280/864) surge-core escalation::tests::gates_land_in_the_subgraph_scope_of_their_loop
+        PASS [   0.019s] (281/864) surge-core event::tests::inbox_run_start_requested_round_trip
+        PASS [   0.075s] (282/864) surge-core escalation::tests::loop_bodies_get_a_split_rung_between_the_extra_attempt_and_the_gate
+        PASS [   0.055s] (283/864) surge-core escalation::tests::retry_config_moves_only_the_runtime
+        PASS [   0.019s] (284/864) surge-core event::tests::inbox_run_started_round_trip
+        PASS [   0.045s] (285/864) surge-core escalation::tests::routing_climbs_from_the_extra_attempt_to_the_gate
+        PASS [   0.022s] (286/864) surge-core event::tests::inbox_skip_requested_round_trip
+        PASS [   0.014s] (287/864) surge-core event::tests::inbox_snooze_requested_round_trip
+        PASS [   0.054s] (288/864) surge-core escalation::tests::retry_outcome_is_the_capped_escalating_loop
+        PASS [   0.014s] (289/864) surge-core event::tests::test_ticket_detected_roundtrip
+        PASS [   0.015s] (290/864) surge-core event::tests::test_task_source_poll_failed_roundtrip
+        PASS [   0.020s] (291/864) surge-core event::tests::test_inbox_card_sent_roundtrip
+        PASS [   0.017s] (292/864) surge-core event::tests::test_tokens_consumed_roundtrip
+        PASS [   0.019s] (293/864) surge-core event::tests::test_tier1_dedup_decided_roundtrip
+        PASS [   0.014s] (294/864) surge-core event::tests::test_triage_decided_roundtrip
+        PASS [   0.014s] (295/864) surge-core event::tests::test_versioned_event_fields
+        PASS [   0.017s] (296/864) surge-core event::tests::test_versioned_event_roundtrip
+        PASS [   0.012s] (297/864) surge-core evidence::tests::completed_and_verified_is_evidence_backed
+        PASS [   0.155s] (298/864) surge-core escalation::tests::derivation_is_idempotent_and_respects_declared_escalation
+        PASS [   0.012s] (299/864) surge-core evidence::tests::completed_but_unverified_is_not_evidence_backed
+        PASS [   0.013s] (300/864) surge-core evidence::tests::unverified_non_completed_statuses_are_not_evidence_backed
+        PASS [   0.016s] (301/864) surge-core evidence::tests::verified_flag_alone_never_backs_a_non_completed_status
+        PASS [   0.019s] (302/864) surge-core execution_recovery::gate_commit::tests::response_hash_includes_feedback_and_effects_preserve_original_schema
+        PASS [   0.016s] (303/864) surge-core execution_recovery::gate_commit::tests::serialized_identity_cannot_bypass_occurrence_or_batch_bounds
+        PASS [   0.015s] (304/864) surge-core execution_recovery::tests::descriptor_decode_cannot_bypass_absolute_cwd
+        PASS [   0.016s] (305/864) surge-core execution_recovery::tests::provider_id_is_opaque_but_bounded_on_constructor_and_json
+        PASS [   0.016s] (306/864) surge-core execution_recovery::process::tests::macos_boot_identity_cannot_be_a_mutable_wall_clock_timestamp
+        PASS [   0.013s] (307/864) surge-core graph::tests::empty_graph_compiles_and_serializes
+        PASS [   0.013s] (308/864) surge-core graph::tests::schema_version_constant_is_one
+        PASS [   0.014s] (309/864) surge-core home::tests::falls_back_to_dot_surge_when_surge_home_is_empty
+        PASS [   0.012s] (310/864) surge-core home::tests::falls_back_to_dot_surge_when_surge_home_is_unset
+        PASS [   0.013s] (311/864) surge-core hooks::tests::empty_matcher_is_unconditional
+        PASS [   0.013s] (312/864) surge-core home::tests::uses_surge_home_when_set_and_non_empty
+        PASS [   0.014s] (313/864) surge-core hooks::tests::hook_matches_combines_trigger_and_matcher
+        PASS [   0.018s] (314/864) surge-core hooks::tests::file_glob_matches_with_glob_pattern
+        PASS [   0.622s] (315/864) surge-core config::io::save_tests::concurrent_saves_publish_complete_configs
+        PASS [   0.017s] (316/864) surge-core hooks::tests::file_glob_rejects_when_no_path_in_context
+        PASS [   0.014s] (317/864) surge-core hooks::tests::hook_with_default_matcher_parses
+        PASS [   0.014s] (318/864) surge-core hooks::tests::invalid_glob_pattern_does_not_match
+        PASS [   0.020s] (319/864) surge-core hooks::tests::hook_toml_roundtrip
+        PASS [   0.014s] (320/864) surge-core hooks::tests::outcome_filter_uses_typed_key
+        PASS [   0.013s] (321/864) surge-core hooks::tests::tool_filter_matches
+        PASS [   0.015s] (322/864) surge-core hooks::tests::tool_arg_substring_filter
+        PASS [   0.021s] (323/864) surge-core hooks::tests::tool_filter_rejects_mismatch
+        PASS [   0.017s] (324/864) surge-core human_gate_config::tests::default_mode_is_generic
+        PASS [   0.014s] (325/864) surge-core human_gate_config::tests::human_gate_toml_roundtrip
+        PASS [   0.017s] (326/864) surge-core human_gate_config::tests::default_option_style_is_normal
+        PASS [   0.019s] (327/864) surge-core human_gate_config::tests::bootstrap_mode_toml_roundtrip
+        PASS [   0.018s] (328/864) surge-core human_gate_config::tests::legacy_toml_without_mode_field_defaults_to_generic
+        PASS [   0.020s] (329/864) surge-core human_gate_config::tests::default_timeout_action_is_reject
+        PASS [   0.015s] (330/864) surge-core id::tests::from_str_bare_ulid
+        PASS [   0.017s] (331/864) surge-core id::tests::display_has_prefix
+        PASS [   0.014s] (332/864) surge-core id::tests::from_str_prefixed_roundtrip
+        PASS [   0.014s] (333/864) surge-core id::tests::from_str_wrong_prefix_still_parses_as_bare
+        PASS [   0.016s] (334/864) surge-core id::tests::from_str_invalid_returns_error
+        PASS [   0.016s] (335/864) surge-core id::tests::gate_event_identity_requires_exact_namespace
+        PASS [   0.014s] (336/864) surge-core id::tests::run_id_and_session_id_are_distinct_types
+        PASS [   0.025s] (337/864) surge-core id::tests::ids_are_unique
+        PASS [   0.015s] (338/864) surge-core id::tests::run_id_displays_with_prefix
+        PASS [   0.019s] (339/864) surge-core id::tests::memory_claim_id_displays_with_prefix
+        PASS [   0.018s] (340/864) surge-core id::tests::memory_claim_id_roundtrips_via_string
+        PASS [   0.013s] (341/864) surge-core id::tests::session_id_displays_with_prefix
+        PASS [   0.019s] (342/864) surge-core id::tests::run_id_roundtrips_via_string
+        PASS [   0.018s] (343/864) surge-core id::tests::short_is_12_chars_for_all_ids
+        PASS [   0.014s] (344/864) surge-core keys::tests::display_emits_inner_string
+        PASS [   0.014s] (345/864) surge-core keys::tests::from_str_parses_valid
+        PASS [   0.017s] (346/864) surge-core keys::tests::deserialize_validates_invalid_string
+        PASS [   0.020s] (347/864) surge-core keys::tests::deserialize_validates_too_long
+        PASS [   0.023s] (348/864) surge-core keys::tests::debug_includes_type_name
+        PASS [   0.024s] (349/864) surge-core id::tests::short_is_alphanumeric_and_distinct
+        PASS [   0.013s] (350/864) surge-core keys::tests::from_str_rejects_invalid
+        PASS [   0.016s] (351/864) surge-core keys::tests::json_roundtrip_in_struct
+        PASS [   0.018s] (352/864) surge-core keys::tests::node_key_accepts_valid_string
+        PASS [   0.018s] (353/864) surge-core keys::tests::node_key_rejects_at_sign
+        PASS [   0.017s] (354/864) surge-core keys::tests::node_key_rejects_dash
+        PASS [   0.023s] (355/864) surge-core keys::tests::node_key_rejects_empty
+        PASS [   0.022s] (356/864) surge-core keys::tests::node_key_rejects_leading_digit
+        PASS [   0.017s] (357/864) surge-core keys::tests::node_key_rejects_too_long
+        PASS [   0.015s] (358/864) surge-core keys::tests::outcome_key_and_node_key_are_distinct_types
+        PASS [   0.019s] (359/864) surge-core keys::tests::template_key_accepts_dashed_versioned_form
+        PASS [   0.022s] (360/864) surge-core keys::tests::profile_key_rejects_space
+        PASS [   0.022s] (361/864) surge-core keys::tests::profile_key_accepts_versioned_form
+        PASS [   0.023s] (362/864) surge-core loop_config::guard_config_tests::tool_call_loop_guard_config_absent_fields_default_on_parse
+        PASS [   0.025s] (363/864) surge-core loop_config::guard_config_tests::tool_call_loop_guard_config_defaults_are_conservative
+        PASS [   0.027s] (364/864) surge-core keys::tests::toml_roundtrip_in_struct
+        PASS [   0.026s] (365/864) surge-core loop_config::guard_config_tests::tool_call_loop_guard_config_toml_roundtrip
+        PASS [   0.029s] (366/864) surge-core loop_config::tests::default_failure_policy_is_abort
+        PASS [   0.030s] (367/864) surge-core loop_config::tests::loop_with_artifact_iterator_roundtrips
+        PASS [   0.025s] (368/864) surge-core mcp_config::tests::defaults_apply_when_omitted
+        PASS [   0.033s] (369/864) surge-core loop_config::tests::loop_with_loop_item_iterator_roundtrips
+        PASS [   0.022s] (370/864) surge-core mcp_config::tests::sandbox_override_roundtrips_and_setter_works
+        PASS [   0.023s] (371/864) surge-core mcp_config::tests::stdio_server_ref_toml_roundtrips
+        PASS [   0.026s] (372/864) surge-core mcp_config::tests::unset_startup_timeout_is_absent_from_serialized_bytes
+        PASS [   0.018s] (373/864) surge-core mcp_config::tests::unset_startup_timeout_never_shortens_the_legacy_handshake
+        PASS [   0.016s] (374/864) surge-core memory::tests::claim_status_roundtrips_through_its_string_form
+        PASS [   0.018s] (375/864) surge-core memory::tests::confidence_roundtrips_through_its_string_form
+        PASS [   0.018s] (376/864) surge-core memory::tests::confidence_string_form_matches_the_three_named_levels
+        PASS [   0.019s] (377/864) surge-core memory::tests::deserializing_verified_status_without_verified_provenance_fails
+        PASS [   0.023s] (378/864) surge-core memory::tests::confidence_ranks_verified_ahead_of_name_matched_ahead_of_asserted
+        PASS [   0.015s] (379/864) surge-core memory::tests::from_transcript_marks_the_claim_unverified_and_asserted
+        PASS [   0.015s] (380/864) surge-core memory::tests::memory_claim_json_roundtrip_preserves_every_field
+        PASS [   0.019s] (381/864) surge-core memory::tests::new_accepts_verified_status_when_provenance_is_verified
+        PASS [   0.015s] (382/864) surge-core memory::tests::new_rejects_verified_status_without_verified_provenance
+        PASS [   0.016s] (383/864) surge-core memory::tests::unverified_claim_is_aging_eligible
+        PASS [   0.021s] (384/864) surge-core memory::tests::provenance_verified_populates_command_and_timestamp
+        PASS [   0.020s] (385/864) surge-core memory::tests::verified_claim_is_never_aging_eligible
+        PASS [   0.016s] (386/864) surge-core migrations::owned_flow_manifest_version_tests::schema14_roundtrips_empty_snapshot_without_changing_prior_events
+        PASS [   0.019s] (387/864) surge-core migrations::owned_flow_manifest_version_tests::schema14_rejects_malformed_snapshot_during_event_decode
+        PASS [   0.018s] (388/864) surge-core migrations::tests::legacy_tool_events_decode_as_none_through_every_version
+        PASS [   0.020s] (389/864) surge-core migrations::tests::schema_version_too_new_is_rejected
+        PASS [   0.017s] (390/864) surge-core migrations::tests::schema_version_too_old_is_rejected
+        PASS [   0.017s] (391/864) surge-core migrations::tests::v16_selected_mcp_catalog_escalation_round_trips_and_v15_readers_stay_clean
+        PASS [   0.019s] (392/864) surge-core migrations::tests::v17_group_stopped_round_trips_and_v16_readers_reject_it
+        PASS [   0.022s] (393/864) surge-core migrations::tests::v18_task_split_round_trips_and_v17_readers_reject_it
+        PASS [   0.025s] (394/864) surge-core migrations::tests::v19_human_overrides_round_trip_and_v18_readers_reject_them
+        PASS [   0.019s] (395/864) surge-core migrations::tests::v1_bytes_handle_runtime_version_warning_as_unknown_variant
+        PASS [   0.019s] (396/864) surge-core migrations::tests::v1_bytes_round_trip_through_chain
+        PASS [   0.021s] (397/864) surge-core migrations::tests::v21_runtime_rotation_round_trips_and_v20_readers_reject_it
+        PASS [   0.023s] (398/864) surge-core migrations::tests::v20_loop_protection_causes_round_trip_and_v19_readers_reject_them
+        PASS [   0.015s] (399/864) surge-core migrations::tests::v3_attributed_tool_event_round_trips
+        PASS [   0.021s] (400/864) surge-core migrations::tests::v2_bytes_round_trip_through_chain
+        PASS [   0.016s] (401/864) surge-core migrations::tests::v4_budget_event_round_trips
+        PASS [   0.016s] (402/864) surge-core migrations::tests::v5_task_ledger_event_round_trips
+        PASS [   0.015s] (403/864) surge-core migrations::tests::v6_skill_bound_event_round_trips
+        PASS [   0.016s] (404/864) surge-core migrations::tests::v7_run_parked_event_round_trips
+        PASS [   0.015s] (405/864) surge-core migrations::tests::v8_capacity_blind_park_limit_escalation_round_trips
+        PASS [   0.013s] (406/864) surge-core migrations::tests::writer_emits_max_supported_version
+        PASS [   0.021s] (407/864) surge-core migrations::tests::v7_run_woke_from_park_event_round_trips
+        PASS [   0.013s] (408/864) surge-core node::tests::agent_node_kind_derives_from_config
+        PASS [   0.013s] (409/864) surge-core node::tests::outcome_decl_roundtrip
+        PASS [   0.018s] (410/864) surge-core migrations::work_item_golden::prior_event_and_bound_attempt_have_explicit_version_gate
+        PASS [   0.014s] (411/864) surge-core node_overrides::tests::absent_or_malformed_edits_are_distinguished
+        PASS [   0.020s] (412/864) surge-core node::tests::terminal_node_roundtrip_via_toml
+        PASS [   0.019s] (413/864) surge-core notify_config::tests::desktop_channel_carries_no_fields
+        PASS [   0.015s] (414/864) surge-core predicate::tests::and_short_circuits_on_first_false
+        PASS [   0.023s] (415/864) surge-core notify_config::tests::notify_with_slack_channel_roundtrips
+        PASS [   0.014s] (416/864) surge-core predicate::tests::artifact_size_eq
+        PASS [   0.012s] (417/864) surge-core predicate::tests::artifact_size_gt_with_missing_artifact_is_false
+        PASS [   0.023s] (418/864) surge-core predicate::tests::artifact_size_all_compare_ops
+        PASS [   0.015s] (419/864) surge-core predicate::tests::env_var_eq
+        PASS [   0.043s] (420/864) surge-core node_overrides::tests::provider_edit_lands_on_the_step
+        PASS [   0.012s] (421/864) surge-core predicate::tests::file_exists_false_when_absent
+        PASS [   0.016s] (422/864) surge-core predicate::tests::env_var_undefined_is_false
+        PASS [   0.014s] (423/864) surge-core predicate::tests::file_exists_true_when_present
+        PASS [   0.014s] (424/864) surge-core predicate::tests::not_inverts_inner
+        PASS [   0.017s] (425/864) surge-core predicate::tests::nested_combinators
+        PASS [   0.052s] (426/864) surge-core node_overrides::tests::unknown_or_non_agent_targets_are_refused_whole
+        PASS [   0.013s] (427/864) surge-core predicate::tests::or_short_circuits_on_first_true
+        PASS [   0.013s] (428/864) surge-core predicate::tests::outcome_matches_missing_node_is_false
+        PASS [   0.023s] (429/864) surge-core predicate::tests::outcome_matches_positive
+        PASS [   0.030s] (430/864) surge-core profile::bundled::tests::all_profile_id_versions_are_unique
+        PASS [   0.027s] (431/864) surge-core profile::bundled::tests::all_returns_expected_count
+        PASS [   0.031s] (432/864) surge-core profile::bundled::tests::app_tester_runs_the_app_but_holds_no_verification_authority
+        PASS [   0.034s] (433/864) surge-core profile::bundled::tests::feature_planner_declares_patch_artifact_and_write_sandbox
+        PASS [   0.025s] (434/864) surge-core profile::bundled::tests::flow_generator_declares_profile_catalog_binding
+        PASS [   0.029s] (435/864) surge-core profile::bundled::tests::implementer_2_0_reports_ready_for_verification
+        PASS [   0.031s] (436/864) surge-core profile::bundled::tests::implementer_default_agent_is_claude_code
+        PASS [   0.061s] (437/864) surge-core profile::bundled::tests::cross_verifier_is_a_sealed_authority_on_a_different_runtime
+        PASS [   0.074s] (438/864) surge-core profile::bundled::tests::bootstrap_profiles_declare_produced_artifact_contracts
+        PASS [   0.026s] (439/864) surge-core profile::bundled::tests::mock_resolves_by_name
+        PASS [   0.033s] (440/864) surge-core profile::bundled::tests::mock_resolves_by_exact_version
+        PASS [   0.081s] (441/864) surge-core profile::bundled::tests::every_bundled_profile_resolves_through_merge_chain
+        PASS [   0.017s] (442/864) surge-core profile::keyref::tests::dashed_name_with_version
+        PASS [   0.032s] (443/864) surge-core profile::bundled::tests::unknown_name_is_none
+        PASS [   0.014s] (444/864) surge-core profile::keyref::tests::double_at_rejected
+        PASS [   0.020s] (445/864) surge-core profile::keyref::tests::dotted_name_with_version
+        PASS [   0.017s] (446/864) surge-core profile::keyref::tests::empty_input_rejected
+        PASS [   0.055s] (447/864) surge-core profile::bundled::tests::ollama_verifier_is_a_sealed_authority_on_the_ollama_runtime
+        PASS [   0.013s] (448/864) surge-core profile::keyref::tests::empty_version_rejected
+        PASS [   0.036s] (449/864) surge-core profile::bundled::tests::verifier_2_0_is_sealed_and_authoritative
+        PASS [   0.019s] (450/864) surge-core profile::keyref::tests::empty_name_rejected
+        PASS [   0.022s] (451/864) surge-core profile::keyref::tests::leading_digit_in_name_rejected
+        PASS [   0.013s] (452/864) surge-core profile::keyref::tests::name_at_major_minor_lifts_to_full
+        PASS [   0.015s] (453/864) surge-core profile::keyref::tests::name_at_major_only_lifts_to_full
+        PASS [   0.018s] (454/864) surge-core profile::keyref::tests::name_at_full_version
+        PASS [   0.016s] (455/864) surge-core profile::keyref::tests::name_only_constructor
+        PASS [   0.021s] (456/864) surge-core profile::keyref::tests::name_only
+        PASS [   0.014s] (457/864) surge-core profile::keyref::tests::space_in_name_rejected
+        PASS [   0.014s] (458/864) surge-core profile::keyref::tests::name_only_constructor_validates
+        PASS [   0.015s] (459/864) surge-core profile::keyref::tests::unparseable_version_rejected
+        PASS [   0.016s] (460/864) surge-core profile::keyref::tests::version_with_too_many_dots_rejected
+        PASS [   0.014s] (461/864) surge-core profile::registry::tests::child_outcomes_fully_replace_parent
+        PASS [   0.018s] (462/864) surge-core profile::registry::tests::bindings_merged_by_name_child_wins
+        PASS [   0.014s] (463/864) surge-core profile::registry::tests::child_prompt_wins_when_non_empty
+        PASS [   0.018s] (464/864) surge-core profile::registry::tests::child_role_wins
+        PASS [   0.016s] (465/864) surge-core profile::registry::tests::collect_chain_at_exact_max_depth_succeeds
+        PASS [   0.014s] (466/864) surge-core profile::registry::tests::collect_chain_depth_guard_triggers_at_max_plus_one
+        PASS [   0.016s] (467/864) surge-core profile::registry::tests::collect_chain_leaf_only
+        PASS [   0.023s] (468/864) surge-core profile::registry::tests::collect_chain_cycle_detected_when_extends_uses_versioned_ref
+        PASS [   0.105s] (469/864) surge-core profile::bundled::tests::specialized_variants_extend_known_parents
+        PASS [   0.018s] (470/864) surge-core profile::registry::tests::collect_chain_missing_parent_is_profile_not_found
+        PASS [   0.015s] (471/864) surge-core profile::registry::tests::collect_chain_multi_step_cycle_detected
+        PASS [   0.021s] (472/864) surge-core profile::registry::tests::collect_chain_propagates_lookup_error
+        PASS [   0.014s] (473/864) surge-core profile::registry::tests::collect_chain_three_levels_root_first
+        PASS [   0.020s] (474/864) surge-core profile::registry::tests::collect_chain_self_cycle_detected
+        PASS [   0.014s] (475/864) surge-core profile::registry::tests::empty_child_outcomes_fall_back_to_parent
+        PASS [   0.019s] (476/864) surge-core profile::registry::tests::collect_chain_then_merge_chain_full_round_trip
+        PASS [   0.015s] (477/864) surge-core profile::registry::tests::empty_child_prompt_falls_back_to_parent
+        PASS [   0.016s] (478/864) surge-core profile::registry::tests::collect_chain_two_levels_root_first
+        PASS [   0.792s] (479/864) surge-core context_pack::tests::selected_cost_never_exceeds_budget
+        PASS [   0.021s] (480/864) surge-core profile::registry::tests::hooks_unioned_with_child_winning_on_collision
+        PASS [   0.017s] (481/864) surge-core profile::registry::tests::merge_chain_singleton_returns_clone
+        PASS [   0.020s] (482/864) surge-core profile::registry::tests::inspector_ui_fields_child_replaces_when_non_empty
+        PASS [   0.019s] (483/864) surge-core profile::registry::tests::runtime_agent_id_child_wins_when_non_default
+        PASS [   0.019s] (484/864) surge-core profile::registry::tests::runtime_agent_id_parent_wins_when_child_default
+        PASS [   0.024s] (485/864) surge-core profile::registry::tests::provenance_serializes_with_snake_case
+        PASS [   0.019s] (486/864) surge-core profile::registry::tests::runtime_recommended_model_parent_wins_when_child_empty
+        PASS [   0.024s] (487/864) surge-core profile::registry::tests::runtime_max_tokens_parent_wins_when_child_default
+        PASS [   0.019s] (488/864) surge-core profile::registry::tests::three_step_chain_folds_left_to_right
+        PASS [   0.022s] (489/864) surge-core profile::registry::tests::sandbox_child_overrides_when_non_default
+        PASS [   0.021s] (490/864) surge-core profile::registry::tests::sandbox_falls_back_to_parent_when_child_default
+        PASS [   0.027s] (491/864) surge-core profile::registry::tests::tools_each_list_replaces_independently
+        PASS [   0.036s] (492/864) surge-core profile::registry::tests::runtime_recommended_model_child_wins_when_non_empty
+        PASS [   0.021s] (493/864) surge-core profile::registry::tests::verification_authority_is_inherited_and_cannot_be_revoked
+        PASS [   0.065s] (494/864) surge-core profile::registry::tests::merge_chain_empty_panics
+        PASS [   0.028s] (495/864) surge-core profile::tests::inspector_field_select_with_options
+        PASS [   0.029s] (496/864) surge-core profile::tests::outcome_artifact_declarations_roundtrip
+        PASS [   0.031s] (497/864) surge-core profile::tests::extends_field_roundtrips_but_is_not_resolved
+        PASS [   0.032s] (498/864) surge-core profile::tests::minimal_profile_roundtrips
+        PASS [   0.026s] (499/864) surge-core roadmap::ids::tests::compares_with_str_and_converts_back
+        PASS [   0.032s] (500/864) surge-core profile::tests::role_category_bootstrap_serializes_with_underscore
+        PASS [   0.021s] (501/864) surge-core roadmap::ids::tests::display_is_the_bare_id
+        PASS [   0.032s] (502/864) surge-core profile::tests::verification_authority_parses_and_defaults_false
+        PASS [   0.023s] (503/864) surge-core roadmap::ids::tests::hash_map_is_queryable_by_str
+        PASS [   0.021s] (504/864) surge-core roadmap::ids::tests::serde_is_a_bare_string
+        PASS [   0.021s] (505/864) surge-core roadmap::tests::a_task_cannot_fulfill_another_missions_assertion
+        PASS [   0.026s] (506/864) surge-core roadmap::plan::roadmap_status_parse_tests::from_str_round_trips_display_and_accepts_hyphens_and_case
+        PASS [   0.018s] (507/864) surge-core roadmap::tests::all_variants_are_named
+        PASS [   0.022s] (508/864) surge-core roadmap::tests::ceremonial_empty_stage_is_rejected
+        PASS [   0.022s] (509/864) surge-core roadmap::tests::independent_group_members_and_blank_groups
+        PASS [   0.029s] (510/864) surge-core roadmap::tests::legacy_roadmap_without_stages_or_priorities_still_parses
+        PASS [   0.024s] (511/864) surge-core roadmap::tests::markdown_lists_missions_contracts_and_fulfills
+        PASS [   0.024s] (512/864) surge-core roadmap::tests::missions_must_partition_milestones_in_order
+        PASS [   0.024s] (513/864) surge-core roadmap::tests::parallel_group_rejects_direct_and_transitive_dependencies
+        PASS [   0.021s] (514/864) surge-core roadmap::tests::priority_and_parallel_group_round_trip
+        PASS [   0.025s] (515/864) surge-core roadmap::tests::passed_verification_rejects_cancelled_skipped_and_missing_checks
+        PASS [   0.017s] (516/864) surge-core roadmap::tests::ready_batches_are_dependency_waves_ordered_by_priority
+        PASS [   0.021s] (517/864) surge-core roadmap::tests::ready_batches_omit_cycles
+        PASS [   0.018s] (518/864) surge-core roadmap::tests::roadmap_without_missions_serializes_without_the_field
+        PASS [   0.018s] (519/864) surge-core roadmap::tests::roadmap_without_stages_is_valid
+        PASS [   0.034s] (520/864) surge-core roadmap::tests::stage_ids_and_milestone_order_are_enforced
+        PASS [   0.031s] (521/864) surge-core roadmap::tests::test_find_item_mut
+        PASS [   0.034s] (522/864) surge-core roadmap::tests::stage_partition_violations_are_reported
+        PASS [   0.033s] (523/864) surge-core roadmap::tests::task_ledger_fields_roundtrip_via_toml
+        PASS [   0.040s] (524/864) surge-core roadmap::tests::single_stage_roadmap_is_valid
+        PASS [   0.034s] (525/864) surge-core roadmap::tests::test_roadmap_artifact_toml_roundtrip
+        PASS [   0.040s] (526/864) surge-core roadmap::tests::test_priority_display
+        PASS [   0.037s] (527/864) surge-core roadmap::tests::test_roadmap_item_toml_roundtrip
+        PASS [   0.029s] (528/864) surge-core roadmap::tests::test_roadmap_status_is_terminal
+        PASS [   0.026s] (529/864) surge-core roadmap::tests::test_timeline_next_ready_batch_none_when_all_done
+        PASS [   0.027s] (530/864) surge-core roadmap::tests::test_timeline_next_ready_batch
+        PASS [   0.030s] (531/864) surge-core roadmap::tests::test_timeline_count_by_status
+        PASS [   0.028s] (532/864) surge-core roadmap::tests::test_timeline_next_ready_batch_none_when_running
+        PASS [   0.024s] (533/864) surge-core roadmap::tests::to_markdown_preserves_running_checkbox_marker
+        PASS [   0.027s] (534/864) surge-core roadmap::tests::test_timeline_total_items
+        PASS [   0.025s] (535/864) surge-core roadmap::tests::v1_roadmap_toml_still_parses_with_defaulted_ledger_fields
+        PASS [   0.019s] (536/864) surge-core roadmap::tests::validate_ledger_accepts_well_formed_v2
+        PASS [   0.019s] (537/864) surge-core roadmap::tests::validate_ledger_flags_duplicate_ids
+        PASS [   0.022s] (538/864) surge-core roadmap::tests::validate_ledger_flags_self_referencing_milestone_dependency
+        PASS [   0.021s] (539/864) surge-core roadmap::tests::validate_ledger_flags_unknown_and_self_references
+        PASS [   0.024s] (540/864) surge-core roadmap::tests::validate_ledger_flags_unknown_milestone_dependency
+        PASS [   0.023s] (541/864) surge-core roadmap::tests::validate_ledger_reports_cycle_deterministically
+        PASS [   0.024s] (542/864) surge-core roadmap::tests::validate_ledger_requires_size_only_at_v2
+        PASS [   0.020s] (543/864) surge-core roadmap::tests::well_formed_stages_validate_and_render_as_headings
+        PASS [   0.023s] (544/864) surge-core roadmap::tests::verification_report_defaults_to_v1_not_roadmap_v2
+        PASS [   0.027s] (545/864) surge-core roadmap::tests::validation_contract_is_required_and_claimed_exactly_once
+        PASS [   0.024s] (546/864) surge-core roadmap::tests::well_formed_missions_validate_and_round_trip
+        PASS [   0.020s] (547/864) surge-core roadmap_patch::tests::appended_milestone_joins_the_last_stage
+        PASS [   0.020s] (548/864) surge-core roadmap_patch::tests::appended_milestone_joins_the_last_mission
+        PASS [   0.020s] (549/864) surge-core roadmap_patch::tests::applies_append_milestone_task_dependency_and_markdown
+        PASS [   0.020s] (550/864) surge-core roadmap_patch::tests::patch_id_new_stores_trimmed_value
+        PASS [   0.018s] (551/864) surge-core roadmap_patch::tests::rejects_insert_after_running_milestone
+        PASS [   0.024s] (552/864) surge-core roadmap_patch::tests::milestone_inserted_before_an_anchor_joins_its_mission_in_order
+        PASS [   0.024s] (553/864) surge-core roadmap_patch::tests::rejects_milestone_dependency_cycle
+        PASS [   0.018s] (554/864) surge-core roadmap_patch::tests::replaces_pending_task_only
+        PASS [   0.019s] (555/864) surge-core roadmap_patch::tests::rejects_task_append_to_completed_milestone
+        PASS [   0.021s] (556/864) surge-core roadmap_patch::tests::replacing_a_milestone_under_a_new_id_renames_it_in_its_mission
+        PASS [   0.019s] (557/864) surge-core route_selection::tests::declared_first_match_and_escalation_preserve_both_counter_increments
+        PASS [   0.019s] (558/864) surge-core roadmap_patch::tests::running_conflict_surfaces_operator_resolution_choices
+        PASS [   0.023s] (559/864) surge-core run_event::tests::artifact_produced_roundtrip
+        PASS [   0.023s] (560/864) surge-core run_event::tests::artifact_source_path_is_optional_for_legacy_events
+        PASS [   0.026s] (561/864) surge-core run_event::tests::approval_request_and_decision_roundtrip
+        PASS [   0.030s] (562/864) surge-core route_selection::tests::overflow_is_a_refusal_without_wrapping_durable_authority
+        PASS [   0.028s] (563/864) surge-core run_event::tests::bootstrap_decision_roundtrip
+        PASS [   0.026s] (564/864) surge-core run_event::tests::bootstrap_telemetry_roundtrip
+        PASS [   0.030s] (565/864) surge-core run_event::tests::budget_events_roundtrip
+        PASS [   0.015s] (566/864) surge-core run_event::tests::edge_traversed_legacy_json_defaults_to_forward
+        PASS [   0.018s] (567/864) surge-core run_event::tests::discriminant_str_is_pascal_case_kind
+        PASS [   0.019s] (568/864) surge-core run_event::tests::discriminant_str_covers_new_variants
+        PASS [   0.021s] (569/864) surge-core run_event::tests::edge_traversed_backtrack_roundtrip
+        PASS [   0.017s] (570/864) surge-core run_event::tests::escalation_requested_legacy_json_defaults_cause_to_unspecified
+        PASS [   0.021s] (571/864) surge-core run_event::tests::edge_traversed_roundtrip
+        PASS [   0.133s] (572/864) surge-core roadmap::tests::validate_ledger_detects_deep_cycle_without_stack_overflow
+        PASS [   0.020s] (573/864) surge-core run_event::tests::escalation_requested_roundtrips_with_typed_cause
+        PASS [   0.017s] (574/864) surge-core run_event::tests::human_input_requested_roundtrip
+        PASS [   0.019s] (575/864) surge-core run_event::tests::hook_executed_and_rejection_roundtrip
+        PASS [   0.022s] (576/864) surge-core run_event::tests::fork_created_roundtrip
+        PASS [   0.019s] (577/864) surge-core run_event::tests::human_input_resolved_roundtrip
+        PASS [   0.019s] (578/864) surge-core run_event::tests::human_input_timed_out_roundtrip
+        PASS [   0.021s] (579/864) surge-core run_event::tests::loop_lifecycle_variants_roundtrip
+        PASS [   0.020s] (580/864) surge-core run_event::tests::roadmap_patch_discriminants_are_stable
+        PASS [   0.018s] (581/864) surge-core run_event::tests::run_config_default_mcp_servers_empty
+        PASS [   0.017s] (582/864) surge-core run_event::tests::run_config_persists_budget_and_defaults_when_absent
+        PASS [   0.025s] (583/864) surge-core run_event::tests::notify_delivered_roundtrips_via_bincode
+        PASS [   0.025s] (584/864) surge-core run_event::tests::pipeline_materialized_carries_graph
+        PASS [   0.025s] (585/864) surge-core run_event::tests::roadmap_patch_lifecycle_events_roundtrip
+        PASS [   0.021s] (586/864) surge-core run_event::tests::run_config_with_mcp_servers_roundtrips
+        PASS [   0.020s] (587/864) surge-core run_event::tests::run_started_bincode_roundtrip
+        PASS [   0.018s] (588/864) surge-core run_event::tests::session_opened_and_closed_roundtrip
+        PASS [   0.020s] (589/864) surge-core run_event::tests::skill_bound_roundtrip
+        PASS [   0.024s] (590/864) surge-core run_event::tests::sandbox_elevation_roundtrip
+        PASS [   0.019s] (591/864) surge-core run_event::tests::stage_entered_roundtrip
+        PASS [   0.022s] (592/864) surge-core run_event::tests::stage_inputs_resolved_legacy_payload_defaults_attempt_and_memory_receipt
+        PASS [   0.025s] (593/864) surge-core run_event::tests::subgraph_entered_roundtrips_via_bincode
+        PASS [   0.023s] (594/864) surge-core run_event::tests::subgraph_exited_roundtrips_via_bincode
+        PASS [   0.023s] (595/864) surge-core run_event::tests::tokens_consumed_roundtrip
+        PASS [   0.027s] (596/864) surge-core run_event::tests::task_ledger_variants_roundtrip
+        PASS [   0.024s] (597/864) surge-core run_event::tests::versioned_payload_accessors
+        PASS [   0.023s] (598/864) surge-core run_event::tests::versioned_wrapper_roundtrip
+        PASS [   0.024s] (599/864) surge-core run_report::render::tests::escape_html_covers_all_five_special_characters
+        PASS [   0.022s] (600/864) surge-core run_report::render::tests::every_string_carrying_section_escapes_its_xss_fixture_in_markdown_too
+        PASS [   0.027s] (601/864) surge-core run_report::render::tests::every_string_carrying_section_escapes_its_xss_fixture
+        PASS [   0.022s] (602/864) surge-core run_report::render::tests::html_escapes_untrusted_event_text
+        PASS [   0.017s] (603/864) surge-core run_report::render::tests::html_is_a_single_well_formed_document
+        PASS [   0.019s] (604/864) surge-core run_report::render::tests::html_has_no_external_references
+        PASS [   0.017s] (605/864) surge-core run_report::render::tests::html_renders_a_parked_run_distinctly_from_not_finished
+        PASS [   0.017s] (606/864) surge-core run_report::render::tests::markdown_contains_every_section_header
+        PASS [   0.025s] (607/864) surge-core run_report::render::tests::json_round_trips_through_serde
+        PASS [   0.023s] (608/864) surge-core run_report::render::tests::markdown_does_not_let_initial_prompt_forge_a_fake_section
+        PASS [   0.026s] (609/864) surge-core run_report::render::tests::markdown_caveats_section_names_legacy_memory_receipt_coverage
+        PASS [   0.017s] (610/864) surge-core run_report::render::tests::markdown_leaves_ordinary_punctuation_verbatim
+        PASS [   0.020s] (611/864) surge-core run_report::render::tests::markdown_escapes_a_details_close_tag_in_free_text
+        PASS [   0.016s] (612/864) surge-core run_report::render::tests::markdown_shows_the_initial_prompt_and_activity_window
+        PASS [   0.020s] (613/864) surge-core run_report::render::tests::markdown_flags_an_incomplete_run
+        PASS [   0.020s] (614/864) surge-core run_report::render::tests::memory_receipt_renderers_mark_legacy_attempt_as_unknown
+        PASS [   0.015s] (615/864) surge-core run_report::render::tests::unverified_success_is_flagged_in_both_render_forms
+        PASS [   0.015s] (616/864) surge-core run_report::tests::a_failed_run_carries_no_evidence_backed_question
+        PASS [   0.022s] (617/864) surge-core run_report::render::tests::memory_receipt_renderers_show_node_claim_ids_and_drop_reason
+        PASS [   0.016s] (618/864) surge-core run_report::tests::a_full_run_covers_all_nine_sections_end_to_end
+        PASS [   0.019s] (619/864) surge-core run_report::render::tests::verified_success_shows_no_unverified_banner
+        PASS [   0.017s] (620/864) surge-core run_report::tests::a_guard_stopped_run_is_incomplete_but_names_why
+        PASS [   0.020s] (621/864) surge-core run_report::tests::a_human_acceptance_is_reported_but_never_evidence_backed
+        PASS [   0.018s] (622/864) surge-core run_report::tests::artifact_produced_and_bootstrap_artifact_are_both_evidence
+        PASS [   0.017s] (623/864) surge-core run_report::tests::bootstrap_and_roadmap_patch_approvals_appear
+        PASS [   0.014s] (624/864) surge-core run_report::tests::completed_run_with_no_verdicts_at_all_is_not_evidence_backed
+        PASS [   0.017s] (625/864) surge-core run_report::tests::caveats_always_names_the_memory_receipts_gap_in_every_format
+        PASS [   0.015s] (626/864) surge-core run_report::tests::completed_result_change_invalidates_verified
+        PASS [   0.024s] (627/864) surge-core run_report::tests::a_torn_run_with_no_terminal_event_compiles_as_incomplete
+        PASS [   0.019s] (628/864) surge-core run_report::tests::completed_run_with_an_authorized_verdict_is_evidence_backed
+        PASS [   0.019s] (629/864) surge-core run_report::tests::completed_run_with_only_an_unauthorized_verdict_is_not_evidence_backed
+        PASS [   0.016s] (630/864) surge-core run_report::tests::empty_event_slice_compiles_to_an_incomplete_empty_report
+        PASS [   0.016s] (631/864) surge-core run_report::tests::escalation_requested_is_recorded_with_its_typed_cause
+        PASS [   0.017s] (632/864) surge-core run_report::tests::failed_verification_status_change_is_a_rejected_verdict
+        PASS [   0.018s] (633/864) surge-core run_report::tests::cost_sums_tokens_and_dollars_across_multiple_events
+        PASS [   0.018s] (634/864) surge-core run_report::tests::header_captures_initial_prompt_and_first_last_event_timestamps
+        PASS [   0.020s] (635/864) surge-core run_report::tests::header_initial_prompt_is_none_when_run_started_is_missing
+        PASS [   0.015s] (636/864) surge-core run_report::tests::human_input_request_resolve_and_timeout_all_appear_as_approvals
+        PASS [   0.020s] (637/864) surge-core run_report::tests::historical_unbound_verification_never_counts_as_fresh_proof
+        PASS [   0.020s] (638/864) surge-core run_report::tests::memory_receipts_are_projected_per_node_from_resolved_input_events
+        PASS [   0.020s] (639/864) surge-core run_report::tests::legacy_approval_requested_decided_events_are_ignored
+        PASS [   0.020s] (640/864) surge-core run_report::tests::node_tracks_attempts_and_last_status_across_a_retry
+        PASS [   0.019s] (641/864) surge-core run_report::tests::nodes_stay_in_first_seen_execution_order
+        PASS [   0.021s] (642/864) surge-core run_report::tests::one_verified_among_several_rejected_verdicts_is_not_evidence_backed
+        PASS [   0.015s] (643/864) surge-core run_report::tests::outcome_rejected_by_hook_is_distinguishable_from_accepted
+        PASS [   0.016s] (644/864) surge-core run_report::tests::outcome_rejected_by_hook_flips_the_matching_entry_not_a_new_one
+        PASS [   0.022s] (645/864) surge-core run_report::tests::one_verified_and_one_superseded_after_verification_is_not_evidence_backed
+        PASS [   0.018s] (646/864) surge-core run_report::tests::outcome_rejected_by_hook_with_no_matching_prior_report_is_still_recorded
+        PASS [   0.017s] (647/864) surge-core run_report::tests::run_completed_is_reflected_in_completion
+        PASS [   0.018s] (648/864) surge-core run_report::tests::outcome_reported_appends_an_outcome_entry
+        PASS [   0.017s] (649/864) surge-core run_report::tests::run_failed_and_aborted_are_distinguished
+        PASS [   0.015s] (650/864) surge-core run_report::tests::run_parked_is_its_own_completion_not_bare_incomplete
+        PASS [   0.016s] (651/864) surge-core run_report::tests::sandbox_elevation_lifecycle_appears_as_approvals
+        PASS [   0.017s] (652/864) surge-core run_report::tests::run_woke_from_park_reverts_to_incomplete_pending_a_real_terminal_event
+        PASS [   0.020s] (653/864) surge-core run_report::tests::skill_bound_events_are_listed_verbatim
+        PASS [   0.013s] (654/864) surge-core run_report::tests::stage_failed_with_no_prior_stage_entered_still_creates_a_node_entry
+        PASS [   0.016s] (655/864) surge-core run_report::tests::status_change_after_verified_revokes_the_stale_verdict
+        PASS [   0.016s] (656/864) surge-core run_report::tests::task_verified_by_an_unauthorized_node_is_flagged_not_verified
+        PASS [   0.020s] (657/864) surge-core run_report::tests::task_discovered_with_no_verdict_at_all_still_counts_against_evidence_backed
+        PASS [   0.021s] (658/864) surge-core run_report::tests::stage_completed_with_no_prior_stage_entered_still_creates_a_node_entry
+        PASS [   0.018s] (659/864) surge-core run_report::tests::task_verified_by_an_authorized_node_is_verified
+        PASS [   0.021s] (660/864) surge-core run_report::tests::steer_delivered_appends_a_steer_entry
+        PASS [   0.011s] (661/864) surge-core run_report::tests::tokens_consumed_without_a_price_increments_uncosted_count_not_cost
+        PASS [   0.013s] (662/864) surge-core run_report::tests::task_verified_with_no_graph_at_all_is_unauthorized_not_verified
+        PASS [   0.014s] (663/864) surge-core run_state::tests::backtrack_feedback_waits_for_the_reentered_node_outcome
+        PASS [   0.015s] (664/864) surge-core run_state::tests::attention_waiting_carries_policy_backoff_basis_too_not_just_observed_reset
+        PASS [   0.016s] (665/864) surge-core run_state::tests::attention_classifies_pipeline_working_and_needs_input
+        PASS [   0.020s] (666/864) surge-core run_state::tests::attention_classifies_bootstrap_awaiting_approval_as_needs_input
+        PASS [   0.017s] (667/864) surge-core run_state::tests::attention_classifies_terminal_as_done
+        PASS [   0.021s] (668/864) surge-core run_state::tests::backtrack_traversal_then_re_entry_advances_cursor_and_increments_visits
+        PASS [   0.020s] (669/864) surge-core run_state::tests::bootstrap_edit_counter_increments_per_stage
+        PASS [   0.020s] (670/864) surge-core run_state::tests::bootstrap_edit_counter_is_deterministic
+        PASS [   0.013s] (671/864) surge-core run_state::tests::corrupted_sequence_returns_error
+        PASS [   0.015s] (672/864) surge-core run_state::tests::budget_warning_raised_folds_into_memory_flag
+        PASS [   0.015s] (673/864) surge-core run_state::tests::empty_event_log_folds_to_not_started
+        PASS [   0.018s] (674/864) surge-core run_state::tests::cursor_clones_cheaply
+        PASS [   0.018s] (675/864) surge-core run_state::tests::graph_revision_event_updates_pipeline_graph_and_revision_memory
+        PASS [   0.019s] (676/864) surge-core run_state::tests::human_input_request_populates_pending_field
+        PASS [   0.016s] (677/864) surge-core run_state::tests::human_overrides_fold_into_the_ledger_and_never_verify
+        PASS [   0.017s] (678/864) surge-core run_state::tests::human_input_resolution_clears_pending_field
+        PASS [   0.014s] (679/864) surge-core run_state::tests::node_authority_is_graph_visible_via_verified_outcome
+        PASS [   0.018s] (680/864) surge-core run_state::tests::ledger_fold_is_deterministic
+        PASS [   0.016s] (681/864) surge-core run_state::tests::node_visits_fold_is_deterministic
+        PASS [   0.021s] (682/864) surge-core run_state::tests::node_visits_counter_increments_on_backtrack_only
+        PASS [   0.017s] (683/864) surge-core run_state::tests::not_started_is_default_initial
+        PASS [   0.015s] (684/864) surge-core run_state::tests::pipeline_materialized_transitions_to_pipeline
+        PASS [   0.017s] (685/864) surge-core run_state::tests::run_failed_transitions_to_terminal
+        PASS [   0.020s] (686/864) surge-core run_state::tests::retry_through_an_escalation_gate_keeps_the_exhausted_stage_feedback
+        PASS [   0.020s] (687/864) surge-core run_state::tests::roadmap_patch_events_update_run_memory_without_mutating_graph
+        PASS [   0.015s] (688/864) surge-core run_state::tests::run_parked_sets_pipeline_parked_and_attention_waiting
+        PASS [   0.020s] (689/864) surge-core run_state::tests::run_memory_default_is_empty
+        PASS [   0.015s] (690/864) surge-core run_state::tests::run_started_transitions_to_bootstrapping
+        PASS [   0.015s] (691/864) surge-core run_state::tests::run_woke_from_park_clears_pipeline_parked_and_attention_reverts_to_working
+        PASS [   0.018s] (692/864) surge-core run_state::tests::shared_display_prioritizes_human_then_capacity_and_requires_crash_evidence
+        PASS [   0.018s] (693/864) surge-core run_state::tests::stale_resolution_or_timeout_cannot_clear_newer_pending_input
+        PASS [   0.018s] (694/864) surge-core run_state::tests::status_change_after_verified_clears_verified_flag
+        PASS [   0.017s] (695/864) surge-core run_state::tests::subgraph_verify_node_has_authority
+        PASS [   0.015s] (696/864) surge-core run_state::tests::task_status_change_and_discovery_fold_into_ledger
+        PASS [   0.015s] (697/864) surge-core run_state::tests::unauthorized_task_verified_is_ignored_and_counted
+        PASS [   0.018s] (698/864) surge-core run_status::tests::display_matches_as_str
+        PASS [   0.018s] (699/864) surge-core run_state::tests::unresolved_mcp_calls_track_calls_without_results_until_next_session
+        PASS [   0.016s] (700/864) surge-core run_status::tests::parked_is_not_terminal
+        PASS [   0.014s] (701/864) surge-core run_status::tests::terminal_classification
+        PASS [   0.015s] (702/864) surge-core run_trace::tests::a_completion_for_another_node_does_not_discard_the_open_span
+        PASS [   0.017s] (703/864) surge-core run_status::tests::roundtrip_string_form
+        PASS [   0.014s] (704/864) surge-core run_trace::tests::a_run_becomes_a_root_span_with_one_child_per_stage
+        PASS [   0.018s] (705/864) surge-core run_status::tests::unknown_string_is_error
+        PASS [   0.017s] (706/864) surge-core run_trace::tests::an_empty_log_is_a_valid_request_with_just_the_root_span
+        PASS [   0.015s] (707/864) surge-core run_trace::tests::ids_are_wellformed_and_stable_across_exports
+        PASS [   0.022s] (708/864) surge-core run_trace::tests::a_stage_still_running_is_left_open_and_the_run_is_marked_in_progress
+        PASS [   0.012s] (709/864) surge-core runtime::tests::dsh_version_policy_is_developer_preview_and_exactly_pinned
+        PASS [   0.016s] (710/864) surge-core runtime::tests::bundled_version_policies_parse
+        PASS [   0.016s] (711/864) surge-core runtime::tests::distinct_wire_forms
+        PASS [   0.021s] (712/864) surge-core run_trace::tests::spans_carry_timing_and_the_events_seen_inside_them
+        PASS [   0.021s] (713/864) surge-core runtime::tests::as_str_matches_display_for_every_variant
+        PASS [   0.015s] (714/864) surge-core runtime::tests::serde_roundtrip_via_json
+        PASS [   0.018s] (715/864) surge-core runtime::tests::serde_wire_form_matches_as_str
+        PASS [   0.015s] (716/864) surge-core runtime::tests::version_policy_returns_none_for_undeclared_runtime
+        PASS [   0.014s] (717/864) surge-core runtime::tests::version_policy_returns_some_for_verified_runtimes
+        PASS [   0.019s] (718/864) surge-core runtime::tests::version_policy_notes_are_non_empty
+        PASS [   0.017s] (719/864) surge-core sandbox::tests::config_toml_roundtrip
+        PASS [   0.012s] (720/864) surge-core sandbox::tests::validate_custom_accepts_any_non_empty_allowlist
+        PASS [   0.019s] (721/864) surge-core sandbox::tests::default_mode_is_workspace_write
+        PASS [   0.019s] (722/864) surge-core sandbox::tests::mode_serializes_kebab_case
+        PASS [   0.013s] (723/864) surge-core sandbox::tests::validate_custom_accepts_non_custom_modes
+        PASS [   0.013s] (724/864) surge-core sandbox::tests::validate_custom_accumulates_multiple_errors
+        PASS [   0.014s] (725/864) surge-core sandbox::tests::validate_custom_accepts_valid_network_patterns
+        PASS [   0.016s] (726/864) surge-core sandbox::tests::validate_custom_flags_invalid_network_pattern
+        PASS [   0.018s] (727/864) surge-core sandbox::tests::validate_custom_flags_writable_root_escape
+        PASS [   0.015s] (728/864) surge-core sandbox::tests::validate_custom_flags_writable_root_escape_windows_separator
+        PASS [   0.014s] (729/864) surge-core sandbox::tests::validate_custom_rejects_empty_allowlists
+        PASS [   0.021s] (730/864) surge-core sandbox::tests::validate_custom_flags_shell_metacharacters
+        PASS [   0.016s] (731/864) surge-core sandbox_matrix::tests::from_rows_preserves_order
+        PASS [   0.020s] (732/864) surge-core sandbox_matrix::tests::bundled_matrix_parses
+        PASS [   0.022s] (733/864) surge-core sandbox_matrix::tests::dsh_declares_all_four_modes_unverified
+        PASS [   0.015s] (734/864) surge-core sandbox_matrix::tests::matrix_never_declares_custom_rows
+        PASS [   0.020s] (735/864) surge-core sandbox_matrix::tests::lookup_returns_some_for_declared_pair
+        PASS [   0.020s] (736/864) surge-core sandbox_matrix::tests::no_row_is_verified_with_empty_flags
+        PASS [   0.017s] (737/864) surge-core sandbox_matrix::tests::unsupported_returns_true_for_custom
+        PASS [   0.020s] (738/864) surge-core sandbox_matrix::tests::round_trip_via_toml
+        PASS [   0.014s] (739/864) surge-core sandbox_matrix::tests::verified_only_filters
+        PASS [   0.022s] (740/864) surge-core sandbox_matrix::tests::unverified_rows_carry_non_empty_note
+        PASS [   0.013s] (741/864) surge-core skill::frontmatter::tests::alias_value_is_rejected
+        PASS [   0.014s] (742/864) surge-core skill::frontmatter::tests::block_list_on_foreign_key_is_accepted_and_ignored
+        PASS [   0.022s] (743/864) surge-core skill::frontmatter::tests::anchor_value_is_rejected
+        PASS [   0.018s] (744/864) surge-core skill::frontmatter::tests::block_list_on_identity_key_is_rejected
+        PASS [   0.015s] (745/864) surge-core skill::frontmatter::tests::block_scalar_header_on_identity_key_is_rejected
+        PASS [   0.016s] (746/864) surge-core skill::frontmatter::tests::block_scalar_on_foreign_key_is_accepted_and_ignored
+        PASS [   0.021s] (747/864) surge-core skill::frontmatter::tests::duplicate_key_is_rejected
+        PASS [   0.019s] (748/864) surge-core skill::frontmatter::tests::empty_name_value_is_rejected
+        PASS [   0.014s] (749/864) surge-core skill::frontmatter::tests::hash_without_preceding_space_stays_literal
+        PASS [   0.015s] (750/864) surge-core skill::frontmatter::tests::indented_content_is_rejected
+        PASS [   0.018s] (751/864) surge-core skill::frontmatter::tests::flat_scalars_parse_name_and_version
+        PASS [   0.012s] (752/864) surge-core skill::frontmatter::tests::inline_list_with_quoted_items_is_accepted_and_ignored
+        PASS [   0.013s] (753/864) surge-core skill::frontmatter::tests::invalid_key_is_rejected
+        PASS [   0.016s] (754/864) surge-core skill::frontmatter::tests::missing_name_key_is_rejected
+        PASS [   0.017s] (755/864) surge-core skill::frontmatter::tests::missing_closing_delimiter_is_rejected
+        PASS [   0.017s] (756/864) surge-core skill::frontmatter::tests::missing_opening_delimiter_is_rejected
+        PASS [   0.014s] (757/864) surge-core skill::frontmatter::tests::name_as_list_is_rejected
+        PASS [   0.021s] (758/864) surge-core skill::frontmatter::tests::multiline_quoted_scalar_on_foreign_key_is_accepted_and_ignored
+        PASS [   0.013s] (759/864) surge-core skill::frontmatter::tests::trailing_comment_after_quoted_scalar_is_stripped
+        PASS [   0.024s] (760/864) surge-core skill::frontmatter::tests::multiline_quoted_scalar_on_identity_key_is_rejected
+        PASS [   0.017s] (761/864) surge-core skill::frontmatter::tests::trailing_comment_is_stripped_from_bare_scalar
+        PASS [   0.012s] (762/864) surge-core skill::frontmatter::tests::unclosed_inline_list_is_rejected
+        PASS [   0.018s] (763/864) surge-core skill::frontmatter::tests::trailing_content_after_closing_quote_is_rejected
+        PASS [   0.014s] (764/864) surge-core spec::tests::test_acceptance_criteria_default_met
+        PASS [   0.020s] (765/864) surge-core skill::frontmatter::tests::unclosed_quote_is_rejected
+        PASS [   0.019s] (766/864) surge-core spec::tests::test_complexity_roundtrip
+        PASS [   0.020s] (767/864) surge-core spec::tests::test_spec_artifact_toml_roundtrip
+        PASS [   0.016s] (768/864) surge-core spec::tests::test_spec_toml_roundtrip
+        PASS [   0.021s] (769/864) surge-core spec::tests::test_subtask_agent_serialized_when_some
+        PASS [   0.017s] (770/864) surge-core spec::tests::test_subtask_agent_skipped_when_none
+        PASS [   0.022s] (771/864) surge-core spec::tests::test_subtask_execution_default
+        PASS [   0.020s] (772/864) surge-core spec::tests::test_subtask_execution_roundtrip
+        PASS [   0.018s] (773/864) surge-core spec::tests::test_subtask_execution_timestamps_omitted_when_none
+        PASS [   0.021s] (774/864) surge-core spec::tests::test_subtask_state_default_is_pending
+        PASS [   0.018s] (775/864) surge-core spec::tests::test_subtask_state_is_terminal
+        PASS [   0.021s] (776/864) surge-core spec::tests::test_subtask_state_is_active
+        PASS [   0.013s] (777/864) surge-core spill_config::tests::output_spill_config_absent_fields_default_on_parse
+        PASS [   0.021s] (778/864) surge-core spec::tests::test_subtask_state_roundtrip
+        PASS [   0.022s] (779/864) surge-core spill_config::tests::output_spill_config_default_is_conservative
+        PASS [   0.019s] (780/864) surge-core spill_config::tests::output_spill_config_toml_roundtrip
+        PASS [   0.017s] (781/864) surge-core state::tests::test_active_states
+        PASS [   0.024s] (782/864) surge-core stage_tool::tests::deserialization_enforces_call_identity_constraints
+        PASS [   0.023s] (783/864) surge-core stage_tool::tests::receipt_roundtrip_is_nonterminal_and_v8_history_remains_readable
+        PASS [   0.017s] (784/864) surge-core state::tests::test_cleanup_invariant
+        PASS [   0.019s] (785/864) surge-core state::tests::test_cleanup_not_required_on_non_terminal_states
+        PASS [   0.025s] (786/864) surge-core state::tests::test_cleanup_hooks_on_state_transitions
+        PASS [   0.025s] (787/864) surge-core state::tests::test_cleanup_required_on_terminal_states
+        PASS [   0.023s] (788/864) surge-core state::tests::test_qa_review_with_metadata
+        PASS [   0.029s] (789/864) surge-core state::tests::test_qa_fix_with_metadata
+        PASS [   0.019s] (790/864) surge-core state::tests::test_task_state_display
+        PASS [   0.020s] (791/864) surge-core state::tests::test_states_are_mutually_exclusive
+        PASS [   0.024s] (792/864) surge-core state::tests::test_qa_states_without_metadata
+        PASS [   0.017s] (793/864) surge-core state::tests::test_terminal_states
+        PASS [   0.020s] (794/864) surge-core state::tests::test_waiting_states
+        PASS [   0.020s] (795/864) surge-core terminal_config::tests::failure_carries_exit_code
+        PASS [   0.018s] (796/864) surge-core untrusted::tests::contents_are_bounded_and_marked_as_data
+        PASS [   0.022s] (797/864) surge-core terminal_config::tests::success_terminal_roundtrip
+        PASS [   0.024s] (798/864) surge-core subgraph_config::tests::subgraph_config_roundtrips
+        PASS [   0.025s] (799/864) surge-core untrusted::tests::text_cannot_forge_the_closing_marker
+        PASS [   0.022s] (800/864) surge-core untrusted::tests::the_boundary_depends_on_the_text
+        PASS [   0.022s] (801/864) surge-core validation::report::tests::errors_and_warnings_are_separated_by_severity_not_position
+        PASS [   0.022s] (802/864) surge-core validation::resolver_tests::known_profile_passes_resolver_check
+        PASS [   0.023s] (803/864) surge-core validation::resolver_tests::no_op_resolver_accepts_anything
+        PASS [   0.026s] (804/864) surge-core validation::report::tests::a_report_with_only_warnings_is_valid
+        PASS [   0.027s] (805/864) surge-core validation::resolver_tests::syntactic_validate_does_not_check_resolver
+        PASS [   0.026s] (806/864) surge-core validation::resolver_tests::unknown_profile_is_reported_via_resolver
+        PASS [   0.028s] (807/864) surge-core validation::tests::command_path_with_dotdot_segment_is_error
+        PASS [   0.025s] (808/864) surge-core validation::tests::duplicate_node_key_in_subgraph_reports_rule_17
+        PASS [   0.026s] (809/864) surge-core validation::tests::empty_server_name_is_error
+        PASS [   0.028s] (810/864) surge-core validation::tests::edge_to_unknown_node_reports_rule_3
+        PASS [   0.018s] (811/864) surge-core validation::tests::empty_terminal_graph_validates
+        PASS [   0.022s] (812/864) surge-core validation::tests::graph_with_no_terminal_reports_rule_7
+        PASS [   0.018s] (813/864) surge-core validation::tests::m6_loop_static_cap_tests::loop_in_subgraph_static_size_above_cap_is_rejected
+        PASS [   0.019s] (814/864) surge-core validation::tests::invalid_skills_declaration_is_rejected_by_graph_validation
+        PASS [   0.021s] (815/864) surge-core validation::tests::m6_loop_static_cap_tests::loop_static_size_above_cap_is_rejected
+        PASS [   0.024s] (816/864) surge-core validation::tests::m6_loop_static_cap_tests::loop_static_size_at_cap_is_ok
+        PASS [   0.022s] (817/864) surge-core validation::tests::m6_notify_validation_tests::notify_fail_without_undeliverable_is_warning
+        PASS [   0.021s] (818/864) surge-core validation::tests::m6_notify_validation_tests::notify_in_subgraph_missing_delivered_is_error
+        PASS [   0.023s] (819/864) surge-core validation::tests::m6_notify_validation_tests::notify_missing_delivered_outcome_is_error
+        PASS [   0.022s] (820/864) surge-core validation::tests::m6_notify_validation_tests::notify_with_delivered_only_continue_is_ok
+        PASS [   0.023s] (821/864) surge-core validation::tests::mcp_server_undeclared_in_tool_override_is_error
+        PASS [   0.022s] (822/864) surge-core validation::tests::missing_start_reports_rule_1
+        PASS [   0.019s] (823/864) surge-core validation::tests::missing_subgraph_ref_reports_rule_11b
+        PASS [   0.020s] (824/864) surge-core validation::tests::orphan_subgraph_reports_warning_not_error
+        PASS [   0.023s] (825/864) surge-core validation::tests::validate_with_run_config_happy_path_returns_no_mcp_errors
+        PASS [   0.024s] (826/864) surge-core validation::tests::severity_classification_correct
+        PASS [   0.020s] (827/864) surge-core validation::w4_tests::loop_body_verifier_counts_as_a_gate
+        PASS [   0.022s] (828/864) surge-core validation::tests::validate_with_run_config_surfaces_mcp_undeclared
+        PASS [   0.022s] (829/864) surge-core validation::w4_tests::no_warning_when_verifier_gates_success
+        PASS [   0.018s] (830/864) surge-core validation::w4_tests::warns_when_a_bypass_path_skips_the_verifier
+        PASS [   0.017s] (831/864) surge-core validation::w4_tests::warns_when_success_has_no_verifier
+        PASS [   0.020s] (832/864) surge-core validation::w5_tests::a1_different_runtimes_no_warning
+        PASS [   0.019s] (833/864) surge-core validation::w5_tests::a2_same_runtime_warns_naming_both_nodes_and_runtime
+        PASS [   0.018s] (834/864) surge-core validation::w5_tests::a5_no_op_resolver_never_warns
+        PASS [   0.024s] (835/864) surge-core validation::w5_tests::a3_unresolved_verifier_profile_does_not_warn
+        PASS [   0.022s] (836/864) surge-core validation::w5_tests::a4_unresolved_implementer_profile_does_not_warn
+        PASS [   0.018s] (837/864) surge-core validation::w5_tests::a6_self_verifying_node_warns_against_itself
+        PASS [   0.021s] (838/864) surge-core validation::w6_tests::b1_one_gate_after_two_work_nodes_warns
+        PASS [   0.024s] (839/864) surge-core validation::w5_tests::fires_through_public_validate_with_resolver_entry_point
+        PASS [   0.023s] (840/864) surge-core validation::w6_tests::b2_single_work_node_has_only_one_boundary_to_gate
+        PASS [   0.020s] (841/864) surge-core validation::w6_tests::b4_two_gates_is_boundary_verification_and_stays_silent
+        PASS [   0.023s] (842/864) surge-core validation::w6_tests::b3_no_gate_at_all_is_w4s_finding_not_this_one
+        PASS [   0.019s] (843/864) surge-core verification_evidence::tests::missing_observation_invalidates_every_time
+        PASS [   0.019s] (844/864) surge-core verification_evidence::tests::observed_a_b_a_does_not_restore_any_proof
+        PASS [   0.020s] (845/864) surge-core work_item::flow_inputs::tests::empty_selection_roundtrips_and_remains_distinct
+        PASS [   0.020s] (846/864) surge-core work_item::flow_inputs::tests::opaque_references_and_hmac_tags_validate_without_echo
+        PASS [   0.021s] (847/864) surge-core work_item::flow_inputs::tests::malformed_or_mixed_snapshots_cannot_deserialize
+        PASS [   0.021s] (848/864) surge-core work_item::flow_inputs::tests::ordered_entries_reject_permutation_deletion_duplicates_and_empty_private
+        PASS [   0.027s] (849/864) surge-core work_item::flow_inputs::tests::private_host_default_binds_unchanged_public_request_identity
+        PASS [   0.025s] (850/864) surge-core work_item::flow_inputs::tests::startup_timeout_is_projected_only_when_explicit
+        PASS [   0.027s] (851/864) surge-core work_item::flow_inputs::tests::private_projection_preserves_public_policy_without_transport
+        PASS [   0.065s] (852/864) surge-core validation::w6_tests::w6_names_exactly_the_four_bundled_flows_that_verify_only_at_the_end
+        PASS [   0.029s] (853/864) surge-core work_item::tests::context_rejects_mixed_origin_forged_binding_and_invalid_graph
+        PASS [   0.027s] (854/864) surge-core work_item::tests::flow_context_preserves_empty_whitespace_and_raw_prompt
+        PASS [   0.018s] (855/864) surge-core work_item::tests::flow_contract_rejects_nonfinite_graph_payload_before_acceptance
+        PASS [   0.026s] (856/864) surge-core work_item::tests::flow_contract_hash_authenticates_domain_graph_and_exact_prompt
+        PASS [   0.018s] (857/864) surge-core work_item::tests::flow_prompt_bound_measures_exact_utf8_bytes
+        PASS [   0.020s] (858/864) surge-core work_item::tests::flow_deserialization_rejects_forged_graph_hash_and_oversized_prompt
+        PASS [   0.018s] (859/864) surge-core work_item::tests::legacy_context_bytes_remain_golden
+        PASS [   0.014s] (860/864) surge-core work_item::tests::legacy_requirements_bytes_and_hash_remain_golden
+        PASS [   0.014s] (861/864) surge-core work_item::tests::legacy_revision_bytes_remain_golden_and_hash_is_validated
+        PASS [   0.012s] (862/864) surge-core work_item::wake_refusal::tests::refuses_forged_schema_and_generations_without_echoing_values
+        PASS [   0.538s] (863/864) surge-core sandbox_matrix::tests::lookup_is_total_for_every_pair
+        PASS [   0.545s] (864/864) surge-core sandbox_matrix::tests::lookup_is_idempotent
+────────────
+     Summary [   3.009s] 864 tests run: 864 passed, 0 skipped

@@ -308,3 +308,21 @@ These CI results resolve the reported macOS failures. They do not replace
 fresh native release-candidate provenance, the skipped-test release gates or
 the remaining v1 product acceptance in the
 [release plan](plans/2026-10-05-002-feat-v1-release-plan.md).
+
+## Agent restrictions and Windows CI follow-up — 2026-10-07
+
+V1 task 1.5 is in progress under the
+[reviewed implementation plan](plans/2026-10-07-001-feat-agent-restrictions-plan.md).
+Its pure core stage has 864 passing nextest tests, strict Clippy on Rust 1.98/1.99,
+MSRV 1.96 and independent spec/API/security acceptance;
+[source-bound receipts](release-evidence/2026-10-05/agent-restrictions-core/README.md)
+retain the actual RED/GREEN evidence. Runtime enforcement remains open; no
+ineffective restriction settings are advertised to users.
+
+The user now explicitly requested Windows CI repair. Windows is included in
+this follow-up, superseding the earlier instruction to defer that platform.
+Current Windows Test Suite job `112948098227` in run `37666830209` ran 3626 tests:
+3510 passed, 116 failed, 33 skipped. Windows Clippy passed. The advisory label
+does not satisfy this repair request; failures must be investigated and repaired
+without disabling tests or weakening safety checks. macOS release acceptance
+remains required independently.

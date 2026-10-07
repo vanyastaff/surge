@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-07",
+  "stage": "pure core policy only",
+  "source_base_commit": "0e8c3eb6862c643b85651c6beb6b76e8fa1f4f99",
+  "runtime_enforcement_complete": false,
+  "sources": {
+    "crates/surge-core/src/agent_restrictions.rs": {
+      "sha256": "3903838ba689563d2c309e2c48c01c862d02250c14513ecf96e9e985434fb293",
+      "bytes": 19857
+    },
+    "crates/surge-core/src/lib.rs": {
+      "sha256": "9013932371ad98abc53cbf45b98c50fc8008345452b2ba498660d5eb2c77b406",
+      "bytes": 7152
+    }
+  },
+  "logs": {
+    "surge-restrictions-core-clippy-199.log": {
+      "sha256": "0a623644ab4987aba2b3d5c5bb2fb2447e63f7f07645080cdbf68ac9114c60a6",
+      "bytes": 3754
+    },
+    "surge-restrictions-core-clippy-final.log": {
+      "sha256": "eb55cf1d5286e43fc20bb324c669f375c4a2d5432dbfd650aaab14f3851b2e0c",
+      "bytes": 158
+    },
+    "surge-restrictions-core-duplicate-red.log": {
+      "sha256": "8e56bffb94246ba592194b7154602dba286e93139d2d7feb56ea095927514168",
+      "bytes": 1048
+    },
+    "surge-restrictions-core-final-green.log": {
+      "sha256": "0abb244f7afd5899a70472d04e2b1f9835618a6d0af69a98dba82cf37a77fb55",
+      "bytes": 64993
+    },
+    "surge-restrictions-core-fmt-final.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "surge-restrictions-core-msrv.log": {
+      "sha256": "05639746d86fa0bd0711663ab0ceef6adb9c3fdd01bc9fb2bd272107cec3c228",
+      "bytes": 2287
+    },
+    "surge-restrictions-core-nextest.log": {
+      "sha256": "16ed0e0c021b0761f9ae46c29e7ee4ab3811b6d05d43306a94992b9b8b20aeeb",
+      "bytes": 94327
+    },
+    "surge-restrictions-core-red.log": {
+      "sha256": "d71caa669a0e5c60e8cd6906c0299062e81ee41ffb8e9586b366e5e2f4212a55",
+      "bytes": 3157
+    }
+  }
+}

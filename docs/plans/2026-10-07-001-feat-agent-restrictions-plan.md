@@ -175,6 +175,11 @@ if its event was sent first and cleanup later finishes normally.
    partially enforced user configuration would misrepresent its behavior.
 4. Independent spec review, then quality/security review and current gates.
 
+Stage 1 completed on 2026-10-07 with independent spec/API/security review:
+[core evidence](../release-evidence/2026-10-05/agent-restrictions-core/README.md).
+Stages 2–3 remain open. `AgentRestrictions::constrains()` reports value rules;
+consumers must evaluate declared selector bindings even without a value rule.
+
 For behavior changes record a failing outer test before implementation, then
 passing unit/integration/mock-ACP fixtures. Run format, strict Clippy in the
 project's feature sets, relevant nextest suites and MSRV. Only one Cargo process
