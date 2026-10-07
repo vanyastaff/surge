@@ -398,6 +398,53 @@ mod tests {
         assert!(tracker.is_pid_alive(self_pid));
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn terminated_child_with_retained_handle_is_not_alive() {
+        let (_tmp, tracker) = setup();
+        let mut child = std::process::Command::new("cmd")
+            .args(["/D", "/C", "exit 259"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                },
+                result => {
+                    let kill_result = child.kill();
+                    let cleanup_deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    let cleanup_result = loop {
+                        match child.try_wait() {
+                            Ok(Some(status)) => break Ok(status),
+                            Ok(None) if std::time::Instant::now() < cleanup_deadline => {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            },
+                            remaining => break Err(remaining),
+                        }
+                    };
+                    panic!(
+                        "child failed bounded wait: {result:?}; kill: {kill_result:?}; bounded cleanup: {cleanup_result:?}"
+                    );
+                },
+            }
+        };
+        assert_eq!(status.code(), Some(259));
+        // Keep the native Child handle alive during the probe: opening a handle
+        // succeeds even though the process has terminated. Exit 259 also rejects
+        // an implementation that mistakes an exit code for STILL_ACTIVE.
+        let observed_alive = tracker.is_pid_alive(pid);
+        drop(child);
+        assert!(
+            !observed_alive,
+            "terminated child with retained handle is not alive"
+        );
+    }
+
     #[test]
     fn test_is_running_invalid_pid() {
         let (_tmp, tracker) = setup();

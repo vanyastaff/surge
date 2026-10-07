@@ -176,7 +176,10 @@ fn graph() -> Graph {
 fn engine_config(home: &Path, stall_prompt: bool) -> EngineConfig {
     let profiles = home.join("profiles");
     std::fs::create_dir_all(&profiles).unwrap();
-    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mock_acp_agent");
+    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     assert!(binary.is_file(), "build mock_acp_agent prerequisite");
     let mut agents = HashMap::new();
     for (role, runtime) in [("mcp-primary", "quota-a"), ("mcp-fallback", "quota-b")] {

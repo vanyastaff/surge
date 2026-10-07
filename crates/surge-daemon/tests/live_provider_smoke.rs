@@ -58,7 +58,7 @@ fn watchdog(live: bool) {
     }
     let root = tempfile::Builder::new()
         .prefix("surge-live-")
-        .tempdir_in("/tmp")
+        .tempdir()
         .unwrap();
     let test = if live {
         "live_codex_daemon_mcp_smoke"
@@ -152,7 +152,10 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     let binary = if live {
         PathBuf::from(CODEX)
     } else {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mock_acp_agent")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/debug/mock_acp_agent{}",
+            std::env::consts::EXE_SUFFIX
+        ))
     };
     assert!(binary.is_file(), "required local ACP binary is absent");
     let mut config = surge_core::SurgeConfig::default();

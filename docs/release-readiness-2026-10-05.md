@@ -326,3 +326,10 @@ Current Windows Test Suite job `112948098227` in run `37666830209` ran 3626 test
 does not satisfy this repair request; failures must be investigated and repaired
 without disabling tests or weakening safety checks. macOS release acceptance
 remains required independently.
+
+Windows CI prerequisite checkpoint: [source-bound local evidence](release-evidence/2026-10-05/windows-ci-precursor/README.md)
+records 899 passing scoped macOS tests, strict Rust 1.99 Clippy and real mock
+binary build. Windows checks are mandatory again; prerequisite paths and quoting
+are corrected. Production process liveness stays unchanged for a retained-handle
+exit-259 native RED. Latest baseline `87ad59a` ran 3635 Windows tests: 3520 passed,
+115 failed, 33 skipped. Native repair and complete Windows acceptance remain open.

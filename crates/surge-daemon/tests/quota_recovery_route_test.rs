@@ -210,7 +210,10 @@ fn engine_config(home: &Path, all_exhausted: bool) -> EngineConfig {
         write_profile(&profiles, "quota-fallback", "quota-b");
         write_profile(&profiles, "quota-warmup", "quota-c");
     }
-    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mock_acp_agent");
+    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     assert!(binary.exists(), "build real mock_acp_agent prerequisite");
     let mut agents = std::collections::HashMap::new();
     for (runtime, scenario) in [
@@ -573,8 +576,10 @@ async fn quota_dispatch_fixture_source(
             AccountEvidence, FrozenQuotaCandidate, FrozenQuotaPolicy, FrozenQuotaStage,
             QuotaRoutingMode,
         };
-        let binary =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mock_acp_agent");
+        let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/debug/mock_acp_agent{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         let candidate = |runtime: &str, scenario: &str, stage_mcp: bool| {
             let mut args = vec![
                 "--scenario".to_owned(),
@@ -1566,7 +1571,10 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
     std::fs::create_dir_all(&profiles).unwrap();
     write_profile(&profiles, "quota-primary", "quota-a");
     write_profile(&profiles, "quota-fallback", "quota-b");
-    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mock_acp_agent");
+    let binary = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/debug/mock_acp_agent{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     let mut agents = std::collections::HashMap::new();
     for (runtime, scenario) in [
         ("quota-a", "prompt_error=429_no_reset"),

@@ -1091,16 +1091,28 @@ mod tests {
             id: "writer-boundary".into(),
             trigger: HookTrigger::PostToolUse,
             matcher: MatcherSpec::default(),
-            command: format!(
-                "python3 '{}' '{}' '{}'",
-                oracle.display(),
-                home.path()
+            command: {
+                let database = home
+                    .path()
                     .join("runs")
                     .join(run.to_string())
-                    .join("events.sqlite")
-                    .display(),
-                marker.display()
-            ),
+                    .join("events.sqlite");
+                #[cfg(target_os = "windows")]
+                let command = format!(
+                    "python \"{}\" \"{}\" \"{}\"",
+                    oracle.display(),
+                    database.display(),
+                    marker.display()
+                );
+                #[cfg(not(target_os = "windows"))]
+                let command = format!(
+                    "python3 '{}' '{}' '{}'",
+                    oracle.display(),
+                    database.display(),
+                    marker.display()
+                );
+                command
+            },
             on_failure: HookFailureMode::Reject,
             timeout_seconds: Some(5),
             inherit: HookInheritance::Extend,

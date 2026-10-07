@@ -30,11 +30,8 @@ jobs:
       - run: python -m unittest discover -s scripts -p 'test_release*.py' -v
 
   test:
-    name: Test Suite (${{ matrix.os }}${{ matrix.os == 'windows-latest' && ', advisory' || '' }})
+    name: Test Suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows is outside the macOS release scope: its result is reported but does
-    # not fail the workflow. See docs/release-readiness-2026-10-05.md.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -82,10 +79,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev libfontconfig1-dev
 
-      # Ordinary daemon fixtures launch this binary on Linux and macOS.
+      # Ordinary daemon fixtures launch this binary on every matrix platform.
       # Building test targets alone does not create target/debug/mock_acp_agent.
       - name: Build mock_acp_agent for engine integration tests
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
         run: cargo build --locked -p surge-acp --bin mock_acp_agent
 
       # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
@@ -148,11 +144,8 @@ jobs:
         timeout-minutes: 10
 
   clippy:
-    name: Clippy (${{ matrix.os }}${{ matrix.os == 'windows-latest' && ', advisory' || '' }})
+    name: Clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows is outside the macOS release scope: its result is reported but does
-    # not fail the workflow. See docs/release-readiness-2026-10-05.md.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

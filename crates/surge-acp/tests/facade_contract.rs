@@ -25,7 +25,7 @@ struct MinimalMock;
 impl BridgeFacade for MinimalMock {
     async fn open_session(
         &self,
-        _: SessionConfig,
+        config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
         Ok(surge_core::execution_recovery::OpenedSession::new(
             SessionId::new(),
@@ -34,7 +34,7 @@ impl BridgeFacade for MinimalMock {
                 surge_core::id::StageInvocationId::new(),
                 "fixture".into(),
                 surge_core::ContentHash::compute(b"fixture"),
-                std::path::PathBuf::from("/tmp/wt"),
+                config.working_dir,
                 Default::default(),
             )
             .unwrap(),
@@ -84,7 +84,7 @@ fn minimal_session_config() -> SessionConfig {
         config_selections: Vec::new(),
         stage_mcp: None,
         agent_kind: AgentKind::Mock { args: vec![] },
-        working_dir: std::path::PathBuf::from("/tmp/wt"),
+        working_dir: std::env::current_dir().unwrap(),
         system_prompt: "sys".into(),
         declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
         allows_escalation: false,

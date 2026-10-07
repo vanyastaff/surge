@@ -1,0 +1,29 @@
+{
+  "base": "87ad59ab4bc718b0f5c55cdfeac0804fa486b214",
+  "platform": "local macOS",
+  "source_sha256": {
+    ".github/workflows/ci.yml": "685d19b405c599c7db2f6d83073bbb5a3f013bd58029a38cc90370cd034fed68",
+    "crates/surge-acp/src/process_tracker.rs": "0ef96a1dd1daa8ef6dc6893784bf21507b6de980b4e8a4ec81d295b719bf2f9d",
+    "crates/surge-acp/tests/facade_contract.rs": "7781a5ba1661442584f01dd1d865192dedda393bf3b3410aa2b36e02a582ead4",
+    "crates/surge-core/src/verification_evidence.rs": "d4b0f1d24d9b44eda0284bf99a6515e09e31000617d4211b69eba79e7d5ad96d",
+    "crates/surge-daemon/tests/live_provider_smoke.rs": "ab84f2b15a216bcfcb5318365368edefc45061aaf28024f66729115d08112dbc",
+    "crates/surge-daemon/tests/owned_flow_mcp_recovery.rs": "90743fc71e382ede428e0b7c554a28009ab644da7a27506f1fdc1ca875deea11",
+    "crates/surge-daemon/tests/quota_recovery_route_test.rs": "e5c77fa0c19b38f87e247d35f6c68c5b39eb5df0e14a6c6d951fdd6c680642f8",
+    "crates/surge-orchestrator/src/engine/hooks/mod.rs": "cd7893898c52eeb4006f853391b67be236585ab50b10b5cd75a5813b53dd951d",
+    "crates/surge-orchestrator/tests/fixtures/mock_bridge.rs": "b9fff48d7be3c365b7e8e6ec5ecad56e5421187e7808e2a00abd7c94ea3a2cda"
+  },
+  "receipt_sha256": {
+    "clippy-green.log.gz": "addc4c49c50d84ebcf8a2de23d7a3902133f21cf3c7aeb2cebb6d22607bc8128",
+    "clippy.log.gz": "d2ddcddf7b39adc822e2dd26b18418fb050570b49eb24c7b0de8b3e55ac20abb",
+    "windows-baseline-87ad59a.log.gz": "ffcf6aa4d57ca4dd2f7f421ac3f42989432de1fba4a0eb1f0e1496cb947a82ef",
+    "fmt-final.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "mock-build.log.gz": "8da274df60b76dd40d857c1d660c0c72835638778c0a4312a4cb408364699fac",
+    "hooks.log.gz": "9a23e72b4379a9cc5ffb320e1ba579fd94146b0dd8747e1dcd8d75abb3273bdf",
+    "facade.log.gz": "2e8ee62109c0c6f3e24cedfb3bf49dea56b02c14ac9a934779bcef9a77354236",
+    "core-green.log.gz": "9aed836ac3edc8730cf58181710fd1c8dde6da5e01ffa7663e9e7ba232536c54",
+    "shared-mock.log.gz": "558215bdf222c1f760b0d83507944cad1a8e731d1b694ef2029719d8c104add5"
+  },
+  "native_windows_precursor": "pending",
+  "initial_clippy": "exit 101 ENOSPC; generated incremental cache removed; successful retry CARGO_INCREMENTAL=0",
+  "receipt_encoding": "gzip; decompress for original local receipt bytes"
+}

@@ -227,11 +227,7 @@ impl BridgeFacade for MockBridge {
                     config.invocation,
                     config.runtime,
                     launch_hash,
-                    if config.working_dir.is_absolute() {
-                        config.working_dir
-                    } else {
-                        std::env::current_dir().unwrap().join(config.working_dir)
-                    },
+                    std::path::absolute(config.working_dir).unwrap(),
                     SessionRestoreCapabilities {
                         resume: true,
                         load: true,
@@ -347,7 +343,6 @@ impl BridgeFacade for MockBridge {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
     use std::str::FromStr;
     use surge_acp::bridge::event::SessionEndReason;
     use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
@@ -365,7 +360,7 @@ mod tests {
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
-            working_dir: PathBuf::from("/tmp/wt"),
+            working_dir: std::env::current_dir().unwrap(),
             system_prompt: "sys".into(),
             declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
             allows_escalation: false,
