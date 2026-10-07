@@ -1,8 +1,11 @@
 # Release preparation — 2026-10-05
 
-**NO-GO.** Productive MCP cold recovery lacks complete descendant/external-effect
-cleanup evidence. Exact-revision four-platform CI remains unverified. No release,
-tag, push, merge or production change has been authorized or performed.
+**NO-GO for the final release.** macOS CI passes on `89117a7`; MCP restart
+recovery follows the accepted ADR-0021 contract. Remaining v1 phases and a fresh
+release candidate with provenance still require completion. The active scope is
+macOS only. Commits and pushes to PR #89 are authorized; release publication,
+tagging, merge and production changes remain unauthorized. Earlier sections
+below preserve historical checkpoints; later dated updates supersede them.
 
 ## Scope and revision
 
@@ -287,3 +290,21 @@ tests: 3456 passed, 115 failed, about 60 distinct tests. Most are Unix process
 and file-ownership tests (cold host, owned flow, secure start preparation) and
 one mock-bridge admission test compiled into many test binaries. These remain
 advisory and belong to Windows support after v1.
+
+## Current PR checks — 2026-10-07
+
+The six reported failures belong to historical run `37349909332`. Current
+[CI run 37415800196](https://github.com/vanyastaff/surge/actions/runs/37415800196)
+completed on source revision `89117a75952b7cf33d0b89dab96dd36bfe7a06df`:
+
+- macOS nextest: 3707 run, 3707 passed, 37 skipped, in 196.169 seconds.
+- macOS doctests: 5 passed, 7 ignored, no failures.
+- macOS strict Clippy, format, MSRV 1.96, release packaging contract,
+  dependency security/licenses and engine benchmark: passed.
+- Ubuntu tests and Clippy: passed. Windows Clippy: passed; Windows tests
+  remain failed and advisory, outside the active macOS scope.
+
+These CI results resolve the reported macOS failures. They do not replace
+fresh native release-candidate provenance, the skipped-test release gates or
+the remaining v1 product acceptance in the
+[release plan](plans/2026-10-05-002-feat-v1-release-plan.md).
