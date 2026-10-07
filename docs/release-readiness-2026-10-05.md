@@ -368,3 +368,12 @@ with complete flags-0 file/directory flush and exact read-only failure evidence.
 [Source-bound receipt](release-evidence/2026-10-05/windows-ci-493c292/README.md)
 explains the extra standalone-probe skip and remaining 25 private-preparation
 plus nine process-ownership failures. Full Windows CI acceptance remains open.
+
+Native source `965ac42`, run `37687504548`: **3,654 Windows tests run,
+3,620 passed, 34 failed, 37 skipped**. All eight new guardian identity tests
+pass; process ownership is still unimplemented. The mandatory standard-user
+flush probe passes 1/1. Its additional state-home batch reports 0/3: one real
+unsafe-home refusal failure and two profile-lookup fixture failures before the
+backend assertions. [Exact native receipt](release-evidence/2026-10-05/windows-ci-965ac42/README.md)
+keeps those categories distinct. Windows Clippy found two test-only style lints,
+repaired in `7a4b9f4` pending native revalidation. All other jobs pass.

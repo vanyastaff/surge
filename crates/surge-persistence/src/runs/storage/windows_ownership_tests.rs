@@ -4,14 +4,14 @@ use std::{
     fs::{File, OpenOptions},
     mem::{offset_of, size_of},
     os::windows::{
-        fs::OpenOptionsExt,
+        fs::{MetadataExt, OpenOptionsExt},
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf, Prefix},
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HLOCAL, LocalFree},
+        Foundation::{ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL, LocalFree},
         Security::{
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
             Authorization::{
@@ -23,17 +23,18 @@ use windows::{
             SE_DACL_PRESENT, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER, TokenUser,
         },
         Storage::FileSystem::{
-            FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, READ_CONTROL,
+            FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            FILE_TRAVERSE, GetDriveTypeW, GetVolumeInformationByHandleW, READ_CONTROL,
         },
         System::{
-            Com::CoTaskMemFree,
             SystemServices::ACCESS_ALLOWED_ACE_TYPE,
             Threading::{GetCurrentProcess, OpenProcessToken},
+            WindowsProgramming::DRIVE_FIXED,
         },
-        UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
+        UI::Shell::GetUserProfileDirectoryW,
     },
-    core::PWSTR,
+    core::{PCWSTR, PWSTR},
 };
 
 struct Allocation(HLOCAL);
@@ -53,12 +54,17 @@ fn sid_text(sid: PSID) -> String {
     // SAFETY: successful SDK conversion returned an owned terminated string.
     unsafe { text.to_string() }.unwrap()
 }
-fn actual_user() -> String {
+fn process_token() -> OwnedHandle {
     let mut handle = HANDLE::default();
     // SAFETY: borrowed process and initialized writable handle output.
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut handle) }.unwrap();
     // SAFETY: fresh SDK-owned token handle transferred once.
-    let token = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+    unsafe { OwnedHandle::from_raw_handle(handle.0) }
+}
+fn actual_user() -> String {
+    token_user(&process_token())
+}
+fn token_user(token: &OwnedHandle) -> String {
     let mut bytes = [0usize; 128];
     let mut returned = 0;
     // SAFETY: matching aligned initialized token buffer and live token.
@@ -89,26 +95,120 @@ fn actual_user() -> String {
     assert_eq!(actual, std::env::var("SURGE_NATIVE_PROBE_SID").unwrap());
     actual
 }
-fn profile_fixture() -> tempfile::TempDir {
-    // SAFETY: null token selects the actual caller identity, not an inherited TEMP.
-    let path =
-        unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, HANDLE::default()) }
+fn profile_path(token: &OwnedHandle) -> PathBuf {
+    let mut length = 0;
+    // SAFETY: live query token, null buffer with zero capacity and valid size output.
+    let error = unsafe {
+        GetUserProfileDirectoryW(
+            HANDLE(token.as_raw_handle()),
+            PWSTR::null(),
+            &raw mut length,
+        )
+    }
+    .unwrap_err();
+    assert_eq!(error.code(), ERROR_INSUFFICIENT_BUFFER.to_hresult());
+    assert!((2..=32_768).contains(&length));
+    let mut buffer = vec![0u16; usize::try_from(length).unwrap()];
+    // SAFETY: initialized writable UTF-16 storage of exactly the declared capacity;
+    // the retained query token and size output stay live for the synchronous call.
+    unsafe {
+        GetUserProfileDirectoryW(
+            HANDLE(token.as_raw_handle()),
+            PWSTR(buffer.as_mut_ptr()),
+            &raw mut length,
+        )
+    }
+    .unwrap();
+    let returned = usize::try_from(length).unwrap();
+    assert!((2..=buffer.len()).contains(&returned));
+    assert_eq!(buffer[returned - 1], 0);
+    assert!(!buffer[..returned - 1].contains(&0));
+    let text = String::from_utf16(&buffer[..returned - 1]).unwrap();
+    let path = PathBuf::from(text);
+    assert!(path.is_absolute());
+    assert!(matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+    ));
+    path
+}
+fn retained_profile_route(profile: &Path) -> Vec<File> {
+    let mut components = profile.components();
+    let prefix = components.next().unwrap();
+    assert_eq!(components.next(), Some(Component::RootDir));
+    let mut current = PathBuf::from(prefix.as_os_str());
+    current.push(r"\");
+    let root: Vec<u16> = current
+        .to_str()
+        .unwrap()
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    // SAFETY: live terminated drive root, validated as an absolute local disk path.
+    assert_eq!(unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) }, DRIVE_FIXED);
+    let mut paths = vec![current.clone()];
+    for component in components {
+        assert!(matches!(component, Component::Normal(_)));
+        current.push(component.as_os_str());
+        paths.push(current.clone());
+    }
+    let mut retained = Vec::with_capacity(paths.len());
+    for path in paths {
+        let file = OpenOptions::new()
+            .access_mode((FILE_READ_ATTRIBUTES | FILE_TRAVERSE).0)
+            .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+            .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
+            .open(&path)
             .unwrap();
-    // SAFETY: successful SDK path is terminated and live until freed below.
-    let text = unsafe { path.to_string() }.unwrap();
-    // SAFETY: matching allocator for the successful known-folder API result.
-    unsafe { CoTaskMemFree(Some(path.0.cast())) };
-    let parent = PathBuf::from(text);
-    assert!(parent.is_absolute());
+        let metadata = file.metadata().unwrap();
+        assert!(metadata.is_dir());
+        assert_eq!(
+            metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0,
+            0
+        );
+        retained.push(file);
+    }
+    let mut filesystem = [0u16; 32];
+    // SAFETY: retained profile directory handle and initialized bounded output buffer.
+    unsafe {
+        GetVolumeInformationByHandleW(
+            HANDLE(retained.last().unwrap().as_raw_handle()),
+            None,
+            None,
+            None,
+            None,
+            Some(&mut filesystem),
+        )
+    }
+    .unwrap();
+    let end = filesystem.iter().position(|unit| *unit == 0).unwrap();
+    assert_eq!(String::from_utf16(&filesystem[..end]).unwrap(), "NTFS");
+    retained
+}
+fn profile_fixture() -> tempfile::TempDir {
+    let token = process_token();
+    let user = token_user(&token);
+    let parent = profile_path(&token);
+    let _route = retained_profile_route(&parent);
+    assert_eq!(
+        security(&parent).owner,
+        user,
+        "profile must belong to the actual token user"
+    );
+    println!(
+        "stage1 profile selected: user={user} profile={} fixed-NTFS=true reparse=false owner-user=true",
+        parent.display()
+    );
     let fixture = tempfile::Builder::new()
         .prefix("surge-ownership-")
         .tempdir_in(parent)
         .unwrap();
     assert_eq!(
         security(fixture.path()).owner,
-        actual_user(),
-        "fixture parent must belong to the actual token user"
+        user,
+        "fixture must belong to the actual token user"
     );
+    println!("stage1 profile fixture: owner-user=true status=ready");
     fixture
 }
 struct Security {

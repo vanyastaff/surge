@@ -537,3 +537,55 @@ probe's PublicRoot as a trusted private-home ancestor: PublicRoot is runner-owne
 and grants that distinct account full control. The copied test executable may
 stay there; the private namespace must satisfy its own complete ancestor policy.
 No parent ACL repair or enlarged user grant is permitted.
+
+### Native-to-SQLite pathname agreement
+
+Relative NT opens must identify the same pathname that stock SQLite's Win32 VFS
+opens. Reject ambiguous trailing-dot/space components, DOS device basenames
+(including their extensions and documented superscript COM/LPT digits), wildcard
+and control characters before creation. Keep ordinary Unicode names supported.
+A held-versus-named NT check alone cannot prove Win32 pathname agreement when
+normalization differs. Independent alias-target fixtures must prove refusal
+without SQL or filesystem effects. Microsoft documents these
+[naming and reserved-name rules](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
+
+Actual rusqlite 0.32.1 non-Unix path_to_cstring rejects paths without Unicode
+representation; it does not perform lossy conversion. Validate that boundary
+before namespace creation too, rather than leaving newly created private objects
+behind for an input SQLite cannot represent. This refines the existing device/path
+refusal contract; it grants no new Windows capability.
+
+### Explicit-token profile fixture replan after native 965ac42
+
+The null-token Known Folder lookup failed with E_ACCESSDENIED before two of the
+three new acceptance assertions. Only the unsafe inherited home produced actual
+backend RED. Preserve those distinctions in receipts; do not attribute an
+unconfirmed cause to the profile failure.
+
+Owning architecture and security review accepted an explicit-token profile
+locator: retained TOKEN_QUERY handle, GetUserProfileDirectoryW two-call sizing
+accepting only ERROR_INSUFFICIENT_BUFFER, bounded initialized UTF-16 output with
+length/NUL validation, and no environment or public-directory fallback. Before
+fixture creation, independently validate actual TokenUser against the CI account,
+absolute local fixed NTFS routing without reparse points, and profile ownership;
+retain ancestor handles through creation and inspect the resulting owner. Keep
+PowerShell LoadUserProfile. Existing three backend assertion bodies stay intact.
+This is a reviewed fixture foundation replan after the original precursor's three
+repairs, not a reset of that completed repair history. Native results remain open.
+
+### Runtime caller capabilities and canonical home inheritance
+
+Canonical state-home creation uses protected explicit current-user OI|CI rights,
+matching db/runs, because legacy usage.db and memory.db create SQLite side files
+directly beneath it. daemon, lifecycle locks and private object namespaces retain
+their separate strict non-inheriting policy. SQL side-file owner exceptions never
+relax private object ownership or effective user-only grants.
+
+Windows callers use opaque RuntimeHomeOwner/RuntimeDirectoryOwner capabilities.
+Append output returns both Stdio and its retained RuntimeAppendFile lease from
+stdio_clone; callers retain that lease through child readiness or failed-start
+settlement. A separate writable flush handle never enters child Stdio. Control
+files acquire an actual exclusive lock before stale/live inspection or byte
+replacement; deletion uses the owned descriptor. OwnershipBusy denotes actual
+sharing/lock contention, never generic access denial or unknown liveness. These
+contracts need caller integration and native acceptance before Stage 1 closes.
