@@ -445,3 +445,182 @@ Additional primary sources:
 - [WMI last OS restart observation](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-operatingsystem)
 
 - [Creation-time Job assignment attribute](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
+
+## G2 refinement: append-only receipts and typed recovery projection
+
+This is a durable-contract design candidate. G1 types are implemented; no guardian
+runtime or native settlement authority is established by this appendix. ADR-0023
+remains proposed. Owning lead and architecture reviewed the corrected partial
+order as ACCEPTABLE; independent spec/security review remains required before code.
+
+### Historical wire boundary
+
+Advance the event envelope from version 21 to 22 for a distinct
+`WindowsGuardianRecord { record }` event family. Preserve every existing
+`ExecutionWriterEstablished`, `WriterContainer` and v1–21 payload byte and hash.
+Never update append-only journal rows or recompute historical hashes. Existing
+SQL event columns already contain the payload and schema version; no SQL row
+rewrite is required. Every v1–21 decoder must explicitly reject the new event
+discriminator before decoding through the current enum. Current identity
+migrations otherwise accept a newly added variant under an old envelope.
+
+The inner record has version 1 and a tagged kind; unknown versions, kinds and
+fields refuse. Kinds are LaunchIntent, GuardianBound, ChildEstablished,
+ResumeAuthorized, ResumeObserved, SettlementRequested, SettlementObserved,
+SettlementConsumed, LeaseTakenOver and CancelledBeforeSpawn. Constructor validation applies to
+each kind, not only the containing enum. Pure validation grants no live capability.
+
+### Binding, ordering and settlement branches
+
+Common binding includes run, invocation, writer occurrence, installation authority,
+operation identity, positive lease generation and predecessor receipt hash.
+LaunchIntent is genesis with no predecessor; subsequent accepted records require
+the exact preceding hash. IDs are nonnil, integer fields have explicit ranges,
+and occurrence/authority bindings agree. Define and test a domain-separated
+canonical receipt encoding before implementing hashes; no credential enters
+journal payloads. Protocol lease/query counters are not inferred from clocks.
+
+GuardianBound carries exact guardian PID/creation and canonical endpoint, the
+initial exact host identity and positive registry owner generation, without a
+child identity. These initial fields establish the later takeover comparison baseline. G1's complete child identity cannot represent this phase.
+Binding commits before child creation authorization; ChildEstablished carries
+the G1 container and commits before resume authorization. ResumeObserved records
+Started (actual previous suspend count one), Failed (native error), or Uncertain.
+Authorization never proves execution; failed/uncertain observation cannot grant
+Running authority.
+
+SettlementRequested may branch from any bound active phase: no journaled child,
+suspended child, authorized resume, failed/uncertain resume, or running. It fences
+further creation and resume. Settlement does not require a successful resume.
+SettlementObserved carries one of these explicit proofs:
+
+- BoundJobEmpty: exact original guardian binding, actual zero-membership query
+  generation, and sealed creation/resume fence generation. This does not assert
+  that no child ever existed; it covers creation before establishment was
+  journaled only when the original authenticated guardian retains the
+  creation-assigned Job and observes it empty after fencing.
+- ChildJobEmpty: the same evidence plus the exact established G1 child container.
+
+CancelledBeforeSpawn is a separate terminal branch with positive producer-owned
+proof that its still-held launch authorizer was atomically revoked before helper
+spawn. Missing records do not supply that proof. Helper spawn without a durable
+exact binding remains Unknown; empty Job or cancellation cannot be inferred.
+Consumption references the exact accepted settlement proof and committed journal
+sequence before helper handle release. Late establishment/resume after settlement
+fencing conflicts.
+
+Exact duplicates are idempotent. Differing duplicates, absent predecessors, wrong
+occurrences, reordered transitions and stale leases create sticky conflict/attention;
+later valid-looking records cannot erase it. Actual live origin authentication,
+retained Job observation and fences remain G3/G4 requirements.
+
+### Historical and mixed-run authority
+
+Add a separate typed guardian projection to RunMemory. Classify evidence as legacy
+Unix, historical Windows unproven, or guardian before examining legacy cleanup
+shortcuts. Preserve Unix behavior. Historical Windows group-shaped records and
+closed flags remain Unknown for active recovery unless an independently valid
+authority contract supports them. Preserve completed-run historical reporting;
+do not rewrite terminal UI status to implement an active admission guard.
+
+SessionClosed, ExecutionWriterClosed, ExecutionWriterGroupStopped and
+RunSuspended.cleanup_confirmed never settle guardian proof. An empty guardian map
+is insufficient when historical Windows writers exist. Mixed runs require every
+relevant occurrence to satisfy its own typed gate. Restart, continuation, retained
+workspace reuse and replacement-writer admission use the same centralized decision.
+Windows identities never pass into Unix group probing or signalling. G2 explicitly
+refuses unimplemented guardian runtime paths; it cannot coerce them into legacy
+observations.
+
+### Full consumer closure
+
+| Boundary | Files/modules |
+|---|---|
+| Types and projection | core execution_recovery/process.rs, guardian ledger module, run_event.rs, run_state.rs, migrations/mod.rs |
+| Journal inspection and exhaustive matching | persistence runs/inspection.rs, writer.rs, run_writer.rs, views.rs; core run_report/mod.rs |
+| Replay and ownership decisions | orchestrator engine/replay.rs, writer_coverage.rs, gate_answers.rs |
+| Durable admission and suspension | persistence work_items/owned_flow/launch.rs, recovery_cycles.rs, control.rs |
+| Daemon controls and admission | daemon tracked_run.rs, work_items.rs, work_items/start_preparation_barrier.rs |
+| Later native producers | ACP bridge/worker.rs, bridge/session.rs, process_evidence.rs; MCP writer_observer.rs and child_settlement/ |
+
+Current RunMemory legacy closure booleans and writer_coverage early returns cannot
+bypass the new discriminator. Run-level suspension authority is also in scope:
+owned-flow launch, recovery reservations, controls, daemon tracking and gate answers
+currently consume RunSuspended cleanup booleans. Retain readable historical values
+but independently gate active authority with typed occurrence evidence.
+
+### Independent acceptance
+
+Use fixed captured v1–21 fixtures to prove successful historical decoding and
+unchanged original hashes/Unix replay. Every new guardian event under each old
+envelope refuses; valid v22 fixtures decode while future envelopes, unknown kinds
+and malformed nested identities refuse.
+
+Independent transcripts cover missing intent/binding, all early settlement branches,
+failed/uncertain resume, reordered records, stale generation, wrong authority, wrong
+child, conflicting duplicate and consumption of another settlement. Exact duplicates
+retain the same projection; conflict stays sticky. Insert legacy closure and true
+suspension booleans before and after guardian records: none authorizes replacement.
+Old-only and mixed Unix/guardian/historical-Windows journals check every occurrence.
+Persistence inspection and replay must agree on independently specified fixtures;
+malformed payloads produce decode errors, not omitted evidence.
+
+G2 proves durable contracts and refusal only. Native termination/recovery acceptance
+requires G3/G4 with the original authenticated live guardian, held Job handle, exact
+query/fence generation, producer adapters and response-loss/crash transcripts.
+
+### G2 lease advancement refinement
+
+The original live guardian allocates leases. GuardianBound establishes lease 1;
+LeaseTakenOver advances by exactly one with checked addition, refusing overflow.
+A higher journal integer grants no authority. Takeover binds predecessor hash,
+old/new exact host identities, old/new lease, authenticated caller and current
+durable registry owner generation. Registry generation exceeds the previous one
+and matches the current exclusive owner fence; it may skip values.
+
+Takeover requires positively observed termination of the exact previous host,
+preferably through its retained process handle, or its authenticated explicit
+relinquishment. Missing PID/endpoint and unknown liveness refuse. Guardian operations
+and takeover serialize. Once-only resume is occurrence-wide across leases; takeover
+never repeats ResumeThread.
+
+The current authenticated owner may query an old operation; an authenticated
+previous owner may retrieve only its exact recorded receipt. Read-only results
+identify both original operation lease and current guardian lease. They do not
+mutate, resume, reexecute, advance, consume, or provide fresh Job evidence. Stale
+mutations refuse before effects. Exact duplicates return existing receipts without
+execution; differing duplicates create sticky conflict.
+
+Takeover invalidates unconsumed prior-lease settlement as current authority. The
+new owner needs a fresh zero-membership query after sealing creation/resume under
+its accepted lease. Consumption binds current lease, barrier/query generations,
+exact proof hash and durable sequence; old-lease acknowledgement cannot release
+handles. A durably consumed terminal occurrence never advances lease or reopens
+creation/resume. Its permanent sealed proof is not erased by host death; repeated
+consumption acknowledgement/query is read-only and idempotent. The helper exits
+only after durable consumption acknowledgement. Helper loss before consumption
+remains Unknown; endpoint absence supplies no substitute receipt.
+
+Fixed lease transcripts include:
+
+1. Positively observed lease-1 host death, registry generation 7, lease-2 takeover,
+   fresh sealed zero query and exact consumption: accepted.
+2. Lease 1 to 3, wrong predecessor, mismatched registry generation or unknown
+   old-host liveness: refused.
+3. Lease-2 active with lease-1 resume/settlement/consumption: refused before effects.
+4. Lost lease-1 resume response, takeover, read-only old-operation query: the
+   original result is returned and resume still executed exactly once.
+5. Lease-1 observed settlement, takeover, old acknowledgement refused, fresh
+   lease-2 query and consumption accepted.
+6. Conflicting duplicate takeover/operation: sticky attention.
+7. Durable consumed proof before host death: terminal sealed evidence remains
+   terminal, without granting another lease or permitting another child.
+8. Observed but unconsumed proof before host death: prior observation alone
+   cannot authorize handle release or replacement; fresh current-lease evidence
+   or Unknown is required.
+
+G2 refinement owning-lead, architecture, independent spec and security pre-code
+verdicts: ACCEPTABLE for staged durable-contract implementation. LeaseTakenOver
+is an explicit record kind; GuardianBound includes the initial host and registry
+generation baseline. Native guardian authority remains unavailable until the
+private capability and G3/G4 producer/observation closure pass.
