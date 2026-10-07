@@ -9210,6 +9210,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "tracing",
  "ulid",
+ "windows 0.58.0",
 ]
 
 [[package]]

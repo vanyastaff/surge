@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(windows)]
+mod windows_atomic;
+
 /// Overwrites `slot` with the parsed value of env var `key`. An unset variable
 /// keeps the value; an unparsable one is reported and ignored rather than
 /// silently swallowed.
@@ -173,31 +176,40 @@ impl SurgeConfig {
             ))
         })?;
 
-        // Write through an exclusively created descriptor: concurrent saves do not
-        // share a path, and an old predictable-name symlink cannot redirect writes.
-        // The same-directory persist atomically replaces the destination. This does
-        // not promise power-loss durability of the directory entry.
-        use std::io::Write;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
+        #[cfg(windows)]
+        windows_atomic::publish(parent, path, content.as_bytes()).map_err(|e| {
             crate::SurgeError::Config(format!(
-                "Failed to create temp config in {}: {e}",
-                parent.display()
+                "Failed to atomically publish config {}: {e}",
+                path.display()
             ))
         })?;
-        temporary
-            .write_all(content.as_bytes())
-            .map_err(|e| crate::SurgeError::Config(format!("Failed to write temp config: {e}")))?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|e| crate::SurgeError::Config(format!("Failed to sync temp config: {e}")))?;
-        temporary.persist(path).map_err(|e| {
-            crate::SurgeError::Config(format!(
-                "Failed to replace config {}: {}",
-                path.display(),
-                e.error
-            ))
-        })?;
+        #[cfg(not(windows))]
+        {
+            // Write through an exclusively created descriptor: concurrent saves do not
+            // share a path, and an old predictable-name symlink cannot redirect writes.
+            // The same-directory persist atomically replaces the destination. This does
+            // not promise power-loss durability of the directory entry.
+            use std::io::Write;
+            let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
+                crate::SurgeError::Config(format!(
+                    "Failed to create temp config in {}: {e}",
+                    parent.display()
+                ))
+            })?;
+            temporary.write_all(content.as_bytes()).map_err(|e| {
+                crate::SurgeError::Config(format!("Failed to write temp config: {e}"))
+            })?;
+            temporary.as_file().sync_all().map_err(|e| {
+                crate::SurgeError::Config(format!("Failed to sync temp config: {e}"))
+            })?;
+            temporary.persist(path).map_err(|e| {
+                crate::SurgeError::Config(format!(
+                    "Failed to replace config {}: {}",
+                    path.display(),
+                    e.error
+                ))
+            })?;
+        }
         Ok(())
     }
 
@@ -296,6 +308,171 @@ mod save_tests {
         assert!(SurgeConfig::default().save(&destination).is_err());
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "original");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replacement_preserves_retained_reader_without_delete_sharing() {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        let old = SurgeConfig {
+            default_agent: "old".into(),
+            ..SurgeConfig::default()
+        };
+        old.save(&destination).unwrap();
+        let mut retained = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+            .open(&destination)
+            .unwrap();
+        let new = SurgeConfig {
+            default_agent: "new".into(),
+            ..SurgeConfig::default()
+        };
+        new.save(&destination).unwrap();
+        let mut old_contents = String::new();
+        retained.read_to_string(&mut old_contents).unwrap();
+        assert_eq!(old_contents, toml::to_string_pretty(&old).unwrap());
+        let old_read: SurgeConfig = toml::from_str(&old_contents).unwrap();
+        assert_eq!(old_read.default_agent, "old");
+        assert_eq!(
+            SurgeConfig::load(&destination).unwrap().default_agent,
+            "new"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn continuous_readers_observe_complete_configs_from_all_eight_writers() {
+        use std::sync::{
+            Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        SurgeConfig::default().save(&destination).unwrap();
+        let expected: Vec<String> = std::iter::once(SurgeConfig::default())
+            .chain((0..8).map(|writer| SurgeConfig {
+                default_agent: format!("writer-{writer}"),
+                ..SurgeConfig::default()
+            }))
+            .map(|config| toml::to_string_pretty(&config).unwrap())
+            .collect();
+        let barrier = Barrier::new(9);
+        let finished = AtomicUsize::new(0);
+        let read_count = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                barrier.wait();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut reads = 0;
+                while finished.load(Ordering::Acquire) != 8 {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "writers exceeded reader deadline"
+                    );
+                    let observed = std::fs::read_to_string(&destination).unwrap();
+                    assert!(
+                        expected.contains(&observed),
+                        "reader saw incomplete or unknown configuration"
+                    );
+                    let parsed: SurgeConfig = toml::from_str(&observed).unwrap();
+                    parsed.validate().unwrap();
+                    reads += 1;
+                    read_count.fetch_add(1, Ordering::Release);
+                }
+                assert!(reads > 0, "continuous reader must overlap publication");
+            });
+            let mut writers = Vec::new();
+            for writer in 0..8 {
+                let destination = &destination;
+                let barrier = &barrier;
+                let finished = &finished;
+                let read_count = &read_count;
+                writers.push(scope.spawn(move || {
+                    let config = SurgeConfig {
+                        default_agent: format!("writer-{writer}"),
+                        ..SurgeConfig::default()
+                    };
+                    barrier.wait();
+                    let result = save_with_reader_ack(&config, destination, read_count);
+                    finished.fetch_add(1, Ordering::Release);
+                    result
+                }));
+            }
+            for writer in writers {
+                writer.join().unwrap().unwrap();
+            }
+            reader.join().unwrap();
+        });
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    fn save_with_reader_ack(
+        config: &SurgeConfig,
+        destination: &Path,
+        read_count: &std::sync::atomic::AtomicUsize,
+    ) -> Result<(), crate::SurgeError> {
+        config.save(destination)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while read_count.load(std::sync::atomic::Ordering::Acquire) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reader did not acknowledge publication"
+            );
+            std::thread::yield_now();
+        }
+        (0..19).try_for_each(|_| config.save(destination))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn read_only_destination_failure_preserves_bytes_and_cleans_temporary() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surge.toml");
+        std::fs::write(&destination, "original read-only contents").unwrap();
+        let original_permissions = std::fs::metadata(&destination).unwrap().permissions();
+        let mut permissions = original_permissions.clone();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&destination, permissions).unwrap();
+        let result = SurgeConfig::default().save(&destination);
+        let preserved = std::fs::read_to_string(&destination).unwrap();
+        let entries = std::fs::read_dir(directory.path()).unwrap().count();
+        std::fs::set_permissions(&destination, original_permissions).unwrap();
+        assert!(result.is_err());
+        assert_eq!(preserved, "original read-only contents");
+        assert_eq!(entries, 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn first_publication_and_replacement_accept_spaces_and_unicode() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory
+            .path()
+            .join("space folder Ω")
+            .join("surge 日本語.toml");
+        SurgeConfig::default().save(&destination).unwrap();
+        let next = SurgeConfig {
+            default_agent: "second".into(),
+            ..SurgeConfig::default()
+        };
+        next.save(&destination).unwrap();
+        assert_eq!(
+            SurgeConfig::load(&destination).unwrap().default_agent,
+            "second"
+        );
+        assert_eq!(
+            std::fs::read_dir(destination.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[cfg(unix)]

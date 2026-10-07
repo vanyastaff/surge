@@ -333,3 +333,8 @@ binary build. Windows checks are mandatory again; prerequisite paths and quoting
 are corrected. Production process liveness stays unchanged for a retained-handle
 exit-259 native RED. Latest baseline `87ad59a` ran 3635 Windows tests: 3520 passed,
 115 failed, 33 skipped. Native repair and complete Windows acceptance remain open.
+
+Windows atomic configuration publication is implemented and independently
+reviewed, with strict macOS/Windows cross-target lint and MSRV checks;
+[receipts](release-evidence/2026-10-05/windows-atomic-config/README.md) distinguish
+compilation from native execution. Native Windows acceptance remains pending.
