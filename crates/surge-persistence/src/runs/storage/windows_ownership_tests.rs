@@ -148,7 +148,7 @@ fn security(path: &Path) -> Security {
     }
     .ok()
     .unwrap();
-    let owned = Allocation(HLOCAL(descriptor.0));
+    let descriptor_allocation = Allocation(HLOCAL(descriptor.0));
     let owner = sid_text(owner);
     let mut control = 0;
     let mut revision = 0;
@@ -172,7 +172,7 @@ fn security(path: &Path) -> Security {
     let sddl = unsafe { sddl.to_string() }.unwrap();
     Security {
         owner,
-        descriptor: owned,
+        descriptor: descriptor_allocation,
         acl,
         control,
         sddl,
@@ -296,7 +296,7 @@ async fn derived_pool_retains_original_database_until_every_owner_drops() {
         let disk_path = connection
             .path()
             .expect("must retire an actual disk connection");
-        assert!(!disk_path.is_empty());
+        assert_ne!(disk_path, "");
         assert_eq!(
             std::path::Path::new(disk_path).canonicalize().unwrap(),
             path.canonicalize().unwrap()
