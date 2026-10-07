@@ -56,7 +56,7 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
         ), EngineConfig::default()));
         let cancel = tokio_util::sync::CancellationToken::new();
         let socket = home.path().join("framing.sock");
-        let server = tokio::spawn(surge_daemon::run_runs_only(
+        let mut server = tokio::spawn(surge_daemon::run_runs_only(
             surge_daemon::ServerConfig { socket_path: socket.clone(), max_active: 1, max_queue: 2 },
             Arc::new(LocalEngineFacade::new(engine.clone())),
             surge_daemon::tracked_run::TrackingContext::new(engine, storage.clone()),
@@ -64,7 +64,18 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
             Arc::new(surge_daemon::admission::AdmissionController::new(1, 2)), cancel.clone(),
         ));
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !socket.exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+            loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         }).await.unwrap();
         let sentinel = "PRIVATE-SOCKET-UNKNOWN-MCP-TRANSPORT";
         let request = serde_json::json!({"method":"owned_flow_start","request_id":1,"request":{

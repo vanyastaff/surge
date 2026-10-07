@@ -239,11 +239,17 @@ async fn shell_exec_owned(
         Err(message) => return ToolResultPayload::Error { message },
     };
 
-    let mut cmd = if cfg!(windows) {
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
         let mut c = tokio::process::Command::new("cmd");
-        c.args(["/C", command.as_str()]);
+        c.args(["/D", "/S", "/C"]);
+        // Preserve the operator's shell program through cmd's own quote parser.
+        c.as_std_mut().raw_arg(format!("\"{command}\""));
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
         let mut c = tokio::process::Command::new("sh");
         c.args(["-c", command.as_str()]);
         c
@@ -650,6 +656,39 @@ mod tests {
         };
         let result = d.dispatch(&ctx(d.worktree_root(), &mem), &call).await;
         assert!(matches!(result, ToolResultPayload::Unsupported { .. }));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_shell_preserves_quoted_executable_arguments_and_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("working directory");
+        std::fs::create_dir(&cwd).unwrap();
+        let executable = cwd.join("quoted command.exe");
+        std::fs::copy(std::env::var_os("ComSpec").unwrap(), &executable).unwrap();
+        let command = format!(
+            "\"{}\" /D /C echo \"quoted argument\" > \"output file.txt\" & type \"output file.txt\" & echo compound",
+            executable.display()
+        );
+        let dispatcher = WorktreeToolDispatcher::new(cwd.clone());
+        let memory = surge_core::run_state::RunMemory::default();
+        let call = ToolCall {
+            call_id: "quoted_shell".into(),
+            tool: "shell_exec".into(),
+            arguments: serde_json::json!({"command": command}),
+        };
+        let result = dispatcher
+            .dispatch(&ctx(dispatcher.worktree_root(), &memory), &call)
+            .await;
+        let ToolResultPayload::Ok { content } = result else {
+            panic!("quoted shell failed: {result:?}");
+        };
+        assert_eq!(content["exit_code"], 0, "{content}");
+        assert_eq!(content["stdout"], "\"quoted argument\" \r\ncompound\r\n");
+        assert_eq!(
+            std::fs::read(cwd.join("output file.txt")).unwrap(),
+            b"\"quoted argument\" \r\n"
+        );
     }
 
     #[tokio::test]

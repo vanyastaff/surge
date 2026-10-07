@@ -312,7 +312,10 @@ async fn spawn_via_shell(
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(command);
+        use std::os::windows::process::CommandExt;
+        c.args(["/D", "/S", "/C"]);
+        // cmd parses shell programs itself; standard argv escaping changes quotes.
+        c.as_std_mut().raw_arg(format!("\"{command}\""));
         c
     };
 
@@ -1033,6 +1036,38 @@ mod tests {
 
         // PostToolUse never triggers Suppress even when stdout looks like one.
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_shell_preserves_quoted_executable_arguments_and_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("working directory");
+        std::fs::create_dir(&cwd).unwrap();
+        let executable = cwd.join("quoted command.exe");
+        std::fs::copy(std::env::var_os("ComSpec").unwrap(), &executable).unwrap();
+        let command = format!(
+            "\"{}\" /D /C echo \"quoted argument\" > \"output file.txt\" & type \"output file.txt\" & echo compound",
+            executable.display()
+        );
+        let node = NodeKey::try_from("quoted_hook").unwrap();
+        let context = HookContext::for_node(&node).with_worktree_path(&cwd);
+        let result = spawn_via_shell(
+            &command,
+            Some(Duration::from_secs(5)),
+            Some(&cwd),
+            &[],
+            &context,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_status, 0, "{}", result.stderr);
+        assert_eq!(result.stdout, "\"quoted argument\" \r\ncompound\r\n");
+        assert_eq!(
+            std::fs::read(cwd.join("output file.txt")).unwrap(),
+            b"\"quoted argument\" \r\n"
+        );
+        assert!(!result.timed_out);
     }
 
     #[tokio::test]

@@ -269,7 +269,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
     ));
     let socket = home.path().join("task.sock");
     let cancel = CancellationToken::new();
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -281,12 +281,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
         cancel.clone(),
     ));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_for_listener(&socket, &mut server).await;
     let created = request(&socket,json!({"action":"create","operation_id":surge_core::RunId::new(),"project":project.path(),"title":"Durable task","requirements":{"text":"Preserve accepted requirements","criteria":["Requirement survives restart"]}})).await;
     assert_eq!(
         created["method"], "work_item_ok",
@@ -311,7 +306,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         EngineConfig::default(),
     ));
     let cancel = CancellationToken::new();
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -323,8 +318,8 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
         cancel.clone(),
     ));
-    // The old socket is unlinked by the new listener; wait for a successful typed query.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Wait for the replacement listener to accept a real connection.
+    wait_for_listener(&socket, &mut server).await;
     let shown = request(&socket, json!({"action":"show","item":item})).await;
     assert_eq!(
         shown["result"]["value"]["revision"]["requirements"]["text"],
@@ -614,7 +609,7 @@ async fn cold_host_with_config(
     } else {
         format!("cold-{endpoint}.sock")
     });
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 8,
@@ -628,6 +623,12 @@ async fn cold_host_with_config(
     ));
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
+            if server.is_finished() {
+                panic!(
+                    "cold daemon stopped before readiness: {:?}",
+                    (&mut server).await
+                );
+            }
             if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
                 .await
                 .is_ok()
@@ -2028,7 +2029,9 @@ async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: boo
             serde_json::to_vec(&continue_command).unwrap(),
         )
         .unwrap();
+        #[cfg(unix)]
         let stale_socket = home.path().join("cold.sock");
+        #[cfg(unix)]
         if stale_socket.exists() {
             std::fs::remove_file(&stale_socket).unwrap();
         }
@@ -2324,9 +2327,10 @@ async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: boo
         return;
     }
     conn.execute_batch("CREATE TRIGGER fixture_no_continue BEFORE INSERT ON events WHEN NEW.kind='RunContinued' BEGIN SELECT RAISE(ABORT,'fixture rejected control acknowledgement'); END;").unwrap();
-    // The original child was killed and reaped above. Its stale socket must
-    // not satisfy the new host's filesystem readiness check before it binds.
+    // The original child was killed and reaped above; retire its Unix pathname.
+    #[cfg(unix)]
     let stale_socket = home.path().join("cold.sock");
+    #[cfg(unix)]
     if stale_socket.exists() {
         std::fs::remove_file(&stale_socket).unwrap();
     }
@@ -3700,6 +3704,7 @@ async fn gate_answer_crash_fixture(after_effects: bool) {
     }
     conn.execute_batch("DROP TRIGGER fixture_gate_delivery_interval")
         .unwrap();
+    #[cfg(unix)]
     std::fs::remove_file(home.path().join("cold.sock")).unwrap();
     let bridge = Arc::new(wire_bridge::WireBridge {
         bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
@@ -4111,6 +4116,7 @@ async fn pure_gate_suspension_fixture_deadline(
         server.await.unwrap().unwrap();
         return;
     }
+    #[cfg(unix)]
     if socket.exists() {
         std::fs::remove_file(&socket).unwrap();
     }
@@ -4477,4 +4483,31 @@ async fn revisited_human_gate_requires_new_occurrence_and_new_decision() {
     );
     cancel.cancel();
     server.await.unwrap().unwrap();
+}
+
+async fn wait_for_listener(
+    socket: &Path,
+    server: &mut tokio::task::JoinHandle<Result<(), surge_daemon::DaemonError>>,
+) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.is_finished() {
+                panic!(
+                    "daemon stopped before readiness: {:?}",
+                    (&mut *server).await
+                );
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(
+                socket.to_path_buf(),
+            )
+            .await
+            .is_ok()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("daemon must accept a connection within its readiness deadline");
 }

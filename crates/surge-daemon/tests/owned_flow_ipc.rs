@@ -59,7 +59,7 @@ async fn locator_replay_survives_missing_source_and_changed_configuration() {
     ));
     let cancel = tokio_util::sync::CancellationToken::new();
     let socket = home.path().join("flow.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 1,
@@ -72,7 +72,16 @@ async fn locator_replay_survives_missing_source_and_changed_configuration() {
         cancel.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !socket.exists() {
+        loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })

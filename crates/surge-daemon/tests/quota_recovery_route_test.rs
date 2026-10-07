@@ -518,7 +518,7 @@ async fn quota_dispatch_fixture_source(
         },
     ));
     let socket = home.path().join("quota.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -531,7 +531,16 @@ async fn quota_dispatch_fixture_source(
         cancel.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !socket.exists() {
+        loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -1636,7 +1645,7 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
     let scheduler_cancel = cancel.clone();
     let scheduler_task = tokio::spawn(scheduler.run(scheduler_cancel));
     let socket = home.path().join("quota-wake.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -1649,7 +1658,16 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task() {
         cancel.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !socket.exists() {
+        loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -2039,7 +2057,7 @@ async fn child_planned_park_restart_probe() {
     let broadcast = Arc::new(surge_daemon::broadcast::BroadcastRegistry::new());
     let tracking = surge_daemon::tracked_run::TrackingContext::new(engine.clone(), storage.clone());
     let socket = home.join("quota.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -2052,7 +2070,16 @@ async fn child_planned_park_restart_probe() {
         cancel.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !socket.exists() {
+        loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::task::yield_now().await;
         }
     })
@@ -2715,7 +2742,7 @@ async fn cold_committed_reentry_probe(first: bool) {
         committed_reentry_engine_config(&home),
     ));
     let socket = home.join("quota.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -2728,7 +2755,16 @@ async fn cold_committed_reentry_probe(first: bool) {
         cancel.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !socket.exists() {
+        loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::task::yield_now().await;
         }
     })
