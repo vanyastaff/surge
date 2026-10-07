@@ -1,0 +1,4 @@
+fbd128f3842fb4e93708922a54aaabd08de993238c0cb19a48bb22b6b9cec32c  core-windows-clippy.log
+f1d5beb7064c50ba77cf44df22df4b69172406de34fec0ed5a7fe1e06ca8027a  fixture-windows-typecheck.log
+cf8adb0f69077047a1b653787d4a2647428285a8c3d0dbfe139b95b07c84eddf  crates/surge-core/src/config/io.rs
+f6198bbe2ba36a21680993f81f54dd6bad17ae314da199e7f09655de33af8cb9  crates/surge-persistence/src/runs/storage/windows_ownership_tests.rs

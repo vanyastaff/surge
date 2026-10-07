@@ -190,13 +190,13 @@ fn profile_fixture() -> tempfile::TempDir {
     let user = token_user(&token);
     let parent = profile_path(&token);
     let _route = retained_profile_route(&parent);
-    assert_eq!(
-        security(&parent).owner,
-        user,
-        "profile must belong to the actual token user"
+    let profile_owner = security(&parent).owner;
+    assert!(
+        profile_owner == user || matches!(profile_owner.as_str(), "S-1-5-18" | "S-1-5-32-544"),
+        "profile ancestor must belong to the actual user, SYSTEM or Administrators; owner={profile_owner}"
     );
     println!(
-        "stage1 profile selected: user={user} profile={} fixed-NTFS=true reparse=false owner-user=true",
+        "stage1 profile selected: user={user} profile={} owner={profile_owner} fixed-NTFS=true reparse=false owner-trusted=true",
         parent.display()
     );
     let fixture = tempfile::Builder::new()

@@ -388,7 +388,8 @@ mod save_tests {
                         std::time::Instant::now() < deadline,
                         "writers exceeded reader deadline"
                     );
-                    let observed = std::fs::read_to_string(&destination).unwrap();
+                    let observed =
+                        read_config_with_phase_diagnostics(&destination, reads, &finished);
                     assert!(
                         expected.contains(&observed),
                         "reader saw incomplete or unknown configuration"
@@ -423,6 +424,34 @@ mod save_tests {
             reader.join().unwrap();
         });
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    fn read_config_with_phase_diagnostics(
+        destination: &Path,
+        completed_reads: usize,
+        finished: &std::sync::atomic::AtomicUsize,
+    ) -> String {
+        use std::io::Read as _;
+        use std::sync::atomic::Ordering;
+
+        let mut file = std::fs::File::open(destination).unwrap_or_else(|error| {
+            panic!(
+                "config reader open failed: raw_os_error={:?}, completed_reads={completed_reads}, finished_writers={}: {error}",
+                error.raw_os_error(),
+                finished.load(Ordering::Acquire),
+            );
+        });
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap_or_else(|error| {
+            panic!(
+                "config reader read failed: raw_os_error={:?}, completed_reads={completed_reads}, finished_writers={}, buffered_bytes={}: {error}",
+                error.raw_os_error(),
+                finished.load(Ordering::Acquire),
+                contents.len(),
+            );
+        });
+        contents
     }
 
     #[cfg(windows)]

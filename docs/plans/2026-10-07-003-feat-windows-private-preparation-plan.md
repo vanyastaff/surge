@@ -455,13 +455,27 @@ blocking replacement. This requires native multi-connection and migration tests;
 source inspection alone is insufficient. Do not use SQLite URI exclusive=1 here.
 
 Keep DbIdentityFence and directory owners for the entire migration, pool and all
-outstanding derived stores. open_registry_pool currently returns a bare Pool:
-its SqliteConnectionManager with_init closure can retain an Arc<SqliteNamespaceOwner>
-for pool-manager lifetime, and verify before pragmas. The migration connection
-retains a local clone from before open until after close. Each run DB owner is
-retained by its actual writer lifecycle. Direct Store and MemoryStore own their
-corresponding guards in the structs. Verify r2d2 drop/lifetime behavior so dropping
-Storage while a derived store/pool remains cannot release fences early.
+outstanding derived stores. Pinned r2d2 0.8.10 drops its manager before idle
+connections, so a manager-only with_init capture is insufficient. A persistence-
+owned Windows manager retains its own namespace Arc and returns an opaque owned
+connection with independent namespace retention. The public Windows manager alias
+changes accordingly; the Unix alias remains the existing concrete manager.
+
+Owned connections expose immutable Deref and narrow borrowing transaction methods,
+never public DerefMut, into_inner or mutable callbacks that allow safe extraction
+of an unowned disk connection. Wrap before PRAGMAs, migrations and initialization
+callbacks. Migrations, pools, writers, readonly inspection/recovery, refusal owners,
+Store and MemoryStore all follow this same retention contract.
+
+Use checked Connection::close while retaining namespace ownership. Explicit close
+failure returns the owning connection and error; it does not release protection.
+Destructor close failure uses the existing protected-owner fatal policy, aborting
+with both SQLite and namespace still held. This is necessary because rusqlite's
+ordinary destructor discards sqlite3_close errors. A genuine forgotten-statement
+SQLITE_BUSY probe must verify the owning error return and bounded fatal-child
+behavior. SQLITE_TRACE_CLOSE fires before SQLite's busy check and is only an
+ordering oracle, never proof of successful close. Successful WAL cleanup, final
+namespace release and reopen remain separate native acceptance requirements.
 
 ### WAL/SHM/journal lifecycle
 
@@ -589,3 +603,88 @@ files acquire an actual exclusive lock before stale/live inspection or byte
 replacement; deletion uses the owned descriptor. OwnershipBusy denotes actual
 sharing/lock contention, never generic access denial or unknown liveness. These
 contracts need caller integration and native acceptance before Stage 1 closes.
+
+### Caller lifetime refinement accepted before implementation
+
+Preserve the existing canonical home resolver across CLI, daemon and persistence;
+validate its selected route through the native owner. The effective-token profile
+locator is used by fixtures here. Do not silently introduce different production
+defaults under impersonation in just one caller.
+
+Windows PidfileGuard holds the original control object and exclusive OS lock through
+HostRuntime shutdown and terminal joins. Native create-versus-open provenance
+allows initialization of an empty newly created PID file; a preexisting empty,
+malformed, live or unknown PID refuses unchanged. Arm descriptor deletion only
+after successful own-PID publication and complete flush. Process observation uses
+a retained synchronization handle and explicit unknown errors, never exit-code 259
+or access denial as proof of termination.
+
+Detached CLI startup retains its actual Child and append-output leases. Readiness
+requires the connected Windows stream's kernel peer PID to equal that retained
+child's PID, followed by a still-live child check. Pinned interprocess 2.4.2 exposes
+this through StreamCommon::peer_creds; an unrelated concurrently started daemon
+cannot authorize handoff. Missing, failed or mismatched identity settles only the
+launched child. Failure/cancellation requests kill once, then retains ownership
+while polling until actual exit, with diagnostics for uncertainty. Settlement may
+outlast the readiness deadline. It proves direct-child exit only. Output flush
+errors after exit remain errors without undoing the observed settlement fact.
+
+Architecture and independent security reviewers accepted this refinement after
+closing creation-provenance and wrong-server readiness findings. Required literal
+native checks include preexisting empty-file preservation, real active/exit-259
+PID handling, concurrent acquisition, correct/wrong server identity, failed-start
+settlement and cleanup after all actual owners release. Implementation and native
+acceptance remain open; no Stage 2–4 guard is enabled by this plan acceptance.
+
+### Ordinary test-home migration accepted before implementation
+
+A shared test-only FixtureHome helper owns an ordinary temporary outer directory
+under the effective-token profile and a missing protected child created through
+RuntimeHomeOwner. It retains only namespace directories, never a SQLite connection
+or permanent DB fence. Non-Windows uses ordinary TempDir behavior. The helper is
+included once per test binary; persistence supplies its own crate-local owner
+import, avoiding a production test-support API or self-dependency.
+
+Keep canonical relative memory.db/usage.db paths. Separate project/worktree roots
+when a test's contract requires them; repeated opens reuse the same child identity.
+Owner fields precede the outer TempDir, fixture fields follow all actual owners in
+harness structs, and successful tests explicitly settle writers/tasks/readers/pools
+before fallible close. No delayed cleanup, retries, leaked TempDirs or ignored
+errors stand in for settlement. Independent unsafe-home, absent-home creation and
+original DB ownership oracles remain excluded from this convenience helper.
+
+The owning role, independent critic and security reviewer accepted this bounded
+migration. The initial orchestrator inventory has 191 textual Storage open calls
+across 73 files, not 191 unique tests. Start with the shared mock admission fixture,
+bootstrap/loop harnesses, then unit and integration callers; reconcile every actual
+caller's path and lifetime. Native elevated and standard-user creation, unchanged
+outer ACL, same-database reopen, no helper-created DB fence, and completed cleanup
+remain required evidence. Merely compiling these Windows branches is insufficient.
+
+### Directory-only run reservation
+
+Fork reserves its destination before copying artifacts and creating the run. On
+Windows, RuntimeHomeOwner::reserve_run_directory creates the canonical RunId child
+and artifacts directory using exclusive native FILE_CREATE, with no fallback to
+opening collisions. It creates no SQLite file, schema, migration or registry row.
+The returned directory owner retains both descriptor chains through copying and
+Storage handoff; append operations target the run root. Partial failures leave a
+protected incomplete directory and report error, without pathname cleanup.
+
+This capability also permits exact empty/legacy database fixture setup without
+precreating a valid schema and erasing its refusal trigger. Empty-file append must
+flush and drop before checked SQLite opens it; retain directory ownership during
+setup. Native tests must prove absence of SQL after reservation, unchanged bytes
+and ACL on collision, and run/artifacts rename refusal while held followed by
+release. Architecture and independent security accepted this refined contract.
+
+### Profile fixture repair after native 23460aa
+
+Explicit-token profile lookup now succeeds. The profile directory is actually
+LocalSystem-owned, so requiring TokenUser at this ancestor incorrectly stopped
+the positive tests. The fixture accepts only the already-reviewed ancestor owner
+set: current effective user, LocalSystem or Builtin Administrators. The created
+outer fixture and protected child remain strictly current-user-owned. Retained
+routing, fixed NTFS and all three backend assertions remain unchanged. Independent
+security accepted this focused repair (profile replan repair 1); native positive
+backend RED is still pending and must not be inferred from this fixture fix.

@@ -377,3 +377,13 @@ unsafe-home refusal failure and two profile-lookup fixture failures before the
 backend assertions. [Exact native receipt](release-evidence/2026-10-05/windows-ci-965ac42/README.md)
 keeps those categories distinct. Windows Clippy found two test-only style lints,
 repaired in `7a4b9f4` pending native revalidation. All other jobs pass.
+
+Native source `23460aa`, run `37691951295`: **3,654 Windows tests run,
+3,619 passed, 35 failed, 37 skipped**. All platform Clippy and macOS/Ubuntu
+suites pass. The extra failure is intermittent AccessDenied in the unchanged
+concurrent configuration reader test; diagnosis remains open. Standard-user flush
+passes 1/1. Profile lookup now succeeds, but two new state-home fixtures stop on
+the actual SYSTEM-owned profile ancestor; they remain setup failures, not backend
+RED. The unsafe-home refusal assertion remains genuine RED.
+[Full receipt](release-evidence/2026-10-05/windows-ci-23460aa/README.md) preserves
+those results and the focused trusted-ancestor fixture correction.
