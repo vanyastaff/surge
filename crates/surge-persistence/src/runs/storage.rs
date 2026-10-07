@@ -1075,3 +1075,6 @@ mod existing_run_upgrade_tests {
             .unwrap();
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_ownership_tests;

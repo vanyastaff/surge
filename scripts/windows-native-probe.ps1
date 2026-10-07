@@ -38,19 +38,30 @@ try {
     $credential = [PSCredential]::new("$env:COMPUTERNAME\$account", $password)
     $env:SURGE_NATIVE_PROBE_ROOT = $root
     $env:SURGE_NATIVE_PROBE_SID = $userSid
-    $process = Start-Process -FilePath $binary -ArgumentList @('--ignored', '--exact', 'state_home::windows::native::tests::non_admin_ntfs_complete_flush_probe', '--nocapture') -Credential $credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-    if (-not $process.WaitForExit(120000)) {
-        $process.Kill()
-        if (-not $process.WaitForExit(10000)) { throw 'Owned native probe did not terminate after kill' }
-        throw 'Native probe exceeded 120 seconds'
-    }
-    $process.Refresh()
-    Get-Content -LiteralPath $stdout
-    Get-Content -LiteralPath $stderr
-    $printed = $true
-    if ($process.ExitCode -ne 0) { throw "Native probe failed with exit code $($process.ExitCode)" }
-    if (-not (Select-String -LiteralPath $stdout -SimpleMatch 'non-elevated=true filesystem=NTFS file=PASS directory=PASS readonly-error=PASS' -Quiet)) {
-        throw 'Native probe success receipt absent (test filter may not have run)'
+    $cases = @(
+        @{ Filter = 'state_home::windows::native::tests::non_admin_ntfs_complete_flush_probe'; Receipts = @('non-elevated=true filesystem=NTFS file=PASS directory=PASS readonly-error=PASS') },
+        @{ Filter = 'runs::storage::windows_ownership_tests::'; Receipts = @('stage1 new-home protected-user-only=PASS', 'stage1 derived-pool ownership-and-settlement=PASS', 'stage1 unsafe-home unchanged-refusal=PASS') }
+    )
+    foreach ($case in $cases) {
+        $printed = $false
+        $process = Start-Process -FilePath $binary -ArgumentList @('--ignored', $case.Filter, '--nocapture', '--test-threads=1') -Credential $credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            if (-not $process.WaitForExit(10000)) { throw 'Owned native probe did not terminate after kill' }
+            throw 'Native probe exceeded 120 seconds'
+        }
+        $process.Refresh()
+        Get-Content -LiteralPath $stdout
+        Get-Content -LiteralPath $stderr
+        $printed = $true
+        if ($process.ExitCode -ne 0) { throw "Native probe failed with exit code $($process.ExitCode)" }
+        foreach ($receipt in $case.Receipts) {
+            if (-not (Select-String -LiteralPath $stdout -SimpleMatch $receipt -Quiet)) {
+                throw 'Native probe success receipt absent (test filter may not have run)'
+            }
+        }
+        $process.Dispose()
+        $process = $null
     }
 } finally {
     $env:SURGE_NATIVE_PROBE_ROOT = $previousRoot

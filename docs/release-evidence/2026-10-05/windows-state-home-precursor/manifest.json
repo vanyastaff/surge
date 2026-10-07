@@ -1,0 +1,18 @@
+{
+  "source_sha256": {
+    "crates/surge-persistence/src/runs/storage/windows_ownership_tests.rs": "c194cb599e77b79b2f0ae0457dfde26e98daa6dffcf4430a5194283709da0b81",
+    "crates/surge-persistence/src/runs/storage.rs": "d68a6c55f2d8f76dfd21a85f6918849179a62268f5b59e1cebad9182a691e944",
+    "crates/surge-persistence/Cargo.toml": "f1b1bab3749b2a84d3a85e507a0724567ee8ffe45bbe9023bd56b3bfed6fd1b0",
+    "scripts/windows-native-probe.ps1": "ad405b37728c5a598400126b3ccbc3ccfa026275d760b780933d095b68adaefe"
+  },
+  "receipts_sha256": {
+    "target/windows-state-home-red-precursor/macos-persistence-clippy.log": "876f1ac9ce6134089e0b5a813a8ca35efeaf2a9986d1b2da4ff3885a426dafbd",
+    "target/windows-state-home-red-precursor/persistence-fmt.log": "d8f26ddfd7408bc15c4e94d3adf75ae065d813e0cda8184cb7be38abb1602698",
+    "target/windows-state-home-red-precursor/diff-check.log": "3e5621bec35c00df9912b4562b5bedaae8a7b25440a56e4f234a86e23cb4d8de"
+  },
+  "limitations": [
+    "Windows-only existing-API tests not compiled or executed on macOS",
+    "Actual Windows CI required to establish behavioral RED",
+    "No production guard changes; no pre-SQL temporal guarantee claimed by post-open oracle"
+  ]
+}
