@@ -256,7 +256,8 @@ runtime unsupported guard is removed in a pure-type or native-probe stage.
 
 This is the first independently implementable unit after the staged candidate's
 security/critic review. Files: new `surge-core/src/execution_recovery/guardian.rs`
-and its export in `execution_recovery.rs`; adjacent unit tests only. Do not change
+and its export in `execution_recovery.rs`; adjacent unit tests only.
+Use module-local `GuardianIdentityError`; do not extend RecoveryIdentityError. Do not change
 run_event.rs, process.rs, migrations, storage readers or runtime adapters in G1.
 
 Concrete data APIs (all private fields, validating constructors and serde try_from):
@@ -273,12 +274,58 @@ Concrete data APIs (all private fields, validating constructors and serde try_fr
 - `WindowsGuardianIdentity`: authority, existing ExecutionWriterId as ownership
   occurrence, guardian process identity, child process identity, and bounded local
   endpoint label. Require distinct guardian/child PIDs; exact immutable fields.
-  Endpoint label is ASCII `[a-z0-9_-]`, 1..128 bytes, never a filesystem/UNC path,
-  secret or remote pipe locator. Native owner derives its local pipe path from it.
+  Endpoint is exactly `surge-guardian-<installation hex>-<lowercase bare occurrence ULID>`
+  (106 ASCII bytes, within 128); it is never a filesystem/UNC path, secret or remote
+  pipe locator. Constructor derives it; serde validates exact equality. Native owner
+  derives its local pipe path from this public label.
 - `WindowsGuardianContainer`: explicitly tagged `kind=windows_guardian`, version1,
   identity and GroupOnly coverage. Constructor/deserialization cannot accept or
   manufacture CoveredDomain/Incomplete. Establishment journal sequence and lease
   are later receipt types; G1 must not pretend it already owns those authorities.
+
+Frozen V1 wire contract:
+
+```json
+{
+  "kind": "windows_guardian",
+  "version": 1,
+  "identity": {
+    "authority": {
+      "installation_id": "<64 lowercase hex digits>",
+      "executable_hash": "sha256:<64 lowercase hex digits>",
+      "protocol_version": 1
+    },
+    "occurrence": "<canonical bare ULID>",
+    "guardian": {"pid": 100, "creation_filetime": 123},
+    "child": {"pid": 101, "creation_filetime": 124},
+    "endpoint": "surge-guardian-<installation hex>-<lowercase bare occurrence ULID>"
+  },
+  "coverage": "group_only"
+}
+```
+
+Angle-bracket strings describe field formats, not executable test fixtures. Use
+independent literal canonical values in tests. Reject nil ExecutionWriterId: its
+existing `nil()` is a fold placeholder, not a real ownership occurrence. Existing
+ID Display uses `writer-<ULID>` while serde uses bare ULID; strict guardian wire
+uses the canonical uppercase bare ULID, and the endpoint uses its lowercase form.
+Do not build JSON fixtures from Display or normalize noncanonical input silently.
+
+GuardianAuthority's raw serde DTO reads the executable hash as a string, parses
+existing ContentHash, and requires equality with its canonical `to_string()`.
+Existing ContentHash accepts bare/uppercase hex generally; do not change that shared
+API or permit those spellings through the guardian envelope. Typed constructor uses
+the existing 32-byte digest; individual zero bytes and even an all-zero digest are
+structurally valid hashes. Only the installation identifier rejects all-zero bytes.
+Protocol/version fields are exactly numeric1; future values fail explicit validation.
+
+Constructors take typed validated dependencies; getters expose named installation,
+executable_hash, protocol_version, occurrence, guardian, child, pid, creation_filetime,
+endpoint, identity, version and coverage values. All fields remain private and getter
+access grants no live capability. A module-local GuardianIdentityError distinguishes
+invalid installation, noncanonical wire ID/hash, unsupported kind/version/protocol,
+invalid process/occurrence, identity collision, endpoint mismatch and invalid coverage.
+No clock, file, process or cryptographic generation operation belongs in G1.
 
 All DTOs deny unknown fields; reject unknown kind/version, blank/noncanonical
 identifiers, zero PID/FILETIME or all-zero installation ID, conflicting process identities
