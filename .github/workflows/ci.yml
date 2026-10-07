@@ -98,6 +98,12 @@ jobs:
         if: matrix.os != 'ubuntu-latest'
         run: cargo nextest run --locked --workspace --exclude surge-ui --no-fail-fast
 
+      - name: Probe native NTFS durability as a standard user (Windows)
+        if: always() && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/windows-native-probe.ps1
+        timeout-minutes: 10
+
       # nextest does not run doctests; the canonical workaround is a single
       # extra `cargo test --locked --doc` invocation. Cheap because no recompilation.
       - name: Run doctests (incl. surge-ui)

@@ -122,3 +122,6 @@ pub mod error {
 
 /// Durable work-item history and execution reservations.
 pub mod work_items;
+
+#[cfg(windows)]
+mod state_home;
