@@ -52,7 +52,8 @@ try {
         @{ Filter = 'state_home::security_tests::unsafe_home_dacls_are_refused_without_mutating_existing_objects'; Receipts = @('stage1 actual null/unprotected/widened/inherited ACL unchanged refusal=PASS') },
         @{ Filter = 'state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal'; Receipts = @('stage1 unsafe WAL and hardlinked database unchanged refusal=PASS') },
         @{ Filter = 'state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target'; Receipts = @('stage1 native pathname alias and ADS unchanged refusal=PASS') },
-        @{ Filter = 'state_home::creation_security_tests::first_observable_creation_has_private_security'; Receipts = @('stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS') }
+        @{ Filter = 'state_home::creation_security_tests::first_observable_creation_has_private_security'; Receipts = @('stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS') },
+        @{ Filter = 'state_home::control_lock_tests::standard_user_control_lock_and_payload_compatibility'; Receipts = @('stage1 non-elevated control readable payload exclusive writer and legacy lock compatibility=PASS') }
     )
     foreach ($case in $cases) {
         $printed = $false

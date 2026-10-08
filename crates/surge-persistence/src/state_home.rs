@@ -220,7 +220,9 @@ impl RuntimeControlFile {
     pub fn was_created(&self) -> bool {
         self.file.was_created()
     }
-    /// Acquire the exclusive OS lock without waiting; `false` means contention.
+    /// Acquire exclusive ownership without waiting; `false` means lock contention.
+    /// The reserved lock byte overlaps legacy whole-file locks while leaving bounded
+    /// payload reads available. The held descriptor denies independent writers/deleters.
     ///
     /// # Errors
     /// Returns structural, security and non-contention native failures.
@@ -442,3 +444,7 @@ pub(crate) mod test_security;
 #[cfg(test)]
 #[path = "state_home/creation_security_tests.rs"]
 mod creation_security_tests;
+
+#[cfg(test)]
+#[path = "state_home/control_lock_tests.rs"]
+mod control_lock_tests;

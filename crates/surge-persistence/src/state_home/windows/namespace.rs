@@ -164,6 +164,16 @@ fn relative_access(
     creation: Option<&super::security::CreationSecurity>,
     access: windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
 ) -> NativeResult<File> {
+    relative_access_shared(parent, name, directory, creation, access, false)
+}
+fn relative_access_shared(
+    parent: &File,
+    name: &OsStr,
+    directory: bool,
+    creation: Option<&super::security::CreationSecurity>,
+    access: windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
+    control: bool,
+) -> NativeResult<File> {
     #[cfg(test)]
     let observed_name = name;
     let mut name = component(name)?;
@@ -195,7 +205,11 @@ fn relative_access(
             &raw mut io,
             None,
             FILE_ATTRIBUTE_NORMAL,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            if control {
+                FILE_SHARE_READ
+            } else {
+                FILE_SHARE_READ | FILE_SHARE_WRITE
+            },
             if creation.is_some() {
                 FILE_CREATE
             } else {
@@ -586,6 +600,10 @@ pub(in crate::state_home) struct NativeControlFile {
     locked: bool,
     created: bool,
 }
+const CONTROL_PAYLOAD_MAX: usize = 1_048_576;
+const CONTROL_LOCK_OFFSET: u64 = 1_u64 << 32;
+const _: () = assert!(CONTROL_PAYLOAD_MAX as u64 + 1 < CONTROL_LOCK_OFFSET);
+const _: () = assert!(CONTROL_LOCK_OFFSET < u64::MAX);
 impl Namespace {
     fn runtime_file(&self, name: &OsStr, control: bool) -> NativeResult<(File, bool)> {
         use windows::Win32::Storage::FileSystem::{DELETE, FILE_GENERIC_READ};
@@ -599,19 +617,23 @@ impl Namespace {
         if control {
             access |= DELETE;
         }
-        let (file, created) = match relative_access(parent, name, false, Some(&creation), access) {
-            Ok(file) => {
-                self.owner
-                    .validate_directory(&file, DirectoryPolicy::Protected { inheritable: false })?;
-                flush_complete(&file)?;
-                flush_complete(parent)?;
-                (file, true)
-            },
-            Err(NativeError::Open(STATUS_OBJECT_NAME_COLLISION)) => {
-                (relative_access(parent, name, false, None, access)?, false)
-            },
-            Err(error) => return Err(error),
-        };
+        let (file, created) =
+            match relative_access_shared(parent, name, false, Some(&creation), access, control) {
+                Ok(file) => {
+                    self.owner.validate_directory(
+                        &file,
+                        DirectoryPolicy::Protected { inheritable: false },
+                    )?;
+                    flush_complete(&file)?;
+                    flush_complete(parent)?;
+                    (file, true)
+                },
+                Err(NativeError::Open(STATUS_OBJECT_NAME_COLLISION)) => (
+                    relative_access_shared(parent, name, false, None, access, control)?,
+                    false,
+                ),
+                Err(error) => return Err(error),
+            };
         self.owner
             .validate_directory(&file, DirectoryPolicy::Protected { inheritable: false })?;
         Ok((file, created))
@@ -708,19 +730,61 @@ impl NativeControlFile {
         self.created
     }
     pub(in crate::state_home) fn try_lock(&mut self) -> NativeResult<bool> {
+        use windows::Win32::{
+            Foundation::{ERROR_IO_PENDING, ERROR_LOCK_VIOLATION},
+            Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx},
+            System::IO::{OVERLAPPED, OVERLAPPED_0, OVERLAPPED_0_0},
+        };
         // This verifies the held descriptor without reopening DELETE against itself.
         self.namespace.verify()?;
         self.namespace.owner.validate_directory(
             &self.file,
             DirectoryPolicy::Protected { inheritable: false },
         )?;
-        match self.file.try_lock() {
+        inspect(&self.file, false)?;
+        if self.locked {
+            return Ok(true);
+        }
+        let mut overlapped = OVERLAPPED {
+            Anonymous: OVERLAPPED_0 {
+                Anonymous: OVERLAPPED_0_0 {
+                    Offset: 0,
+                    OffsetHigh: u32::try_from(CONTROL_LOCK_OFFSET >> 32)
+                        .map_err(|_| refusal("control lock offset overflow"))?,
+                },
+            },
+            ..Default::default()
+        };
+        // SAFETY: the synchronous held handle and initialized OVERLAPPED stay live
+        // throughout this nonblocking call. The reserved byte is beyond all payload
+        // reads and overlaps the legacy whole-file range without extending the file.
+        let result = unsafe {
+            LockFileEx(
+                HANDLE(self.file.as_raw_handle()),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                1,
+                0,
+                &raw mut overlapped,
+            )
+        };
+        match result {
             Ok(()) => {
                 self.locked = true;
                 Ok(true)
             },
-            Err(std::fs::TryLockError::WouldBlock) => Ok(false),
-            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+            Err(error)
+                if error.code() == windows::core::HRESULT::from_win32(ERROR_IO_PENDING.0) =>
+            {
+                // A nonconforming pending operation must not outlive stack OVERLAPPED.
+                std::process::abort();
+            },
+            Err(error)
+                if error.code() == windows::core::HRESULT::from_win32(ERROR_LOCK_VIOLATION.0) =>
+            {
+                Ok(false)
+            },
+            Err(error) => Err(error.into()),
         }
     }
     pub(in crate::state_home) fn read_bounded(&self, limit: usize) -> NativeResult<Vec<u8>> {
@@ -729,7 +793,7 @@ impl NativeControlFile {
         }
         inspect(&self.file, false)?;
         use std::io::{Read, Seek, SeekFrom};
-        if limit > 1_048_576 {
+        if limit > CONTROL_PAYLOAD_MAX {
             return Err(refusal("control read limit too large"));
         }
         self.namespace.verify()?;
@@ -753,7 +817,7 @@ impl NativeControlFile {
         }
         inspect(&self.file, false)?;
         use std::io::{Seek, SeekFrom, Write};
-        if bytes.len() > 1_048_576 {
+        if bytes.len() > CONTROL_PAYLOAD_MAX {
             return Err(refusal("control write limit too large"));
         }
         self.namespace.verify()?;

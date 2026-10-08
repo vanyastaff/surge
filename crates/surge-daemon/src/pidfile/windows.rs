@@ -166,6 +166,10 @@ mod tests {
             std::fs::read(home.path().join("daemon/daemon.pid")).unwrap(),
             pid.to_string().as_bytes()
         );
+        assert_eq!(
+            super::super::read_pid(&home.path().join("daemon/daemon.pid")).unwrap(),
+            Some(pid)
+        );
         let second = PidfileGuard::acquire_in(home.path(), pid);
         assert!(matches!(
             second,
