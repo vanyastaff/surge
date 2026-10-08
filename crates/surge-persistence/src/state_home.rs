@@ -438,3 +438,7 @@ mod security_tests;
 #[cfg(test)]
 #[path = "state_home/test_security.rs"]
 pub(crate) mod test_security;
+
+#[cfg(test)]
+#[path = "state_home/creation_security_tests.rs"]
+mod creation_security_tests;

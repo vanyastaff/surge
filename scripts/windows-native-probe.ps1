@@ -51,7 +51,8 @@ try {
         @{ Filter = 'runs::connection::windows_tests::busy_close_returns_owner_and_drop_is_fatal'; Receipts = @('stage1 actual SQLITE_BUSY returns ownership and fatal Drop settles process=PASS') },
         @{ Filter = 'state_home::security_tests::unsafe_home_dacls_are_refused_without_mutating_existing_objects'; Receipts = @('stage1 actual null/unprotected/widened/inherited ACL unchanged refusal=PASS') },
         @{ Filter = 'state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal'; Receipts = @('stage1 unsafe WAL and hardlinked database unchanged refusal=PASS') },
-        @{ Filter = 'state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target'; Receipts = @('stage1 native pathname alias and ADS unchanged refusal=PASS') }
+        @{ Filter = 'state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target'; Receipts = @('stage1 native pathname alias and ADS unchanged refusal=PASS') },
+        @{ Filter = 'state_home::creation_security_tests::first_observable_creation_has_private_security'; Receipts = @('stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS') }
     )
     foreach ($case in $cases) {
         $printed = $false

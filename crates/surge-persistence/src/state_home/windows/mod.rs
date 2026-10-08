@@ -4,6 +4,9 @@ pub(super) mod native;
 mod namespace;
 mod security;
 
+#[cfg(test)]
+pub(super) mod creation_observation;
+
 pub(crate) use namespace::NativeJournalLock;
 pub(super) use namespace::{Namespace, NativeAppendFile, NativeControlFile};
 

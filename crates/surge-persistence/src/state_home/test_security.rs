@@ -10,7 +10,7 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HLOCAL, LocalFree},
+        Foundation::{ERROR_NO_TOKEN, HANDLE, HLOCAL, LocalFree},
         Security::{
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
             Authorization::{ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT},
@@ -25,7 +25,7 @@ use windows::{
         },
         System::{
             SystemServices::ACCESS_ALLOWED_ACE_TYPE,
-            Threading::{GetCurrentProcess, OpenProcessToken},
+            Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
         },
     },
     core::PWSTR,
@@ -49,9 +49,17 @@ fn sid_text(sid: PSID) -> String {
     unsafe { text.to_string() }.unwrap()
 }
 fn token_principals() -> (String, String) {
+    token_principals_for_actor(&std::env::var("SURGE_NATIVE_PROBE_SID").unwrap())
+}
+pub(crate) fn token_principals_for_actor(expected_actor: &str) -> (String, String) {
     let mut handle = HANDLE::default();
-    // SAFETY: process pseudo-handle and initialized output; only TOKEN_QUERY requested.
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut handle) }.unwrap();
+    // SAFETY: query-only pseudo thread handle and initialized real-token output.
+    let thread = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &raw mut handle) };
+    if let Err(error) = thread {
+        assert_eq!(error.code(), ERROR_NO_TOKEN.to_hresult());
+        // SAFETY: absence of a thread token is the sole allowed process fallback.
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut handle) }.unwrap();
+    }
     // SAFETY: transfer the one newly returned handle into RAII ownership.
     let token = unsafe { OwnedHandle::from_raw_handle(handle.0) };
     let mut principals = Vec::new();
@@ -92,7 +100,7 @@ fn token_principals() -> (String, String) {
         principals.push(sid_text(sid));
     }
     let user = principals.remove(0);
-    assert_eq!(user, std::env::var("SURGE_NATIVE_PROBE_SID").unwrap());
+    assert_eq!(user, expected_actor);
     (user, principals.remove(0))
 }
 struct Security {
@@ -102,13 +110,15 @@ struct Security {
     mask: u32,
     flags: u8,
 }
-fn observe(path: &Path) -> Security {
-    let file = OpenOptions::new()
+pub(crate) fn open_observer(path: &Path) -> std::fs::File {
+    OpenOptions::new()
         .access_mode((READ_CONTROL | FILE_READ_ATTRIBUTES).0)
         .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
         .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
         .open(path)
-        .unwrap();
+        .unwrap()
+}
+fn observe(file: &std::fs::File) -> Security {
     let mut owner = PSID::default();
     let mut acl: *mut ACL = std::ptr::null_mut();
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
@@ -168,19 +178,30 @@ fn observe(path: &Path) -> Security {
 }
 
 pub(crate) fn assert_private_directory(path: &Path) {
-    let observed = observe(path);
-    let (user, _) = token_principals();
+    assert_private_for_actor(
+        path,
+        &std::env::var("SURGE_NATIVE_PROBE_SID").unwrap(),
+        true,
+    );
+}
+pub(crate) fn assert_private_for_actor(path: &Path, expected_actor: &str, directory: bool) {
+    assert_private_handle(&open_observer(path), expected_actor, directory);
+}
+pub(crate) fn assert_private_handle(file: &std::fs::File, expected_actor: &str, directory: bool) {
+    let observed = observe(file);
+    let (user, _) = token_principals_for_actor(expected_actor);
     assert_eq!(observed.owner, user);
     assert_eq!(observed.principal, user);
     assert_ne!(observed.control & SE_DACL_PROTECTED.0, 0);
     assert_eq!(observed.mask, FILE_ALL_ACCESS.0);
     assert_eq!(
-        observed.flags, 3,
-        "exact object/container inheritance required"
+        observed.flags,
+        if directory { 3 } else { 0 },
+        "exact protected object inheritance policy required"
     );
 }
 pub(crate) fn assert_sqlite_sidefile(path: &Path) {
-    let observed = observe(path);
+    let observed = observe(&open_observer(path));
     let (user, default_owner) = token_principals();
     assert!(
         observed.owner == user
@@ -195,4 +216,33 @@ pub(crate) fn assert_sqlite_sidefile(path: &Path) {
         matches!(observed.flags, 0 | 16),
         "only effective explicit/inherited file grants allowed"
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    pub(crate) volume: u64,
+    pub(crate) id: [u8; 16],
+}
+pub(crate) fn file_identity(file: &std::fs::File) -> FileIdentity {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+    let mut identity = FILE_ID_INFO::default();
+    // SAFETY: actual open descriptor and exact initialized SDK output layout/size.
+    unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            FileIdInfo,
+            (&raw mut identity).cast(),
+            u32::try_from(size_of::<FILE_ID_INFO>()).unwrap(),
+        )
+    }
+    .unwrap();
+    FileIdentity {
+        volume: identity.VolumeSerialNumber,
+        id: identity.FileId.Identifier,
+    }
+}
+pub(crate) fn path_identity(path: &Path) -> FileIdentity {
+    file_identity(&open_observer(path))
 }

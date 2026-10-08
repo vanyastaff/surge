@@ -164,6 +164,8 @@ fn relative_access(
     creation: Option<&super::security::CreationSecurity>,
     access: windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
 ) -> NativeResult<File> {
+    #[cfg(test)]
+    let observed_name = name;
     let mut name = component(name)?;
     let length = u16::try_from(name.len() * 2).map_err(|_| refusal("component size overflow"))?;
     let unicode = UNICODE_STRING {
@@ -229,6 +231,10 @@ fn relative_access(
     }
     if final_status != STATUS_SUCCESS {
         return Err(NativeError::Open(final_status));
+    }
+    #[cfg(test)]
+    if creation.is_some() {
+        super::creation_observation::created(parent, observed_name, directory, &file);
     }
     inspect(&file, directory)?;
     Ok(file)
