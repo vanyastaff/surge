@@ -454,3 +454,15 @@ its observer handles before acknowledgment. [Frozen source and local checks](rel
 record bounded pre-native review and cross-target lint; actual outer Storage
 compilation and native behavior acceptance remain pending. Privileged owner
 fixtures, private/preparation support and guardian runtime remain unfinished.
+
+Native source `dd8d2b0`, run `37719859930`: **3,703 Windows tests run,
+3,505 passed, 198 failed, 47 skipped**. All other CI jobs pass. The separate
+standard-user NTFS step passes **13/13**, including the repaired ACL matrix,
+unsafe sidefile/hardlink and pathname refusal, and first-observable private
+creation with zero-byte database and identity settlement. Windows doctests and
+later integration/smoke stages are skipped after the nextest failure.
+[Complete native receipt](release-evidence/2026-10-05/windows-ci-dd8d2b0/README.md)
+closes these bounded native fixture checks, not full Stage 1 or release acceptance.
+Privileged owner fixtures, private preparation and guardian runtime remain open.
+PID/control-lock candidate `19404ba` has local cross-target lint evidence and
+regression tests but still requires its own native run.
