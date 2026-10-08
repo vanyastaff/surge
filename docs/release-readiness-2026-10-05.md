@@ -466,3 +466,7 @@ closes these bounded native fixture checks, not full Stage 1 or release acceptan
 Privileged owner fixtures, private preparation and guardian runtime remain open.
 PID/control-lock candidate `19404ba` has local cross-target lint evidence and
 regression tests but still requires its own native run.
+
+### Native control-lock follow-up on 5f42653
+
+Windows CI run 37721838146/job 113131022825 completed: 3516/3705 nextest cases passed, 189 failed, 48 skipped. The independent standard-user NTFS step passed all 14 configured cases, including commit 19404ba readable PID/control payload and legacy lock compatibility. [Exact receipts](release-evidence/2026-10-05/windows-ci-5f42653/README.md). The macOS test job failed one mixed quota recovery case; Linux tests and all three Clippy jobs passed. Privileged actor/provisioner, remaining Windows failures, settlement/reconciliation repairs and final revision gates remain open. Release verdict remains NO-GO.
