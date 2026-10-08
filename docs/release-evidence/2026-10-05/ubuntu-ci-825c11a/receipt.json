@@ -1,0 +1,15 @@
+{
+  "revision": "825c11a4d0f5ec38e6ee484c5131716df50c1eec",
+  "run": 37726100778,
+  "job": 113144503163,
+  "conclusion": "SUCCESS",
+  "nextest": {
+    "run": 3983,
+    "passed": 3983,
+    "failed": 0,
+    "skipped": 35
+  },
+  "raw_sha256": "a7da8308c203e2b0ecead989ce24460147be561293bf5f2a50a21c31af70adc4",
+  "archive_sha256": "187c927e29c837f4cebf8576f812909116267a7a7bb2c3dacaf4aeb853342f1f",
+  "scope": "Hosted committed source; all uncommitted runtime repairs excluded."
+}

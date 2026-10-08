@@ -1,0 +1,15 @@
+{
+  "revision": "825c11a4d0f5ec38e6ee484c5131716df50c1eec",
+  "run": 37726100778,
+  "job": 113144502969,
+  "conclusion": "SUCCESS",
+  "nextest": {
+    "run": 3760,
+    "passed": 3760,
+    "failed": 0,
+    "skipped": 37
+  },
+  "raw_sha256": "71dbe569a810edb27d9e1ea806c635e07442c0bb1aae31676bc8a360bb4e2d82",
+  "archive_sha256": "5018bde6bc36a2c92f59c221631042dcad260489a1d6da07d1d55f4ea6958961",
+  "scope": "Hosted committed source only; uncommitted local repairs excluded. Same runtime source as prior failing macOS job: this is not proof the intermittent quota failure is fixed."
+}

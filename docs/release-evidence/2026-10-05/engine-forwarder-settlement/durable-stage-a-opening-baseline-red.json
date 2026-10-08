@@ -1,0 +1,29 @@
+{
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-persistence --lib runs::storage::stage_a_tests -- --nocapture",
+  "session": 39740,
+  "exit_code": 101,
+  "passed": 0,
+  "failed": 2,
+  "filtered_out": 525,
+  "build_seconds": 17.75,
+  "test_seconds": 0.12,
+  "head": "c7a57e508c83ec924374ea1639871745396f1c1f",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "scope": "Actual host behavioral RED using existing production APIs; no schema or behavior implementation. No native Windows acceptance.",
+  "observations": {
+    "missing_lock": "Unexpected real writer opened; original missing lock recreated. Writer close, recreated-lock removal and FixtureHome cleanup all Ok.",
+    "reader_write": "Real same-pool SELECT 1 returned 1; CREATE TABLE succeeded; sqlite_master showed exactly one probe table. Dedicated table removal and FixtureHome cleanup both Ok; actual SQL worker joined."
+  },
+  "source_sha256": {
+    "crates/surge-persistence/src/runs/storage.rs": "bd69882ebb2d77acff8c2a2fec8af40255a0651da8312bc6b9c898100abfe37c",
+    "crates/surge-persistence/src/runs/storage/stage_a_tests.rs": "e270120af63dca5281b8eb6ceb4c3382239d724e020a13e5d40784c345950bca",
+    "crates/surge-persistence/src/runs/file_lock.rs": "5fd52e1bd01ee6b830012dea6dd58e49898f9dca0876f83d5c010c84b7875dd5",
+    "crates/surge-persistence/src/runs/connection.rs": "9f185958b1c518a034f03f920be735f8e519cf39c003ce16bce85f5a7bc62fb7",
+    "crates/surge-persistence/src/runs/pragmas.rs": "d986ecf38e47c7af06f508ef4596c930d42d0fd509a3ea45acbb87ca30e8e9a8",
+    "crates/surge-persistence/src/runs/writer.rs": "971060f9b4dd8d5d211678bc46f0e0e50c53b60e1c409ac9c7ecbf863cd225ae",
+    "crates/surge-persistence/src/runs/writer_slot.rs": "3319d5fd9cd3d5c4c1fd934bcbf13b84c0d45a00628f127a2a158822c4d6f164",
+    "crates/surge-persistence/src/runs/reader.rs": "a46ed3dce4117a51098799a823efae3ae238e093b414d50d2516212eddf4bbb0"
+  },
+  "log_sha256": "632a985c500bbea883c5d08280548e52a787ca95e390352b79a7e6c0d9614da4",
+  "preserved_log": "durable-stage-a-opening-baseline-red.log.gz"
+}
