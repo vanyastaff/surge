@@ -1,0 +1,19 @@
+{
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-persistence --lib runs::reader::feed_probe_tests -- --nocapture",
+  "session": 17987,
+  "exit_code": 0,
+  "passed": 3,
+  "failed": 0,
+  "filtered_out": 522,
+  "build_seconds": 17.88,
+  "test_seconds": 0.2,
+  "scope": "Host execution only; no Windows native execution or overall Stage1 acceptance claim. Supersedes earlier persistence freezes for these files; historical receipts remain intact.",
+  "source_sha256": {
+    "crates/surge-persistence/src/runs/reader.rs": "a46ed3dce4117a51098799a823efae3ae238e093b414d50d2516212eddf4bbb0",
+    "crates/surge-persistence/src/runs/reader/feed_probe_tests.rs": "4b32d7de79d6f11b8a505b6a12415d7bc2919bf8d0dc9fc74518a3434e02af30",
+    "crates/surge-persistence/src/runs/mod.rs": "462402c9b53111511b87f0c051eceeffcecc9a804964f60d93809667237433c1"
+  },
+  "raw_log_sha256": "0b437e47e623fd0b0ebff1ec7462586ffca5a4ea111020e319c5ea85440a467b",
+  "raw_log_path": "target/ci-repair-evidence/persistence-feed-pool-probe-tests.log",
+  "preserved_log": "persistence-feed-pool-probe-tests.log.gz"
+}
