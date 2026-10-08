@@ -3,6 +3,7 @@
 pub mod commit;
 pub mod gate_commit;
 pub mod guardian;
+pub mod guardian_ledger;
 pub mod process;
 use crate::{ContentHash, SessionId, id::StageInvocationId};
 use serde::{Deserialize, Serialize};
