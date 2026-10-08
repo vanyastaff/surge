@@ -20,6 +20,7 @@ use windows::{
     core::PCWSTR,
 };
 
+#[path = "creation_security_tests/observation.rs"]
 mod observation;
 
 struct Descriptor(HLOCAL);

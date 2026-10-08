@@ -1,15 +1,26 @@
 //! Independent filesystem mutations exercise refusal without security repair.
 use super::{RuntimeHomeOwner, SqliteNamespaceOwner, tests::descriptor_text};
-use std::{os::windows::ffi::OsStrExt, path::Path};
+use std::{
+    fs::OpenOptions,
+    os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
+    path::Path,
+};
 use windows::{
     Win32::{
-        Foundation::{HLOCAL, LocalFree},
+        Foundation::{BOOL, HANDLE, HLOCAL, LocalFree},
         Security::{
             Authorization::{
-                ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+                ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
+                SDDL_REVISION_1, SE_FILE_OBJECT, SetSecurityInfo,
             },
-            DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-            SetFileSecurityW, UNPROTECTED_DACL_SECURITY_INFORMATION,
+            DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+            IsValidAcl, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+            PSECURITY_DESCRIPTOR, PSID, SE_DACL_PRESENT, SE_DACL_PROTECTED, SetFileSecurityW,
+            UNPROTECTED_DACL_SECURITY_INFORMATION,
+        },
+        Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
         },
     },
     core::PCWSTR,
@@ -26,7 +37,6 @@ impl Drop for Descriptor {
 /// Test setup only: mutate our fixture through the SDK, independently of production policy.
 fn install_dacl(path: &Path, sddl: &str, protected: bool) {
     let text: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
-    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     // SAFETY: terminated owned input and initialized SDK output; success transfers allocation.
     unsafe {
@@ -39,16 +49,83 @@ fn install_dacl(path: &Path, sddl: &str, protected: bool) {
     }
     .unwrap();
     let _owner = Descriptor(HLOCAL(descriptor.0));
-    let flags = DACL_SECURITY_INFORMATION
-        | if protected {
-            PROTECTED_DACL_SECURITY_INFORMATION
-        } else {
-            UNPROTECTED_DACL_SECURITY_INFORMATION
-        };
+    if !protected {
+        unprotect_dacl(path, descriptor);
+        return;
+    }
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let flags = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
     // SAFETY: live terminated fixture path and valid owned security descriptor.
     unsafe { SetFileSecurityW(PCWSTR(path.as_ptr()), flags, descriptor) }
         .ok()
         .unwrap();
+}
+
+/// Inheritance-aware SDK mutation, only for the genuinely unprotected fixture.
+fn unprotect_dacl(path: &Path, descriptor: PSECURITY_DESCRIPTOR) {
+    let mut present = BOOL(0);
+    let mut defaulted = BOOL(0);
+    let mut acl = std::ptr::null_mut();
+    // SAFETY: caller retains the SDK-created descriptor allocation throughout this call.
+    unsafe {
+        GetSecurityDescriptorDacl(
+            descriptor,
+            &raw mut present,
+            &raw mut acl,
+            &raw mut defaulted,
+        )
+    }
+    .unwrap();
+    assert!(present.as_bool() && !acl.is_null());
+    // SAFETY: non-null ACL belongs to the live SDK descriptor.
+    assert!(unsafe { IsValidAcl(acl) }.as_bool());
+    let file = OpenOptions::new()
+        .access_mode((WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES).0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
+        .open(path)
+        .unwrap();
+    // SAFETY: held exact fixture handle and retained valid ACL; owner/group/SACL are untouched.
+    unsafe {
+        SetSecurityInfo(
+            HANDLE(file.as_raw_handle()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+            PSID::default(),
+            PSID::default(),
+            Some(acl),
+            None,
+        )
+    }
+    .ok()
+    .unwrap();
+    let mut observed = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: same held handle and initialized owned output; no production validator is used.
+    unsafe {
+        GetSecurityInfo(
+            HANDLE(file.as_raw_handle()),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            None,
+            None,
+            Some(&raw mut observed),
+        )
+    }
+    .ok()
+    .unwrap();
+    let _observed = Descriptor(HLOCAL(observed.0));
+    let mut control = 0;
+    let mut revision = 0;
+    // SAFETY: independently queried SDK descriptor stays owned throughout inspection.
+    unsafe { GetSecurityDescriptorControl(observed, &raw mut control, &raw mut revision) }.unwrap();
+    assert_ne!(control & SE_DACL_PRESENT.0, 0);
+    assert_eq!(
+        control & SE_DACL_PROTECTED.0,
+        0,
+        "fixture must really inherit"
+    );
 }
 
 fn fixture() -> tempfile::TempDir {
@@ -91,8 +168,18 @@ fn unsafe_home_dacls_are_refused_without_mutating_existing_objects() {
         install_dacl(&path, &descriptor, policy != "unprotected");
         let before = descriptor_text(&path);
         assert_ne!(before, original, "fixture must alter actual ACL: {policy}");
+        assert_eq!(owner_sid(&before), sid, "fixture must retain its owner");
         let count = std::fs::read_dir(&path).unwrap().count();
-        assert!(RuntimeHomeOwner::prepare(&path).is_err(), "{policy}");
+        let reopened = RuntimeHomeOwner::prepare(&path);
+        if policy == "unprotected" {
+            assert!(matches!(
+                reopened,
+                Err(crate::PersistenceError::StateHome { category: "security refusal", message })
+                    if message == "native security validation refused: directory DACL is not protected"
+            ));
+        } else {
+            assert!(reopened.is_err(), "{policy}");
+        }
         assert_eq!(descriptor_text(&path), before, "{policy}");
         assert_eq!(std::fs::read(&sentinel).unwrap(), b"preexisting bytes");
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), count);
