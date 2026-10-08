@@ -436,3 +436,21 @@ Guardian G2a pure receipt types and canonical hashing are complete in `30e7a79`.
 retain a genuine strict-serde RED, 15/15 focused tests (including 14 vectors in
 one matrix), 887/887 full core tests, strict Clippy and Rust 1.96 checks. This
 does not implement G2b transcript validation or native guardian/Job ownership.
+
+Native source `04c4678`, run `37714922396`: **3,703 Windows tests run,
+3,504 passed, 199 failed, 46 skipped**. All platform Clippy and Ubuntu tests
+pass. The exact TrustedInstaller root route now passes protected-home creation
+and all three ancestor-role unit tests. The first nine dedicated NTFS probes
+pass; probe 10 fails its fixture precondition because attempted ACL unprotection
+leaves the original protected ACL unchanged. The remaining two probes do not run.
+macOS reports **3,760 run, 3,759 passed, one failed, 37 skipped**: quota wake
+reaches Attention without terminal completion; omitted attempt diagnostics and a
+possible stale reconciliation race are being investigated.
+[Raw native receipt](release-evidence/2026-10-05/windows-ci-04c4678/README.md)
+records the exact successes and limits. Overall CI and release remain open.
+
+Candidate `f6dc15d` adds the first-observable creation security probe and closes
+its observer handles before acknowledgment. [Frozen source and local checks](release-evidence/2026-10-05/windows-first-observable-creation/README.md)
+record bounded pre-native review and cross-target lint; actual outer Storage
+compilation and native behavior acceptance remain pending. Privileged owner
+fixtures, private/preparation support and guardian runtime remain unfinished.
