@@ -407,3 +407,32 @@ assertions after successful fixture setup: unprotected creation, missing manager
 fence and accepted unsafe home. The standard-user flush probe remains 1/1 PASS.
 [Native baseline receipt](release-evidence/2026-10-05/windows-ci-0350d4a/README.md)
 separates these genuine RED results from prior fixture setup failures.
+
+Native Stage 1 candidate `29228ea`, run `37698935672`: **3,685 Windows tests
+run, 2,922 passed, 763 failed, 46 skipped**. macOS and Ubuntu tests and Clippy
+passed. Many Windows failures now report an untrusted object owner; this is a
+regression and its exact refused object remains unresolved. The dedicated
+standard-user flush probe passed, but protected new-home creation failed with
+the same refusal and prevented the remaining ten native probes from running.
+Windows Clippy also found one test-only `manual_assert` lint. Commit `8dac04c`
+fixes that lint and adds independent SDK owner/SDDL diagnostics for the complete
+native route; it does not relax the security policy or claim behavioral repair.
+[Candidate failure receipt](release-evidence/2026-10-05/windows-ci-29228ea/README.md)
+retains both raw Windows logs. Windows acceptance and release remain open.
+
+Diagnostic source `8dac04c`, run `37712492476`: all jobs pass except Windows
+Test Suite, which repeats **3,685 run, 2,922 passed, 763 failed, 46 skipped**.
+Independent SDK diagnostics identify the first rejected object as `C:\`, owned
+by the exact Windows TrustedInstaller SID. Its effective outsider child-creation
+grant also requires a separate ancestor allowance. No protected home was created.
+The [native route receipt](release-evidence/2026-10-05/windows-ci-8dac04c/README.md)
+establishes this probe's immediate cause, not that every failure has that cause.
+The reviewed repair is limited to ancestor owner recognition and child-creation
+allowance; mutation-ACE trust, protected-object and SQLite rules stay unchanged.
+Native GREEN and the remaining Stage 1 security fixtures are still required.
+
+Guardian G2a pure receipt types and canonical hashing are complete in `30e7a79`.
+[Local receipts and independent verdicts](release-evidence/2026-10-05/windows-guardian-g2a/README.md)
+retain a genuine strict-serde RED, 15/15 focused tests (including 14 vectors in
+one matrix), 887/887 full core tests, strict Clippy and Rust 1.96 checks. This
+does not implement G2b transcript validation or native guardian/Job ownership.

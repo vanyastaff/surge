@@ -174,18 +174,7 @@ impl EffectiveOwner {
             .checked_add(length)
             .ok_or(NativeError::Security("descriptor address overflow"))?;
         bounded_sid_length(owner, start, end)?;
-        let owner_is_user = self.matches_sid(owner)?;
-        let owner_is_system = trusted_maintenance_sid(owner)?;
-        let trusted_owner = match policy {
-            DirectoryPolicy::Ancestor => owner_is_system,
-            DirectoryPolicy::SqliteSidefile => {
-                owner_is_system && self.matches_default_owner(owner)?
-            },
-            DirectoryPolicy::Protected { .. } => false,
-        };
-        if !owner_is_user && !trusted_owner {
-            return Err(NativeError::Security("object owner is not trusted"));
-        }
+        let outsider_child_creation = self.validate_owner(owner, policy)?;
         let mut control = 0;
         let mut revision = 0;
         // SAFETY: valid descriptor and initialized ABI outputs.
@@ -197,7 +186,29 @@ impl EffectiveOwner {
         {
             return Err(NativeError::Security("directory DACL is not protected"));
         }
-        self.validate_acl(acl, start, end, policy, owner_is_system)
+        self.validate_acl(acl, start, end, policy, outsider_child_creation)
+    }
+    // The SID must already be bounded within the held descriptor. These are
+    // separate roles: ancestor ownership never broadens mutation-ACE trust or
+    // SQLite's captured SYSTEM/Admin default-owner exception.
+    fn validate_owner(&self, owner: PSID, policy: DirectoryPolicy) -> NativeResult<bool> {
+        let owner_is_user = self.matches_sid(owner)?;
+        let owner_is_system = trusted_maintenance_sid(owner)?;
+        let installer_ancestor =
+            matches!(policy, DirectoryPolicy::Ancestor) && trusted_installer_owner_sid(owner)?;
+        let trusted_owner = match policy {
+            DirectoryPolicy::Ancestor => owner_is_system || installer_ancestor,
+            DirectoryPolicy::SqliteSidefile => {
+                owner_is_system && self.matches_default_owner(owner)?
+            },
+            DirectoryPolicy::Protected { .. } => false,
+        };
+        if !owner_is_user && !trusted_owner {
+            return Err(NativeError::Security("object owner is not trusted"));
+        }
+        // Only OS-maintained ancestors may grant outsiders creation of new
+        // sibling names. Existing entry mutation is still rejected by validate_acl.
+        Ok(matches!(policy, DirectoryPolicy::Ancestor) && (owner_is_system || installer_ancestor))
     }
     fn matches_default_owner(&self, sid: PSID) -> NativeResult<bool> {
         // SAFETY: caller bounded and validated the object SID and capture owns the token SID.
@@ -233,7 +244,7 @@ impl EffectiveOwner {
         start: usize,
         end: usize,
         policy: DirectoryPolicy,
-        system_owned: bool,
+        outsider_child_creation: bool,
     ) -> NativeResult<()> {
         use windows::Win32::{
             Security::{
@@ -351,7 +362,7 @@ impl EffectiveOwner {
                         continue;
                     }
                     let mut permitted = FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0;
-                    if system_owned {
+                    if outsider_child_creation {
                         permitted |= FILE_ADD_FILE.0 | FILE_ADD_SUBDIRECTORY.0;
                     }
                     if mask & !permitted != 0 {
@@ -362,6 +373,18 @@ impl EffectiveOwner {
         }
         Ok(())
     }
+}
+// This exact OS installer identity is accepted only in ancestor-owner roles.
+// It deliberately does not join trusted_maintenance_sid's mutation-ACE principals.
+fn trusted_installer_owner_sid(sid: PSID) -> NativeResult<bool> {
+    let mut text = windows::core::PWSTR::null();
+    // SAFETY: caller independently bounded and validated the descriptor owner SID.
+    unsafe { ConvertSidToStringSidW(sid, &raw mut text) }?;
+    let _allocation = LocalAllocation(HLOCAL(text.0.cast()));
+    // SAFETY: successful conversion returned a terminated SDK-owned string.
+    let value = unsafe { text.to_string() }
+        .map_err(|_| NativeError::Security("invalid SID string encoding"))?;
+    Ok(value == "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")
 }
 fn trusted_maintenance_sid(sid: PSID) -> NativeResult<bool> {
     let mut text = windows::core::PWSTR::null();
@@ -534,5 +557,252 @@ mod tests {
             bounded_sid_length(PSID(pointer.cast()), start, start + 4),
             Err(NativeError::Security(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod ancestor_owner_role_tests {
+    use super::{
+        CreationSecurity, DirectoryPolicy, EffectiveOwner, LocalAllocation, NativeError,
+        NativeResult, bounded_sid_length,
+    };
+    use std::mem::size_of;
+    use windows::{
+        Win32::{
+            Foundation::{BOOL, HLOCAL},
+            Security::{
+                ACL,
+                Authorization::{
+                    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+                    SDDL_REVISION_1,
+                },
+                CopySid, GetLengthSid, GetSecurityDescriptorDacl, GetSecurityDescriptorLength,
+                GetSecurityDescriptorOwner, IsValidSid, PSECURITY_DESCRIPTOR, PSID,
+            },
+        },
+        core::PCWSTR,
+    };
+
+    const USER: &str = "S-1-5-21-101-202-303-1001";
+    const FOREIGN: &str = "S-1-5-21-101-202-303-1002";
+    const INSTALLER: &str = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+    // Synthetic owned token SID buffers exercise policy separation only. They
+    // do not claim an actual token, privileged owner assignment or filesystem proof.
+    fn sid_words(text: &str) -> (Vec<usize>, usize) {
+        let text: Vec<u16> = text.encode_utf16().chain([0]).collect();
+        let mut sid = PSID::default();
+        // SAFETY: terminated literal input and initialized SDK-owned output.
+        unsafe { ConvertStringSidToSidW(PCWSTR(text.as_ptr()), &raw mut sid) }.unwrap();
+        let _allocation = LocalAllocation(HLOCAL(sid.0));
+        // SAFETY: successful SDK conversion owns a complete SID allocation.
+        assert!(unsafe { IsValidSid(sid) }.as_bool());
+        // SAFETY: the SDK-owned SID was validated above and remains live.
+        let length = usize::try_from(unsafe { GetLengthSid(sid) }).unwrap();
+        let mut words = vec![0usize; length.div_ceil(size_of::<usize>())];
+        // SAFETY: validated source, aligned initialized destination covering the entire SID.
+        unsafe {
+            CopySid(
+                u32::try_from(length).unwrap(),
+                PSID(words.as_mut_ptr().cast()),
+                sid,
+            )
+        }
+        .unwrap();
+        (words, length)
+    }
+    fn owner(default: &str) -> EffectiveOwner {
+        let (words, length) = sid_words(USER);
+        let (default_words, default_length) = sid_words(default);
+        EffectiveOwner {
+            words,
+            length,
+            default_words,
+            default_length,
+        }
+    }
+    fn descriptor(text: &str) -> CreationSecurity {
+        let text: Vec<u16> = text.encode_utf16().chain([0]).collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: terminated test SDDL and initialized uniquely owned SDK output.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(text.as_ptr()),
+                SDDL_REVISION_1,
+                &raw mut descriptor,
+                None,
+            )
+        }
+        .unwrap();
+        CreationSecurity {
+            allocation: LocalAllocation(HLOCAL(descriptor.0)),
+        }
+    }
+    fn validate_descriptor(
+        effective: &EffectiveOwner,
+        object_owner: &str,
+        aces: &str,
+        policy: DirectoryPolicy,
+    ) -> NativeResult<bool> {
+        let descriptor = descriptor(&format!("O:{object_owner}D:P{aces}"));
+        let mut sid = PSID::default();
+        let mut defaulted = BOOL(0);
+        let mut present = BOOL(0);
+        let mut acl: *mut ACL = std::ptr::null_mut();
+        // SAFETY: immutable SDK-created descriptor remains alive through both queries.
+        unsafe {
+            GetSecurityDescriptorOwner(descriptor.descriptor(), &raw mut sid, &raw mut defaulted)
+        }
+        .unwrap();
+        // SAFETY: same valid descriptor and initialized ABI outputs.
+        unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor.descriptor(),
+                &raw mut present,
+                &raw mut acl,
+                &raw mut defaulted,
+            )
+        }
+        .unwrap();
+        assert!(present.as_bool() && !acl.is_null());
+        let start = descriptor.descriptor().0 as usize;
+        // SAFETY: SDK-created descriptor is unchanged and still owned.
+        let end = start
+            + usize::try_from(unsafe { GetSecurityDescriptorLength(descriptor.descriptor()) })
+                .unwrap();
+        bounded_sid_length(sid, start, end).unwrap();
+        let permits_creation = effective.validate_owner(sid, policy)?;
+        effective.validate_acl(acl, start, end, policy, permits_creation)?;
+        Ok(permits_creation)
+    }
+
+    #[test]
+    fn exact_installer_owner_is_ancestor_only_even_when_token_default_owner_matches() {
+        let user_only = format!("(A;;FA;;;{USER})");
+        let effective = owner(USER);
+        for sid in ["S-1-5-18", "S-1-5-32-544", INSTALLER] {
+            assert!(
+                validate_descriptor(&effective, sid, &user_only, DirectoryPolicy::Ancestor)
+                    .unwrap()
+            );
+            assert!(matches!(
+                validate_descriptor(
+                    &effective,
+                    sid,
+                    &user_only,
+                    DirectoryPolicy::Protected { inheritable: false }
+                ),
+                Err(NativeError::Security("object owner is not trusted"))
+            ));
+        }
+        for sid in [
+            FOREIGN,
+            "S-1-5-80-1-2-3-4-5",
+            "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478465",
+        ] {
+            assert!(matches!(
+                validate_descriptor(&effective, sid, &user_only, DirectoryPolicy::Ancestor),
+                Err(NativeError::Security("object owner is not trusted"))
+            ));
+        }
+        assert!(
+            !validate_descriptor(&effective, USER, &user_only, DirectoryPolicy::Ancestor).unwrap()
+        );
+        assert!(
+            !validate_descriptor(
+                &effective,
+                USER,
+                &user_only,
+                DirectoryPolicy::Protected { inheritable: false }
+            )
+            .unwrap()
+        );
+        for sid in ["S-1-5-18", "S-1-5-32-544"] {
+            assert!(
+                !validate_descriptor(
+                    &owner(sid),
+                    sid,
+                    &user_only,
+                    DirectoryPolicy::SqliteSidefile
+                )
+                .unwrap()
+            );
+            assert!(matches!(
+                validate_descriptor(&effective, sid, &user_only, DirectoryPolicy::SqliteSidefile),
+                Err(NativeError::Security("object owner is not trusted"))
+            ));
+        }
+        assert!(matches!(
+            validate_descriptor(
+                &owner(INSTALLER),
+                INSTALLER,
+                &user_only,
+                DirectoryPolicy::SqliteSidefile
+            ),
+            Err(NativeError::Security("object owner is not trusted"))
+        ));
+    }
+
+    #[test]
+    fn installer_owner_does_not_trust_installer_or_other_service_mutation_aces() {
+        let effective = owner(USER);
+        for sid in [USER, "S-1-5-18", "S-1-5-32-544"] {
+            let aces = format!("(A;;FA;;;{USER})(A;;FA;;;{sid})");
+            assert!(
+                validate_descriptor(&effective, INSTALLER, &aces, DirectoryPolicy::Ancestor)
+                    .unwrap()
+            );
+        }
+        for sid in [INSTALLER, "S-1-5-80-1-2-3-4-5", FOREIGN] {
+            let read_only = format!("(A;;FA;;;{USER})(A;;0x1200a9;;;{sid})");
+            assert!(
+                validate_descriptor(&effective, INSTALLER, &read_only, DirectoryPolicy::Ancestor)
+                    .unwrap()
+            );
+            let mutation = format!("(A;;FA;;;{USER})(A;;FA;;;{sid})");
+            assert!(matches!(
+                validate_descriptor(&effective, INSTALLER, &mutation, DirectoryPolicy::Ancestor),
+                Err(NativeError::Security("ancestor grants outsider mutation"))
+            ));
+        }
+        let extra_installer = format!("(A;;FA;;;{USER})(A;;FA;;;{INSTALLER})");
+        assert!(matches!(
+            validate_descriptor(
+                &effective,
+                USER,
+                &extra_installer,
+                DirectoryPolicy::Protected { inheritable: false }
+            ),
+            Err(NativeError::Security(
+                "protected ACL needs one exact allow ACE"
+            ))
+        ));
+    }
+
+    #[test]
+    fn installer_child_creation_allowance_excludes_existing_entry_mutation() {
+        let effective = owner(USER);
+        for mask in [0x2u32, 0x4, 0x6] {
+            let aces = format!("(A;;FA;;;{USER})(A;;{mask:#x};;;{FOREIGN})");
+            for sid in [INSTALLER, "S-1-5-18", "S-1-5-32-544"] {
+                assert!(
+                    validate_descriptor(&effective, sid, &aces, DirectoryPolicy::Ancestor).unwrap()
+                );
+            }
+            assert!(matches!(
+                validate_descriptor(&effective, USER, &aces, DirectoryPolicy::Ancestor),
+                Err(NativeError::Security("ancestor grants outsider mutation"))
+            ));
+        }
+        // Independent literal SDK rights: DELETE_CHILD, DELETE, WRITE_DAC,
+        // WRITE_OWNER, WRITE_ATTRIBUTES, WRITE_EA and GENERIC_WRITE respectively.
+        for forbidden in [0x40u32, 0x10000, 0x40000, 0x80000, 0x100, 0x10, 0x4000_0000] {
+            let mask = 0x6 | forbidden;
+            let aces = format!("(A;;FA;;;{USER})(A;;{mask:#x};;;{FOREIGN})");
+            assert!(matches!(
+                validate_descriptor(&effective, INSTALLER, &aces, DirectoryPolicy::Ancestor),
+                Err(NativeError::Security("ancestor grants outsider mutation"))
+            ));
+        }
     }
 }
