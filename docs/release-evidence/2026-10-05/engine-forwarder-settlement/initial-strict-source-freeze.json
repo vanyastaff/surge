@@ -1,0 +1,43 @@
+{
+  "stage": "Initial orchestrator local ownership implementation strict gate; full plan/native/history open",
+  "strict_command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo +1.99.0 clippy -p surge-orchestrator --all-targets --all-features -- -D warnings",
+  "strict_exit_code": 0,
+  "strict_seconds": 9.38,
+  "test_receipts": {
+    "ownership_integration": "9/9 PASS, four ownership tests plus five shared mock fixture tests,0.29s",
+    "run_execution": "2/2 PASS,0.00s",
+    "before_first_poll": "1/1 PASS,0.13s; saved Weak destruction before runtime teardown"
+  },
+  "files": {
+    "crates/surge-orchestrator/Cargo.toml": "9b2229b86e8dcd33c6588ac2e6302cb1001ddee7109b90f54081c8abeca260cc",
+    "crates/surge-orchestrator/src/engine/handle.rs": "889e982ab666137c947da0c6b8689114c34eb1034653fde6aa2e2a30c093ba65",
+    "crates/surge-orchestrator/src/engine/error.rs": "65d79ce3dfbe83c88fd4c28b586319eca1b66f5f1f2e4e4354895a87c0470a17",
+    "crates/surge-orchestrator/src/engine/run_forwarder.rs": "d19a1868f8e23671d743efeb9e10c060e8365f9398974b8a60477e3f591d2577",
+    "crates/surge-orchestrator/src/engine/run_execution.rs": "663b996ac5e258099729b847fe0ab49177f488b6009e9da95194fccf5cc3bfbc",
+    "crates/surge-orchestrator/src/engine/mod.rs": "a1887a527883ee48729ac79145f9b89bb9c457507b1249caf99b50d20a368313",
+    "crates/surge-orchestrator/src/engine/run_task.rs": "0e094e09f317d35db800a2999c6ad087c43ab1db6eaa7271dde34cd4d6b0e8cb",
+    "crates/surge-orchestrator/src/engine/event_tap.rs": "6cf3837774b0b8662e1789af8b61a31c38ae6b7d738c661d5660cb81f135f501",
+    "crates/surge-orchestrator/src/engine/engine.rs": "9a2c45d247122a7ac20f2cb19bdc06c0a3653e5977c8c73428b43b3fd2151d81",
+    "crates/surge-orchestrator/src/engine/tools/mod.rs": "ae0c1b91555fc5a70bf0b872cc024b38e5cd4839ad02a29734fae90682004fbf",
+    "crates/surge-orchestrator/src/engine/hooks/mod.rs": "0998fdc5901654f44e0471d9d91ac37eb61725332a4429bb9cc5be39cb38ff9a",
+    "crates/surge-orchestrator/src/engine/stage/mod.rs": "bea02d05acf68b0a33e81aedb4451bf5015b05b1402107dfbf8134fbf3b5ce5d",
+    "crates/surge-orchestrator/src/engine/engine/settlement_tests.rs": "3ef5c525fa25b0432e0c9bbe7d3224fa554dd90de62850bd122a18e858393006",
+    "crates/surge-orchestrator/src/engine/run_forwarder/tests.rs": "d3872fd9ecfc42acd239afd3874e3dab145f4f78d96f4dc50e1cdca7d62d2a10",
+    "crates/surge-orchestrator/src/engine/event_tap/ownership_tests.rs": "c7ee42f99afbdb2f2de22159b0c5893bf671beed396b4be7557a7c0843f47747"
+  },
+  "logs": {
+    "engine-forwarder-strict-clippy-1.log": "cf771b7109846023c6122f38751a82a3e594dc4d96ce92606cb2f058b1589490",
+    "engine-forwarder-strict-clippy-2.log": "13994d1352dcb7cd828e832f4d472d481c0d3a6536e422f763f7a8aa59c9916a",
+    "engine-forwarder-strict-clippy-3.log": "948b2a91b98f470bd909c29635277ee93a6f06418986c64c34af65a79deab732",
+    "engine-forwarder-strict-clippy-4.log": "ba1bd6f24493a6b47b95b04109d7af1a6500d63de10f6241501c2862f4219a8b",
+    "engine-forwarder-ownership-integration.log": "097d2da4297726aa5c237a080ef7c001901278a0c3d4b21dd37ac377e22d9888",
+    "engine-execution-settlement-tests.log": "994755c4e8d707bd9e0a709d3979052ffda4cc759060c5f56e7b55b46c4ec88a",
+    "engine-completion-before-first-poll.log": "442490a4b025ba8374f1bde5cc07413314440e3f7a84d9de5b18e3fb94126aaa"
+  },
+  "limits": [
+    "strict performed after helper extraction; test rerun justified for next edits",
+    "registration map stale-removal race source finding remains; actual RED required",
+    "durable historical settlement bypass remains; approved auxiliary hook not yet implemented",
+    "public completion abort during actualSQL and controlledchildruntime proof remain"
+  ]
+}

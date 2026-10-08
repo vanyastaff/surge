@@ -1,0 +1,14 @@
+{
+  "plan_sha256": "254bab802b2e80e79b187eb78f7e5cef6753fdc64feedbea418bc6952abbbd35",
+  "root_verdict": "ACCEPTABLE",
+  "independent_reviewer": "caller_plan_arch",
+  "independent_verdict": "ACCEPTABLE",
+  "scope": "Test-support hook, actual pool error producer and historical consumer RED tests only. No schema implementation.",
+  "constraints": [
+    "Exact RunId, all three feed spawn routes, actual writer close on setup errors.",
+    "BeforeCheckout retains real fixture owners explicitly; AfterCheckout controller owns channels only.",
+    "Producer authentic terminal journal and actual SettlementFailed; final consumer safe assertions remain unchanged from RED to GREEN.",
+    "One Cargo process, source window only after existing strict process terminal."
+  ],
+  "review_counter": "Original engine1/3 unchanged"
+}

@@ -1,0 +1,18 @@
+{
+  "stage": "Deterministic actual-SQL seal race RED before condition repair",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --lib engine::run_forwarder::tests::empty_running_read_before_append_and_seal_requeries_final_prefix -- --exact --nocapture",
+  "exit_code": 101,
+  "compile_seconds": 24.11,
+  "test_seconds": 0.09,
+  "result": "Expected Ok(EventSeq(1)), actual Err(ForwarderSequence) after actual empty Running SQL result held while append+seal1 completes",
+  "files": {
+    "crates/surge-orchestrator/src/engine/run_forwarder.rs": "459ce5a1f20f6ad0f72c9a06aa8774680daef5d48a6977d459fc636069112a97",
+    "crates/surge-orchestrator/src/engine/run_forwarder/tests.rs": "3e57ed6179bcd129ddd8700932dd7142c1bb3a09040fefe718877f52bd785573",
+    "crates/surge-persistence/src/runs/reader.rs": "1b7a0f6327d0392eef7638ecc67fe9ba31df35dc44ea1e5011fdcde7f4073915"
+  },
+  "logs": {
+    "engine-forwarder-seal-race-red.log": "a3afd9253f6c50d84dfa7c771001bf0ee26db5ef0af6daebccd5f09bb43a92c9",
+    "engine-forwarder-seal-race-compile-1.log": "2ce1b4819b57fed64a8291625b0836999073dd2c9697327e3cdc80cf2fefbae7"
+  }
+}

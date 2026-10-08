@@ -1,0 +1,39 @@
+{
+  "stage": "Initial original baseline GREEN; remaining race and full matrix open",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --test engine_forwarder_ownership_test ownership_tests::completed_run_releases_actual_reader_pool_owners -- --exact --nocapture",
+  "exit_code": 0,
+  "compile_seconds": 37.82,
+  "child_test_seconds": 0.09,
+  "parent_test_seconds": 0.11,
+  "log_sha256": "00688dcedeb8c31c1d739393a83e525a82e892268607467ccb9eef0e54867746",
+  "files": {
+    "crates/surge-orchestrator/Cargo.toml": "9b2229b86e8dcd33c6588ac2e6302cb1001ddee7109b90f54081c8abeca260cc",
+    "crates/surge-persistence/Cargo.toml": "2d9d1b882bea44a2a536566d56c38ac17b8e2215eff1f23a2a893adf84ecd00c",
+    "crates/surge-orchestrator/src/bootstrap_driver.rs": "bd1152e5786a50a14248891a2766518e3810313f677a83750a111582fe4f8586",
+    "crates/surge-orchestrator/src/engine/handle.rs": "889e982ab666137c947da0c6b8689114c34eb1034653fde6aa2e2a30c093ba65",
+    "crates/surge-orchestrator/src/engine/error.rs": "65d79ce3dfbe83c88fd4c28b586319eca1b66f5f1f2e4e4354895a87c0470a17",
+    "crates/surge-orchestrator/src/engine/run_forwarder.rs": "459ce5a1f20f6ad0f72c9a06aa8774680daef5d48a6977d459fc636069112a97",
+    "crates/surge-orchestrator/src/engine/run_execution.rs": "18ebf7726a7e237304188083ee6cc146ddd83f670386d88b414c2adcd61e3956",
+    "crates/surge-orchestrator/src/engine/mod.rs": "a1887a527883ee48729ac79145f9b89bb9c457507b1249caf99b50d20a368313",
+    "crates/surge-orchestrator/src/engine/run_task.rs": "b2ee052a2bf9ec06d57b40025dc12959f907cb8fda02ea45d08bc5133b4c8938",
+    "crates/surge-orchestrator/src/engine/event_tap.rs": "6cf3837774b0b8662e1789af8b61a31c38ae6b7d738c661d5660cb81f135f501",
+    "crates/surge-orchestrator/src/engine/engine.rs": "7d239def396a0f69b18b61f0e07ec3f7059e07b656383522fc95e915e7485366",
+    "crates/surge-orchestrator/src/engine/event_tap/ownership_tests.rs": "c7ee42f99afbdb2f2de22159b0c5893bf671beed396b4be7557a7c0843f47747",
+    "crates/surge-orchestrator/src/engine/run_forwarder/tests.rs": "f77590e454070a331d7e50941d9ecfbd2135051983e871c005807399e319dd74",
+    "crates/surge-orchestrator/tests/engine_forwarder_ownership_test.rs": "52b68b8ad4aec5b797ee30e0970a1f8eb1691670e5e3dcc44d81431c4a8831b0",
+    "crates/surge-persistence/src/runs/mod.rs": "19b71ea81507fdc4775beb294f3e5b5ef77d5d00c8a898e3dcbcdb40869d3ce8",
+    "crates/surge-persistence/src/runs/writer.rs": "971060f9b4dd8d5d211678bc46f0e0e50c53b60e1c409ac9c7ecbf863cd225ae",
+    "crates/surge-persistence/src/runs/reader.rs": "b081f406e900b31243fe05dcb231ef200efcd278cddacde88c7ddf5424552d36",
+    "crates/surge-persistence/src/runs/run_writer.rs": "3ae1c66d01fd6e976a591b0dea308bf59c31696738dd61117372c8602fd9d9b7",
+    "crates/surge-persistence/src/runs/error.rs": "406aea211d8228644a41f6bb040d1e067f407aa28c309278bd05ee35848576ba",
+    "crates/surge-persistence/src/runs/storage.rs": "b9afe57288752cb31554a180661f36c643f41ae1b5778183506ed662bd1e1a72",
+    "crates/surge-persistence/src/runs/subscribe.rs": "8f5e22785fad8497cdf6fbca03c70760c776e2b982ea99258bd98e82a8e898b9",
+    "crates/surge-persistence/src/runs/storage/reader_pool_witness.rs": "5d5bceac750f06ea2e80bcad6737d743977988ca1e1a4c188f7f97d7f64af6fd"
+  },
+  "limits": [
+    "original exact test only; unit/fault/cancellation matrix not executed",
+    "running-empty-read versus concurrent seal race source finding remains; deterministic RED required next",
+    "native acceptance and overall Stage1 remain open"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "stage": "Bounded forwarder race repair and six local tests; not fullplan/native acceptance",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "checks": [
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --lib engine::run_forwarder::tests::empty_running_read_before_append_and_seal_requeries_final_prefix -- --exact --nocapture",
+      "exit_code": 0,
+      "result": "1/1PASS",
+      "compile_seconds": 24.99,
+      "test_seconds": 0.06
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --lib engine::run_forwarder::tests -- --nocapture",
+      "exit_code": 0,
+      "result": "6/6PASS",
+      "compile_seconds": 0.83,
+      "test_seconds": 0.36
+    }
+  ],
+  "files": {
+    "crates/surge-orchestrator/src/engine/run_forwarder.rs": "d19a1868f8e23671d743efeb9e10c060e8365f9398974b8a60477e3f591d2577",
+    "crates/surge-orchestrator/src/engine/run_forwarder/tests.rs": "3e57ed6179bcd129ddd8700932dd7142c1bb3a09040fefe718877f52bd785573",
+    "crates/surge-persistence/src/runs/reader.rs": "1b7a0f6327d0392eef7638ecc67fe9ba31df35dc44ea1e5011fdcde7f4073915"
+  },
+  "logs": {
+    "engine-forwarder-seal-race-green.log": "67aab39be7ed2f4d153d1d8c7988faafc51bfe8378106ba633feb26f5d62a84d",
+    "engine-forwarder-focused-green.log": "11409888ea9a1d67dc9d8b3cbc504a646527cc277ee2626619aad5aa5b4cd353",
+    "engine-forwarder-seal-race-no-edit-repeat-red.log": "26d372cb147d0e0f72b9bfa7e5b795c2f1cc40dff1d968f641a1a462015eec76"
+  },
+  "note": "No-edit repeat RED followed failed textual edit assertion; not counted as a new behavior, repair, or GREEN. Actual minimal condition repair follows only after source mutation success."
+}
