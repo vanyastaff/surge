@@ -144,9 +144,10 @@ fn bounded_exit(child: &mut std::process::Child) -> std::process::ExitStatus {
     child.kill().unwrap();
     let reap_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if child.try_wait().unwrap().is_some() {
-            panic!("checked close child exceeded deadline");
-        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "checked close child exceeded deadline"
+        );
         assert!(
             std::time::Instant::now() < reap_deadline,
             "checked close child did not settle after kill"

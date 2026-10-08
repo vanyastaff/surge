@@ -370,7 +370,36 @@ fn assert_private_home(path: &Path, inheritance: Option<u8>) {
 async fn new_state_home_has_protected_current_user_acl_after_open() {
     let fixture = profile_fixture();
     let home = fixture.path().join("state");
-    let storage = Storage::open(&home).await.unwrap();
+    for ancestor in fixture.path().ancestors() {
+        let observed = security(ancestor);
+        println!(
+            "stage1 route object: path={} owner={} control={:#x} sddl={}",
+            ancestor.display(),
+            observed.owner,
+            observed.control,
+            observed.sddl
+        );
+    }
+    let opened = Storage::open(&home).await;
+    if opened.is_err() {
+        for path in [
+            home.clone(),
+            home.join("db"),
+            home.join("db/registry.sqlite"),
+        ] {
+            if path.exists() {
+                let observed = security(&path);
+                println!(
+                    "stage1 failed-open object: path={} owner={} control={:#x} sddl={}",
+                    path.display(),
+                    observed.owner,
+                    observed.control,
+                    observed.sddl
+                );
+            }
+        }
+    }
+    let storage = opened.unwrap();
     assert_private_home(&home, None);
     assert_private_home(&home.join("db"), Some(3));
     assert_private_home(&home.join("runs"), Some(3));
