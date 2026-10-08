@@ -1,4 +1,7 @@
 //! Persistent task controls use the actual daemon, engine and registry.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 #[path = "../../surge-orchestrator/tests/fixtures/mock_bridge.rs"]
 mod mock_bridge;
 use interprocess::local_socket::tokio::prelude::*;
@@ -132,7 +135,12 @@ async fn wait_for_active_run(conn: &rusqlite::Connection, engine: &Engine, run: 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn daemon_gate_answer_requires_durable_acceptance_before_success() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    daemon_gate_answer_requires_durable_acceptance_before_success_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn daemon_gate_answer_requires_durable_acceptance_before_success_in_home(home: &FixtureHome) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) =
         reserve_fixture_with_gate(home.path(), project.path(), true, true).await;
@@ -241,7 +249,14 @@ async fn daemon_gate_answer_requires_durable_acceptance_before_success() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    task_created_over_daemon_survives_restart_and_runs_pinned_requirements_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     for args in [
         vec!["init"],
@@ -269,7 +284,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
     ));
     let socket = home.path().join("task.sock");
     let cancel = CancellationToken::new();
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -281,12 +296,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
         cancel.clone(),
     ));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_for_listener(&socket, &mut server).await;
     let created = request(&socket,json!({"action":"create","operation_id":surge_core::RunId::new(),"project":project.path(),"title":"Durable task","requirements":{"text":"Preserve accepted requirements","criteria":["Requirement survives restart"]}})).await;
     assert_eq!(
         created["method"], "work_item_ok",
@@ -311,7 +321,7 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         EngineConfig::default(),
     ));
     let cancel = CancellationToken::new();
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 2,
@@ -323,8 +333,8 @@ async fn task_created_over_daemon_survives_restart_and_runs_pinned_requirements(
         Arc::new(surge_daemon::admission::AdmissionController::new(2, 2)),
         cancel.clone(),
     ));
-    // The old socket is unlinked by the new listener; wait for a successful typed query.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Wait for the replacement listener to accept a real connection.
+    wait_for_listener(&socket, &mut server).await;
     let shown = request(&socket, json!({"action":"show","item":item})).await;
     assert_eq!(
         shown["result"]["value"]["revision"]["requirements"]["text"],
@@ -605,8 +615,16 @@ async fn cold_host_with_config(
         config,
     ));
     let cancel = CancellationToken::new();
-    let socket = home.join("cold.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    static NEXT_ENDPOINT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let endpoint = NEXT_ENDPOINT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Owned child fixtures publish their first endpoint at the agreed name.
+    // Additional simultaneous hosts must not replace that listener.
+    let socket = home.join(if endpoint == 0 {
+        "cold.sock".to_owned()
+    } else {
+        format!("cold-{endpoint}.sock")
+    });
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 8,
@@ -618,12 +636,25 @@ async fn cold_host_with_config(
         Arc::new(surge_daemon::admission::AdmissionController::new(8, 2)),
         cancel.clone(),
     ));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.is_finished() {
+                panic!(
+                    "cold daemon stopped before readiness: {:?}",
+                    (&mut server).await
+                );
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    })
+    .await
+    .expect("cold host must accept a connection within its readiness deadline");
     (engine, cancel, server, socket)
 }
 async fn write_owned_startup(
@@ -724,7 +755,15 @@ async fn write_owned_startup(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context_in_home(&home)
+        .await;
+    home.close().unwrap();
+}
+
+async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, workspace, _start) =
         reserve_fixture(home.path(), project.path(), true).await;
@@ -804,76 +843,93 @@ async fn cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_co
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention() {
     for version in [13, 12] {
-        let home = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let (storage, attempt, workspace, _) =
-            reserve_fixture(home.path(), project.path(), true).await;
-        write_owned_startup(&storage, &attempt, &workspace, true, true).await;
-        let path = home
-            .path()
-            .join("runs")
-            .join(attempt.run.to_string())
-            .join("events.sqlite");
-        let conn = rusqlite::Connection::open(path).unwrap();
-        conn.execute_batch("DROP TRIGGER trg_events_no_update")
-            .unwrap();
-        let rows: Vec<(u64, Vec<u8>)> = conn
-            .prepare("SELECT seq,payload FROM events ORDER BY seq")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        for (seq, bytes) in rows {
-            let mut payload: surge_core::VersionedEventPayload =
-                serde_json::from_slice(&bytes).unwrap();
-            payload.schema_version = version;
-            if let surge_core::EventPayload::RunStarted { config, .. } = &mut payload.payload {
-                config.bootstrap_edit_loop_cap = None;
-            }
-            conn.execute(
-                "UPDATE events SET payload=?,schema_version=? WHERE seq=?",
-                rusqlite::params![serde_json::to_vec(&payload).unwrap(), version, seq],
-            )
-            .unwrap();
+        let home = FixtureHome::new().unwrap();
+        legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention_in_home(
+            &home, version,
+        )
+        .await;
+        home.close().unwrap();
+    }
+}
+
+async fn legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention_in_home(
+    home: &FixtureHome,
+    version: u32,
+) {
+    let project = tempfile::tempdir().unwrap();
+    let (storage, attempt, workspace, _) = reserve_fixture(home.path(), project.path(), true).await;
+    write_owned_startup(&storage, &attempt, &workspace, true, true).await;
+    let path = home
+        .path()
+        .join("runs")
+        .join(attempt.run.to_string())
+        .join("events.sqlite");
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch("DROP TRIGGER trg_events_no_update")
+        .unwrap();
+    let rows: Vec<(u64, Vec<u8>)> = conn
+        .prepare("SELECT seq,payload FROM events ORDER BY seq")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (seq, bytes) in rows {
+        let mut payload: surge_core::VersionedEventPayload =
+            serde_json::from_slice(&bytes).unwrap();
+        payload.schema_version = version;
+        if let surge_core::EventPayload::RunStarted { config, .. } = &mut payload.payload {
+            config.bootstrap_edit_loop_cap = None;
         }
-        conn.execute_batch("CREATE TRIGGER trg_events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;").unwrap();
-        let bridge = Arc::new(mock_bridge::MockBridge::new());
-        let (engine, cancel, server, _) =
-            cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-        let observed = wait_for_attention(&bridge, &storage, attempt.run).await;
-        assert!(
-            observed.is_ok(),
-            "version {version}: {:?}",
-            storage.work_items().for_run(attempt.run).unwrap()
-        );
-        let prompted = bridge.last_prompt().await.is_some();
-        if prompted {
-            engine
-                .stop_run(attempt.run, "fixture cleanup".into())
-                .await
-                .unwrap();
-        }
-        cancel.cancel();
-        server.await.unwrap().unwrap();
+        conn.execute(
+            "UPDATE events SET payload=?,schema_version=? WHERE seq=?",
+            rusqlite::params![serde_json::to_vec(&payload).unwrap(), version, seq],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("CREATE TRIGGER trg_events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;").unwrap();
+    let bridge = Arc::new(mock_bridge::MockBridge::new());
+    let (engine, cancel, server, _) =
+        cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
+    let observed = wait_for_attention(&bridge, &storage, attempt.run).await;
+    assert!(
+        observed.is_ok(),
+        "version {version}: {:?}",
+        storage.work_items().for_run(attempt.run).unwrap()
+    );
+    let prompted = bridge.last_prompt().await.is_some();
+    if prompted {
+        engine
+            .stop_run(attempt.run, "fixture cleanup".into())
+            .await
+            .unwrap();
+    }
+    cancel.cancel();
+    server.await.unwrap().unwrap();
+    assert_eq!(
+        prompted,
+        version == 12,
+        "legacy generic task must remain executable; current origin must retain immutable cap authority"
+    );
+    if !prompted {
+        let current = storage.work_items().for_run(attempt.run).unwrap().unwrap();
         assert_eq!(
-            prompted,
-            version == 12,
-            "legacy generic task must remain executable; current origin must retain immutable cap authority"
+            current.state,
+            surge_core::work_item::WorkItemAttemptState::Attention
         );
-        if !prompted {
-            let current = storage.work_items().for_run(attempt.run).unwrap().unwrap();
-            assert_eq!(
-                current.state,
-                surge_core::work_item::WorkItemAttemptState::Attention
-            );
-            assert_eq!(current.binding, attempt.binding);
-        }
+        assert_eq!(current.binding, attempt.binding);
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, workspace, _start) =
         reserve_fixture(home.path(), project.path(), true).await;
@@ -916,90 +972,108 @@ async fn cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once() {
     for boundary in 0..3 {
-        let home = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let (storage, attempt, workspace, start) =
-            reserve_fixture(home.path(), project.path(), false).await;
-        if boundary == 1 {
-            let writer = storage
-                .create_run(attempt.run, &workspace.path, None)
-                .await
-                .unwrap();
-            writer.close().await.unwrap();
-        }
-        if boundary == 2 {
-            surge_git::task_workspace::prepare(
-                &workspace,
-                surge_git::run_worktree::ReconcilePhase::BeforeExecution,
-            )
-            .unwrap();
-        }
-        let bridge = Arc::new(mock_bridge::MockBridge::new());
-        let (_engine, cancel, server, socket) =
-            cold_host(home.path(), project.path(), storage.clone(), bridge).await;
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(
-            storage
-                .work_items()
-                .for_run(attempt.run)
-                .unwrap()
-                .unwrap()
-                .state,
-            surge_core::work_item::WorkItemAttemptState::Reserved,
-            "unlaunched reservation must require explicit retry"
-        );
-        let command = serde_json::to_value(&start).unwrap();
-        let (first, concurrent) = tokio::join!(
-            request(&socket, command.clone()),
-            request(&socket, command.clone())
-        );
-        for response in [&first, &concurrent] {
-            if response["method"] == "work_item_ok" {
-                assert_eq!(
-                    response["result"]["value"]["run"],
-                    serde_json::to_value(attempt.run).unwrap()
-                );
-            } else {
-                assert!(
-                    response["message"].as_str().unwrap().contains("claimed"),
-                    "{response}"
-                );
-            }
-        }
-        let replay = request(&socket, command).await;
-        assert_eq!(
-            replay["result"]["value"]["run"],
-            serde_json::to_value(attempt.run).unwrap(),
-            "{replay}"
-        );
-        let inspected = storage.inspect_run(attempt.run).await.unwrap();
-        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
-            inspected.database
-        else {
-            panic!("startup")
-        };
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(
-                    event.payload.payload,
-                    surge_core::EventPayload::RunStarted { .. }
-                ))
-                .count(),
-            1
-        );
-        assert_eq!(
-            storage.work_items().show(attempt.item).unwrap().usage.runs,
-            1
-        );
-        cancel.cancel();
-        server.await.unwrap().unwrap();
+        let home = FixtureHome::new().unwrap();
+        lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once_in_home(
+            &home, boundary,
+        )
+        .await;
+        home.close().unwrap();
     }
+}
+
+async fn lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once_in_home(
+    home: &FixtureHome,
+    boundary: u32,
+) {
+    let project = tempfile::tempdir().unwrap();
+    let (storage, attempt, workspace, start) =
+        reserve_fixture(home.path(), project.path(), false).await;
+    if boundary == 1 {
+        let writer = storage
+            .create_run(attempt.run, &workspace.path, None)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+    }
+    if boundary == 2 {
+        surge_git::task_workspace::prepare(
+            &workspace,
+            surge_git::run_worktree::ReconcilePhase::BeforeExecution,
+        )
+        .unwrap();
+    }
+    let bridge = Arc::new(mock_bridge::MockBridge::new());
+    let (_engine, cancel, server, socket) =
+        cold_host(home.path(), project.path(), storage.clone(), bridge).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(
+        storage
+            .work_items()
+            .for_run(attempt.run)
+            .unwrap()
+            .unwrap()
+            .state,
+        surge_core::work_item::WorkItemAttemptState::Reserved,
+        "unlaunched reservation must require explicit retry"
+    );
+    let command = serde_json::to_value(&start).unwrap();
+    let (first, concurrent) = tokio::join!(
+        request(&socket, command.clone()),
+        request(&socket, command.clone())
+    );
+    for response in [&first, &concurrent] {
+        if response["method"] == "work_item_ok" {
+            assert_eq!(
+                response["result"]["value"]["run"],
+                serde_json::to_value(attempt.run).unwrap()
+            );
+        } else {
+            assert!(
+                response["message"].as_str().unwrap().contains("claimed"),
+                "{response}"
+            );
+        }
+    }
+    let replay = request(&socket, command).await;
+    assert_eq!(
+        replay["result"]["value"]["run"],
+        serde_json::to_value(attempt.run).unwrap(),
+        "{replay}"
+    );
+    let inspected = storage.inspect_run(attempt.run).await.unwrap();
+    let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+        inspected.database
+    else {
+        panic!("startup")
+    };
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.payload.payload,
+                surge_core::EventPayload::RunStarted { .. }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        storage.work_items().show(attempt.item).unwrap().usage.runs,
+        1
+    );
+    cancel.cancel();
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn partial_task_startup_missing_initial_prompt_is_attention_without_dispatch() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    partial_task_startup_missing_initial_prompt_is_attention_without_dispatch_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn partial_task_startup_missing_initial_prompt_is_attention_without_dispatch_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, workspace, _start) =
         reserve_fixture(home.path(), project.path(), true).await;
@@ -1050,7 +1124,14 @@ async fn partial_task_startup_missing_initial_prompt_is_attention_without_dispat
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn disconnected_start_caller_does_not_drop_durable_attempt_or_active_run() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    disconnected_start_caller_does_not_drop_durable_attempt_or_active_run_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn disconnected_start_caller_does_not_drop_durable_attempt_or_active_run_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _workspace, start) =
         reserve_fixture(home.path(), project.path(), true).await;
@@ -1106,62 +1187,70 @@ async fn disconnected_start_caller_does_not_drop_durable_attempt_or_active_run()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn durable_terminal_settlement_validates_frozen_requirements_before_releasing_ownership() {
     for corrupt in [false, true] {
-        let home = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let (storage, attempt, workspace, _start) =
-            reserve_fixture(home.path(), project.path(), true).await;
-        write_owned_startup(&storage, &attempt, &workspace, true, true).await;
-        let writer = storage.open_run_writer(attempt.run).await.unwrap();
-        writer
-            .append_event(surge_core::VersionedEventPayload::new(
-                surge_core::EventPayload::RunFailed {
-                    error: "Execution failed after committed startup".into(),
-                },
-            ))
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-        if corrupt {
-            let inspection = storage.inspect_folded_run(attempt.run).await.unwrap();
-            let path = inspection
-                .database
-                .unwrap()
-                .startup
-                .into_iter()
-                .find_map(|row| match row.payload.payload {
-                    surge_core::EventPayload::ArtifactProduced { name, path, .. }
-                        if name == "accepted_requirements" =>
-                    {
-                        Some(path)
-                    },
-                    _ => None,
-                })
-                .unwrap();
-            std::fs::write(path, b"tampered immutable requirement artifact").unwrap();
-        }
-        let bridge = Arc::new(mock_bridge::MockBridge::new());
-        let (_engine, cancel, server, _) =
-            cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-        let expected = if corrupt {
-            surge_core::work_item::WorkItemAttemptState::Attention
-        } else {
-            surge_core::work_item::WorkItemAttemptState::Failed
-        };
-        wait_for_attempt_state(&storage, attempt.run, expected).await;
-        assert!(bridge.last_prompt().await.is_none());
-        assert_eq!(
-            storage
-                .work_items()
-                .show(attempt.item)
-                .unwrap()
-                .item
-                .active_run,
-            if corrupt { Some(attempt.run) } else { None }
-        );
-        assert!(workspace.path.exists());
-        cancel.cancel();
-        server.await.unwrap().unwrap();
+        let home = FixtureHome::new().unwrap();
+        durable_terminal_settlement_validates_frozen_requirements_before_releasing_ownership_in_home(&home, corrupt).await;
+        home.close().unwrap();
     }
+}
+
+async fn durable_terminal_settlement_validates_frozen_requirements_before_releasing_ownership_in_home(
+    home: &FixtureHome,
+    corrupt: bool,
+) {
+    let project = tempfile::tempdir().unwrap();
+    let (storage, attempt, workspace, _start) =
+        reserve_fixture(home.path(), project.path(), true).await;
+    write_owned_startup(&storage, &attempt, &workspace, true, true).await;
+    let writer = storage.open_run_writer(attempt.run).await.unwrap();
+    writer
+        .append_event(surge_core::VersionedEventPayload::new(
+            surge_core::EventPayload::RunFailed {
+                error: "Execution failed after committed startup".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    writer.close().await.unwrap();
+    if corrupt {
+        let inspection = storage.inspect_folded_run(attempt.run).await.unwrap();
+        let path = inspection
+            .database
+            .unwrap()
+            .startup
+            .into_iter()
+            .find_map(|row| match row.payload.payload {
+                surge_core::EventPayload::ArtifactProduced { name, path, .. }
+                    if name == "accepted_requirements" =>
+                {
+                    Some(path)
+                },
+                _ => None,
+            })
+            .unwrap();
+        std::fs::write(path, b"tampered immutable requirement artifact").unwrap();
+    }
+    let bridge = Arc::new(mock_bridge::MockBridge::new());
+    let (_engine, cancel, server, _) =
+        cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
+    let expected = if corrupt {
+        surge_core::work_item::WorkItemAttemptState::Attention
+    } else {
+        surge_core::work_item::WorkItemAttemptState::Failed
+    };
+    wait_for_attempt_state(&storage, attempt.run, expected).await;
+    assert!(bridge.last_prompt().await.is_none());
+    assert_eq!(
+        storage
+            .work_items()
+            .show(attempt.item)
+            .unwrap()
+            .item
+            .active_run,
+        if corrupt { Some(attempt.run) } else { None }
+    );
+    assert!(workspace.path.exists());
+    cancel.cancel();
+    server.await.unwrap().unwrap();
 }
 
 async fn wait_for_attempt_state(
@@ -1197,8 +1286,13 @@ async fn wait_for_attempt_transition(
 
 /// Deliberately damage only an isolated fixture journal, retaining valid payloads.
 async fn assert_malformed_owned_startup_is_attention(kind: &str) {
+    let home = FixtureHome::new().unwrap();
+    assert_malformed_owned_startup_is_attention_in_home(&home, kind).await;
+    home.close().unwrap();
+}
+
+async fn assert_malformed_owned_startup_is_attention_in_home(home: &FixtureHome, kind: &str) {
     use surge_core::{EventPayload as E, VersionedEventPayload as V};
-    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, workspace, _) = reserve_fixture(home.path(), project.path(), true).await;
     write_owned_startup(&storage, &attempt, &workspace, true, true).await;
@@ -1351,7 +1445,14 @@ async fn corrupt_owned_startup_late_prompt_artifact_is_attention() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execution_owner_prevents_second_live_host_from_replaying_agent_turn() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    execution_owner_prevents_second_live_host_from_replaying_agent_turn_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn execution_owner_prevents_second_live_host_from_replaying_agent_turn_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) = reserve_fixture(home.path(), project.path(), true).await;
     let first_bridge = Arc::new(mock_bridge::MockBridge::new());
@@ -1419,60 +1520,73 @@ async fn execution_owner_prevents_second_live_host_from_replaying_agent_turn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ambiguous_owned_terminal_history_never_releases_task_ownership() {
     for duplicate in [false, true] {
-        let home = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let (storage, attempt, workspace, _) =
-            reserve_fixture(home.path(), project.path(), true).await;
-        write_owned_startup(&storage, &attempt, &workspace, true, true).await;
-        let writer = storage.open_run_writer(attempt.run).await.unwrap();
-        let completed = surge_core::EventPayload::RunCompleted {
-            terminal_node: "end".parse().unwrap(),
-        };
-        writer
-            .append_events(vec![
-                surge_core::VersionedEventPayload::new(completed.clone()),
-                surge_core::VersionedEventPayload::new(if duplicate {
-                    completed
-                } else {
-                    surge_core::EventPayload::RunFailed {
-                        error: "Conflicting definitive evidence".into(),
-                    }
-                }),
-            ])
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-        let bridge = Arc::new(mock_bridge::MockBridge::new());
-        let (_, cancel, server, _) =
-            cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
-        let observed = wait_for_attempt_transition(&storage, attempt.run).await;
-        cancel.cancel();
-        server.await.unwrap().unwrap();
-        assert_eq!(
-            observed.state,
-            surge_core::work_item::WorkItemAttemptState::Attention,
-            "ambiguous definitive terminal evidence was trusted"
-        );
-        assert_eq!(
-            storage
-                .work_items()
-                .show(attempt.item)
-                .unwrap()
-                .item
-                .active_run,
-            Some(attempt.run)
-        );
-        assert!(bridge.last_prompt().await.is_none());
+        let home = FixtureHome::new().unwrap();
+        ambiguous_owned_terminal_history_never_releases_task_ownership_in_home(&home, duplicate)
+            .await;
+        home.close().unwrap();
     }
+}
+
+async fn ambiguous_owned_terminal_history_never_releases_task_ownership_in_home(
+    home: &FixtureHome,
+    duplicate: bool,
+) {
+    let project = tempfile::tempdir().unwrap();
+    let (storage, attempt, workspace, _) = reserve_fixture(home.path(), project.path(), true).await;
+    write_owned_startup(&storage, &attempt, &workspace, true, true).await;
+    let writer = storage.open_run_writer(attempt.run).await.unwrap();
+    let completed = surge_core::EventPayload::RunCompleted {
+        terminal_node: "end".parse().unwrap(),
+    };
+    writer
+        .append_events(vec![
+            surge_core::VersionedEventPayload::new(completed.clone()),
+            surge_core::VersionedEventPayload::new(if duplicate {
+                completed
+            } else {
+                surge_core::EventPayload::RunFailed {
+                    error: "Conflicting definitive evidence".into(),
+                }
+            }),
+        ])
+        .await
+        .unwrap();
+    writer.close().await.unwrap();
+    let bridge = Arc::new(mock_bridge::MockBridge::new());
+    let (_, cancel, server, _) =
+        cold_host(home.path(), project.path(), storage.clone(), bridge.clone()).await;
+    let observed = wait_for_attempt_transition(&storage, attempt.run).await;
+    cancel.cancel();
+    server.await.unwrap().unwrap();
+    assert_eq!(
+        observed.state,
+        surge_core::work_item::WorkItemAttemptState::Attention,
+        "ambiguous definitive terminal evidence was trusted"
+    );
+    assert_eq!(
+        storage
+            .work_items()
+            .show(attempt.item)
+            .unwrap()
+            .item
+            .active_run,
+        Some(attempt.run)
+    );
+    assert!(bridge.last_prompt().await.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_pr_cannot_attach_another_repository_or_unknown_remote() {
+    let home = FixtureHome::new().unwrap();
+    task_pr_cannot_attach_another_repository_or_unknown_remote_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn task_pr_cannot_attach_another_repository_or_unknown_remote_in_home(home: &FixtureHome) {
     use surge_core::{
         id::WorkItemOperationId,
         work_item::{WorkItemCommand as C, WorkItemPr},
     };
-    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, _) = reserve_fixture(home.path(), project.path(), false).await;
     let (_, cancel, server, socket) = cold_host(
@@ -1520,113 +1634,131 @@ async fn task_pr_cannot_attach_another_repository_or_unknown_remote() {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_pr_normalized_remote_mapping_replay_and_rejection_preserve_association() {
-    use surge_core::{
-        id::WorkItemOperationId,
-        work_item::{WorkItemCommand as C, WorkItemPr},
-    };
     for origin in [
         "git@github.com:fixture/repo.git",
         "https://github.com/fixture/repo.git",
         "ssh://git@github.com/fixture/repo.git",
         "https://github.com/fork/repo.git",
     ] {
-        let home = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let (storage, attempt, _, _) = reserve_fixture(home.path(), project.path(), false).await;
+        let home = FixtureHome::new().unwrap();
+        task_pr_normalized_remote_mapping_replay_and_rejection_preserve_association_in_home(
+            &home, origin,
+        )
+        .await;
+        home.close().unwrap();
+    }
+}
+
+async fn task_pr_normalized_remote_mapping_replay_and_rejection_preserve_association_in_home(
+    home: &FixtureHome,
+    origin: &str,
+) {
+    use surge_core::{
+        id::WorkItemOperationId,
+        work_item::{WorkItemCommand as C, WorkItemPr},
+    };
+    let project = tempfile::tempdir().unwrap();
+    let (storage, attempt, _, _) = reserve_fixture(home.path(), project.path(), false).await;
+    assert!(
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", origin])
+            .current_dir(project.path())
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    if origin.contains("fork/") {
         assert!(
             std::process::Command::new("git")
-                .args(["remote", "add", "origin", origin])
+                .args([
+                    "remote",
+                    "add",
+                    "upstream",
+                    "git@github.com:fixture/repo.git"
+                ])
                 .current_dir(project.path())
                 .output()
                 .unwrap()
                 .status
                 .success()
         );
-        if origin.contains("fork/") {
-            assert!(
-                std::process::Command::new("git")
-                    .args([
-                        "remote",
-                        "add",
-                        "upstream",
-                        "git@github.com:fixture/repo.git"
-                    ])
-                    .current_dir(project.path())
-                    .output()
-                    .unwrap()
-                    .status
-                    .success()
-            );
-        }
-        let (_, cancel, server, socket) = cold_host(
-            home.path(),
-            project.path(),
-            storage.clone(),
-            Arc::new(mock_bridge::MockBridge::new()),
-        )
-        .await;
-        let attach = |repository: &str, number: u64| C::AttachPr {
-            operation_id: WorkItemOperationId::new(),
-            item: attempt.item,
-            expected_version: storage
-                .work_items()
-                .show(attempt.item)
-                .unwrap()
-                .item
-                .version,
-            pr: WorkItemPr {
-                provider: "github".into(),
-                repository: repository.into(),
-                number,
-                url: format!("https://github.com/{repository}/pull/{number}"),
-            },
-        };
-        let wrong = request(
-            &socket,
-            serde_json::to_value(attach("other/repository", 31)).unwrap(),
-        )
-        .await;
-        assert_ne!(
-            wrong["method"], "work_item_ok",
-            "foreign PR accepted: {wrong}"
-        );
-        let valid = attach("fixture/repo", 32);
-        let accepted = request(&socket, serde_json::to_value(&valid).unwrap()).await;
-        assert_eq!(accepted["method"], "work_item_ok", "{accepted}");
-        for name in ["origin", "upstream"] {
-            let _ = std::process::Command::new("git")
-                .args(["remote", "remove", name])
-                .current_dir(project.path())
-                .output()
-                .unwrap();
-        }
-        let replay = request(&socket, serde_json::to_value(valid).unwrap()).await;
-        assert_eq!(accepted, replay);
-        let rejected = request(
-            &socket,
-            serde_json::to_value(attach("other/repository", 33)).unwrap(),
-        )
-        .await;
-        assert_ne!(rejected["method"], "work_item_ok");
-        assert_eq!(
-            storage
-                .work_items()
-                .show(attempt.item)
-                .unwrap()
-                .pr
-                .unwrap()
-                .number,
-            32
-        );
-        cancel.cancel();
-        server.await.unwrap().unwrap();
     }
+    let (_, cancel, server, socket) = cold_host(
+        home.path(),
+        project.path(),
+        storage.clone(),
+        Arc::new(mock_bridge::MockBridge::new()),
+    )
+    .await;
+    let attach = |repository: &str, number: u64| C::AttachPr {
+        operation_id: WorkItemOperationId::new(),
+        item: attempt.item,
+        expected_version: storage
+            .work_items()
+            .show(attempt.item)
+            .unwrap()
+            .item
+            .version,
+        pr: WorkItemPr {
+            provider: "github".into(),
+            repository: repository.into(),
+            number,
+            url: format!("https://github.com/{repository}/pull/{number}"),
+        },
+    };
+    let wrong = request(
+        &socket,
+        serde_json::to_value(attach("other/repository", 31)).unwrap(),
+    )
+    .await;
+    assert_ne!(
+        wrong["method"], "work_item_ok",
+        "foreign PR accepted: {wrong}"
+    );
+    let valid = attach("fixture/repo", 32);
+    let accepted = request(&socket, serde_json::to_value(&valid).unwrap()).await;
+    assert_eq!(accepted["method"], "work_item_ok", "{accepted}");
+    for name in ["origin", "upstream"] {
+        let _ = std::process::Command::new("git")
+            .args(["remote", "remove", name])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+    }
+    let replay = request(&socket, serde_json::to_value(valid).unwrap()).await;
+    assert_eq!(accepted, replay);
+    let rejected = request(
+        &socket,
+        serde_json::to_value(attach("other/repository", 33)).unwrap(),
+    )
+    .await;
+    assert_ne!(rejected["method"], "work_item_ok");
+    assert_eq!(
+        storage
+            .work_items()
+            .show(attempt.item)
+            .unwrap()
+            .pr
+            .unwrap()
+            .number,
+        32
+    );
+    cancel.cancel();
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_tracking_error_with_conflicting_terminals_retains_task_ownership() {
+    let home = FixtureHome::new().unwrap();
+    live_tracking_error_with_conflicting_terminals_retains_task_ownership_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn live_tracking_error_with_conflicting_terminals_retains_task_ownership_in_home(
+    home: &FixtureHome,
+) {
     use surge_core::{EventPayload as E, VersionedEventPayload as V};
-    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) = reserve_fixture(home.path(), project.path(), true).await;
     let bridge = Arc::new(mock_bridge::MockBridge::new());
@@ -1884,9 +2016,18 @@ async fn wait_for_continue_confirmation(
 }
 
 async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: bool) {
+    let home = FixtureHome::new().unwrap();
+    committed_continue_fixture_in_home(&home, crash_ack, successor_gate).await;
+    home.close().unwrap();
+}
+
+async fn committed_continue_fixture_in_home(
+    home: &FixtureHome,
+    crash_ack: Option<bool>,
+    successor_gate: bool,
+) {
     use surge_core::id::WorkItemOperationId;
     use surge_core::work_item::WorkItemCommand;
-    let home = ContinueFixtureDirectory::new();
     let project = ContinueFixtureDirectory::new();
     let (storage, attempt, _, start) =
         reserve_fixture_with_gate(home.path(), project.path(), true, successor_gate).await;
@@ -2013,7 +2154,9 @@ async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: boo
             serde_json::to_vec(&continue_command).unwrap(),
         )
         .unwrap();
+        #[cfg(unix)]
         let stale_socket = home.path().join("cold.sock");
+        #[cfg(unix)]
         if stale_socket.exists() {
             std::fs::remove_file(&stale_socket).unwrap();
         }
@@ -2173,15 +2316,15 @@ async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: boo
             };
             let request_id = surge_core::id::GateRequestId::from_event_call_id(call_id).unwrap();
             tokio::time::timeout(Duration::from_secs(8), async {
-                loop {
-                    assert_eq!(conn.query_row("SELECT COUNT(*) FROM events WHERE kind='HumanInputRequested'", [], |row|row.get::<_,u64>(0)).unwrap(), 1, "recovery must reuse the original decision request rather than emit a replacement");
-                    match recovered_engine.resolve_gate_input(attempt.run, node.clone(), request_id, json!({"outcome":"approve"})).await {
-                        Ok(()) => break,
-                        Err(surge_orchestrator::engine::EngineError::StaleGateRequest) => tokio::time::sleep(Duration::from_millis(10)).await,
-                        Err(error) => panic!("original gate identity cannot resolve: {error}"),
-                    }
+            loop {
+                assert_eq!(conn.query_row("SELECT COUNT(*) FROM events WHERE kind='HumanInputRequested'", [], |row|row.get::<_,u64>(0)).unwrap(), 1, "recovery must reuse the original decision request rather than emit a replacement");
+                match recovered_engine.resolve_gate_input(attempt.run, node.clone(), request_id, json!({"outcome":"approve"})).await {
+                    Ok(()) => break,
+                    Err(surge_orchestrator::engine::EngineError::StaleGateRequest) => tokio::time::sleep(Duration::from_millis(10)).await,
+                    Err(error) => panic!("original gate identity cannot resolve: {error}"),
                 }
-            }).await.unwrap();
+            }
+        }).await.unwrap();
             assert_eq!(
                 request(&socket, serde_json::to_value(&continue_command).unwrap()).await["method"],
                 "work_item_ok"
@@ -2309,6 +2452,13 @@ async fn committed_continue_fixture(crash_ack: Option<bool>, successor_gate: boo
         return;
     }
     conn.execute_batch("CREATE TRIGGER fixture_no_continue BEFORE INSERT ON events WHEN NEW.kind='RunContinued' BEGIN SELECT RAISE(ABORT,'fixture rejected control acknowledgement'); END;").unwrap();
+    // The original child was killed and reaped above; retire its Unix pathname.
+    #[cfg(unix)]
+    let stale_socket = home.path().join("cold.sock");
+    #[cfg(unix)]
+    if stale_socket.exists() {
+        std::fs::remove_file(&stale_socket).unwrap();
+    }
     let bridge = Arc::new(wire_bridge::WireBridge {
         bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
         flags: commit_wire_flags(home.path()),
@@ -2451,7 +2601,16 @@ async fn cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider
 }
 
 async fn cold_committed_fixture(after_route: bool, checkpoint_damage: Option<&str>) {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    cold_committed_fixture_in_home(&home, after_route, checkpoint_damage).await;
+    home.close().unwrap();
+}
+
+async fn cold_committed_fixture_in_home(
+    home: &FixtureHome,
+    after_route: bool,
+    checkpoint_damage: Option<&str>,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) = reserve_fixture(home.path(), project.path(), true).await;
     std::fs::write(
@@ -2461,18 +2620,19 @@ async fn cold_committed_fixture(after_route: bool, checkpoint_damage: Option<&st
     .unwrap();
     let barrier = home.path().join("close-barrier");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "child_committed_outcome_host_probe",
-            "--nocapture",
-        ])
-        .env("SURGE_TEST_COMMIT_HOME", home.path())
-        .env("SURGE_TEST_COMMIT_PROJECT", project.path())
-        .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    .args([
+        "--exact",
+        "child_committed_outcome_host_probe",
+        "--nocapture",
+    ])
+    .env("SURGE_TEST_COMMIT_HOME", home.path())
+    .env("SURGE_TEST_COMMIT_PROJECT", project.path())
+    .env("SURGE_TEST_CLOSE_BARRIER", &barrier)
+    .stdout(std::process::Stdio::null())
+    // Inherited so nextest shows a child panic; the probe emits no tracing output.
+    .stderr(std::process::Stdio::inherit())
+    .spawn()
+    .unwrap();
     let ready = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             if !barrier.with_extension("ready").exists() {
@@ -2519,6 +2679,8 @@ async fn cold_committed_fixture(after_route: bool, checkpoint_damage: Option<&st
             events_conn.execute_batch("CREATE TRIGGER fixture_no_terminal BEFORE INSERT ON events WHEN NEW.kind IN ('RunCompleted','RunFailed','RunAborted') BEGIN SELECT RAISE(ABORT,'fixture crash boundary before terminal'); END;").unwrap();
         }
         std::fs::write(&barrier, b"release").unwrap();
+        // The route commit must not wait on this lock: the best-effort capacity
+        // clear runs after it, and registry SQLite runs off the async workers.
         tokio::time::timeout(Duration::from_secs(8), async {
             loop {
                 let inspected = storage.inspect_run(attempt.run).await.unwrap();
@@ -2797,7 +2959,14 @@ async fn cold_committed_fixture(after_route: bool, checkpoint_damage: Option<&st
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    killed_execution_owner_releases_os_lock_and_same_attempt_recovers_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) = reserve_fixture(home.path(), project.path(), true).await;
     std::fs::write(
@@ -2858,7 +3027,14 @@ async fn killed_execution_owner_releases_os_lock_and_same_attempt_recovers() {
 /// Actual ACP subprocess opening is the anchor for provider-session continuity.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn task_provider_identity_is_durable_before_first_real_acp_prompt() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    task_provider_identity_is_durable_before_first_real_acp_prompt_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn task_provider_identity_is_durable_before_first_real_acp_prompt_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, workspace, start) =
         reserve_fixture(home.path(), project.path(), true).await;
@@ -2982,8 +3158,17 @@ async fn manual_suspend_supersedes_reserved_continue_and_historical_replay_canno
 }
 
 async fn suspend_continue_wire(restored_capabilities: &str, manual_wins: bool) {
+    let home = FixtureHome::new().unwrap();
+    suspend_continue_wire_in_home(&home, restored_capabilities, manual_wins).await;
+    home.close().unwrap();
+}
+
+async fn suspend_continue_wire_in_home(
+    home: &FixtureHome,
+    restored_capabilities: &str,
+    manual_wins: bool,
+) {
     use surge_core::{EventPayload, id::WorkItemOperationId, work_item::WorkItemCommand};
-    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, workspace, start) =
         reserve_fixture(home.path(), project.path(), true).await;
@@ -3366,7 +3551,12 @@ async fn suspend_continue_wire(restored_capabilities: &str, manual_wins: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_gate_answer_receipt_survives_completion_and_restart() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    accepted_gate_answer_receipt_survives_completion_and_restart_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn accepted_gate_answer_receipt_survives_completion_and_restart_in_home(home: &FixtureHome) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) =
         reserve_fixture_with_gate(home.path(), project.path(), true, true).await;
@@ -3517,8 +3707,13 @@ async fn committed_gate_effects_survive_owner_death_before_route_without_repetit
 }
 
 async fn gate_answer_crash_fixture(after_effects: bool) {
+    let home = FixtureHome::new().unwrap();
+    gate_answer_crash_fixture_in_home(&home, after_effects).await;
+    home.close().unwrap();
+}
+
+async fn gate_answer_crash_fixture_in_home(home: &FixtureHome, after_effects: bool) {
     use rusqlite::OptionalExtension;
-    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) =
         reserve_fixture_with_gate(home.path(), project.path(), true, true).await;
@@ -3676,6 +3871,7 @@ async fn gate_answer_crash_fixture(after_effects: bool) {
     }
     conn.execute_batch("DROP TRIGGER fixture_gate_delivery_interval")
         .unwrap();
+    #[cfg(unix)]
     std::fs::remove_file(home.path().join("cold.sock")).unwrap();
     let bridge = Arc::new(wire_bridge::WireBridge {
         bridge: surge_acp::bridge::AcpBridge::with_defaults().unwrap(),
@@ -3748,7 +3944,14 @@ async fn gate_answer_crash_fixture(after_effects: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_admission_task_conflict_is_typed_and_has_no_operation_receipt() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    pre_admission_task_conflict_is_typed_and_has_no_operation_receipt_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn pre_admission_task_conflict_is_typed_and_has_no_operation_receipt_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, _) = reserve_fixture(home.path(), project.path(), false).await;
     let claim = storage.work_items().claim(attempt.run).unwrap();
@@ -3801,7 +4004,14 @@ async fn pre_admission_task_conflict_is_typed_and_has_no_operation_receipt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admitted_suspend_with_no_local_actor_returns_pending_original_operation() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    admitted_suspend_with_no_local_actor_returns_pending_original_operation_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn admitted_suspend_with_no_local_actor_returns_pending_original_operation_in_home(
+    home: &FixtureHome,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, _) = reserve_fixture(home.path(), project.path(), false).await;
     let claim = storage.work_items().claim(attempt.run).unwrap();
@@ -3910,7 +4120,25 @@ async fn pure_gate_suspension_fixture_deadline(
     expired: bool,
     forged_route: bool,
 ) {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    pure_gate_suspension_fixture_deadline_in_home(
+        &home,
+        forged,
+        answer_while_suspended,
+        expired,
+        forged_route,
+    )
+    .await;
+    home.close().unwrap();
+}
+
+async fn pure_gate_suspension_fixture_deadline_in_home(
+    home: &FixtureHome,
+    forged: bool,
+    answer_while_suspended: bool,
+    expired: bool,
+    forged_route: bool,
+) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) = reserve_fixture_graph_timeout(
         home.path(),
@@ -4087,6 +4315,7 @@ async fn pure_gate_suspension_fixture_deadline(
         server.await.unwrap().unwrap();
         return;
     }
+    #[cfg(unix)]
     if socket.exists() {
         std::fs::remove_file(&socket).unwrap();
     }
@@ -4356,7 +4585,12 @@ async fn pure_gate_suspension_fixture_deadline(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revisited_human_gate_requires_new_occurrence_and_new_decision() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
+    revisited_human_gate_requires_new_occurrence_and_new_decision_in_home(&home).await;
+    home.close().unwrap();
+}
+
+async fn revisited_human_gate_requires_new_occurrence_and_new_decision_in_home(home: &FixtureHome) {
     let project = tempfile::tempdir().unwrap();
     let (storage, attempt, _, start) =
         reserve_fixture_graph(home.path(), project.path(), false, true, true).await;
@@ -4453,4 +4687,31 @@ async fn revisited_human_gate_requires_new_occurrence_and_new_decision() {
     );
     cancel.cancel();
     server.await.unwrap().unwrap();
+}
+
+async fn wait_for_listener(
+    socket: &Path,
+    server: &mut tokio::task::JoinHandle<Result<(), surge_daemon::DaemonError>>,
+) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.is_finished() {
+                panic!(
+                    "daemon stopped before readiness: {:?}",
+                    (&mut *server).await
+                );
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(
+                socket.to_path_buf(),
+            )
+            .await
+            .is_ok()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("daemon must accept a connection within its readiness deadline");
 }

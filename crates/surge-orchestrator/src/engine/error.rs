@@ -126,6 +126,28 @@ pub enum EngineError {
     /// event to seed the child run.
     #[error("invalid fork request: {0}")]
     ForkInvalid(String),
+
+    /// A fork writer failed to settle after its operation succeeded.
+    #[error("fork writer {run} failed to close: {close}")]
+    ForkWriterClose {
+        /// Run whose writer failed to settle.
+        run: RunId,
+        /// Actual writer close or join failure.
+        #[source]
+        close: Box<surge_persistence::runs::CloseError>,
+    },
+
+    /// Both a fork operation and its writer settlement failed.
+    #[error("{operation}; fork writer {run} also failed to close: {close}")]
+    ForkOperationAndClose {
+        /// Run whose writer failed to settle.
+        run: RunId,
+        /// Original operation error, including any child settlement failure.
+        #[source]
+        operation: Box<EngineError>,
+        /// Additional writer close or join failure.
+        close: Box<surge_persistence::runs::CloseError>,
+    },
 }
 
 fn format_node_cycle(nodes: &[surge_core::keys::NodeKey]) -> String {

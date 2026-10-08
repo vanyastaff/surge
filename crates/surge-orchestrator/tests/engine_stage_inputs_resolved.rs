@@ -1,5 +1,7 @@
 //! Actual agent-stage launch records complete resolved input hashes, not ACP echo limits.
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use surge_acp::bridge::{error::SendMessageError, facade::BridgeFacade};
@@ -45,113 +47,119 @@ async fn launch(
     registry: bool,
     with_memory_claim_snapshot: bool,
 ) -> (StageResult, Vec<EventPayload>, bool) {
-    let directory = tempfile::tempdir().unwrap();
-    if let Some(content) = file {
-        std::fs::write(directory.path().join("context.md"), content).unwrap();
-    }
-    let storage = Storage::open(directory.path()).await.unwrap();
-    let run = RunId::new();
-    let writer = storage
-        .create_run(run, directory.path(), None)
-        .await
-        .unwrap();
-    let artifacts = surge_persistence::artifacts::ArtifactStore::new(directory.path().join("runs"));
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    // Stop after the real launch boundary without driving a native provider.
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "controlled stop".into(),
-    })
-    .await;
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let node = NodeKey::try_from("worker").unwrap();
-    let mut memory = RunMemory::default();
-    memory.artifacts.insert(
-        "context".into(),
-        ArtifactRef {
-            hash: ContentHash::compute(b"artifact catalog metadata is not resolved content"),
-            path: "context.md".into(),
-            name: "context".into(),
-            produced_by: node.clone(),
-            produced_at_seq: 1,
-        },
-    );
-    if file.is_some() {
-        let artifact = memory.artifacts.get("context").unwrap().clone();
-        memory.artifacts.insert("project_memory".into(), artifact);
-    }
-    if with_memory_claim_snapshot {
-        let snapshot = surge_orchestrator::project_context::MemoryClaimSnapshot {
-            budget: surge_core::context_pack::ContextPackConfig {
-                budget_tokens: 2000,
-            },
-            claims: Vec::new(),
-        };
-        let bytes = serde_json::to_vec(&snapshot).unwrap();
-        let artifact = artifacts
-            .put(
-                run,
-                surge_orchestrator::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME,
-                &bytes,
-            )
+    let directory = FixtureHome::new().unwrap();
+    let fixture_result = {
+        if let Some(content) = file {
+            std::fs::write(directory.path().join("context.md"), content).unwrap();
+        }
+        let storage = Storage::open(directory.path()).await.unwrap();
+        let run = RunId::new();
+        let writer = storage
+            .create_run(run, directory.path(), None)
             .await
             .unwrap();
+        let artifacts =
+            surge_persistence::artifacts::ArtifactStore::new(directory.path().join("runs"));
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        // Stop after the real launch boundary without driving a native provider.
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "controlled stop".into(),
+        })
+        .await;
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let node = NodeKey::try_from("worker").unwrap();
+        let mut memory = RunMemory::default();
         memory.artifacts.insert(
-            surge_orchestrator::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME.into(),
-            artifact,
+            "context".into(),
+            ArtifactRef {
+                hash: ContentHash::compute(b"artifact catalog metadata is not resolved content"),
+                path: "context.md".into(),
+                name: "context".into(),
+                produced_by: node.clone(),
+                produced_at_seq: 1,
+            },
         );
-    }
-    let resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hooks = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        node: &node,
-        attempt: 1,
-        steers: Vec::new(),
-        agent_config: config,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifacts,
-        worktree_path: directory.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id: run,
-        tool_resolutions: &resolutions,
-        human_input_timeout: Duration::from_secs(1),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: Default::default(),
-        output_spill: Default::default(),
-        profile_registry: registry.then(|| Arc::new(ProfileRegistry::new(DiskProfileSet::empty()))),
-        agent_registry: None,
-        hook_executor: &hooks,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await;
-    let events = writer
-        .read_events(EventSeq(0)..EventSeq(u64::MAX))
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|event| event.payload.payload)
-        .collect();
-    let opened = mock
-        .recorded_calls
-        .lock()
-        .await
-        .iter()
-        .any(|call| matches!(call, fixtures::mock_bridge::RecordedCall::OpenSession));
-    writer.close().await.unwrap();
-    (result, events, opened)
+        if file.is_some() {
+            let artifact = memory.artifacts.get("context").unwrap().clone();
+            memory.artifacts.insert("project_memory".into(), artifact);
+        }
+        if with_memory_claim_snapshot {
+            let snapshot = surge_orchestrator::project_context::MemoryClaimSnapshot {
+                budget: surge_core::context_pack::ContextPackConfig {
+                    budget_tokens: 2000,
+                },
+                claims: Vec::new(),
+            };
+            let bytes = serde_json::to_vec(&snapshot).unwrap();
+            let artifact = artifacts
+                .put(
+                    run,
+                    surge_orchestrator::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME,
+                    &bytes,
+                )
+                .await
+                .unwrap();
+            memory.artifacts.insert(
+                surge_orchestrator::engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME.into(),
+                artifact,
+            );
+        }
+        let resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hooks = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            node: &node,
+            attempt: 1,
+            steers: Vec::new(),
+            agent_config: config,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifacts,
+            worktree_path: directory.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id: run,
+            tool_resolutions: &resolutions,
+            human_input_timeout: Duration::from_secs(1),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: Default::default(),
+            output_spill: Default::default(),
+            profile_registry: registry
+                .then(|| Arc::new(ProfileRegistry::new(DiskProfileSet::empty()))),
+            agent_registry: None,
+            hook_executor: &hooks,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await;
+        let events = writer
+            .read_events(EventSeq(0)..EventSeq(u64::MAX))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        let opened = mock
+            .recorded_calls
+            .lock()
+            .await
+            .iter()
+            .any(|call| matches!(call, fixtures::mock_bridge::RecordedCall::OpenSession));
+        writer.close().await.unwrap();
+        (result, events, opened)
+    };
+    directory.close().unwrap();
+    fixture_result
 }
 
 fn recorded_inputs(events: &[EventPayload]) -> &BTreeMap<String, ContentHash> {

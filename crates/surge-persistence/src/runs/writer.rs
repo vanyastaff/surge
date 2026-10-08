@@ -158,6 +158,18 @@ async fn writer_loop(
     let span = tracing::info_span!("writer_task", run_id = %cfg.run_id);
     let _enter = span.enter();
 
+    #[cfg(windows)]
+    lease
+        .namespace
+        .verify()
+        .map_err(|error| WriterError::Io(std::io::Error::other(error.to_string())))?;
+    #[cfg(windows)]
+    let mut conn = super::connection::RetainedConnection::open_owned(
+        &cfg.events_db_path,
+        rusqlite::OpenFlags::default(),
+        lease.namespace.clone(),
+    )?;
+    #[cfg(not(windows))]
     let mut conn = Connection::open(&cfg.events_db_path)?;
     crate::runs::pragmas::apply(&conn, crate::runs::pragmas::PER_RUN_PRAGMAS)?;
 
@@ -172,7 +184,7 @@ async fn writer_loop(
             biased;
             cmd = rx.recv() => {
                 let Some(cmd) = cmd else { break };
-                if !handle_command(&mut conn, &cfg, cmd).await {
+                if !handle_command(super::connection::raw_mut(&mut conn), &cfg, cmd).await {
                     break;
                 }
             }
@@ -426,6 +438,26 @@ fn commit_stage_route(
     blob: &[u8],
 ) -> Result<EventSeq, WriterError> {
     use surge_core::run_event::EventPayload;
+    let all = payloads;
+    // Task-scoped records (a split, a human override) lead a route batch so
+    // they commit atomically with the route and its snapshot.
+    let leading = all
+        .iter()
+        .take_while(|payload| {
+            matches!(
+                payload.payload(),
+                EventPayload::TaskSplit { .. }
+                    | EventPayload::TaskAcceptedByHuman { .. }
+                    | EventPayload::RequirementRevised { .. }
+            )
+        })
+        .count();
+    if leading > 2 {
+        return Err(WriterError::OperationRejected(
+            "stage route carries too many task records".into(),
+        ));
+    }
+    let payloads = &all[leading..];
     if !(2..=3).contains(&payloads.len())
         || !matches!(payloads[0].payload(), EventPayload::EdgeTraversed { .. })
         || !matches!(payloads[1].payload(), EventPayload::StageCompleted { .. })
@@ -490,7 +522,7 @@ fn commit_stage_route(
         }
     }
     let mut final_seq = prefix;
-    for payload in payloads {
+    for payload in all {
         let timestamp = cfg.clock.now_ms();
         let assigned: u64 = tx.query_row(
             "INSERT INTO events(timestamp,kind,payload,schema_version) VALUES(?,?,?,?) RETURNING seq",

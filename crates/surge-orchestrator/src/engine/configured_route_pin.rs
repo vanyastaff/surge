@@ -10,12 +10,15 @@ pub enum RoutePinError {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Unsupported,
     #[error("unsafe route key location")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     UnsafeLocation,
     #[error("invalid route key")]
     InvalidKey,
     #[error("route key I/O failed")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     KeyIo,
     #[error("secure random generation failed")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     Random,
     #[error("declared route source unavailable")]
     SourceUnavailable,
@@ -259,19 +262,10 @@ mod unix_key {
             Err(())
         }
     }
-    fn check_acl(file: &File) -> Result<(), ()> {
-        #[cfg(target_os = "macos")]
-        {
-            mac_acl::rejects_grants(file)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = file;
-            Ok(())
-        }
-    }
     fn safe_directory(file: &File, final_dir: bool) -> Result<(), RoutePinError> {
-        check_acl(file).map_err(|()| RoutePinError::UnsafeLocation)?;
+        // Only Darwin extended ACLs are inspected; Linux relies on mode bits below.
+        #[cfg(target_os = "macos")]
+        mac_acl::rejects_grants(file).map_err(|()| RoutePinError::UnsafeLocation)?;
         let m = file.metadata().map_err(|_| RoutePinError::KeyIo)?;
         let write = m.mode() & 0o022 != 0;
         let sticky_root = m.uid() == 0 && m.mode() & 0o1000 != 0;
@@ -308,7 +302,8 @@ mod unix_key {
         Ok(current)
     }
     fn read_key(mut file: File) -> Result<[u8; 32], RoutePinError> {
-        check_acl(&file).map_err(|()| RoutePinError::InvalidKey)?;
+        #[cfg(target_os = "macos")]
+        mac_acl::rejects_grants(&file).map_err(|()| RoutePinError::InvalidKey)?;
         let m = file.metadata().map_err(|_| RoutePinError::KeyIo)?;
         if !m.is_file()
             || m.uid() != uid()

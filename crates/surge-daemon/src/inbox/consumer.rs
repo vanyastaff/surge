@@ -1,6 +1,7 @@
 //! `InboxActionConsumer` — polls `inbox_action_queue` and dispatches
 //! Start/Snooze/Skip handlers.
 
+use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,10 +15,11 @@ use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::inbox_queue::{self, InboxActionKind, InboxActionRow};
 use surge_persistence::intake::{IntakeError, IntakeRepo, TicketState};
 use surge_persistence::runs::storage::Storage;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::inbox::ticket_run_launcher::{LaunchOutcome, TicketRunLauncher};
+use crate::inbox::ticket_run_launcher::{LaunchOutcome, LaunchedRun, TicketRunLauncher};
 
 /// Polls `inbox_action_queue` and dispatches handlers.
 pub struct InboxActionConsumer {
@@ -44,21 +46,57 @@ pub struct InboxActionConsumer {
 }
 
 impl InboxActionConsumer {
-    /// Drive the polling loop until cancellation.
+    /// Stop accepting actions on cancellation, then settle all accepted followers.
+    /// Hard abort drops observers; it does not prove engine completion.
     pub async fn run(self, shutdown: CancellationToken) {
+        let (sender, receiver) = mpsc::channel(1);
+        tokio::join!(
+            self.poll_actions(shutdown, sender),
+            self.follow_runs(receiver)
+        );
+    }
+
+    async fn poll_actions(&self, shutdown: CancellationToken, sender: mpsc::Sender<LaunchedRun>) {
         let mut interval = tokio::time::interval(self.poll_interval);
         loop {
             tokio::select! {
+                biased;
                 () = shutdown.cancelled() => return,
                 _ = interval.tick() => {}
             }
-            if let Err(e) = self.tick().await {
+            if shutdown.is_cancelled() {
+                return;
+            }
+            if let Err(e) = self.tick(&sender, &shutdown).await {
                 warn!(error = %e, "InboxActionConsumer tick failed");
             }
         }
     }
 
-    async fn tick(&self) -> Result<(), String> {
+    async fn follow_runs(&self, mut receiver: mpsc::Receiver<LaunchedRun>) {
+        let mut followers: FuturesUnordered<BoxFuture<'static, ()>> = FuturesUnordered::new();
+        let mut accepting = true;
+        while accepting || !followers.is_empty() {
+            tokio::select! {
+                run = receiver.recv(), if accepting => match run {
+                    Some(run) => {
+                        let sync = crate::inbox::state_sync::TicketStateSync::new(
+                            run.task_id, self.storage.clone(), run.source,
+                        );
+                        followers.push(Box::pin(sync.run(run.handle)));
+                    },
+                    None => accepting = false,
+                },
+                _ = followers.next(), if !followers.is_empty() => {},
+            }
+        }
+    }
+
+    async fn tick(
+        &self,
+        sender: &mpsc::Sender<LaunchedRun>,
+        shutdown: &CancellationToken,
+    ) -> Result<(), String> {
         let pending = {
             let conn = self
                 .storage
@@ -67,8 +105,11 @@ impl InboxActionConsumer {
             inbox_queue::list_pending_actions(&conn).map_err(|e| e.to_string())?
         };
         for row in pending {
+            if shutdown.is_cancelled() {
+                break;
+            }
             let result = match row.kind {
-                InboxActionKind::Start => self.handle_start(&row).await,
+                InboxActionKind::Start => self.handle_start(&row, sender).await,
                 InboxActionKind::Snooze => self.handle_snooze(&row).await,
                 InboxActionKind::Skip => self.handle_skip(&row).await,
             };
@@ -109,7 +150,11 @@ impl InboxActionConsumer {
         )
     }
 
-    async fn handle_start(&self, row: &InboxActionRow) -> Result<(), String> {
+    async fn handle_start(
+        &self,
+        row: &InboxActionRow,
+        sender: &mpsc::Sender<LaunchedRun>,
+    ) -> Result<(), String> {
         let launcher = self.launcher();
         let Some(start) = launcher
             .fetch_ticket_for_start(&self.sources, &row.callback_token)
@@ -137,17 +182,17 @@ impl InboxActionConsumer {
             .await?
         {
             LaunchOutcome::Launched(run) => {
-                let sync = crate::inbox::state_sync::TicketStateSync::new(
-                    run.task_id.clone(),
-                    Arc::clone(&self.storage),
-                    run.source,
-                );
-                tokio::spawn(sync.run(run.handle));
                 info!(
                     task_id = %run.task_id,
                     run_id = %run.run_id,
                     "inbox Start dispatched"
                 );
+                // Once launch returned, cancellation cannot skip this ownership
+                // handoff or the subsequent processed-action receipt.
+                sender
+                    .send(run)
+                    .await
+                    .map_err(|_| "inbox follower owner closed".to_owned())?;
             },
             LaunchOutcome::StateRejected { task_id, from, to } => {
                 warn!(

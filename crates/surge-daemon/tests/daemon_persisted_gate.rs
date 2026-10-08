@@ -1,4 +1,8 @@
 //! Real Engine events must reach IPC before gate approval and before terminal closure.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use surge_acp::bridge::{
     error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError},
@@ -135,7 +139,8 @@ async fn connect(path: PathBuf) -> DaemonEngineFacade {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_gate_request_and_resolution_arrive_before_terminal_and_slot_release() {
     let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let engine = Arc::new(Engine::new(
         Arc::new(NoAgent(broadcast::channel(8).0)),
         storage.clone(),
@@ -260,12 +265,17 @@ async fn real_gate_request_and_resolution_arrive_before_terminal_and_slot_releas
         .unwrap()
         .unwrap()
         .unwrap();
+    drop(client);
+    drop(engine);
+    drop(storage);
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unreadable_run_stream_fails_waiter_but_another_run_stays_connected() {
     let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path()).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let engine = Arc::new(Engine::new(
         Arc::new(NoAgent(broadcast::channel(8).0)),
         storage.clone(),
@@ -311,15 +321,55 @@ async fn unreadable_run_stream_fails_waiter_but_another_run_stays_connected() {
         .unwrap();
     wait_for_gate(&mut first.events).await;
     let (node, call_id) = wait_for_gate(&mut second.events).await;
-    // Keep the live writer's DB inode intact but make readonly reopening fail.
-    std::fs::rename(
-        root.path()
+    // Publish an unread, malformed journal row atomically, preserving the live
+    // database and append-only triggers. Copy metadata from its actual gate.
+    let mut connection = rusqlite::Connection::open(
+        home.path()
             .join("runs")
             .join(first_id.to_string())
             .join("events.sqlite"),
-        root.path().join("hidden.sqlite"),
     )
     .unwrap();
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let watermark: u64 = transaction
+        .query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))
+        .unwrap();
+    let sequence = watermark.checked_add(1).unwrap();
+    assert_eq!(
+        transaction
+            .execute(
+                "INSERT INTO events (seq, timestamp, kind, payload, schema_version) \
+                 SELECT ?1, timestamp, kind, ?2, schema_version FROM events \
+                 WHERE seq=(SELECT seq FROM events WHERE kind='HumanInputRequested' ORDER BY seq LIMIT 1)",
+                rusqlite::params![sequence, b"malformed fixture event".as_slice()],
+            )
+            .unwrap(),
+        1,
+        "fault injection must append exactly one unread row using actual gate metadata"
+    );
+    transaction.commit().unwrap();
+    let scoped = storage
+        .inspect_events_after(
+            first_id,
+            EventSeq(watermark),
+            std::num::NonZeroU32::new(1).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    let full = storage.inspect_run(first_id).await.unwrap_err();
+    for inspection in [scoped, full] {
+        assert!(
+            matches!(
+                &inspection,
+                surge_persistence::runs::StorageError::MigrationFailed(reason)
+                    if reason.contains(&format!("seq={sequence}:"))
+                        && reason.contains("payload decode failed")
+            ),
+            "fixture must fail unread event decoding rather than SQL access: {inspection}"
+        );
+    }
     tokio::time::timeout(Duration::from_secs(4), async {
         loop {
             match first.events.recv().await.unwrap() {
@@ -364,6 +414,11 @@ async fn unreadable_run_stream_fails_waiter_but_another_run_stays_connected() {
     .unwrap();
     shutdown.cancel();
     server.await.unwrap().unwrap();
+    drop(connection);
+    drop(client);
+    drop(engine);
+    drop(storage);
+    home.close().unwrap();
 }
 
 async fn wait_for_gate(

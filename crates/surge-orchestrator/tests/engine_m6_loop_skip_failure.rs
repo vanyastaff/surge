@@ -1,5 +1,6 @@
 //! Skip policy must record failures and advance through every item.
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 #[path = "fixtures/loop_failure.rs"]
 mod scenario;
 

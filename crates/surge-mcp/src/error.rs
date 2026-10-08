@@ -70,6 +70,16 @@ pub enum McpError {
     /// The call exceeded `McpServerRef::call_timeout`.
     #[error("MCP call timed out after {0:?}")]
     Timeout(Duration),
+    /// Spawn plus the MCP `initialize` handshake exceeded
+    /// `McpServerRef::effective_startup_timeout`. Counts as a failed
+    /// (re)connect attempt for the restart policy.
+    #[error("server '{server}' did not complete MCP startup within {timeout:?}")]
+    StartupTimeout {
+        /// Server name from the configuration.
+        server: String,
+        /// The startup deadline that elapsed.
+        timeout: Duration,
+    },
     /// rmcp transport-level error (socket / pipe / handshake).
     #[error("rmcp transport error: {0}")]
     Transport(String),

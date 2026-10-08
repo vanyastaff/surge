@@ -1,0 +1,23 @@
+$ rustc -vV
+exit=0
+rustc 1.98.1 (48a229cea 2026-09-01)
+binary: rustc
+commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+commit-date: 2026-09-01
+host: aarch64-apple-darwin
+release: 1.98.1
+LLVM version: 22.1.8
+
+$ sw_vers
+exit=0
+ProductName:		macOS
+ProductVersion:		27.0
+BuildVersion:		26A428
+
+$ rg OPENSSL_VERSION_TEXT /opt/homebrew/opt/openssl@3/include/openssl/opensslv.h
+exit=0
+# define OPENSSL_VERSION_TEXT "OpenSSL 3.6.4 25 Aug 2026"
+
+$ git rev-parse HEAD
+exit=0
+3136b8268cb33009305acf114ff6cc075bbc3b8d

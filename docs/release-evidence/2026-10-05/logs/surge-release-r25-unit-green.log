@@ -1,0 +1,19 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.11s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-8b1eaa767c938271)
+
+running 10 tests
+test automation_merge_gate::tests::readiness_variants_compare ... ok
+test automation_merge_gate::tests::label_constants_are_stable ... ok
+test automation_merge_gate::tests::apply_home_shortening_refuses_none_and_empty ... ok
+test automation_merge_gate::tests::label_constants_do_not_collide ... ok
+test automation_merge_gate::tests::apply_home_shortening_refuses_the_filesystem_root ... ok
+test automation_merge_gate::tests::apply_home_shortening_applies_a_custom_surge_home ... ok
+test automation_merge_gate::tests::shorten_home_prefix_replaces_every_occurrence ... ok
+test automation_merge_gate::tests::reconciliation_pages_include_terminal_tickets_and_exclude_receipts ... ok
+test automation_merge_gate::tests::scrub_for_publication_redacts_a_credential_pattern ... ok
+test automation_merge_gate::tests::run_report_attachment_omits_when_reserved_len_pushes_it_over_the_cap ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 117 filtered out; finished in 0.09s

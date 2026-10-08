@@ -1,0 +1,31 @@
+    Checking surge-ui v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-ui)
+    Checking surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:733:63
+    |
+733 |                       break if phase == "populated-unconfirmed" {
+    |  _______________________________________________________________^
+734 | |                         None
+735 | |                     } else {
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+    = note: `-D clippy::excessive-nesting` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::excessive_nesting)]`
+
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:735:28
+    |
+735 |                       } else {
+    |  ____________________________^
+736 | |                         cycles.into_iter().next()
+737 | |                     };
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: could not compile `surge-daemon` (test "owned_flow_mcp_recovery") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -34,7 +34,9 @@ allow = [
 confidence-threshold = 0.8
 # Per-crate license clarifications go here if a crate's license is only
 # discoverable from a non-standard file. None needed today.
-exceptions = []
+# libbz2-rs-sys retains the original permissive bzip2 license: redistribution
+# is allowed with attribution, no misrepresentation and no author endorsement.
+exceptions = [{ allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" }]
 
 [advisories]
 # RustSec advisory DB gates live in `cargo audit` (security.yml); keep the

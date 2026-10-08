@@ -5,7 +5,6 @@
 
 use std::{path::Path, sync::Arc};
 
-use rusqlite::{Connection, OpenFlags};
 use surge_core::{RunId, VersionedEventPayload, migrate_payload};
 
 use super::{ReadEvent, RunSummary, Storage, StorageError, seq::EventSeq};
@@ -64,8 +63,7 @@ impl Storage {
             if !exists_as(&path, false)? {
                 return Ok(None);
             }
-            let mut connection =
-                Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let mut connection = crate::runs::connection::RetainedConnection::read_only(&path)?;
             let transaction = connection.transaction()?;
             Ok(super::bootstrap_operations::read_capture_for_run(
                 &transaction,
@@ -86,7 +84,7 @@ impl Storage {
             if !exists_as(&path, false)? {
                 return Ok(None);
             }
-            let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let connection = crate::runs::connection::RetainedConnection::read_only(&path)?;
             super::registry::get_run_connection(&connection, &run_id)
         })
         .await
@@ -103,7 +101,7 @@ impl Storage {
             if !exists_as(&path, false)? {
                 return Ok(Vec::new());
             }
-            let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let connection = crate::runs::connection::RetainedConnection::read_only(&path)?;
             super::registry::list_runs_connection(
                 &connection,
                 &super::registry::RunFilter {
@@ -255,7 +253,7 @@ fn read_event_range(
     after: Option<i64>,
     limit: i64,
 ) -> Result<Vec<ReadEvent>, StorageError> {
-    let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut connection = crate::runs::connection::RetainedConnection::read_only(path)?;
     let transaction = connection.transaction()?;
     let query = if after.is_some() {
         "SELECT seq, timestamp, kind, payload, schema_version FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?2"
@@ -302,95 +300,111 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn folded_history_rejects_orphan_stage_route() {
         use surge_core::run_event::{EventPayload as E, VersionedEventPayload as V};
-        let home = tempfile::tempdir().unwrap();
-        let storage = Storage::open(home.path()).await.unwrap();
-        let run = RunId::new();
-        let writer = storage.create_run(run, home.path(), None).await.unwrap();
-        writer
-            .append_events(vec![V::new(E::RunStarted {
-                pipeline_template: None,
-                project_path: home.path().into(),
-                initial_prompt: "fixture".into(),
-                config: surge_core::run_event::RunConfig {
-                    bootstrap_edit_loop_cap: None,
-                    sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
-                    approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
-                    auto_pr: false,
-                    mcp_servers: vec![],
-                    budget: surge_core::budget::BudgetGuard::default(),
-                },
-            })])
-            .await
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(home.path()).await.unwrap();
+            let run = RunId::new();
+            let writer = storage.create_run(run, home.path(), None).await.unwrap();
+            writer
+                .append_events(vec![V::new(E::RunStarted {
+                    pipeline_template: None,
+                    project_path: home.path().into(),
+                    initial_prompt: "fixture".into(),
+                    config: surge_core::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                        budget: surge_core::budget::BudgetGuard::default(),
+                    },
+                })])
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+            let conn = rusqlite::Connection::open(storage.events_db_path(&run)).unwrap();
+            let payload = V::new(E::StageRouteCommitted {
+                invocation: surge_core::id::StageInvocationId::new(),
+                outcome_commit_seq: 1,
+            });
+            conn.execute(
+                "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(2,0,?1,?2,?3)",
+                rusqlite::params![
+                    "StageRouteCommitted",
+                    serde_json::to_vec(&payload).unwrap(),
+                    payload.schema_version
+                ],
+            )
             .unwrap();
-        writer.close().await.unwrap();
-        let conn = Connection::open(storage.events_db_path(&run)).unwrap();
-        let payload = V::new(E::StageRouteCommitted {
-            invocation: surge_core::id::StageInvocationId::new(),
-            outcome_commit_seq: 1,
-        });
-        conn.execute(
-            "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(2,0,?1,?2,?3)",
-            rusqlite::params![
-                "StageRouteCommitted",
-                serde_json::to_vec(&payload).unwrap(),
-                payload.schema_version
-            ],
-        )
-        .unwrap();
-        let error = read_folded_events(&storage.events_db_path(&run), run).err();
-        assert!(
-            error.is_some_and(|error| error
-                .to_string()
-                .contains("stage route has no matching accepted commit")),
-            "orphan route must not become trusted replay state"
-        );
+            let error = read_folded_events(&storage.events_db_path(&run), run).err();
+            assert!(
+                error.is_some_and(|error| error
+                    .to_string()
+                    .contains("stage route has no matching accepted commit")),
+                "orphan route must not become trusted replay state"
+            );
+        }
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn exact_summary_inspection_preserves_custom_path_and_handles_absence() {
-        let root = tempfile::tempdir().unwrap();
-        let missing = root.path().join("absent");
-        let run = RunId::new();
-        assert!(
-            Storage::inspect_existing_run_summary(missing.clone(), run)
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let missing = root.path().join("absent");
+            let run = RunId::new();
+            assert!(
+                Storage::inspect_existing_run_summary(missing.clone(), run)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!missing.exists());
+            let storage = Storage::open(root.path()).await.unwrap();
+            let writer = storage
+                .create_run(run, "/custom/output with spaces", None)
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+            let row = Storage::inspect_existing_run_summary(root.path().into(), run)
                 .await
                 .unwrap()
-                .is_none()
-        );
-        assert!(!missing.exists());
-        let storage = Storage::open(root.path()).await.unwrap();
-        let writer = storage
-            .create_run(run, "/custom/output with spaces", None)
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-        let row = Storage::inspect_existing_run_summary(root.path().into(), run)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.id, run);
-        assert_eq!(row.project_path, Path::new("/custom/output with spaces"));
-        assert_eq!(row.status, surge_core::RunStatus::Bootstrapping);
-        assert!(
-            Storage::inspect_existing_run_summary(root.path().into(), RunId::new())
-                .await
-                .unwrap()
-                .is_none()
-        );
+                .unwrap();
+            assert_eq!(row.id, run);
+            assert_eq!(row.project_path, Path::new("/custom/output with spaces"));
+            assert_eq!(row.status, surge_core::RunStatus::Bootstrapping);
+            assert!(
+                Storage::inspect_existing_run_summary(root.path().into(), RunId::new())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        root.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn exact_summary_inspection_reports_invalid_database() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("db")).unwrap();
-        let path = root.path().join("db/registry.sqlite");
-        std::fs::write(&path, "broken database").unwrap();
-        assert!(
-            Storage::inspect_existing_run_summary(root.path().into(), RunId::new())
-                .await
-                .is_err()
-        );
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "broken database");
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            #[cfg(not(windows))]
+            std::fs::create_dir(root.path().join("db")).unwrap();
+            #[cfg(windows)]
+            let _database_owner = crate::state_home::StateHomeOwner::open(root.path())
+                .unwrap()
+                .registry()
+                .unwrap();
+            let path = root.path().join("db/registry.sqlite");
+            std::fs::write(&path, "broken database").unwrap();
+            let result =
+                Storage::inspect_existing_run_summary(root.path().into(), RunId::new()).await;
+            assert!(
+                matches!(result, Err(StorageError::Sqlite(rusqlite::Error::SqliteFailure(error, _)))
+                if error.code == rusqlite::ErrorCode::NotADatabase)
+            );
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "broken database");
+        }
+        root.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -407,213 +421,291 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn summary_inspection_reads_existing_rows_with_limit() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let run = RunId::new();
-        let writer = storage.create_run(run, "/worktree", None).await.unwrap();
-        writer
-            .append_event(VersionedEventPayload::new(
-                surge_core::EventPayload::RunAborted {
-                    reason: "test".into(),
-                },
-            ))
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-        let rows =
-            Storage::inspect_existing_run_summaries(root.path().into(), std::num::NonZeroU32::MIN)
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let run = RunId::new();
+            let writer = storage.create_run(run, "/worktree", None).await.unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(
+                    surge_core::EventPayload::RunAborted {
+                        reason: "test".into(),
+                    },
+                ))
                 .await
                 .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, run);
-        // Inspection returns raw registry evidence; it must not repair it from events.
-        assert_eq!(rows[0].status, surge_core::RunStatus::Bootstrapping);
+            writer.close().await.unwrap();
+            let rows = Storage::inspect_existing_run_summaries(
+                root.path().into(),
+                std::num::NonZeroU32::MIN,
+            )
+            .await
+            .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].id, run);
+            // Inspection returns raw registry evidence; it must not repair it from events.
+            assert_eq!(rows[0].status, surge_core::RunStatus::Bootstrapping);
+        }
+        root.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn full_snapshot_rejects_nonpositive_rows_before_valid_history() {
         for invalid in [0, -1] {
-            let root = tempfile::tempdir().unwrap();
-            let storage = Storage::open(root.path()).await.unwrap();
-            let id = RunId::new();
-            let writer = storage.create_run(id, "/worktree", None).await.unwrap();
-            for _ in 0..3 {
-                writer
-                    .append_event(VersionedEventPayload::new(
-                        surge_core::EventPayload::RunAborted {
-                            reason: "fixture".into(),
-                        },
-                    ))
-                    .await
+            let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            {
+                let storage = Storage::open(root.path()).await.unwrap();
+                let id = RunId::new();
+                let writer = storage.create_run(id, "/worktree", None).await.unwrap();
+                for _ in 0..3 {
+                    writer
+                        .append_event(VersionedEventPayload::new(
+                            surge_core::EventPayload::RunAborted {
+                                reason: "fixture".into(),
+                            },
+                        ))
+                        .await
+                        .unwrap();
+                }
+                let connection = rusqlite::Connection::open(storage.events_db_path(&id)).unwrap();
+                // Simulate corruption outside the normal append-only writer contract.
+                connection
+                    .execute_batch("DROP TRIGGER trg_events_no_update")
                     .unwrap();
+                connection
+                    .execute("UPDATE events SET seq = ? WHERE seq = 3", [invalid])
+                    .unwrap();
+                assert!(
+                    storage.inspect_run(id).await.is_err(),
+                    "full snapshot hid sequence {invalid}"
+                );
+                writer.close().await.unwrap();
             }
-            let connection = Connection::open(storage.events_db_path(&id)).unwrap();
-            // Simulate corruption outside the normal append-only writer contract.
-            connection
-                .execute_batch("DROP TRIGGER trg_events_no_update")
-                .unwrap();
-            connection
-                .execute("UPDATE events SET seq = ? WHERE seq = 3", [invalid])
-                .unwrap();
-            assert!(
-                storage.inspect_run(id).await.is_err(),
-                "full snapshot hid sequence {invalid}"
-            );
+            root.close().unwrap();
         }
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn incremental_snapshot_limits_rows_and_does_not_decode_old_payloads() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let id = RunId::new();
-        let writer = storage.create_run(id, "/worktree", None).await.unwrap();
-        for reason in ["one", "two", "three"] {
-            writer
-                .append_event(VersionedEventPayload::new(
-                    surge_core::EventPayload::RunAborted {
-                        reason: reason.into(),
-                    },
-                ))
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let id = RunId::new();
+            let writer = storage.create_run(id, "/worktree", None).await.unwrap();
+            for reason in ["one", "two", "three"] {
+                writer
+                    .append_event(VersionedEventPayload::new(
+                        surge_core::EventPayload::RunAborted {
+                            reason: reason.into(),
+                        },
+                    ))
+                    .await
+                    .unwrap();
+            }
+            let connection = rusqlite::Connection::open(storage.events_db_path(&id)).unwrap();
+            // Simulate old corrupted bytes; incremental queries must not decode them.
+            connection
+                .execute_batch("DROP TRIGGER trg_events_no_update")
+                .unwrap();
+            connection
+                .execute("UPDATE events SET payload = x'00' WHERE seq = 1", [])
+                .unwrap();
+            let limit = std::num::NonZeroU32::new(1).unwrap();
+            let events = storage
+                .inspect_events_after(id, EventSeq(1), limit)
                 .await
                 .unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].seq, EventSeq(2));
+            assert!(storage.inspect_run(id).await.is_err());
+            assert!(
+                storage
+                    .inspect_events_after(id, EventSeq::ZERO, limit)
+                    .await
+                    .is_err()
+            );
+            let next = storage
+                .inspect_events_after(id, EventSeq(2), limit)
+                .await
+                .unwrap();
+            assert_eq!(next[0].seq, EventSeq(3));
+            assert!(
+                storage
+                    .inspect_events_after(id, EventSeq(3), limit)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let missing = RunId::new();
+            assert!(
+                storage
+                    .inspect_events_after(missing, EventSeq::ZERO, limit)
+                    .await
+                    .is_err()
+            );
+            assert!(!storage.run_dir(&missing).exists());
+            writer.close().await.unwrap();
         }
-        let connection = Connection::open(storage.events_db_path(&id)).unwrap();
-        // Simulate old corrupted bytes; incremental queries must not decode them.
-        connection
-            .execute_batch("DROP TRIGGER trg_events_no_update")
-            .unwrap();
-        connection
-            .execute("UPDATE events SET payload = x'00' WHERE seq = 1", [])
-            .unwrap();
-        let limit = std::num::NonZeroU32::new(1).unwrap();
-        let events = storage
-            .inspect_events_after(id, EventSeq(1), limit)
-            .await
-            .unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].seq, EventSeq(2));
-        assert!(storage.inspect_run(id).await.is_err());
-        assert!(
-            storage
-                .inspect_events_after(id, EventSeq::ZERO, limit)
-                .await
-                .is_err()
-        );
-        let next = storage
-            .inspect_events_after(id, EventSeq(2), limit)
-            .await
-            .unwrap();
-        assert_eq!(next[0].seq, EventSeq(3));
-        assert!(
-            storage
-                .inspect_events_after(id, EventSeq(3), limit)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        let missing = RunId::new();
-        assert!(
-            storage
-                .inspect_events_after(missing, EventSeq::ZERO, limit)
-                .await
-                .is_err()
-        );
-        assert!(!storage.run_dir(&missing).exists());
+        root.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn database_without_registry_is_present_not_absent() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let id = RunId::new();
-        std::fs::create_dir_all(storage.run_dir(&id)).unwrap();
-        let conn = Connection::open(storage.events_db_path(&id)).unwrap();
-        conn.execute_batch("CREATE TABLE events(seq INTEGER, timestamp INTEGER, kind TEXT, payload BLOB, schema_version INTEGER)").unwrap();
-        drop(conn);
-        let inspected = storage.inspect_run(id).await.unwrap();
-        assert!(inspected.registry.is_none());
-        assert!(
-            matches!(inspected.database, RunDatabaseInspection::Present { events } if events.is_empty())
-        );
-        assert!(inspected.run_directory_present);
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let id = RunId::new();
+            #[cfg(not(windows))]
+            std::fs::create_dir_all(storage.run_dir(&id)).unwrap();
+            #[cfg(windows)]
+            let run_namespace = crate::RuntimeHomeOwner::prepare(&storage.home)
+                .unwrap()
+                .reserve_run_directory(id)
+                .unwrap();
+            #[cfg(windows)]
+            {
+                let database = run_namespace
+                    .open_append(std::ffi::OsStr::new("events.sqlite"))
+                    .unwrap();
+                database.flush().unwrap();
+            }
+
+            let conn = rusqlite::Connection::open(storage.events_db_path(&id)).unwrap();
+            conn.execute_batch("CREATE TABLE events(seq INTEGER, timestamp INTEGER, kind TEXT, payload BLOB, schema_version INTEGER)").unwrap();
+            drop(conn);
+            let inspected = storage.inspect_run(id).await.unwrap();
+            assert!(inspected.registry.is_none());
+            assert!(
+                matches!(inspected.database, RunDatabaseInspection::Present { events } if events.is_empty())
+            );
+            assert!(inspected.run_directory_present);
+        }
+        root.close().unwrap();
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn absent_and_empty_database_are_not_created_or_migrated() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let id = RunId::new();
-        let inspected = storage.inspect_run(id).await.unwrap();
-        assert!(!inspected.run_directory_present);
-        assert!(matches!(inspected.database, RunDatabaseInspection::Absent));
-        assert!(!storage.run_dir(&id).exists());
-        std::fs::create_dir_all(storage.run_dir(&id)).unwrap();
-        let path = storage.events_db_path(&id);
-        std::fs::write(&path, []).unwrap();
-        assert!(storage.inspect_run(id).await.is_err());
-        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
-        assert_eq!(std::fs::read_dir(storage.run_dir(&id)).unwrap().count(), 1);
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let id = RunId::new();
+            let inspected = storage.inspect_run(id).await.unwrap();
+            assert!(!inspected.run_directory_present);
+            assert!(matches!(inspected.database, RunDatabaseInspection::Absent));
+            assert!(!storage.run_dir(&id).exists());
+            #[cfg(not(windows))]
+            std::fs::create_dir_all(storage.run_dir(&id)).unwrap();
+            #[cfg(windows)]
+            let run_namespace = crate::RuntimeHomeOwner::prepare(&storage.home)
+                .unwrap()
+                .reserve_run_directory(id)
+                .unwrap();
+            #[cfg(windows)]
+            {
+                let database = run_namespace
+                    .open_append(std::ffi::OsStr::new("events.sqlite"))
+                    .unwrap();
+                database.flush().unwrap();
+            }
+
+            let path = storage.events_db_path(&id);
+            std::fs::write(&path, []).unwrap();
+            assert!(storage.inspect_run(id).await.is_err());
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+            // Windows reservation includes the protected artifacts directory, but no SQL schema.
+            #[cfg(windows)]
+            let expected = ["artifacts", "events.sqlite"];
+            #[cfg(not(windows))]
+            let expected = ["events.sqlite"];
+            let mut entries: Vec<_> = std::fs::read_dir(storage.run_dir(&id))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            entries.sort();
+            assert_eq!(entries, expected);
+        }
+        root.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn wal_events_are_read_without_repairing_registry_status() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let id = RunId::new();
-        let writer = storage.create_run(id, "/saved/custom", None).await.unwrap();
-        writer
-            .append_event(VersionedEventPayload::new(
-                surge_core::EventPayload::RunAborted {
-                    reason: "persisted cancellation".into(),
-                },
-            ))
-            .await
-            .unwrap();
-        storage
-            .acquire_registry_conn()
-            .unwrap()
-            .execute(
-                "UPDATE runs SET daemon_pid = 2147483647 WHERE id = ?",
-                [id.to_string()],
-            )
-            .unwrap();
-        let before = super::super::registry::get_run(&storage.registry_pool, &id)
-            .unwrap()
-            .unwrap();
-        let inspected = storage.inspect_run(id).await.unwrap();
-        let RunDatabaseInspection::Present { events } = inspected.database else {
-            panic!("missing DB")
-        };
-        assert_eq!(events.len(), 1);
-        assert!(
-            matches!(&events[0].payload.payload, surge_core::EventPayload::RunAborted { reason } if reason == "persisted cancellation")
-        );
-        let after = super::super::registry::get_run(&storage.registry_pool, &id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(before.status, after.status);
-        assert_eq!(before.ended_at_ms, after.ended_at_ms);
-        assert_eq!(before.daemon_pid, after.daemon_pid);
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let id = RunId::new();
+            let writer = storage.create_run(id, "/saved/custom", None).await.unwrap();
+            writer
+                .append_event(VersionedEventPayload::new(
+                    surge_core::EventPayload::RunAborted {
+                        reason: "persisted cancellation".into(),
+                    },
+                ))
+                .await
+                .unwrap();
+            storage
+                .acquire_registry_conn()
+                .unwrap()
+                .execute(
+                    "UPDATE runs SET daemon_pid = 2147483647 WHERE id = ?",
+                    [id.to_string()],
+                )
+                .unwrap();
+            let before = super::super::registry::get_run(&storage.registry_pool, &id)
+                .unwrap()
+                .unwrap();
+            let inspected = storage.inspect_run(id).await.unwrap();
+            let RunDatabaseInspection::Present { events } = inspected.database else {
+                panic!("missing DB")
+            };
+            assert_eq!(events.len(), 1);
+            assert!(
+                matches!(&events[0].payload.payload, surge_core::EventPayload::RunAborted { reason } if reason == "persisted cancellation")
+            );
+            let after = super::super::registry::get_run(&storage.registry_pool, &id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(before.status, after.status);
+            assert_eq!(before.ended_at_ms, after.ended_at_ms);
+            assert_eq!(before.daemon_pid, after.daemon_pid);
+            writer.close().await.unwrap();
+        }
+        root.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn malformed_event_is_an_error_not_an_empty_log() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
-        let id = RunId::new();
-        std::fs::create_dir_all(storage.run_dir(&id)).unwrap();
-        let conn = Connection::open(storage.events_db_path(&id)).unwrap();
-        conn.execute_batch("CREATE TABLE events(seq INTEGER, timestamp INTEGER, kind TEXT, payload BLOB, schema_version INTEGER); INSERT INTO events VALUES(1,0,'RunStarted',x'00',1)").unwrap();
-        assert!(matches!(
-            storage.inspect_run(id).await,
-            Err(StorageError::MigrationFailed(_))
-        ));
-        assert_eq!(
-            conn.query_row("SELECT count(*) FROM events", [], |row| row
-                .get::<_, i64>(0))
-                .unwrap(),
-            1
-        );
+        let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(root.path()).await.unwrap();
+            let id = RunId::new();
+            #[cfg(not(windows))]
+            std::fs::create_dir_all(storage.run_dir(&id)).unwrap();
+            #[cfg(windows)]
+            let run_namespace = crate::RuntimeHomeOwner::prepare(&storage.home)
+                .unwrap()
+                .reserve_run_directory(id)
+                .unwrap();
+            #[cfg(windows)]
+            {
+                let database = run_namespace
+                    .open_append(std::ffi::OsStr::new("events.sqlite"))
+                    .unwrap();
+                database.flush().unwrap();
+            }
+
+            let conn = rusqlite::Connection::open(storage.events_db_path(&id)).unwrap();
+            conn.execute_batch("CREATE TABLE events(seq INTEGER, timestamp INTEGER, kind TEXT, payload BLOB, schema_version INTEGER); INSERT INTO events VALUES(1,0,'RunStarted',x'00',1)").unwrap();
+            assert!(matches!(
+                storage.inspect_run(id).await,
+                Err(StorageError::MigrationFailed(_))
+            ));
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM events", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        root.close().unwrap();
     }
 
     #[cfg(unix)]
@@ -662,7 +754,7 @@ fn read_folded_with_gate_receipt(
 > {
     use surge_core::EventPayload as E;
     let mut receipt = None;
-    let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut connection = crate::runs::connection::RetainedConnection::read_only(path)?;
     let transaction = connection.transaction()?;
     let mut state = surge_core::RunState::NotStarted;
     let mut startup = Vec::new();
@@ -1251,78 +1343,83 @@ mod paged_owned_history_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn input_manifest_repeat_after_startup_closes_is_rejected() {
         use surge_core::{EventPayload as E, VersionedEventPayload as V, work_item::*};
-        let home = tempfile::tempdir().unwrap();
-        let storage = Storage::open(home.path()).await.unwrap();
-        let run = RunId::new();
-        let writer = storage.create_run(run, home.path(), None).await.unwrap();
-        let graph: surge_core::Graph =
-            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
-        let manifest = OwnedFlowInputsManifest::new(
-            surge_core::id::WorkItemOperationId::new(),
-            OwnedFlowRequestIdentity::PlainPublic {
-                digest: surge_core::ContentHash::compute(b"request"),
-            },
-            WorkItemBinding {
-                item: surge_core::id::WorkItemId::new(),
-                revision: 1,
-                generation: 1,
-                requirements_hash: surge_core::ContentHash::compute(b"accepted"),
-            },
-            run,
-            RunId::new(),
-            WorkItemWorkspace {
-                repository: home.path().join("project/.git"),
-                checkout: home.path().join("project"),
-                path: home.path().join("workspace"),
-                ownership: "original-owner".into(),
-                branch: "codex/owned".into(),
-                base_commit: "a".repeat(40),
-            },
-            FrozenOwnedFlowMcp::empty(OwnedFlowMcpSelection::Explicit),
-        )
-        .unwrap();
-        writer
-            .append_events(vec![
-                V::new(E::RunStarted {
-                    project_path: home.path().into(),
-                    pipeline_template: None,
-                    initial_prompt: String::new(),
-                    config: surge_core::run_event::RunConfig {
-                        bootstrap_edit_loop_cap: None,
-                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
-                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
-                        auto_pr: false,
-                        mcp_servers: vec![],
-                        budget: surge_core::budget::BudgetGuard::default(),
-                    },
-                }),
-                V::new(E::PipelineMaterialized {
-                    graph_hash: surge_core::ContentHash::compute(
-                        &serde_json::to_vec(&graph).unwrap(),
-                    ),
-                    graph: Box::new(graph),
-                }),
-                V::new(E::OwnedFlowInputsBound {
-                    manifest: Box::new(manifest.clone()),
-                }),
-                V::new(E::StageEntered {
-                    node: surge_core::NodeKey::try_from("end").unwrap(),
-                    attempt: 1,
-                }),
-            ])
-            .await
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(home.path()).await.unwrap();
+            let run = RunId::new();
+            let writer = storage.create_run(run, home.path(), None).await.unwrap();
+            let graph: surge_core::Graph =
+                toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml"))
+                    .unwrap();
+            let manifest = OwnedFlowInputsManifest::new(
+                surge_core::id::WorkItemOperationId::new(),
+                OwnedFlowRequestIdentity::PlainPublic {
+                    digest: surge_core::ContentHash::compute(b"request"),
+                },
+                WorkItemBinding {
+                    item: surge_core::id::WorkItemId::new(),
+                    revision: 1,
+                    generation: 1,
+                    requirements_hash: surge_core::ContentHash::compute(b"accepted"),
+                },
+                run,
+                RunId::new(),
+                WorkItemWorkspace {
+                    repository: home.path().join("project/.git"),
+                    checkout: home.path().join("project"),
+                    path: home.path().join("workspace"),
+                    ownership: "original-owner".into(),
+                    branch: "codex/owned".into(),
+                    base_commit: "a".repeat(40),
+                },
+                FrozenOwnedFlowMcp::empty(OwnedFlowMcpSelection::Explicit),
+            )
             .unwrap();
-        assert!(storage.inspect_folded_run(run).await.is_ok());
-        writer
-            .append_event(V::new(E::OwnedFlowInputsBound {
-                manifest: Box::new(manifest),
-            }))
-            .await
-            .unwrap();
-        assert!(
-            storage.inspect_folded_run(run).await.is_err(),
-            "late duplicate must not escape the startup-only retention check"
-        );
+            writer
+                .append_events(vec![
+                    V::new(E::RunStarted {
+                        project_path: home.path().into(),
+                        pipeline_template: None,
+                        initial_prompt: String::new(),
+                        config: surge_core::run_event::RunConfig {
+                            bootstrap_edit_loop_cap: None,
+                            sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                            approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                            auto_pr: false,
+                            mcp_servers: vec![],
+                            budget: surge_core::budget::BudgetGuard::default(),
+                        },
+                    }),
+                    V::new(E::PipelineMaterialized {
+                        graph_hash: surge_core::ContentHash::compute(
+                            &serde_json::to_vec(&graph).unwrap(),
+                        ),
+                        graph: Box::new(graph),
+                    }),
+                    V::new(E::OwnedFlowInputsBound {
+                        manifest: Box::new(manifest.clone()),
+                    }),
+                    V::new(E::StageEntered {
+                        node: surge_core::NodeKey::try_from("end").unwrap(),
+                        attempt: 1,
+                    }),
+                ])
+                .await
+                .unwrap();
+            assert!(storage.inspect_folded_run(run).await.is_ok());
+            writer
+                .append_event(V::new(E::OwnedFlowInputsBound {
+                    manifest: Box::new(manifest),
+                }))
+                .await
+                .unwrap();
+            assert!(
+                storage.inspect_folded_run(run).await.is_err(),
+                "late duplicate must not escape the startup-only retention check"
+            );
+            writer.close().await.unwrap();
+        }
+        home.close().unwrap();
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn folded_history_rejects_forged_stage_effects_digest() {
@@ -1332,118 +1429,121 @@ mod paged_owned_history_tests {
         };
         use surge_core::{EventPayload as E, VersionedEventPayload as V};
         for forged in [false, true] {
-            let home = tempfile::tempdir().unwrap();
-            let storage = Storage::open(home.path()).await.unwrap();
-            let run = RunId::new();
-            let writer = storage.create_run(run, home.path(), None).await.unwrap();
-            let node = surge_core::NodeKey::try_from("impl_1").unwrap();
-            let outcome = surge_core::OutcomeKey::try_from("done").unwrap();
-            let session = surge_core::SessionId::new();
-            let invocation = surge_core::id::StageInvocationId::new();
-            let descriptor = ProviderSessionDescriptor::new(
-                ProviderSessionId::new("actual-saved-fixture".into()).unwrap(),
-                invocation,
-                "fixture-runtime".into(),
-                surge_core::ContentHash::compute(b"launch"),
-                home.path().into(),
-                SessionRestoreCapabilities {
-                    resume: true,
-                    load: true,
-                },
-            )
-            .unwrap();
-            let opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();
-            let graph: surge_core::Graph =
-                toml::from_str(include_str!("../../../../examples/flow_minimal_agent.toml"))
-                    .unwrap();
-            let serialized = toml::to_string(&graph).unwrap();
-            let mut effects = vec![V::new(E::OutcomeReported {
-                node: node.clone(),
-                outcome: outcome.clone(),
-                summary: "accepted".into(),
-            })];
-            for index in 0..280 {
-                effects.push(V::new(E::TaskDiscovered {
-                    task_id: surge_core::roadmap::RoadmapTaskId::from(format!("task-{index}")),
-                    discovered_from: surge_core::roadmap::RoadmapTaskId::from("origin-task"),
-                    title: format!("Fixed page-crossing task {index}"),
-                }));
-            }
-            let digest = if forged {
-                surge_core::ContentHash::compute(b"forged-effects")
-            } else {
-                surge_core::ContentHash::compute(&serde_json::to_vec(&effects).unwrap())
-            };
-            let authority = surge_core::stage_tool::StageToolContext {
-                run,
-                node: node.clone(),
-                session: surge_core::SessionId::new(),
-                generation: surge_core::id::StageGenerationId::new(),
-            };
-            let commit = StageOutcomeCommit::new(
-                authority.clone(),
-                session,
-                invocation,
-                outcome.clone(),
-                effects.len() as u32,
-                digest,
-            )
-            .unwrap();
-            let mut batch = vec![
-                V::new(E::RunStarted {
-                    pipeline_template: None,
-                    project_path: home.path().into(),
-                    initial_prompt: "fixture".into(),
-                    config: surge_core::run_event::RunConfig {
-                        bootstrap_edit_loop_cap: None,
-                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
-                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
-                        auto_pr: false,
-                        mcp_servers: vec![],
-                        budget: surge_core::budget::BudgetGuard::default(),
-                    },
-                }),
-                V::new(E::PipelineMaterialized {
-                    graph: Box::new(graph),
-                    graph_hash: surge_core::ContentHash::compute(serialized.as_bytes()),
-                }),
-                V::new(E::StageEntered {
-                    node: node.clone(),
-                    attempt: 1,
-                }),
-                V::new(E::SessionEstablishmentRequested {
-                    node: node.clone(),
+            let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            {
+                let storage = Storage::open(home.path()).await.unwrap();
+                let run = RunId::new();
+                let writer = storage.create_run(run, home.path(), None).await.unwrap();
+                let node = surge_core::NodeKey::try_from("impl_1").unwrap();
+                let outcome = surge_core::OutcomeKey::try_from("done").unwrap();
+                let session = surge_core::SessionId::new();
+                let invocation = surge_core::id::StageInvocationId::new();
+                let descriptor = ProviderSessionDescriptor::new(
+                    ProviderSessionId::new("actual-saved-fixture".into()).unwrap(),
                     invocation,
-                    restore: false,
-                    authority: Some(authority),
-                }),
-                V::new(E::SessionOpened {
-                    handoff: None,
+                    "fixture-runtime".into(),
+                    surge_core::ContentHash::compute(b"launch"),
+                    home.path().into(),
+                    SessionRestoreCapabilities {
+                        resume: true,
+                        load: true,
+                    },
+                )
+                .unwrap();
+                let opened = OpenedSession::new(session, descriptor, SessionOpenMode::New).unwrap();
+                let graph: surge_core::Graph =
+                    toml::from_str(include_str!("../../../../examples/flow_minimal_agent.toml"))
+                        .unwrap();
+                let serialized = toml::to_string(&graph).unwrap();
+                let mut effects = vec![V::new(E::OutcomeReported {
                     node: node.clone(),
+                    outcome: outcome.clone(),
+                    summary: "accepted".into(),
+                })];
+                for index in 0..280 {
+                    effects.push(V::new(E::TaskDiscovered {
+                        task_id: surge_core::roadmap::RoadmapTaskId::from(format!("task-{index}")),
+                        discovered_from: surge_core::roadmap::RoadmapTaskId::from("origin-task"),
+                        title: format!("Fixed page-crossing task {index}"),
+                    }));
+                }
+                let digest = if forged {
+                    surge_core::ContentHash::compute(b"forged-effects")
+                } else {
+                    surge_core::ContentHash::compute(&serde_json::to_vec(&effects).unwrap())
+                };
+                let authority = surge_core::stage_tool::StageToolContext {
+                    run,
+                    node: node.clone(),
+                    session: surge_core::SessionId::new(),
+                    generation: surge_core::id::StageGenerationId::new(),
+                };
+                let commit = StageOutcomeCommit::new(
+                    authority.clone(),
                     session,
-                    agent: "fixture".into(),
-                    agent_id: None,
-                    opened: Some(opened),
-                }),
-            ];
-            batch.extend(effects);
-            batch.push(V::new(E::StageOutcomeCommitted { commit }));
-            writer.append_events(batch).await.unwrap();
-            writer.close().await.unwrap();
-            let inspected = read_folded_events(&storage.events_db_path(&run), run);
-            if forged {
-                assert!(
-                    inspected.err().is_some_and(|error| error
-                        .to_string()
-                        .contains("stage commit effects digest mismatch")),
-                    "a forged marker must report its exact effects corruption"
-                );
-            } else {
-                assert!(
-                    inspected.is_ok(),
-                    "the identical valid adjacent effects group must remain readable"
-                );
+                    invocation,
+                    outcome.clone(),
+                    effects.len() as u32,
+                    digest,
+                )
+                .unwrap();
+                let mut batch = vec![
+                    V::new(E::RunStarted {
+                        pipeline_template: None,
+                        project_path: home.path().into(),
+                        initial_prompt: "fixture".into(),
+                        config: surge_core::run_event::RunConfig {
+                            bootstrap_edit_loop_cap: None,
+                            sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                            approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                            auto_pr: false,
+                            mcp_servers: vec![],
+                            budget: surge_core::budget::BudgetGuard::default(),
+                        },
+                    }),
+                    V::new(E::PipelineMaterialized {
+                        graph: Box::new(graph),
+                        graph_hash: surge_core::ContentHash::compute(serialized.as_bytes()),
+                    }),
+                    V::new(E::StageEntered {
+                        node: node.clone(),
+                        attempt: 1,
+                    }),
+                    V::new(E::SessionEstablishmentRequested {
+                        node: node.clone(),
+                        invocation,
+                        restore: false,
+                        authority: Some(authority),
+                    }),
+                    V::new(E::SessionOpened {
+                        handoff: None,
+                        node: node.clone(),
+                        session,
+                        agent: "fixture".into(),
+                        agent_id: None,
+                        opened: Some(opened),
+                    }),
+                ];
+                batch.extend(effects);
+                batch.push(V::new(E::StageOutcomeCommitted { commit }));
+                writer.append_events(batch).await.unwrap();
+                writer.close().await.unwrap();
+                let inspected = read_folded_events(&storage.events_db_path(&run), run);
+                if forged {
+                    assert!(
+                        inspected.err().is_some_and(|error| error
+                            .to_string()
+                            .contains("stage commit effects digest mismatch")),
+                        "a forged marker must report its exact effects corruption"
+                    );
+                } else {
+                    assert!(
+                        inspected.is_ok(),
+                        "the identical valid adjacent effects group must remain readable"
+                    );
+                }
             }
+            home.close().unwrap();
         }
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1452,79 +1552,82 @@ mod paged_owned_history_tests {
             EventPayload as E, VersionedEventPayload, approvals::ApprovalPolicy,
             run_event::RunConfig, sandbox::SandboxMode,
         };
-        let home = tempfile::tempdir().unwrap();
-        let storage = Storage::open(home.path()).await.unwrap();
-        let run = RunId::new();
-        let writer = storage.create_run(run, home.path(), None).await.unwrap();
-        writer.close().await.unwrap();
-        let mut conn = Connection::open(storage.events_db_path(&run)).unwrap();
-        let txn = conn.transaction().unwrap();
-        let origin = E::RunStarted {
-            pipeline_template: None,
-            project_path: home.path().into(),
-            initial_prompt: String::new(),
-            config: RunConfig {
-                bootstrap_edit_loop_cap: None,
-                sandbox_default: SandboxMode::WorkspaceWrite,
-                approval_default: ApprovalPolicy::OnRequest,
-                auto_pr: false,
-                mcp_servers: vec![],
-                budget: surge_core::budget::BudgetGuard::default(),
-            },
-        };
-        for seq in 1..=10_025u64 {
-            let payload = if seq == 1 {
-                origin.clone()
-            } else if seq == 10_025 {
-                E::RunAborted {
-                    reason: "Fixed late terminal oracle".into(),
-                }
-            } else {
-                E::PipelineMaterialized {
-                    graph: Box::new(
-                        toml::from_str(include_str!(
-                            "../../../../examples/flow_terminal_only.toml"
-                        ))
-                        .unwrap(),
-                    ),
-                    graph_hash: surge_core::ContentHash::compute(b"oracle"),
-                }
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(home.path()).await.unwrap();
+            let run = RunId::new();
+            let writer = storage.create_run(run, home.path(), None).await.unwrap();
+            writer.close().await.unwrap();
+            let mut conn = rusqlite::Connection::open(storage.events_db_path(&run)).unwrap();
+            let txn = conn.transaction().unwrap();
+            let origin = E::RunStarted {
+                pipeline_template: None,
+                project_path: home.path().into(),
+                initial_prompt: String::new(),
+                config: RunConfig {
+                    bootstrap_edit_loop_cap: None,
+                    sandbox_default: SandboxMode::WorkspaceWrite,
+                    approval_default: ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                    mcp_servers: vec![],
+                    budget: surge_core::budget::BudgetGuard::default(),
+                },
             };
-            txn.execute(
-                "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(?,?,?,?,?)",
-                rusqlite::params![
-                    seq,
-                    1,
-                    payload.discriminant_str(),
-                    serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap(),
-                    VersionedEventPayload::new(payload.clone()).schema_version
-                ],
-            )
-            .unwrap();
-        }
-        txn.commit().unwrap();
-        let inspected = storage
-            .inspect_folded_run(run)
-            .await
-            .unwrap()
-            .database
-            .unwrap();
-        assert_eq!(inspected.event_count, 10_025);
-        assert_eq!(inspected.startup.len(), 2);
-        assert!(matches!(
-            inspected.state,
-            surge_core::RunState::Terminal {
-                kind: surge_core::run_state::TerminalReason::Aborted,
-                ..
+            for seq in 1..=10_025u64 {
+                let payload = if seq == 1 {
+                    origin.clone()
+                } else if seq == 10_025 {
+                    E::RunAborted {
+                        reason: "Fixed late terminal oracle".into(),
+                    }
+                } else {
+                    E::PipelineMaterialized {
+                        graph: Box::new(
+                            toml::from_str(include_str!(
+                                "../../../../examples/flow_terminal_only.toml"
+                            ))
+                            .unwrap(),
+                        ),
+                        graph_hash: surge_core::ContentHash::compute(b"oracle"),
+                    }
+                };
+                txn.execute(
+                    "INSERT INTO events(seq,timestamp,kind,payload,schema_version) VALUES(?,?,?,?,?)",
+                    rusqlite::params![
+                        seq,
+                        1,
+                        payload.discriminant_str(),
+                        serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap(),
+                        VersionedEventPayload::new(payload.clone()).schema_version
+                    ],
+                )
+                .unwrap();
             }
-        ));
-        conn.execute("INSERT INTO events(seq,timestamp,kind,payload,schema_version) SELECT 10027,timestamp,kind,payload,schema_version FROM events WHERE seq=10025",[]).unwrap();
-        assert!(storage.inspect_folded_run(run).await.is_err());
-        assert_eq!(
-            conn.query_row("SELECT count(*) FROM events", [], |row| row
-                .get::<_, u64>(0))
-                .unwrap(),
-            10_026
-        );
+            txn.commit().unwrap();
+            let inspected = storage
+                .inspect_folded_run(run)
+                .await
+                .unwrap()
+                .database
+                .unwrap();
+            assert_eq!(inspected.event_count, 10_025);
+            assert_eq!(inspected.startup.len(), 2);
+            assert!(matches!(
+                inspected.state,
+                surge_core::RunState::Terminal {
+                    kind: surge_core::run_state::TerminalReason::Aborted,
+                    ..
+                }
+            ));
+            conn.execute("INSERT INTO events(seq,timestamp,kind,payload,schema_version) SELECT 10027,timestamp,kind,payload,schema_version FROM events WHERE seq=10025",[]).unwrap();
+            assert!(storage.inspect_folded_run(run).await.is_err());
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM events", [], |row| row
+                    .get::<_, u64>(0))
+                    .unwrap(),
+                10_026
+            );
+        }
+        home.close().unwrap();
     }
 }

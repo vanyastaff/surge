@@ -109,7 +109,8 @@ through its `allowed_tools` whitelist if specified).
 | `name` | String | required | Identifier referenced in `tool_overrides.mcp_add` |
 | `transport` | `McpTransportConfig` | required | How surge reaches the server |
 | `allowed_tools` | `Option<Vec<String>>` | None (all exposed) | Per-server tool whitelist |
-| `call_timeout` | Duration | 60s | Max time for a single `tools/call` |
+| `call_timeout` | Duration | 60s | Max time for one RPC (`tools/call`, the whole paginated `tools/list`) |
+| `startup_timeout` | `Option<Duration>` | None → max(30s, `call_timeout`) | Max time from spawn to a completed MCP `initialize` handshake |
 | `restart_on_crash` | bool | true | Re-spawn on transport-class failure |
 | `sandbox` | `Option<SandboxMode>` | None (inherit run) | Per-server sandbox-intent override (`read-only` denies MCP) |
 
@@ -125,7 +126,7 @@ through its `allowed_tools` whitelist if specified).
 
 Connections are lazy (`Disconnected`); the first `call_tool` /
 `list_tools` triggers `ensure_connected` (spawn child + rmcp handshake
-bounded by `call_timeout` → `Running`).
+bounded by the startup deadline, not `call_timeout` → `Running`).
 
 - **Crash detection is structural**: `rmcp::ServiceError::{TransportClosed,
   TransportSend}` mark the connection `Crashed`; service-level errors
@@ -175,6 +176,13 @@ milestone may add an optional shared-server mode
 The child command failed to spawn. Verify the binary is on `PATH` or
 use an absolute path in `command`. Check execute permission. On
 Windows, ensure the path resolves to a `.exe` if needed.
+
+**`McpError::StartupTimeout`**
+The child did not complete the MCP `initialize` handshake within its
+startup deadline (`startup_timeout`, default max(30s, `call_timeout`)).
+Interpreter or package startup (`npx`, `uvx`, Python imports) counts
+against it. Raise `startup_timeout`; a timeout counts as a failed
+(re)connect attempt for the restart policy.
 
 **`McpError::Timeout`**
 The call exceeded `call_timeout`. Either the server is genuinely slow

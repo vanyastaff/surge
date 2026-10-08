@@ -1,6 +1,10 @@
 //! Ordinary Flow submission is a durable host-owned operation.
 #[path = "../../surge-orchestrator/tests/fixtures/mock_bridge.rs"]
 mod mock_bridge;
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use interprocess::local_socket::tokio::prelude::*;
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -34,7 +38,7 @@ async fn request(socket: &Path, body: &Value) -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn locator_replay_survives_missing_source_and_changed_configuration() {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let project = tempfile::tempdir().unwrap();
     let repo = git2::Repository::init(project.path()).unwrap();
     let graph = include_str!("../../../examples/flow_terminal_only.toml");
@@ -59,7 +63,7 @@ async fn locator_replay_survives_missing_source_and_changed_configuration() {
     ));
     let cancel = tokio_util::sync::CancellationToken::new();
     let socket = home.path().join("flow.sock");
-    let server = tokio::spawn(surge_daemon::run_runs_only(
+    let mut server = tokio::spawn(surge_daemon::run_runs_only(
         surge_daemon::ServerConfig {
             socket_path: socket.clone(),
             max_active: 1,
@@ -72,7 +76,16 @@ async fn locator_replay_survives_missing_source_and_changed_configuration() {
         cancel.clone(),
     ));
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !socket.exists() {
+        loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -140,23 +153,48 @@ async fn locator_replay_survives_missing_source_and_changed_configuration() {
         panic!("attempt history")
     };
     assert_eq!(attempts.entries.len(), 1);
+    drop(storage);
+    home.close().unwrap();
 }
 
 async fn wait_terminal_history(
     storage: &Arc<Storage>,
     run: surge_core::RunId,
 ) -> surge_persistence::runs::inspection::FoldedRunEvidence {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let inspected = storage.inspect_folded_run(run).await.unwrap();
-            if let Some(history) = inspected.database
-                && matches!(history.state, surge_core::RunState::Terminal { .. })
-            {
-                return history;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    use surge_core::work_item::WorkItemAttemptState;
+    // owned_flow_started acknowledges durable acceptance, not asynchronous
+    // launch/schema readiness. Completed is published only after the daemon
+    // strictly validates the terminal journal and its accepted binding.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let attempt = storage.work_items().for_run(run).unwrap().unwrap();
+        if attempt.state == WorkItemAttemptState::Completed {
+            break;
         }
-    })
-    .await
-    .unwrap()
+        assert!(
+            matches!(
+                attempt.state,
+                WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+            ),
+            "owned Flow {run} did not complete: state={:?}, diagnostic={:?}",
+            attempt.state,
+            attempt.diagnostic
+        );
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "owned Flow {run} completion deadline: state={:?}, diagnostic={:?}",
+            attempt.state,
+            attempt.diagnostic
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let inspected = storage.inspect_folded_run(run).await.unwrap();
+    let history = inspected
+        .database
+        .expect("completed attempt must have a strict journal");
+    assert!(matches!(
+        history.state,
+        surge_core::RunState::Terminal { .. }
+    ));
+    history
 }

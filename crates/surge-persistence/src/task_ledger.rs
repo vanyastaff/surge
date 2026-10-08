@@ -10,8 +10,8 @@
 
 use std::path::PathBuf;
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use surge_core::{RoadmapStatus, RunId};
@@ -54,6 +54,11 @@ pub struct TaskLedgerIndexUpsert {
     pub updated_seq: u64,
     /// Observation timestamp in unix epoch milliseconds.
     pub observed_at_ms: i64,
+    /// A human accepted the task after its retry ladder was exhausted; never
+    /// implies `verified`.
+    pub accepted_by_human: bool,
+    /// A human revised the task's requirement.
+    pub requirement_revised: bool,
 }
 
 /// One row from the registry-level task-ledger index.
@@ -81,6 +86,13 @@ pub struct TaskLedgerIndexRecord {
     pub updated_seq: u64,
     /// Last time this row was updated in unix epoch milliseconds.
     pub updated_at_ms: i64,
+    /// A human accepted the task after its retry ladder was exhausted; never
+    /// implies `verified`.
+    #[serde(default)]
+    pub accepted_by_human: bool,
+    /// A human revised the task's requirement.
+    #[serde(default)]
+    pub requirement_revised: bool,
 }
 
 impl TaskLedgerIndexRecord {
@@ -152,12 +164,15 @@ impl TaskLedgerStore {
         conn.execute(
             "INSERT INTO task_ledger_index
                 (run_id, task_id, project_path, status, verified, discovered_from,
-                 last_authority_node, updated_seq, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_authority_node, updated_seq, updated_at, accepted_by_human,
+                 requirement_revised)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(run_id, task_id) DO UPDATE SET
                 project_path = excluded.project_path,
                 status = excluded.status,
                 verified = excluded.verified,
+                accepted_by_human = excluded.accepted_by_human,
+                requirement_revised = excluded.requirement_revised,
                 discovered_from = COALESCE(excluded.discovered_from, discovered_from),
                 last_authority_node = excluded.last_authority_node,
                 updated_seq = excluded.updated_seq,
@@ -172,6 +187,8 @@ impl TaskLedgerStore {
                 input.last_authority_node.as_deref(),
                 input.updated_seq as i64,
                 input.observed_at_ms,
+                i64::from(input.accepted_by_human),
+                i64::from(input.requirement_revised),
             ],
         )?;
         self.get(input.run_id, &input.task_id)?
@@ -192,7 +209,8 @@ impl TaskLedgerStore {
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         let mut sql = String::from(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
-                    last_authority_node, updated_seq, updated_at
+                    last_authority_node, updated_seq, updated_at, accepted_by_human,
+                    requirement_revised
              FROM task_ledger_index WHERE 1=1",
         );
         let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -239,7 +257,8 @@ impl TaskLedgerStore {
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         conn.query_row(
             "SELECT run_id, task_id, project_path, status, verified, discovered_from,
-                    last_authority_node, updated_seq, updated_at
+                    last_authority_node, updated_seq, updated_at, accepted_by_human,
+                    requirement_revised
              FROM task_ledger_index WHERE run_id = ? AND task_id = ?",
             params![run_id.to_string(), task_id],
             row_to_record,
@@ -275,6 +294,8 @@ fn row_to_record(row: &Row<'_>) -> rusqlite::Result<TaskLedgerIndexRecord> {
         last_authority_node: row.get(6)?,
         updated_seq: row.get::<_, i64>(7)? as u64,
         updated_at_ms: row.get(8)?,
+        accepted_by_human: row.get::<_, i64>(9)? != 0,
+        requirement_revised: row.get::<_, i64>(10)? != 0,
 
         freshness: surge_core::verification_evidence::ProofFreshness::Unknown,
     })
@@ -315,11 +336,11 @@ mod tests {
     use crate::runs::clock::MockClock;
     use crate::runs::registry::open_registry_pool;
 
-    fn store() -> TaskLedgerStore {
-        let tmp = tempfile::tempdir().unwrap();
+    fn store() -> (crate::runtime_home_fixture::FixtureHome, TaskLedgerStore) {
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let clock = MockClock::new(1_700_000_000_000);
         let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        TaskLedgerStore::new(pool)
+        (tmp, TaskLedgerStore::new(pool))
     }
 
     fn upsert(
@@ -339,50 +360,60 @@ mod tests {
             last_authority_node: Some("verify_1".into()),
             updated_seq: 7,
             observed_at_ms: 1_700_000_000_000,
+            accepted_by_human: false,
+            requirement_revised: false,
         }
     }
 
     #[test]
     fn upsert_then_get_roundtrips() {
-        let store = store();
-        let run = RunId::new();
-        let record = store
-            .upsert(&upsert(run, "m1-t1", RoadmapStatus::Completed, true, None))
-            .unwrap();
-        assert!(record.verified);
-        assert_eq!(record.status, RoadmapStatus::Completed);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            let record = store
+                .upsert(&upsert(run, "m1-t1", RoadmapStatus::Completed, true, None))
+                .unwrap();
+            assert!(record.verified);
+            assert_eq!(record.status, RoadmapStatus::Completed);
 
-        let fetched = store.get(run, "m1-t1").unwrap().unwrap();
-        assert_eq!(fetched, record);
+            let fetched = store.get(run, "m1-t1").unwrap().unwrap();
+            assert_eq!(fetched, record);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn is_evidence_backed_requires_current_completed_and_verified() {
-        let store = store();
-        let run = RunId::new();
-        let mut verified = store
-            .upsert(&upsert(run, "backed", RoadmapStatus::Completed, true, None))
-            .unwrap();
-        assert!(
-            !verified.is_evidence_backed(),
-            "raw registry bit has no current observation"
-        );
-        verified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
-        assert!(verified.is_evidence_backed());
-        verified.freshness = surge_core::verification_evidence::ProofFreshness::Stale;
-        assert!(!verified.is_evidence_backed());
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            let mut verified = store
+                .upsert(&upsert(run, "backed", RoadmapStatus::Completed, true, None))
+                .unwrap();
+            assert!(
+                !verified.is_evidence_backed(),
+                "raw registry bit has no current observation"
+            );
+            verified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
+            assert!(verified.is_evidence_backed());
+            verified.freshness = surge_core::verification_evidence::ProofFreshness::Stale;
+            assert!(!verified.is_evidence_backed());
 
-        let mut unverified = store
-            .upsert(&upsert(
-                run,
-                "unbacked",
-                RoadmapStatus::ReadyForVerification,
-                false,
-                None,
-            ))
-            .unwrap();
-        unverified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
-        assert!(!unverified.is_evidence_backed());
+            let mut unverified = store
+                .upsert(&upsert(
+                    run,
+                    "unbacked",
+                    RoadmapStatus::ReadyForVerification,
+                    false,
+                    None,
+                ))
+                .unwrap();
+            unverified.freshness = surge_core::verification_evidence::ProofFreshness::Current;
+            assert!(!unverified.is_evidence_backed());
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     /// `surge ledger --json`/`surge ready --json` must not disagree with
@@ -395,120 +426,136 @@ mod tests {
     /// table for.
     #[test]
     fn with_verified_normalized_matches_the_table_on_the_boundary_case() {
-        let store = store();
-        let run = RunId::new();
-        let stale_flag = store
-            .upsert(&upsert(
-                run,
-                "stale",
-                RoadmapStatus::FailedVerification,
-                true,
-                None,
-            ))
-            .unwrap();
-        assert!(
-            stale_flag.verified,
-            "the raw field this test exercises must actually be set"
-        );
-        let normalized = stale_flag.clone().with_verified_normalized();
-        assert!(
-            !normalized.verified,
-            "a verified:true row that never reached Completed must serialize as \
-             verified:false, matching the table's is_evidence_backed() column"
-        );
-        assert_eq!(
-            normalized.status, stale_flag.status,
-            "only verified changes"
-        );
-        assert_eq!(normalized.task_id, stale_flag.task_id);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            let stale_flag = store
+                .upsert(&upsert(
+                    run,
+                    "stale",
+                    RoadmapStatus::FailedVerification,
+                    true,
+                    None,
+                ))
+                .unwrap();
+            assert!(
+                stale_flag.verified,
+                "the raw field this test exercises must actually be set"
+            );
+            let normalized = stale_flag.clone().with_verified_normalized();
+            assert!(
+                !normalized.verified,
+                "a verified:true row that never reached Completed must serialize as \
+                 verified:false, matching the table's is_evidence_backed() column"
+            );
+            assert_eq!(
+                normalized.status, stale_flag.status,
+                "only verified changes"
+            );
+            assert_eq!(normalized.task_id, stale_flag.task_id);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn upsert_is_idempotent_on_run_task_key() {
-        let store = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(
-                run,
-                "t1",
-                RoadmapStatus::ReadyForVerification,
-                false,
-                None,
-            ))
-            .unwrap();
-        store
-            .upsert(&upsert(run, "t1", RoadmapStatus::Completed, true, None))
-            .unwrap();
-        let all = store.list(&TaskLedgerIndexFilter::default()).unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].status, RoadmapStatus::Completed);
-        assert!(all[0].verified);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            store
+                .upsert(&upsert(
+                    run,
+                    "t1",
+                    RoadmapStatus::ReadyForVerification,
+                    false,
+                    None,
+                ))
+                .unwrap();
+            store
+                .upsert(&upsert(run, "t1", RoadmapStatus::Completed, true, None))
+                .unwrap();
+            let all = store.list(&TaskLedgerIndexFilter::default()).unwrap();
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0].status, RoadmapStatus::Completed);
+            assert!(all[0].verified);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn list_filters_by_status_and_discovered() {
-        let store = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(run, "t1", RoadmapStatus::Pending, false, None))
-            .unwrap();
-        store
-            .upsert(&upsert(
-                run,
-                "t2",
-                RoadmapStatus::Pending,
-                false,
-                Some("t1"),
-            ))
-            .unwrap();
-        store
-            .upsert(&upsert(run, "t3", RoadmapStatus::Completed, true, None))
-            .unwrap();
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            store
+                .upsert(&upsert(run, "t1", RoadmapStatus::Pending, false, None))
+                .unwrap();
+            store
+                .upsert(&upsert(
+                    run,
+                    "t2",
+                    RoadmapStatus::Pending,
+                    false,
+                    Some("t1"),
+                ))
+                .unwrap();
+            store
+                .upsert(&upsert(run, "t3", RoadmapStatus::Completed, true, None))
+                .unwrap();
 
-        let pending = store
-            .list(&TaskLedgerIndexFilter {
-                status: Some(RoadmapStatus::Pending),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(pending.len(), 2);
+            let pending = store
+                .list(&TaskLedgerIndexFilter {
+                    status: Some(RoadmapStatus::Pending),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(pending.len(), 2);
 
-        let discovered = store
-            .list(&TaskLedgerIndexFilter {
-                discovered_only: true,
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0].task_id, "t2");
-        assert_eq!(discovered[0].discovered_from.as_deref(), Some("t1"));
+            let discovered = store
+                .list(&TaskLedgerIndexFilter {
+                    discovered_only: true,
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(discovered.len(), 1);
+            assert_eq!(discovered[0].task_id, "t2");
+            assert_eq!(discovered[0].discovered_from.as_deref(), Some("t1"));
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn discovered_from_is_preserved_across_later_status_upserts() {
-        let store = store();
-        let run = RunId::new();
-        store
-            .upsert(&upsert(
-                run,
-                "t2",
-                RoadmapStatus::Pending,
-                false,
-                Some("t1"),
-            ))
-            .unwrap();
-        // A later status-only upsert (COALESCE keeps the origin).
-        store
-            .upsert(&upsert(
-                run,
-                "t2",
-                RoadmapStatus::ReadyForVerification,
-                false,
-                None,
-            ))
-            .unwrap();
-        let record = store.get(run, "t2").unwrap().unwrap();
-        assert_eq!(record.discovered_from.as_deref(), Some("t1"));
-        assert_eq!(record.status, RoadmapStatus::ReadyForVerification);
+        let (home, store) = store();
+        {
+            let run = RunId::new();
+            store
+                .upsert(&upsert(
+                    run,
+                    "t2",
+                    RoadmapStatus::Pending,
+                    false,
+                    Some("t1"),
+                ))
+                .unwrap();
+            // A later status-only upsert (COALESCE keeps the origin).
+            store
+                .upsert(&upsert(
+                    run,
+                    "t2",
+                    RoadmapStatus::ReadyForVerification,
+                    false,
+                    None,
+                ))
+                .unwrap();
+            let record = store.get(run, "t2").unwrap().unwrap();
+            assert_eq!(record.discovered_from.as_deref(), Some("t1"));
+            assert_eq!(record.status, RoadmapStatus::ReadyForVerification);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 }

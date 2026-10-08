@@ -64,6 +64,11 @@ pub(crate) mod test_helpers {
             vec!["init"],
             vec!["config", "user.email", "test@test.com"],
             vec!["config", "user.name", "Test"],
+            // `git commit` otherwise starts background auto-maintenance that
+            // writes `.git/objects/maintenance.lock` while a test observes
+            // the repository for writes.
+            vec!["config", "maintenance.auto", "false"],
+            vec!["config", "gc.auto", "0"],
         ] {
             Command::new("git")
                 .args(&args)

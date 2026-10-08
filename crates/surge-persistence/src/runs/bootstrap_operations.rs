@@ -3,8 +3,8 @@
 //! Environment capture belongs to the daemon, outside every transaction. Call
 //! `lookup` before capture, then `insert_if_absent` to resolve a concurrent retry.
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use surge_core::bootstrap_continuation::{BootstrapContinuation, BootstrapTerminal};
 use surge_core::bootstrap_operation::{

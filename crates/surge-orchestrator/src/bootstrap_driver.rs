@@ -14,7 +14,9 @@ use surge_core::graph::Graph;
 use surge_core::id::RunId;
 use surge_core::run_event::{BootstrapStage, EventPayload, VersionedEventPayload};
 use surge_core::run_state::ArtifactRef;
-use surge_persistence::runs::{EventSeq, OpenError, ReadEvent, RunWriter, StorageError};
+use surge_persistence::runs::{
+    CloseError, EventSeq, OpenError, ReadEvent, RunWriter, StorageError,
+};
 
 const BOOTSTRAP_FLOW_NAME: &str = "bootstrap";
 const BOOTSTRAP_ARTIFACTS: [&str; 3] = ["description", "roadmap", "flow"];
@@ -42,9 +44,21 @@ pub enum BootstrapError {
     /// Opening the completed run's event log failed.
     #[error("open run event log failed: {0}")]
     Open(#[from] OpenError),
-    /// Reading the completed run's event log failed.
-    #[error("read run event log failed: {0}")]
+    /// Reading or writing the completed run's event log failed.
+    #[error("read/write run event log failed: {0}")]
     Storage(#[from] StorageError),
+    /// Closing the telemetry writer failed after its event was written.
+    #[error("close bootstrap telemetry writer failed: {0}")]
+    WriterClose(#[from] CloseError),
+    /// Both writing telemetry and joining its writer failed; neither error is discarded.
+    #[error("write bootstrap telemetry failed: {write}; close its writer also failed: {close}")]
+    TelemetryWriteAndClose {
+        /// Primary append or flush failure.
+        #[source]
+        write: Box<StorageError>,
+        /// Additional failure while settling the same writer.
+        close: Box<CloseError>,
+    },
     /// Bootstrap run reached a failure terminal or stage error.
     #[error("bootstrap run failed: {0}")]
     RunFailed(String),
@@ -305,11 +319,23 @@ async fn append_bootstrap_telemetry(
         archetype: materialized_graph.metadata.archetype.clone(),
     };
     let writer = open_writer_after_completion(engine, run_id).await?;
-    writer
-        .append_event(VersionedEventPayload::new(telemetry))
-        .await?;
-    writer.flush().await?;
-    Ok(())
+    let write = async {
+        writer
+            .append_event(VersionedEventPayload::new(telemetry))
+            .await?;
+        writer.flush().await
+    }
+    .await;
+    let close = writer.close().await;
+    match (write, close) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(write), Ok(())) => Err(BootstrapError::Storage(write)),
+        (Ok(()), Err(close)) => Err(BootstrapError::WriterClose(close)),
+        (Err(write), Err(close)) => Err(BootstrapError::TelemetryWriteAndClose {
+            write: Box::new(write),
+            close: Box::new(close),
+        }),
+    }
 }
 
 async fn open_writer_after_completion(
@@ -398,6 +424,82 @@ mod tests {
             kind: payload.discriminant_str().to_owned(),
             payload: VersionedEventPayload::new(payload),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn telemetry_returns_with_writer_released_and_fresh_repeat_preserves_one_record() {
+        tokio::spawn(async {
+        use std::sync::Arc;
+        use crate::engine::config::EngineConfig;
+        use crate::engine::tools::worktree::WorktreeToolDispatcher;
+        use surge_persistence::runs::Storage;
+
+        let directory = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(directory.path()).await.unwrap();
+        let run = RunId::new();
+        storage.create_run(run, directory.path(), None).await.unwrap().close().await.unwrap();
+        let engine = Engine::new(
+            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(directory.path().into())),
+            EngineConfig::default(),
+        );
+        let graph = BundledFlows::by_name_latest("bootstrap").unwrap().graph;
+        append_bootstrap_telemetry(&engine, run, &[], &graph).await.unwrap();
+        // No scheduling delay or retry: success must already have released ownership.
+        let writer = storage.open_run_writer(run).await.unwrap();
+        writer.close().await.unwrap();
+        let reader = storage.open_run_reader(run).await.unwrap();
+        let events = reader.read_events(EventSeq(0)..EventSeq(u64::MAX)).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0].payload.payload, EventPayload::BootstrapTelemetry {
+            stage_durations, edit_counts, archetype
+        } if stage_durations.is_empty() && edit_counts.is_empty() && archetype == &graph.metadata.archetype));
+        // The second call uses freshly read evidence, not a stale concurrent snapshot.
+        append_bootstrap_telemetry(&engine, run, &events, &graph).await.unwrap();
+        let writer = storage.open_run_writer(run).await.unwrap();
+        writer.close().await.unwrap();
+        let repeated = reader.read_events(EventSeq(0)..EventSeq(u64::MAX)).await.unwrap();
+        assert_eq!(repeated.len(), 1);
+        drop(reader);
+        drop(engine);
+        drop(storage);
+        directory.close().unwrap();
+        }).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn telemetry_write_failure_returns_with_writer_released() {
+        tokio::spawn(async {
+        use std::sync::Arc;
+        use crate::engine::config::EngineConfig;
+        use crate::engine::tools::worktree::WorktreeToolDispatcher;
+        use surge_persistence::runs::Storage;
+
+        let directory = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(directory.path()).await.unwrap();
+        let run = RunId::new();
+        storage.create_run(run, directory.path(), None).await.unwrap().close().await.unwrap();
+        let connection = rusqlite::Connection::open(directory.path().join("runs").join(run.to_string()).join("events.sqlite")).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_telemetry BEFORE INSERT ON events WHEN NEW.kind = 'BootstrapTelemetry' BEGIN SELECT RAISE(ABORT, 'fixture telemetry refused'); END;").unwrap();
+        let engine = Engine::new(
+            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(directory.path().into())),
+            EngineConfig::default(),
+        );
+        let graph = BundledFlows::by_name_latest("bootstrap").unwrap().graph;
+        let error = append_bootstrap_telemetry(&engine, run, &[], &graph).await.unwrap_err();
+        assert!(matches!(error, BootstrapError::Storage(StorageError::Sqlite(_))), "{error}");
+        let writer = storage.open_run_writer(run).await.unwrap();
+        writer.close().await.unwrap();
+        let events = storage.open_run_reader(run).await.unwrap().read_events(EventSeq(0)..EventSeq(u64::MAX)).await.unwrap();
+        assert!(events.is_empty());
+        drop(connection);
+        drop(engine);
+        drop(storage);
+        directory.close().unwrap();
+        }).await.unwrap();
     }
 
     #[test]

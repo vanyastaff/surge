@@ -5,6 +5,8 @@
 #![allow(clippy::too_many_lines)]
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -127,116 +129,120 @@ system = "test"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("pass").unwrap(),
-        summary: "first try".into(),
-        artifacts_produced: vec![],
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("pass").unwrap(),
+            summary: "first try".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
-        summary: "fallback".into(),
-        artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
+            summary: "fallback".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg(vec![outcome_reject_hook("deny-pass", "pass")], 3);
-    let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg(vec![outcome_reject_hook("deny-pass", "pass")], 3);
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
 
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("stage should complete with the retry outcome");
-
-    pump.await.unwrap();
-    assert_eq!(result.as_str(), "fixes_needed");
-
-    // Drop the writer so the reader can take its lock.
-    drop(writer);
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
         .await
-        .unwrap();
+        .expect("stage should complete with the retry outcome");
 
-    let mut saw_rejection = false;
-    let mut saw_outcome = false;
-    for ev in events {
-        match ev.payload.payload {
-            EventPayload::OutcomeRejectedByHook {
-                outcome, hook_id, ..
-            } => {
-                assert_eq!(outcome.as_str(), "pass");
-                assert_eq!(hook_id, "deny-pass");
-                saw_rejection = true;
-            },
-            EventPayload::OutcomeReported { outcome, .. } => {
-                assert_eq!(outcome.as_str(), "fixes_needed");
-                saw_outcome = true;
-            },
-            _ => {},
+        pump.await.unwrap();
+        assert_eq!(result.as_str(), "fixes_needed");
+
+        // Drop the writer so the reader can take its lock.
+        writer.close().await.unwrap();
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+
+        let mut saw_rejection = false;
+        let mut saw_outcome = false;
+        for ev in events {
+            match ev.payload.payload {
+                EventPayload::OutcomeRejectedByHook {
+                    outcome, hook_id, ..
+                } => {
+                    assert_eq!(outcome.as_str(), "pass");
+                    assert_eq!(hook_id, "deny-pass");
+                    saw_rejection = true;
+                },
+                EventPayload::OutcomeReported { outcome, .. } => {
+                    assert_eq!(outcome.as_str(), "fixes_needed");
+                    saw_outcome = true;
+                },
+                _ => {},
+            }
         }
+        assert!(saw_rejection, "missing OutcomeRejectedByHook for 'pass'");
+        assert!(saw_outcome, "missing OutcomeReported for 'fixes_needed'");
     }
-    assert!(saw_rejection, "missing OutcomeRejectedByHook for 'pass'");
-    assert!(saw_outcome, "missing OutcomeReported for 'fixes_needed'");
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -246,226 +252,234 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("pass").unwrap(),
-        summary: "profile hook rejects this".into(),
-        artifacts_produced: vec![],
-
-        verification_report: None,
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
-        summary: "fallback".into(),
-        artifacts_produced: vec![],
-
-        verification_report: None,
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg_with_profile("validator@1.0", vec![], 3);
-    let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: Some(registry),
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("stage should complete after profile hook rejection retry");
-
-    pump.await.unwrap();
-    assert_eq!(result.as_str(), "fixes_needed");
-
-    drop(writer);
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-
-    let saw_profile_rejection = events.into_iter().any(|ev| {
-        matches!(
-            ev.payload.payload,
-            EventPayload::OutcomeRejectedByHook { ref hook_id, .. } if hook_id == "profile-validator"
-        )
-    });
-    assert!(
-        saw_profile_rejection,
-        "profile on_outcome hook should reject the first outcome"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn retry_budget_exhausted_emits_stage_failed() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
-
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    for _ in 0..5 {
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
         mock.enqueue_event(BridgeEvent::OutcomeReported {
             session: session_id,
             outcome: OutcomeKey::from_str("pass").unwrap(),
-            summary: "again".into(),
+            summary: "profile hook rejects this".into(),
             artifacts_produced: vec![],
 
             verification_report: None,
         })
         .await;
-    }
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("fixes_needed").unwrap(),
+            summary: "fallback".into(),
+            artifacts_produced: vec![],
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+            verification_report: None,
+        })
+        .await;
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    // max_retries = 1: first rejection allowed, second tips us over budget.
-    let cfg = agent_cfg(vec![outcome_reject_hook("deny-pass", "pass")], 1);
-    let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await;
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg_with_profile("validator@1.0", vec![], 3);
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
 
-    pump.await.unwrap();
-
-    match result {
-        Err(StageError::AgentCrashed(reason)) => {
-            assert!(
-                reason.contains("rejection budget exhausted"),
-                "unexpected reason: {reason}"
-            );
-        },
-        other => panic!("expected AgentCrashed after retries exhausted, got {other:?}"),
-    }
-
-    drop(writer);
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: Some(registry),
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
         .await
-        .unwrap();
+        .expect("stage should complete after profile hook rejection retry");
 
-    let mut rejection_count = 0;
-    let mut saw_stage_failed = false;
-    for ev in events {
-        match ev.payload.payload {
-            EventPayload::OutcomeRejectedByHook { .. } => rejection_count += 1,
-            EventPayload::StageFailed {
-                reason,
-                retry_available,
-                ..
-            } => {
-                assert!(reason.contains("rejection budget exhausted"));
-                assert!(!retry_available);
-                saw_stage_failed = true;
-            },
-            EventPayload::OutcomeReported { .. } => {
-                panic!("OutcomeReported must not be persisted while hooks reject");
-            },
-            _ => {},
-        }
+        pump.await.unwrap();
+        assert_eq!(result.as_str(), "fixes_needed");
+
+        writer.close().await.unwrap();
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+
+        let saw_profile_rejection = events.into_iter().any(|ev| {
+        matches!(
+            ev.payload.payload,
+            EventPayload::OutcomeRejectedByHook { ref hook_id, .. } if hook_id == "profile-validator"
+        )
+    });
+        assert!(
+            saw_profile_rejection,
+            "profile on_outcome hook should reject the first outcome"
+        );
     }
-    assert_eq!(
-        rejection_count, 2,
-        "expected exactly max_retries+1 OutcomeRejectedByHook events"
-    );
-    assert!(
-        saw_stage_failed,
-        "missing StageFailed event after exhaustion"
-    );
+    dir.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retry_budget_exhausted_emits_stage_failed() {
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        for _ in 0..5 {
+            mock.enqueue_event(BridgeEvent::OutcomeReported {
+                session: session_id,
+                outcome: OutcomeKey::from_str("pass").unwrap(),
+                summary: "again".into(),
+                artifacts_produced: vec![],
+
+                verification_report: None,
+            })
+            .await;
+        }
+
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        // max_retries = 1: first rejection allowed, second tips us over budget.
+        let cfg = agent_cfg(vec![outcome_reject_hook("deny-pass", "pass")], 1);
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await;
+
+        pump.await.unwrap();
+
+        match result {
+            Err(StageError::AgentCrashed(reason)) => {
+                assert!(
+                    reason.contains("rejection budget exhausted"),
+                    "unexpected reason: {reason}"
+                );
+            },
+            other => panic!("expected AgentCrashed after retries exhausted, got {other:?}"),
+        }
+
+        writer.close().await.unwrap();
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+
+        let mut rejection_count = 0;
+        let mut saw_stage_failed = false;
+        for ev in events {
+            match ev.payload.payload {
+                EventPayload::OutcomeRejectedByHook { .. } => rejection_count += 1,
+                EventPayload::StageFailed {
+                    reason,
+                    retry_available,
+                    ..
+                } => {
+                    assert!(reason.contains("rejection budget exhausted"));
+                    assert!(!retry_available);
+                    saw_stage_failed = true;
+                },
+                EventPayload::OutcomeReported { .. } => {
+                    panic!("OutcomeReported must not be persisted while hooks reject");
+                },
+                _ => {},
+            }
+        }
+        assert_eq!(
+            rejection_count, 2,
+            "expected exactly max_retries+1 OutcomeRejectedByHook events"
+        );
+        assert!(
+            saw_stage_failed,
+            "missing StageFailed event after exhaustion"
+        );
+    }
+    dir.close().unwrap();
 }

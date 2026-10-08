@@ -79,4 +79,5 @@ async fn views_aggregate_after_canonical_event_sequence() {
     );
 
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }

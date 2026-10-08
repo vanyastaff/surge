@@ -1,0 +1,62 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+warning: field `admission` is never read
+  --> crates/surge-telegram/src/cockpit/outgoing_admission.rs:10:16
+   |
+ 8 | pub(super) struct AdmittedTelegramApi<A> {
+   |                   ------------------- field in this struct
+ 9 |     pub(super) api: A,
+10 |     pub(super) admission: PairingsAdmission,
+   |                ^^^^^^^^^
+   |
+   = note: `AdmittedTelegramApi` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+warning: `surge-telegram` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.32s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/daemon_merge_gate_e2e.rs (target/debug/deps/daemon_merge_gate_e2e-8aff482b487e18b6)
+
+running 14 tests
+test l3_merge_is_pinned_to_readiness_head ... ok
+test l3_already_merged_is_success ... ok
+test l3_blocked_posts_merge_blocked_comment_and_escalates ... ok
+
+thread 'interrupted_merge_attempt_escalates_without_retrying_provider' (33326804) panicked at crates/surge-daemon/tests/daemon_merge_gate_e2e.rs:899:5:
+assertion failed: notices[0].2.contains("manual")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test l3_default_readiness_blocks_when_provider_does_not_implement ... ok
+test interrupted_merge_attempt_escalates_without_retrying_provider ... FAILED
+test l3_merge_conflict_escalates ... ok
+test l3_ready_merges_and_posts_merged_comment_and_label ... ok
+test non_l3_task_is_a_no_op ... ok
+test failed_run_outcome_does_not_trigger_gate ... ok
+test l3_merged_comment_omits_the_run_report_when_publishing_is_disabled ... ok
+test idempotent_double_merge ... ok
+test l3_merged_comment_attaches_the_run_report_and_flags_it_unverified ... ok
+
+thread 'merge_receipt_storage_failure_never_calls_provider' (33326859) panicked at crates/surge-daemon/tests/daemon_merge_gate_e2e.rs:866:5:
+missing durable receipt must fail closed
+test merge_receipt_storage_failure_never_calls_provider ... FAILED
+
+thread 'startup_recovers_completed_terminal_ticket_without_broadcast' (33326865) panicked at crates/surge-daemon/tests/daemon_merge_gate_e2e.rs:830:5:
+assertion `left == right` failed: startup must recover without any RunFinished event
+  left: 0
+ right: 1
+test startup_recovers_completed_terminal_ticket_without_broadcast ... FAILED
+
+failures:
+
+failures:
+    interrupted_merge_attempt_escalates_without_retrying_provider
+    merge_receipt_storage_failure_never_calls_provider
+    startup_recovers_completed_terminal_ticket_without_broadcast
+
+test result: FAILED. 11 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+
+error: test failed, to rerun pass `-p surge-daemon --test daemon_merge_gate_e2e`

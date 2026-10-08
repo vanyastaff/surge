@@ -38,13 +38,14 @@ pub fn maintain(
         EdgeTraversed, EscalationRequested, ForkCreated, GraphRevisionAccepted, HookExecuted,
         HumanInputRequested, HumanInputResolved, HumanInputTimedOut, LoopCompleted,
         LoopIterationCompleted, LoopIterationStarted, NotifyDelivered, OutcomeRejectedByHook,
-        OutcomeReported, PipelineMaterialized, RoadmapPatchApplied, RoadmapPatchApprovalDecided,
-        RoadmapPatchApprovalRequested, RoadmapPatchDrafted, RoadmapUpdated, RunAborted,
-        RunCompleted, RunFailed, RunParked, RunStarted, RunWokeFromPark, RuntimeVersionWarning,
-        SandboxElevationDecided, SandboxElevationRequested, SandboxElevationTimedOut,
-        SessionClosed, SessionOpened, SkillBound, StageCompleted, StageEntered, StageFailed,
-        StageInputsResolved, SteerDelivered, SubgraphEntered, SubgraphExited, TaskDiscovered,
-        TaskStatusChanged, TaskVerified, TokensConsumed, ToolCalled, ToolResultReceived,
+        OutcomeReported, PipelineMaterialized, RequirementRevised, RoadmapPatchApplied,
+        RoadmapPatchApprovalDecided, RoadmapPatchApprovalRequested, RoadmapPatchDrafted,
+        RoadmapUpdated, RunAborted, RunCompleted, RunFailed, RunParked, RunStarted,
+        RunWokeFromPark, RuntimeVersionWarning, SandboxElevationDecided, SandboxElevationRequested,
+        SandboxElevationTimedOut, SessionClosed, SessionOpened, SkillBound, StageCompleted,
+        StageEntered, StageFailed, StageInputsResolved, SteerDelivered, SubgraphEntered,
+        SubgraphExited, TaskAcceptedByHuman, TaskDiscovered, TaskStatusChanged, TaskVerified,
+        TokensConsumed, ToolCalled, ToolResultReceived,
     };
     let accepted_verification = super::verification::maintain(tx, seq.0, payload)?;
     match payload {
@@ -404,6 +405,8 @@ pub fn maintain(
                  ON CONFLICT(task_id) DO UPDATE SET
                     status = excluded.status,
                     verified = 0,
+                    accepted_by_human = CASE WHEN excluded.status = 'completed'
+                                             THEN accepted_by_human ELSE 0 END,
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![
@@ -436,6 +439,8 @@ pub fn maintain(
             }
             let verified = accepted_verification
                 == Some(surge_core::verification_evidence::VerificationClaim::Verified);
+            // Mirrors `LedgerState::record_verified`: a real verification
+            // supersedes an earlier human acceptance.
             tx.execute(
                 "INSERT INTO task_ledger
                     (task_id, status, verified, last_authority_node, updated_seq)
@@ -443,9 +448,44 @@ pub fn maintain(
                  ON CONFLICT(task_id) DO UPDATE SET
                     status = 'completed',
                     verified = excluded.verified,
+                    accepted_by_human = CASE WHEN excluded.verified = 1 THEN 0
+                                             ELSE accepted_by_human END,
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![task_id.as_str(), verified, node.as_str(), seq.0 as i64],
+            )?;
+        },
+        // Mirrors `LedgerState::record_accepted_by_human`.
+        TaskAcceptedByHuman {
+            node,
+            task: Some(task_id),
+            ..
+        } => {
+            tx.execute(
+                "INSERT INTO task_ledger
+                    (task_id, status, verified, accepted_by_human, last_authority_node, updated_seq)
+                 VALUES (?, 'completed', 0, 1, ?, ?)
+                 ON CONFLICT(task_id) DO UPDATE SET
+                    status = 'completed',
+                    verified = 0,
+                    accepted_by_human = 1,
+                    last_authority_node = excluded.last_authority_node,
+                    updated_seq = excluded.updated_seq",
+                rusqlite::params![task_id.as_str(), node.as_str(), seq.0 as i64],
+            )?;
+        },
+        // Mirrors `LedgerState::record_requirement_revised`.
+        RequirementRevised {
+            task: Some(task_id),
+            ..
+        } => {
+            tx.execute(
+                "INSERT INTO task_ledger (task_id, status, verified, requirement_revised, updated_seq)
+                 VALUES (?, 'pending', 0, 1, ?)
+                 ON CONFLICT(task_id) DO UPDATE SET
+                    requirement_revised = 1,
+                    updated_seq = excluded.updated_seq",
+                rusqlite::params![task_id.as_str(), seq.0 as i64],
             )?;
         },
         SessionOpened { node, session, .. } => {
@@ -498,6 +538,11 @@ pub fn maintain(
         | EventPayload::ExecutionWriterIntent { .. }
         | EventPayload::ExecutionWriterEstablished { .. }
         | EventPayload::ExecutionWriterClosed { .. }
+        | EventPayload::ExecutionWriterGroupStopped { .. }
+        | EventPayload::TaskSplit { .. }
+        | EventPayload::StageRuntimeRotated { .. }
+        | EventPayload::RequirementRevised { task: None, .. }
+        | EventPayload::TaskAcceptedByHuman { task: None, .. }
         | EventPayload::SessionEstablishmentRequested { .. }
         | EventPayload::RunSuspended { .. }
         | EventPayload::RunRecoveryRequired { .. }

@@ -1,0 +1,21 @@
+{
+  "source_sha256": {
+    "crates/surge-core/src/execution_recovery/guardian.rs": "76fe1a8f2a7fc573b982f8e2e846442c9ca509ae36712709068fd3814ef2cd39",
+    "crates/surge-core/src/execution_recovery.rs": "e73b941e0a6bef161aee24e1e1a1d38e5251131e42cd35c814dc8dd9079d5d71"
+  },
+  "raw_log_sha256": {
+    "surge-guardian-g1-fixture-green.log": "37b4c337e3c4d8686d1114ae44bb210e2fd7215a784823e5b3cd5e3d384c7861",
+    "surge-guardian-g1-msrv.log": "eb55cf1d5286e43fc20bb324c669f375c4a2d5432dbfd650aaab14f3851b2e0c",
+    "surge-guardian-g1-fixture-fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "surge-guardian-g1-green-final.log": "5ec0a7d9f550facc3c5673c96b1362e9510661dfe63db6faad90e2c6dc1eb577",
+    "surge-guardian-g1-clippy.log": "1cff98d384fbfff43af3e3ba632126188f5a76c13ca0f314b221fe478b6b625c",
+    "surge-guardian-g1-fmt-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "surge-guardian-g1-red.log": "a8aa3b23bbdea3b10e74c88d86e72ef1989c1eaa6a65e9726dee1ee4b20c3232",
+    "surge-guardian-g1-fixture-core-tests.log": "6e71c2435f558b905511273424eb81badc64814faac3bde452d9410e03ce5267",
+    "surge-guardian-g1-fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "surge-guardian-g1-fixture-defect-red.log": "6237868b879348db4750fcedee1115306b7f7dba1124b99f6755868dc5e88e17",
+    "surge-guardian-g1-fixture-fmt-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "surge-guardian-g1-green.log": "d8696337c13c0eb34cf741068338e55fc23746fb13103be52222c26a2b4e5b8e",
+    "surge-guardian-g1-core-tests.log": "a18b35a38c46523c3dd9bb864c2ff847b73fb40004d59e6f2e5d8a738e82f713"
+  }
+}

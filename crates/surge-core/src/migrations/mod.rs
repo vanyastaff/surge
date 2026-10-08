@@ -97,7 +97,28 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// **v13:** host-owned human-decision effect and route commitments.
 /// **v14:** immutable public owned-flow startup input snapshots.
 /// **v15:** informational permanent owned-flow quota-wake refusal.
-pub const MAX_SUPPORTED_VERSION: u32 = 15;
+/// **v16:** adds [`crate::run_event::EscalationCause::McpSelectedCatalogUnavailable`]
+/// (a selected MCP server's catalog failed at stage open). Same nested-enum
+/// reasoning as v8: a v15-max reader cannot decode the new cause tag, so it
+/// must reject v16 with [`SurgeError::SchemaTooNew`].
+/// **v17:** adds [`EventPayload::ExecutionWriterGroupStopped`], ADR-0021
+/// best-effort MCP group cleanup. A v16-max reader has no variant to decode it
+/// into, so it rejects v17 with [`SurgeError::SchemaTooNew`] instead of
+/// misreading best-effort cleanup as confirmed closure.
+/// **v18:** adds [`EventPayload::TaskSplit`], the verifier ladder's split rung
+/// (a task replaced by smaller tasks in the same loop). A v17-max reader has
+/// no variant for it and rejects v18 with [`SurgeError::SchemaTooNew`].
+/// **v19:** adds [`EventPayload::TaskAcceptedByHuman`] and
+/// [`EventPayload::RequirementRevised`], the human overrides of an exhausted
+/// retry ladder. A v18-max reader would otherwise miss that a completed task
+/// was accepted by a human rather than verified, so it rejects v19.
+/// **v20:** adds [`crate::run_event::EscalationCause::LoopGuardNoProgress`] and
+/// [`crate::run_event::EscalationCause::LoopGuardToolCallCap`] (loop
+/// protection). Same nested-enum rule as v8: v19 readers reject v20.
+/// **v21:** adds [`EventPayload::StageRuntimeRotated`] (a stage moved to a
+/// fallback agent on an exhausted usage limit). A v20 reader would replay the
+/// stage on the exhausted agent, so it rejects v21.
+pub const MAX_SUPPORTED_VERSION: u32 = 21;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -373,6 +394,90 @@ impl Migration for IdentityV15 {
     }
 }
 
+/// Identity decoder for the selected-MCP-catalog escalation cause.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV16;
+impl Migration for IdentityV16 {
+    fn version(&self) -> u32 {
+        16
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v16 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for best-effort MCP group cleanup records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV17;
+impl Migration for IdentityV17 {
+    fn version(&self) -> u32 {
+        17
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v17 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for task split records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV18;
+impl Migration for IdentityV18 {
+    fn version(&self) -> u32 {
+        18
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v18 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for human override records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV19;
+impl Migration for IdentityV19 {
+    fn version(&self) -> u32 {
+        19
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v19 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for loop-protection escalation causes.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV20;
+impl Migration for IdentityV20 {
+    fn version(&self) -> u32 {
+        20
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v20 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity decoder for agent rotation records.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV21;
+impl Migration for IdentityV21 {
+    fn version(&self) -> u32 {
+        21
+    }
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|error| SurgeError::Spec(format!("v21 payload decode failed: {error}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -382,7 +487,9 @@ impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
     /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], [`IdentityV10`], [`IdentityV11`],
-    /// [`IdentityV12`], [`IdentityV13`], and [`IdentityV14`].
+    /// [`IdentityV12`], [`IdentityV13`], [`IdentityV14`], [`IdentityV15`],
+    /// [`IdentityV16`], [`IdentityV17`], [`IdentityV18`], [`IdentityV19`],
+    /// [`IdentityV20`], and [`IdentityV21`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -402,6 +509,12 @@ impl MigrationChain {
                 Box::new(IdentityV13),
                 Box::new(IdentityV14),
                 Box::new(IdentityV15),
+                Box::new(IdentityV16),
+                Box::new(IdentityV17),
+                Box::new(IdentityV18),
+                Box::new(IdentityV19),
+                Box::new(IdentityV20),
+                Box::new(IdentityV21),
             ],
         }
     }
@@ -577,6 +690,149 @@ mod tests {
         let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v21_runtime_rotation_round_trips_and_v20_readers_reject_it() {
+        let payload = EventPayload::StageRuntimeRotated {
+            node: NodeKey::try_from("implement").unwrap(),
+            from: "claude-code".into(),
+            to: "codex".into(),
+            reason: "usage limit reached".into(),
+            same_as_partner: true,
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, 21);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("stage_runtime_rotated"));
+        assert_eq!(migrate_payload(21, &bytes).unwrap(), payload);
+        assert!(matches!(
+            migrate_payload(22, &bytes),
+            Err(SurgeError::SchemaTooNew { found: 22, max: 21 })
+        ));
+    }
+
+    #[test]
+    fn v20_loop_protection_causes_round_trip_and_v19_readers_reject_them() {
+        use crate::run_event::EscalationCause;
+        for (cause, tag) in [
+            (
+                EscalationCause::LoopGuardNoProgress,
+                "loop_guard_no_progress",
+            ),
+            (
+                EscalationCause::LoopGuardToolCallCap,
+                "loop_guard_tool_call_cap",
+            ),
+        ] {
+            let payload = EventPayload::EscalationRequested {
+                stage: None,
+                reason: "loop protection".into(),
+                cause,
+            };
+            let wrapper = VersionedEventPayload::new(payload.clone());
+            assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+            let bytes = serde_json::to_vec(&wrapper).unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
+            assert_eq!(migrate_payload(20, &bytes).unwrap(), payload);
+            assert!(matches!(
+                migrate_payload(22, &bytes),
+                Err(SurgeError::SchemaTooNew { found: 22, max: 21 })
+            ));
+        }
+    }
+
+    #[test]
+    fn v19_human_overrides_round_trip_and_v18_readers_reject_them() {
+        let accepted = EventPayload::TaskAcceptedByHuman {
+            node: NodeKey::try_from("verify").unwrap(),
+            task: Some(crate::roadmap::RoadmapTaskId::from("login")),
+            findings: Some(crate::content_hash::ContentHash::compute(b"report")),
+            comment: Some("good enough for the demo".into()),
+        };
+        let revised = EventPayload::RequirementRevised {
+            node: NodeKey::try_from("verify").unwrap(),
+            task: None,
+            text: "Sessions may last 24 hours".into(),
+        };
+        for (payload, tag) in [
+            (accepted, "task_accepted_by_human"),
+            (revised, "requirement_revised"),
+        ] {
+            let wrapper = VersionedEventPayload::new(payload.clone());
+            assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+            let bytes = serde_json::to_vec(&wrapper).unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains(tag), "{tag}");
+            assert_eq!(migrate_payload(19, &bytes).unwrap(), payload);
+        }
+    }
+
+    #[test]
+    fn v18_task_split_round_trips_and_v17_readers_reject_it() {
+        let item: toml::Value =
+            toml::from_str("id = 'login-a'\ntitle = 'Reject empty passwords'").unwrap();
+        let payload = EventPayload::TaskSplit {
+            loop_id: NodeKey::try_from("task_loop").unwrap(),
+            index: 2,
+            task: Some("login".into()),
+            into: vec![item],
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("\"task_split\""));
+        assert_eq!(migrate_payload(18, &bytes).unwrap(), payload);
+        assert!(matches!(
+            migrate_payload(MAX_SUPPORTED_VERSION + 1, &bytes),
+            Err(SurgeError::SchemaTooNew { found, max }) if found == MAX_SUPPORTED_VERSION + 1 && max == MAX_SUPPORTED_VERSION
+        ));
+    }
+
+    #[test]
+    fn v17_group_stopped_round_trips_and_v16_readers_reject_it() {
+        let payload = EventPayload::ExecutionWriterGroupStopped {
+            writer: crate::id::ExecutionWriterId::new(),
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("execution_writer_group_stopped"),
+            "variant tag must be stable snake_case"
+        );
+        assert_eq!(migrate_payload(17, &bytes).unwrap(), payload);
+        assert!(
+            serde_json::from_slice::<VersionedEventPayload>(br#"{"schema_version":16,"payload":{"type":"execution_writer_group_stopped_typo"}}"#).is_err(),
+            "unknown variant tags never decode"
+        );
+    }
+
+    #[test]
+    fn v16_selected_mcp_catalog_escalation_round_trips_and_v15_readers_stay_clean() {
+        use crate::run_event::EscalationCause;
+
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "selected MCP server 'slow' catalog unavailable".into(),
+            cause: EscalationCause::McpSelectedCatalogUnavailable,
+        };
+        let wrapper = VersionedEventPayload::new(payload.clone());
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+        let bytes = serde_json::to_vec(&wrapper).unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("mcp_selected_catalog_unavailable"),
+            "cause tag must be stable snake_case"
+        );
+        assert_eq!(migrate_payload(16, &bytes).unwrap(), payload);
+        let historical = br#"{"schema_version":15,"payload":{"type":"escalation_requested","reason":"old","cause":"mcp_restarts_exhausted"}}"#;
+        assert_eq!(
+            migrate_payload(15, historical).unwrap(),
+            EventPayload::EscalationRequested {
+                stage: None,
+                reason: "old".into(),
+                cause: EscalationCause::McpRestartsExhausted,
+            }
+        );
     }
 
     #[test]
@@ -769,7 +1025,7 @@ mod owned_flow_manifest_version_tests {
             manifest: Box::new(manifest),
         };
         let wrapper = VersionedEventPayload::new(payload.clone());
-        assert_eq!(wrapper.schema_version, 15);
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
         assert_eq!(payload.discriminant_str(), "OwnedFlowInputsBound");
         let bytes = serde_json::to_vec(&wrapper).unwrap();
         assert_eq!(migrate_payload(14, &bytes).unwrap(), payload);
@@ -781,8 +1037,8 @@ mod owned_flow_manifest_version_tests {
             }
         );
         assert!(matches!(
-            migrate_payload(16, &bytes),
-            Err(SurgeError::SchemaTooNew { found: 16, max: 15 })
+            migrate_payload(MAX_SUPPORTED_VERSION + 1, &bytes),
+            Err(SurgeError::SchemaTooNew { found, max }) if found == MAX_SUPPORTED_VERSION + 1 && max == MAX_SUPPORTED_VERSION
         ));
     }
 

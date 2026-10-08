@@ -1,6 +1,9 @@
 //! Per-server MCP connection state. Wraps an rmcp `RunningService`
 //! and handles spawn / crash detection / reconnect.
 
+#[path = "stderr_capture.rs"]
+mod stderr_capture;
+
 use crate::child_settlement::ObservedTransport;
 use crate::error::McpError;
 use rmcp::ServiceExt;
@@ -426,13 +429,22 @@ impl McpServerConnection {
             return Err(error);
         }
 
+        self.handshake(transport).await
+    }
+
+    /// Complete the rmcp `initialize` handshake within the startup deadline.
+    async fn handshake(
+        &self,
+        transport: ObservedTransport,
+    ) -> Result<RunningService<RoleClient, ()>, McpError> {
         // `()` implements `ClientHandler` (all methods defaulted), and
         // the blanket `impl<H: ClientHandler> Service<RoleClient> for H`
-        // gives it `ServiceExt::serve`. Bound the handshake with the
-        // same call_timeout used for individual tool calls — if the
-        // child starts but never completes MCP init we don't hang.
-        let call_timeout = self.config.call_timeout;
-        let service = match tokio::time::timeout(call_timeout, ().serve(transport)).await {
+        // gives it `ServiceExt::serve`. The handshake wait includes the
+        // child's own process and interpreter startup, so it is bounded by
+        // the startup deadline rather than the per-RPC `call_timeout` — a
+        // child that never completes MCP init still cannot hang us.
+        let startup_timeout = self.config.effective_startup_timeout();
+        let service = match tokio::time::timeout(startup_timeout, ().serve(transport)).await {
             Ok(Ok(svc)) => svc,
             Ok(Err(_error)) => {
                 return Err(McpError::StartFailed {
@@ -441,7 +453,16 @@ impl McpServerConnection {
                 });
             },
             Err(_elapsed) => {
-                return Err(McpError::Timeout(call_timeout));
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    server = %self.config.name,
+                    timeout_ms = u64::try_from(startup_timeout.as_millis()).unwrap_or(u64::MAX),
+                    "mcp_startup_timed_out"
+                );
+                return Err(McpError::StartupTimeout {
+                    server: self.config.name.clone(),
+                    timeout: startup_timeout,
+                });
             },
         };
 
@@ -450,12 +471,14 @@ impl McpServerConnection {
 
     /// List all tools the server reports via the MCP `tools/list` verb.
     ///
-    /// Triggers a lazy connect on first call. On failure, classifies
+    /// Triggers a lazy connect on first call; that connect is bounded by
+    /// the startup deadline, not `call_timeout`. On failure, classifies
     /// the error structurally: transport failures mark the connection
     /// crashed (so the next call reconnects); service-level errors
-    /// leave the connection alive. The RPC is bounded by `call_timeout`
-    /// (mirroring [`call_tool`](Self::call_tool)) so a slow `tools/list`
-    /// cannot hang the session-open catalog build or a health probe.
+    /// leave the connection alive. The RPC itself is bounded by
+    /// `call_timeout` (mirroring [`call_tool`](Self::call_tool)), one
+    /// deadline across all pages, so a slow `tools/list` cannot hang the
+    /// session-open catalog build or a health probe.
     /// (No `#[must_use]`: the `async fn` future is already `#[must_use]`,
     /// so the result cannot be silently dropped — adding the attribute
     /// trips `clippy::double_must_use`.)
@@ -493,6 +516,8 @@ impl McpServerConnection {
     /// Call a named tool with the supplied JSON arguments, honouring
     /// the configured `call_timeout`.
     ///
+    /// - A lazy (re)connect is bounded by the startup deadline →
+    ///   [`McpError::StartupTimeout`].
     /// - Timeout elapses → [`McpError::Timeout`] (not marked crashed —
     ///   a slow server is not necessarily dead).
     /// - Transport-class error → connection marked crashed,
@@ -504,8 +529,22 @@ impl McpServerConnection {
         tool: &str,
         arguments: serde_json::Value,
     ) -> Result<rmcp::model::CallToolResult, McpError> {
+        self.call_tool_within(tool, arguments, self.config.call_timeout)
+            .await
+    }
+
+    /// [`call_tool`](Self::call_tool) with a caller RPC budget. The RPC
+    /// deadline is `min(rpc_timeout, call_timeout)`; it starts after the
+    /// connection is running, so a caller budget never truncates a
+    /// (re)connect, which keeps its own startup deadline.
+    pub async fn call_tool_within(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+        rpc_timeout: Duration,
+    ) -> Result<rmcp::model::CallToolResult, McpError> {
         let rs = self.ensure_connected().await?;
-        let timeout = self.config.call_timeout;
+        let timeout = rpc_timeout.min(self.config.call_timeout);
 
         let mut params = rmcp::model::CallToolRequestParams::new(tool.to_string());
         if let Some(map) = match arguments {
@@ -808,11 +847,15 @@ impl StderrRecords {
         }
     }
 
-    async fn publish(&self, server: &str, path: &Path) {
+    async fn publish(&self, server: &str, capture: &mut Option<tokio::fs::File>) {
         if let Some(reason) = self.safe.last() {
             tracing::info!(target: "mcp::child::stderr", server = %server, reason);
         }
-        let _ = tokio::fs::write(path, self.safe.join("\n")).await;
+        if let Some(file) = capture
+            && let Err(error) = stderr_capture::publish(file, &self.safe.join("\n")).await
+        {
+            tracing::warn!(%error, "MCP stderr capture write failed");
+        }
     }
 }
 
@@ -859,9 +902,19 @@ pub fn stderr_log_path(cwd: Option<&Path>, server: &str) -> PathBuf {
         .collect();
     let base = match cwd {
         Some(dir) => dir.join(".surge").join("mcp-stderr"),
-        None => std::env::temp_dir().join("surge-mcp-stderr"),
+        None => daemon_stderr_directory(),
     };
     base.join(format!("{safe}.log"))
+}
+
+fn daemon_stderr_directory() -> PathBuf {
+    #[cfg(unix)]
+    let identity = nix::unistd::Uid::effective().as_raw().to_string();
+    #[cfg(not(unix))]
+    let identity = std::process::id().to_string();
+    std::env::temp_dir()
+        .join(format!("surge-mcp-{identity}"))
+        .join("mcp-stderr")
 }
 
 /// Drain raw stderr in fixed memory; publish only bounded opaque records.
@@ -872,45 +925,13 @@ async fn stderr_forwarder(
     owner: Option<Arc<dyn crate::writer_observer::HostWriterObserver>>,
 ) {
     let _owner = owner;
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-        // Owner-only capture dir. Daemon-scoped probes write under
-        // `temp_dir()/surge-mcp-stderr/`, which would otherwise inherit
-        // a world-readable umask default. Public files contain opaque
-        // operational categories only. Run-scoped paths live
-        // under the user-owned worktree, so 0700 is harmless there too.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ =
-                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
-        }
-    }
-    // Capture file must be owner-only for its whole lifetime. Create
-    // it 0600 (atomic for a fresh file), then also tighten an
-    // already-existing one: a prior probe/run may have left it with a
-    // broader umask default, and `mode()` only applies on creation.
-    // Truncate: this call runs once per spawned child (including
-    // restarts), and the path is stable across restarts — without
-    // truncation a restarted child's log would start by showing the
-    // previous (possibly crashed) child's categories until its own
-    // first record arrives, which is exactly the moment `surge mcp logs`
-    // is most likely to be read for a diagnosis.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&path)
-            .await
-            .is_ok()
-        {
-            let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await;
-        }
-    }
+    let mut capture = match stderr_capture::open(&path) {
+        Ok(file) => Some(tokio::fs::File::from_std(file)),
+        Err(error) => {
+            tracing::warn!(%error, "MCP stderr capture disabled: unsafe or unavailable location");
+            None
+        },
+    };
     let mut buffer = [0_u8; 4096];
     let mut records = StderrRecords::default();
     loop {
@@ -919,27 +940,27 @@ async fn stderr_forwarder(
             Ok(count) => {
                 for byte in &buffer[..count] {
                     if records.byte(*byte) {
-                        records.publish(&server, &path).await;
+                        records.publish(&server, &mut capture).await;
                     }
                 }
             },
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
             Err(_error) => {
                 if records.complete("mcp_stderr_read_failed") {
-                    records.publish(&server, &path).await;
+                    records.publish(&server, &mut capture).await;
                 }
                 break;
             },
         }
     }
     if records.bytes != 0 && records.finish() {
-        records.publish(&server, &path).await;
+        records.publish(&server, &mut capture).await;
     }
     if records.suppressed != 0 {
         tracing::info!(target: "mcp::child::stderr", server = %server,
             suppressed = records.suppressed, reason = "mcp_stderr_records_suppressed");
         records.safe.push("mcp_stderr_records_suppressed");
-        let _ = tokio::fs::write(&path, records.safe.join("\n")).await;
+        records.publish(&server, &mut capture).await;
     }
 }
 

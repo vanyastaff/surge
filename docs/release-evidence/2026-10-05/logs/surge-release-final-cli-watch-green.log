@@ -1,0 +1,16 @@
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.03s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (target/debug/deps/surge-beff987a331c8625)
+
+running 7 tests
+test commands::engine::watch_tests::closed_stream_without_terminal_is_unconfirmed ... ok
+test commands::engine::watch_tests::failed_terminal_is_not_a_successful_command ... ok
+test commands::engine::watch_tests::stream_error_is_not_successful_observation ... ok
+test commands::engine::watch_tests::lost_events_do_not_become_success_after_a_terminal ... ok
+test commands::engine::watch_tests::aborted_terminal_is_not_a_successful_command ... ok
+test commands::engine::watch_tests::explicit_terminal_confirms_observation ... ok
+test commands::engine::watch_tests::disk_history_requires_one_successful_terminal ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; finished in 0.00s

@@ -39,357 +39,396 @@ fn open(root: &std::path::Path) -> BootstrapOperationStore {
 
 #[test]
 fn accepted_identity_payload_and_queue_survive_reopen() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let first = RunId::new();
-    let original = intent(temp.path(), "  exact prompt\n");
-    let pins = capture(temp.path());
-    let record = store.insert_if_absent(first, &original, &pins).unwrap();
-    let second = store
-        .insert_if_absent(RunId::new(), &original, &capture(temp.path()))
-        .unwrap();
-    drop(store);
-    let store = open(temp.path());
-    let loaded = store.lookup(first, &original).unwrap().unwrap();
-    assert_eq!(loaded, record);
-    assert_eq!(
-        store.pending_admission_runs().unwrap(),
-        vec![record.status.planning_run, second.status.planning_run]
-    );
-    assert_eq!(store.queued().unwrap(), vec![record.clone(), second]);
-    // Changed capture is irrelevant to a duplicate accepted intent.
-    assert_eq!(
-        store
-            .insert_if_absent(first, &original, &capture(temp.path()))
-            .unwrap(),
-        record
-    );
-    assert!(matches!(
-        store.lookup(first, &intent(temp.path(), "different")),
-        Err(BootstrapStoreError::IntentConflict)
-    ));
-    assert_eq!(store.get(first).unwrap().unwrap(), record);
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let first = RunId::new();
+        let original = intent(temp.path(), "  exact prompt\n");
+        let pins = capture(temp.path());
+        let record = store.insert_if_absent(first, &original, &pins).unwrap();
+        let second = store
+            .insert_if_absent(RunId::new(), &original, &capture(temp.path()))
+            .unwrap();
+        drop(store);
+        let store = open(temp.path());
+        let loaded = store.lookup(first, &original).unwrap().unwrap();
+        assert_eq!(loaded, record);
+        assert_eq!(
+            store.pending_admission_runs().unwrap(),
+            vec![record.status.planning_run, second.status.planning_run]
+        );
+        assert_eq!(store.queued().unwrap(), vec![record.clone(), second]);
+        // Changed capture is irrelevant to a duplicate accepted intent.
+        assert_eq!(
+            store
+                .insert_if_absent(first, &original, &capture(temp.path()))
+                .unwrap(),
+            record
+        );
+        assert!(matches!(
+            store.lookup(first, &intent(temp.path(), "different")),
+            Err(BootstrapStoreError::IntentConflict)
+        ));
+        assert_eq!(store.get(first).unwrap().unwrap(), record);
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn cancellation_is_monotonic_and_claim_is_compare_and_swap() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    let accepted = store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    let claimed = store.claim(id, accepted.status.revision).unwrap();
-    assert_eq!(
-        claimed.status.state,
-        BootstrapState::Pending {
-            phase: BootstrapPhase::PreparingPlanning
-        }
-    );
-    assert!(matches!(
-        store.claim(id, accepted.status.revision),
-        Err(BootstrapStoreError::StaleRevision)
-    ));
-    assert_eq!(
-        store.pending_admission_runs().unwrap(),
-        vec![claimed.status.planning_run]
-    );
-    let cancelled = store.request_cancel(id).unwrap();
-    assert!(store.pending_admission_runs().unwrap().is_empty());
-    assert!(cancelled.status.cancel_requested);
-    assert_eq!(
-        cancelled.status.state,
-        BootstrapState::Cancelling {
-            phase: BootstrapPhase::PreparingPlanning
-        }
-    );
-    assert_eq!(store.request_cancel(id).unwrap(), cancelled);
-    assert!(store.claim(id, cancelled.status.revision).is_err());
-    drop(store);
-    assert_eq!(open(temp.path()).get(id).unwrap().unwrap(), cancelled);
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        let accepted = store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        let claimed = store.claim(id, accepted.status.revision).unwrap();
+        assert_eq!(
+            claimed.status.state,
+            BootstrapState::Pending {
+                phase: BootstrapPhase::PreparingPlanning
+            }
+        );
+        assert!(matches!(
+            store.claim(id, accepted.status.revision),
+            Err(BootstrapStoreError::StaleRevision)
+        ));
+        assert_eq!(
+            store.pending_admission_runs().unwrap(),
+            vec![claimed.status.planning_run]
+        );
+        let cancelled = store.request_cancel(id).unwrap();
+        assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
+        assert!(cancelled.status.cancel_requested);
+        assert_eq!(
+            cancelled.status.state,
+            BootstrapState::Cancelling {
+                phase: BootstrapPhase::PreparingPlanning
+            }
+        );
+        assert_eq!(store.request_cancel(id).unwrap(), cancelled);
+        assert!(store.claim(id, cancelled.status.revision).is_err());
+        drop(store);
+        assert_eq!(open(temp.path()).get(id).unwrap().unwrap(), cancelled);
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn attention_requires_explicit_retry_with_original_pins() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    let pins = capture(temp.path());
-    let accepted = store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &pins)
-        .unwrap();
-    let blocked = store
-        .block(
-            id,
-            accepted.status.revision,
-            BootstrapAttentionReason::ConfigurationChanged,
-        )
-        .unwrap();
-    assert!(store.queued().unwrap().is_empty());
-    assert!(store.pending_admission_runs().unwrap().is_empty());
-    assert!(store.claim(id, blocked.status.revision).is_err());
-    assert!(matches!(
-        store.retry(id, blocked.status.revision, &capture(temp.path())),
-        Err(BootstrapStoreError::PinnedInputsChanged)
-    ));
-    let retried = store.retry(id, blocked.status.revision, &pins).unwrap();
-    assert_eq!(retried.status.state, accepted.status.state);
-    assert!(retried.status.revision > blocked.status.revision);
-    let cancelling = store.request_cancel(id).unwrap();
-    assert!(store.retry(id, cancelling.status.revision, &pins).is_err());
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        let pins = capture(temp.path());
+        let accepted = store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &pins)
+            .unwrap();
+        let blocked = store
+            .block(
+                id,
+                accepted.status.revision,
+                BootstrapAttentionReason::ConfigurationChanged,
+            )
+            .unwrap();
+        assert_eq!(store.queued().unwrap().len(), 0);
+        assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
+        assert!(store.claim(id, blocked.status.revision).is_err());
+        assert!(matches!(
+            store.retry(id, blocked.status.revision, &capture(temp.path())),
+            Err(BootstrapStoreError::PinnedInputsChanged)
+        ));
+        let retried = store.retry(id, blocked.status.revision, &pins).unwrap();
+        assert_eq!(retried.status.state, accepted.status.state);
+        assert!(retried.status.revision > blocked.status.revision);
+        let cancelling = store.request_cancel(id).unwrap();
+        assert!(store.retry(id, cancelling.status.revision, &pins).is_err());
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn unknown_versions_are_inspectable_but_not_claimable() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute(
-            "UPDATE bootstrap_operations SET payload_version=99, capture_json='future data'",
-            [],
-        )
-        .unwrap();
-    assert!(store.queued().unwrap().is_empty());
-    assert!(store.pending_admission_runs().unwrap().is_empty());
-    let record = store.get(id).unwrap().unwrap();
-    assert!(matches!(
-        record.payload,
-        BootstrapStoredPayload::Unsupported { version: 99 }
-    ));
-    assert!(matches!(
-        store.claim(id, record.status.revision),
-        Err(BootstrapStoreError::UnsupportedPayload)
-    ));
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE bootstrap_operations SET payload_version=99, capture_json='future data'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.queued().unwrap().len(), 0);
+        assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
+        let record = store.get(id).unwrap().unwrap();
+        assert!(matches!(
+            record.payload,
+            BootstrapStoredPayload::Unsupported { version: 99 }
+        ));
+        assert!(matches!(
+            store.claim(id, record.status.revision),
+            Err(BootstrapStoreError::UnsupportedPayload)
+        ));
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn tampered_fingerprint_is_not_accepted_as_existing_intent() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute(
-            "UPDATE bootstrap_operations SET intent_fingerprint=?",
-            [ContentHash::compute(b"tamper").to_string()],
-        )
-        .unwrap();
-    assert!(matches!(
-        store.get(id),
-        Err(BootstrapStoreError::CorruptRecord)
-    ));
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE bootstrap_operations SET intent_fingerprint=?",
+                [ContentHash::compute(b"tamper").to_string()],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.get(id),
+            Err(BootstrapStoreError::CorruptRecord)
+        ));
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn failed_cancel_transaction_never_reports_acknowledgement() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    let before = store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    // Deferred foreign-key failure happens at COMMIT, after the state UPDATE
-    // and the in-transaction reread have both succeeded.
-    store.pool.get().unwrap().execute_batch(
-        "CREATE TABLE cancel_parent (id TEXT PRIMARY KEY);
-         CREATE TABLE cancel_child (id TEXT REFERENCES cancel_parent(id) DEFERRABLE INITIALLY DEFERRED);
-         CREATE TRIGGER reject_cancel AFTER UPDATE ON bootstrap_operations
-         BEGIN INSERT INTO cancel_child VALUES ('missing-parent'); END;"
-    ).unwrap();
-    assert!(matches!(
-        store.request_cancel(id),
-        Err(BootstrapStoreError::Sqlite(_))
-    ));
-    assert_eq!(store.get(id).unwrap().unwrap(), before);
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        let before = store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        // Deferred foreign-key failure happens at COMMIT, after the state UPDATE
+        // and the in-transaction reread have both succeeded.
+        store.pool.get().unwrap().execute_batch(
+            "CREATE TABLE cancel_parent (id TEXT PRIMARY KEY);
+             CREATE TABLE cancel_child (id TEXT REFERENCES cancel_parent(id) DEFERRABLE INITIALLY DEFERRED);
+             CREATE TRIGGER reject_cancel AFTER UPDATE ON bootstrap_operations
+             BEGIN INSERT INTO cancel_child VALUES ('missing-parent'); END;"
+        ).unwrap();
+        assert!(matches!(
+            store.request_cancel(id),
+            Err(BootstrapStoreError::Sqlite(_))
+        ));
+        assert_eq!(store.get(id).unwrap().unwrap(), before);
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn cancelling_terminal_record_does_not_relabel_or_increment_it() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    for state in [
-        BootstrapState::Completed,
-        BootstrapState::Failed,
-        BootstrapState::Cancelled,
-    ] {
-        seed_terminal(&store, id, state);
-        let before = store.get(id).unwrap().unwrap();
-        assert_eq!(store.request_cancel(id).unwrap(), before);
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        for state in [
+            BootstrapState::Completed,
+            BootstrapState::Failed,
+            BootstrapState::Cancelled,
+        ] {
+            seed_terminal(&store, id, state);
+            let before = store.get(id).unwrap().unwrap();
+            assert_eq!(store.request_cancel(id).unwrap(), before);
+        }
     }
+    temp.close().unwrap();
 }
 
 #[test]
 fn competing_insert_and_claim_cannot_duplicate_identity() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    let original = intent(temp.path(), "x");
-    let pins = capture(temp.path());
-    let results = std::thread::scope(|scope| {
-        let a = scope.spawn(|| store.insert_if_absent(id, &original, &pins).unwrap());
-        let b = scope.spawn(|| store.insert_if_absent(id, &original, &pins).unwrap());
-        [a.join().unwrap(), b.join().unwrap()]
-    });
-    assert_eq!(results[0], results[1]);
-    let revision = results[0].status.revision;
-    let results = std::thread::scope(|scope| {
-        let a = scope.spawn(|| store.claim(id, revision));
-        let b = scope.spawn(|| store.request_cancel(id));
-        [a.join().unwrap(), b.join().unwrap()]
-    });
-    assert!(results[1].is_ok());
-    let final_record = store.get(id).unwrap().unwrap();
-    assert!(final_record.status.cancel_requested);
-    assert!(matches!(
-        final_record.status.state,
-        BootstrapState::Cancelling { .. }
-    ));
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        let original = intent(temp.path(), "x");
+        let pins = capture(temp.path());
+        let results = std::thread::scope(|scope| {
+            let a = scope.spawn(|| store.insert_if_absent(id, &original, &pins).unwrap());
+            let b = scope.spawn(|| store.insert_if_absent(id, &original, &pins).unwrap());
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        assert_eq!(results[0], results[1]);
+        let revision = results[0].status.revision;
+        let results = std::thread::scope(|scope| {
+            let a = scope.spawn(|| store.claim(id, revision));
+            let b = scope.spawn(|| store.request_cancel(id));
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        assert!(results[1].is_ok());
+        let final_record = store.get(id).unwrap().unwrap();
+        assert!(final_record.status.cancel_requested);
+        assert!(matches!(
+            final_record.status.state,
+            BootstrapState::Cancelling { .. }
+        ));
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn corrupt_supported_payload_stops_queue_enumeration() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    store
-        .insert_if_absent(
-            RunId::new(),
-            &intent(temp.path(), "x"),
-            &capture(temp.path()),
-        )
-        .unwrap();
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute("UPDATE bootstrap_operations SET capture_json='{}'", [])
-        .unwrap();
-    assert!(matches!(
-        store.queued(),
-        Err(BootstrapStoreError::Serialization(_))
-    ));
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        store
+            .insert_if_absent(
+                RunId::new(),
+                &intent(temp.path(), "x"),
+                &capture(temp.path()),
+            )
+            .unwrap();
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute("UPDATE bootstrap_operations SET capture_json='{}'", [])
+            .unwrap();
+        assert!(matches!(
+            store.queued(),
+            Err(BootstrapStoreError::Serialization(_))
+        ));
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn incoherent_state_is_rejected_before_scheduling() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute("UPDATE bootstrap_operations SET cancel_requested=1", [])
-        .unwrap();
-    assert!(matches!(
-        store.get(id),
-        Err(BootstrapStoreError::CorruptRecord)
-    ));
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute("UPDATE bootstrap_operations SET cancel_requested=1", [])
+            .unwrap();
+        assert!(matches!(
+            store.get(id),
+            Err(BootstrapStoreError::CorruptRecord)
+        ));
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn attention_cannot_point_at_an_unrelated_run() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
-        .unwrap();
-    let state = BootstrapState::NeedsAttention {
-        phase: BootstrapPhase::QueuedPlanning,
-        run_id: Some(RunId::new()),
-        reason: BootstrapAttentionReason::ConfigurationChanged,
-    };
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute(
-            "UPDATE bootstrap_operations SET state_json=?",
-            [serde_json::to_string(&state).unwrap()],
-        )
-        .unwrap();
-    assert!(matches!(
-        store.queued(),
-        Err(BootstrapStoreError::CorruptRecord)
-    ));
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &capture(temp.path()))
+            .unwrap();
+        let state = BootstrapState::NeedsAttention {
+            phase: BootstrapPhase::QueuedPlanning,
+            run_id: Some(RunId::new()),
+            reason: BootstrapAttentionReason::ConfigurationChanged,
+        };
+        store
+            .pool
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE bootstrap_operations SET state_json=?",
+                [serde_json::to_string(&state).unwrap()],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.queued(),
+            Err(BootstrapStoreError::CorruptRecord)
+        ));
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn terminal_intent_conflict_cannot_overwrite_the_original_record() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    let original = intent(temp.path(), "first");
-    let pins = capture(temp.path());
-    store.insert_if_absent(id, &original, &pins).unwrap();
-    seed_terminal(&store, id, BootstrapState::Completed);
-    let before = store.get(id).unwrap().unwrap();
-    assert!(matches!(
-        store.insert_if_absent(id, &intent(temp.path(), "different"), &capture(temp.path())),
-        Err(BootstrapStoreError::IntentConflict)
-    ));
-    assert_eq!(store.get(id).unwrap().unwrap(), before);
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        let original = intent(temp.path(), "first");
+        let pins = capture(temp.path());
+        store.insert_if_absent(id, &original, &pins).unwrap();
+        seed_terminal(&store, id, BootstrapState::Completed);
+        let before = store.get(id).unwrap().unwrap();
+        assert!(matches!(
+            store.insert_if_absent(id, &intent(temp.path(), "different"), &capture(temp.path())),
+            Err(BootstrapStoreError::IntentConflict)
+        ));
+        assert_eq!(store.get(id).unwrap().unwrap(), before);
+    }
+    temp.close().unwrap();
 }
 
 #[test]
 fn cancellation_attention_preserves_stop_intent_and_cannot_retry() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    let id = RunId::new();
-    let pins = capture(temp.path());
-    store
-        .insert_if_absent(id, &intent(temp.path(), "x"), &pins)
-        .unwrap();
-    let claimed = store.claim(id, 0).unwrap();
-    let cancelled = store.request_cancel(id).unwrap();
-    let blocked = store
-        .block(
-            id,
-            cancelled.status.revision,
-            BootstrapAttentionReason::StorageUnconfirmed,
-        )
-        .unwrap();
-    assert!(blocked.status.cancel_requested);
-    assert_eq!(store.request_cancel(id).unwrap(), blocked);
-    assert_eq!(
-        blocked.status.state,
-        BootstrapState::NeedsAttention {
-            phase: BootstrapPhase::PreparingPlanning,
-            run_id: Some(claimed.status.planning_run),
-            reason: BootstrapAttentionReason::StorageUnconfirmed,
-        }
-    );
-    assert!(store.queued().unwrap().is_empty());
-    assert!(store.pending_admission_runs().unwrap().is_empty());
-    assert!(matches!(
-        store.claim(id, blocked.status.revision),
-        Err(BootstrapStoreError::InvalidTransition)
-    ));
-    assert!(matches!(
-        store.retry(id, blocked.status.revision, &pins),
-        Err(BootstrapStoreError::InvalidTransition)
-    ));
-    drop(store);
-    assert_eq!(open(temp.path()).get(id).unwrap().unwrap(), blocked);
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        let id = RunId::new();
+        let pins = capture(temp.path());
+        store
+            .insert_if_absent(id, &intent(temp.path(), "x"), &pins)
+            .unwrap();
+        let claimed = store.claim(id, 0).unwrap();
+        let cancelled = store.request_cancel(id).unwrap();
+        let blocked = store
+            .block(
+                id,
+                cancelled.status.revision,
+                BootstrapAttentionReason::StorageUnconfirmed,
+            )
+            .unwrap();
+        assert!(blocked.status.cancel_requested);
+        assert_eq!(store.request_cancel(id).unwrap(), blocked);
+        assert_eq!(
+            blocked.status.state,
+            BootstrapState::NeedsAttention {
+                phase: BootstrapPhase::PreparingPlanning,
+                run_id: Some(claimed.status.planning_run),
+                reason: BootstrapAttentionReason::StorageUnconfirmed,
+            }
+        );
+        assert_eq!(store.queued().unwrap().len(), 0);
+        assert_eq!(store.pending_admission_runs().unwrap().len(), 0);
+        assert!(matches!(
+            store.claim(id, blocked.status.revision),
+            Err(BootstrapStoreError::InvalidTransition)
+        ));
+        assert!(matches!(
+            store.retry(id, blocked.status.revision, &pins),
+            Err(BootstrapStoreError::InvalidTransition)
+        ));
+        drop(store);
+        assert_eq!(open(temp.path()).get(id).unwrap().unwrap(), blocked);
+    }
+    temp.close().unwrap();
 }
 
 fn child_intent(parent: RunId) -> BootstrapContinuation {
@@ -422,56 +461,59 @@ fn child_intent(parent: RunId) -> BootstrapContinuation {
 
 #[test]
 fn child_launch_commit_survives_reopen_and_cancel_fences_continuation() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = open(temp.path());
-    for cancelled in [false, true] {
-        let id = RunId::new();
-        let captured = capture(temp.path());
-        let record = store
-            .insert_if_absent(id, &intent(temp.path(), "app"), &captured)
-            .unwrap();
-        let planning = BootstrapState::Pending {
-            phase: BootstrapPhase::Planning,
-        };
-        store
-            .pool
-            .get()
-            .unwrap()
-            .execute(
-                "UPDATE bootstrap_operations SET state_json=? WHERE operation_id=?",
-                params![serde_json::to_string(&planning).unwrap(), id.to_string()],
-            )
-            .unwrap();
-        let child = child_intent(record.status.planning_run);
-        if cancelled {
-            store.request_cancel(id).unwrap();
-            assert!(
-                store
-                    .continue_planning(id, record.status.revision, &child)
-                    .is_err()
-            );
-            assert!(open(temp.path()).get(id).unwrap().unwrap().child.is_none());
-        } else {
-            let committed = store
-                .continue_planning(id, record.status.revision, &child)
+    let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(temp.path());
+        for cancelled in [false, true] {
+            let id = RunId::new();
+            let captured = capture(temp.path());
+            let record = store
+                .insert_if_absent(id, &intent(temp.path(), "app"), &captured)
                 .unwrap();
-            assert_eq!(
-                committed.status.state,
-                BootstrapState::Pending {
-                    phase: BootstrapPhase::QueuedImplementation
-                }
-            );
-            assert_eq!(
-                open(temp.path()).get(id).unwrap().unwrap().child,
-                Some(child.clone())
-            );
-            assert!(
-                store
-                    .continue_planning(id, committed.status.revision, &child)
-                    .is_err()
-            );
+            let planning = BootstrapState::Pending {
+                phase: BootstrapPhase::Planning,
+            };
+            store
+                .pool
+                .get()
+                .unwrap()
+                .execute(
+                    "UPDATE bootstrap_operations SET state_json=? WHERE operation_id=?",
+                    params![serde_json::to_string(&planning).unwrap(), id.to_string()],
+                )
+                .unwrap();
+            let child = child_intent(record.status.planning_run);
+            if cancelled {
+                store.request_cancel(id).unwrap();
+                assert!(
+                    store
+                        .continue_planning(id, record.status.revision, &child)
+                        .is_err()
+                );
+                assert!(open(temp.path()).get(id).unwrap().unwrap().child.is_none());
+            } else {
+                let committed = store
+                    .continue_planning(id, record.status.revision, &child)
+                    .unwrap();
+                assert_eq!(
+                    committed.status.state,
+                    BootstrapState::Pending {
+                        phase: BootstrapPhase::QueuedImplementation
+                    }
+                );
+                assert_eq!(
+                    open(temp.path()).get(id).unwrap().unwrap().child,
+                    Some(child.clone())
+                );
+                assert!(
+                    store
+                        .continue_planning(id, committed.status.revision, &child)
+                        .is_err()
+                );
+            }
         }
     }
+    temp.close().unwrap();
 }
 
 fn seed_terminal(store: &BootstrapOperationStore, id: RunId, state: BootstrapState) {
@@ -502,74 +544,80 @@ fn seed_terminal(store: &BootstrapOperationStore, id: RunId, state: BootstrapSta
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_only_capture_inspection_uses_run_identity_and_checks_integrity() {
-    let root = tempfile::tempdir().unwrap();
-    let store = open(root.path());
-    let pins = capture(root.path());
-    let operation = RunId::new();
-    store
-        .insert_if_absent(operation, &intent(root.path(), "create"), &pins)
-        .unwrap();
-    for run in [pins.fields().planning_run, pins.fields().implementation_run] {
-        let found = crate::runs::Storage::inspect_existing_run_capture(root.path().into(), run)
-            .await
+    let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let store = open(root.path());
+        let pins = capture(root.path());
+        let operation = RunId::new();
+        store
+            .insert_if_absent(operation, &intent(root.path(), "create"), &pins)
             .unwrap();
-        assert_eq!(found, Some(pins.clone()));
-    }
-    assert!(
-        crate::runs::Storage::inspect_existing_run_capture(root.path().into(), RunId::new())
-            .await
+        for run in [pins.fields().planning_run, pins.fields().implementation_run] {
+            let found = crate::runs::Storage::inspect_existing_run_capture(root.path().into(), run)
+                .await
+                .unwrap();
+            assert_eq!(found, Some(pins.clone()));
+        }
+        assert!(
+            crate::runs::Storage::inspect_existing_run_capture(root.path().into(), RunId::new())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        store
+            .pool
+            .get()
             .unwrap()
-            .is_none()
-    );
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute(
-            "UPDATE bootstrap_operations SET capture_fingerprint = ?",
-            ["0".repeat(64)],
-        )
-        .unwrap();
-    assert!(
-        crate::runs::Storage::inspect_existing_run_capture(
-            root.path().into(),
-            pins.fields().implementation_run
-        )
-        .await
-        .is_err()
-    );
+            .execute(
+                "UPDATE bootstrap_operations SET capture_fingerprint = ?",
+                ["0".repeat(64)],
+            )
+            .unwrap();
+        assert!(
+            crate::runs::Storage::inspect_existing_run_capture(
+                root.path().into(),
+                pins.fields().implementation_run
+            )
+            .await
+            .is_err()
+        );
+    }
+    root.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_only_capture_inspection_preserves_absence_and_rejects_future_payload() {
-    let root = tempfile::tempdir().unwrap();
-    let missing = root.path().join("absent");
-    assert!(
-        crate::runs::Storage::inspect_existing_run_capture(missing.clone(), RunId::new())
-            .await
+    let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    {
+        let missing = root.path().join("absent");
+        assert!(
+            crate::runs::Storage::inspect_existing_run_capture(missing.clone(), RunId::new())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!missing.exists());
+        let store = open(root.path());
+        let pins = capture(root.path());
+        store
+            .insert_if_absent(RunId::new(), &intent(root.path(), "create"), &pins)
+            .unwrap();
+        store
+            .pool
+            .get()
             .unwrap()
-            .is_none()
-    );
-    assert!(!missing.exists());
-    let store = open(root.path());
-    let pins = capture(root.path());
-    store
-        .insert_if_absent(RunId::new(), &intent(root.path(), "create"), &pins)
-        .unwrap();
-    store
-        .pool
-        .get()
-        .unwrap()
-        .execute("UPDATE bootstrap_operations SET payload_version = 999", [])
-        .unwrap();
-    assert!(matches!(
-        crate::runs::Storage::inspect_existing_run_capture(
-            root.path().into(),
-            pins.fields().planning_run
-        )
-        .await,
-        Err(crate::runs::StorageError::BootstrapJournal(
-            BootstrapStoreError::UnsupportedPayload
-        ))
-    ));
+            .execute("UPDATE bootstrap_operations SET payload_version = 999", [])
+            .unwrap();
+        assert!(matches!(
+            crate::runs::Storage::inspect_existing_run_capture(
+                root.path().into(),
+                pins.fields().planning_run
+            )
+            .await,
+            Err(crate::runs::StorageError::BootstrapJournal(
+                BootstrapStoreError::UnsupportedPayload
+            ))
+        ));
+    }
+    root.close().unwrap();
 }

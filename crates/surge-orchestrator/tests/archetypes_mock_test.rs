@@ -6,6 +6,10 @@
 //! which gives this suite a deterministic terminal run for every archetype
 //! without requiring an external ACP binary.
 
+#[path = "fixtures/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -223,62 +227,66 @@ impl BridgeFacade for DeterministicMockBridge {
 }
 
 async fn run_archetype(name: &str) -> Vec<surge_persistence::runs::reader::ReadEvent> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let storage = Storage::open(dir.path()).await.expect("storage");
-    let bridge = Arc::new(DeterministicMockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    // Without a `ProfileRegistry`, the engine falls back to the legacy M5
-    // mock path, which never merges a profile's own `[sandbox]` section —
-    // so `verifier@2.0`'s `mode = "read-only"` never lands on the node, and
-    // its `passed` outcome (`ledger_effect = "verified"`) trips the
-    // sealed-verifier gate in `engine/stage/agent.rs` unconditionally. The
-    // gate checks the *resolved* sandbox mode, not actual filesystem
-    // activity, so a wired (bundled-only) registry is required for
-    // `flow_bug_fix`/`flow_refactor` to reach `Completed`.
-    let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
-    let engine = Engine::new(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        EngineConfig {
-            profile_registry: Some(profile_registry),
-            ..EngineConfig::default()
-        },
-    );
-
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            load_archetype(name),
-            dir.path().to_path_buf(),
-            // The archetypes' first stage binds `user_prompt`
-            // (`ArtifactSource::InitialPrompt`), as every real run has one.
-            EngineRunConfig {
-                initial_prompt: format!("Exercise the {name} archetype."),
-                ..EngineRunConfig::default()
+    let dir = FixtureHome::new().unwrap();
+    let fixture_result = {
+        let storage = Storage::open(dir.path()).await.expect("storage");
+        let bridge = Arc::new(DeterministicMockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        // Without a `ProfileRegistry`, the engine falls back to the legacy M5
+        // mock path, which never merges a profile's own `[sandbox]` section —
+        // so `verifier@2.0`'s `mode = "read-only"` never lands on the node, and
+        // its `passed` outcome (`ledger_effect = "verified"`) trips the
+        // sealed-verifier gate in `engine/stage/agent.rs` unconditionally. The
+        // gate checks the *resolved* sandbox mode, not actual filesystem
+        // activity, so a wired (bundled-only) registry is required for
+        // `flow_bug_fix`/`flow_refactor` to reach `Completed`.
+        let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+        let engine = Engine::new(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            EngineConfig {
+                profile_registry: Some(profile_registry),
+                ..EngineConfig::default()
             },
-        )
-        .await
-        .unwrap_or_else(|e| panic!("{name}: start_run failed: {e}"));
+        );
 
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .unwrap_or_else(|_| panic!("{name}: run hung > 30s"))
-        .expect("await_completion");
-    match outcome {
-        RunOutcome::Completed { .. } => {},
-        other => panic!("{name}: expected Completed, got {other:?}"),
-    }
-    drop(engine);
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                load_archetype(name),
+                dir.path().to_path_buf(),
+                // The archetypes' first stage binds `user_prompt`
+                // (`ArtifactSource::InitialPrompt`), as every real run has one.
+                EngineRunConfig {
+                    initial_prompt: format!("Exercise the {name} archetype."),
+                    ..EngineRunConfig::default()
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{name}: start_run failed: {e}"));
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap()
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .unwrap_or_else(|_| panic!("{name}: run hung > 30s"))
+            .expect("await_completion");
+        match outcome {
+            RunOutcome::Completed { .. } => {},
+            other => panic!("{name}: expected Completed, got {other:?}"),
+        }
+        drop(engine);
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap()
+    };
+    dir.close().unwrap();
+    fixture_result
 }
 
 /// Write a trivial always-succeeding executable that ignores its arguments,

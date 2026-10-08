@@ -149,8 +149,7 @@ impl WorkItemStore {
                 "suspension fence is absent from authoritative nonterminal journal".into(),
             ));
         }
-        let connection =
-            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let connection = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let snapshot: Vec<u8> = connection.query_row(
             "SELECT snapshot FROM graph_snapshots WHERE at_seq=?",
             [fence.snapshot_seq],

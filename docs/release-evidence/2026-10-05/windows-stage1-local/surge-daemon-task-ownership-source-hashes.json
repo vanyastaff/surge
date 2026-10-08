@@ -1,0 +1,20 @@
+{
+  "stage": "24 scoped tests GREEN; strict alltargets blocked by other fixture diagnostics",
+  "files": {
+    "crates/surge-daemon/src/server.rs": "36eb45b999b4df7f1ecb25e9a3909870ef996df32f7f413e041c47b65b50b034",
+    "crates/surge-daemon/src/inbox/consumer.rs": "d74a8ca6a7a66f8df33b5d68f92938b2820d0e63a0466a1da77a5261bc41d055",
+    "crates/surge-daemon/src/inbox/state_sync.rs": "4612d9fe892adb7ba563976113ff8b27f28f7e2c890fdcc0653fe056345b5d23",
+    "crates/surge-daemon/src/main.rs": "6b703525ac979269614df1aa309458886bf43dfe6f32c9f11601e2fddc26625f",
+    "crates/surge-daemon/tests/inbox_callback_e2e.rs": "a6f0a94bd4ad363d5d85d6021b3b87d6e8bd5268239624c63c847fcb34e57ba7"
+  },
+  "red_receipts": {
+    "/tmp/surge-daemon-task-ownership-red.log": "Three genuine behavioral failures; initial normal-shutdown failure was socket fixture setup only",
+    "/tmp/surge-daemon-task-ownership-red-shutdown-valid.log": "Normal shutdown genuine failure: retained Storage count4 vs baseline2; socket setup succeeded"
+  },
+  "limitations": [
+    "Native Windows unverified",
+    "Hard abort is not engine/SQL settlement"
+  ],
+  "green_receipt": "/tmp/surge-daemon-task-ownership-green.log",
+  "strict_receipt": "/tmp/surge-daemon-task-ownership-clippy.log"
+}

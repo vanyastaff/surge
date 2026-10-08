@@ -1,0 +1,39 @@
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Checking surge-ui v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-ui)
+    Checking surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:698:57
+    |
+698 |   ...   if phase == "populated-unconfirmed" {
+    |  ___________________________________________^
+699 | | ...       if events.iter().any(|event| matches!(event.payload.payload, EventPayload::RunRecoveryRequired { .. }))
+700 | | ...           && storage.work_items().for_run(receipt.run).unwrap().unwrap().state == surge_core::work_item::WorkItemAttemptState...
+701 | | ...           break None;
+702 | | ...       }
+703 | | ...   } else if let Some(cycle) = cycles.into_iter().next()
+    | |_______^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+    = note: `-D clippy::excessive-nesting` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::excessive_nesting)]`
+
+error: this block is too nested
+   --> crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:704:156
+    |
+704 |                           && events.iter().any(|event| matches!(event.payload.payload, EventPayload::RunSuspended { ref fence } if fence.cleanup_confirmed)) {
+    |  ____________________________________________________________________________________________________________________________________________________________^
+705 | |                         break Some(cycle);
+706 | |                     }
+    | |_____________________^
+    |
+    = help: try refactoring your code to minimize nesting
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#excessive_nesting
+
+error: could not compile `surge-daemon` (test "owned_flow_mcp_recovery") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

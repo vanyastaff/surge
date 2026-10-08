@@ -137,6 +137,12 @@ pub struct OwnedFlowMcpManifestEntry {
     allowed_tools: Option<Vec<String>>,
     #[serde(with = "humantime_serde")]
     call_timeout: Duration,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "humantime_serde"
+    )]
+    startup_timeout: Option<Duration>,
     restart_on_crash: bool,
     sandbox: Option<SandboxMode>,
     object_ref: OwnedFlowObjectRef,
@@ -150,6 +156,12 @@ struct RawMcpManifestEntry {
     allowed_tools: Option<Vec<String>>,
     #[serde(with = "humantime_serde")]
     call_timeout: Duration,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "humantime_serde"
+    )]
+    startup_timeout: Option<Duration>,
     restart_on_crash: bool,
     sandbox: Option<SandboxMode>,
     object_ref: OwnedFlowObjectRef,
@@ -163,6 +175,7 @@ impl TryFrom<RawMcpManifestEntry> for OwnedFlowMcpManifestEntry {
             name: raw.name,
             allowed_tools: raw.allowed_tools,
             call_timeout: raw.call_timeout,
+            startup_timeout: raw.startup_timeout,
             restart_on_crash: raw.restart_on_crash,
             sandbox: raw.sandbox,
             object_ref: raw.object_ref,
@@ -188,6 +201,7 @@ impl OwnedFlowMcpManifestEntry {
             name: server.name.clone(),
             allowed_tools: server.allowed_tools.clone(),
             call_timeout: server.call_timeout,
+            startup_timeout: server.startup_timeout,
             restart_on_crash: server.restart_on_crash,
             sandbox: server.sandbox,
             object_ref,
@@ -226,6 +240,13 @@ impl OwnedFlowMcpManifestEntry {
     #[must_use]
     pub fn call_timeout(&self) -> Duration {
         self.call_timeout
+    }
+    /// Exact explicit startup deadline; `None` means the host default
+    /// (`McpServerRef::effective_startup_timeout`). Absent from the encoded
+    /// entry when `None`, so pre-existing snapshots keep their exact bytes.
+    #[must_use]
+    pub fn startup_timeout(&self) -> Option<Duration> {
+        self.startup_timeout
     }
     /// Exact child restart policy.
     #[must_use]
@@ -621,6 +642,7 @@ mod tests {
             serde_json::json!([])
         );
         assert_eq!(value["mcp"]["entries"][0]["call_timeout"], "17s");
+        assert!(value["mcp"]["entries"][0].get("startup_timeout").is_none());
         assert_eq!(value["mcp"]["entries"][0]["restart_on_crash"], false);
         assert_eq!(value["mcp"]["entries"][0]["sandbox"], "read-only");
         assert!(value["mcp"]["entries"][0].get("transport").is_none());
@@ -628,6 +650,44 @@ mod tests {
             serde_json::from_value::<OwnedFlowInputsManifest>(value).unwrap(),
             accepted
         );
+    }
+
+    #[test]
+    fn startup_timeout_is_projected_only_when_explicit() {
+        let server = McpServerRef::new(
+            "slow".into(),
+            McpTransportConfig::stdio("python3".into(), vec![], HashMap::new()),
+            None,
+            Duration::from_millis(275),
+            false,
+        );
+        let reference = OwnedFlowObjectRef::new(format!("{:064x}", 0)).unwrap();
+        let legacy = OwnedFlowMcpManifestEntry::new(
+            0,
+            &server,
+            reference.clone(),
+            HmacSha256Tag::from_bytes([5; 32]),
+        )
+        .unwrap();
+        let legacy_value = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_value.get("startup_timeout").is_none());
+        let decoded: OwnedFlowMcpManifestEntry =
+            serde_json::from_value(legacy_value.clone()).unwrap();
+        assert_eq!(decoded.startup_timeout(), None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), legacy_value);
+
+        let explicit = OwnedFlowMcpManifestEntry::new(
+            0,
+            &server.with_startup_timeout(Some(Duration::from_secs(20))),
+            reference,
+            HmacSha256Tag::from_bytes([5; 32]),
+        )
+        .unwrap();
+        let value = serde_json::to_value(&explicit).unwrap();
+        assert_eq!(value["startup_timeout"], "20s");
+        let decoded: OwnedFlowMcpManifestEntry = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, explicit);
+        assert_ne!(decoded, legacy);
     }
 
     #[test]

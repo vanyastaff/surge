@@ -633,7 +633,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bootstrap_accepted_effects_rollback_when_outcome_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -695,12 +695,15 @@ mod tests {
             "rejected required outcome must not increment an edit cycle: {kinds:?}"
         );
         assert!(!kinds.contains(&"OutcomeReported"));
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn precancelled_gate_does_not_invent_a_decision_or_timeout() {
         for with_receiver in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
             let storage = Storage::open(dir.path()).await.unwrap();
             let id = surge_core::id::RunId::new();
             let writer = storage.create_run(id, dir.path(), None).await.unwrap();
@@ -740,12 +743,15 @@ mod tests {
                 collect_payload_kinds(&storage, id).await,
                 ["BootstrapApprovalRequested", "HumanInputRequested"]
             );
+            writer.close().await.unwrap();
+            drop(storage);
+            dir.close().unwrap();
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn selected_decision_finishes_persistence_despite_later_cancellation() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let id = surge_core::id::RunId::new();
         let writer = storage.create_run(id, dir.path(), None).await.unwrap();
@@ -803,11 +809,14 @@ mod tests {
                 "GateStageOutcomeCommitted",
             ]
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn timeout_with_reject_returns_rejected_error() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -833,11 +842,14 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(StageError::HumanGateRejected)));
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resolution_returns_outcome() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -871,11 +883,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.as_ref(), "approve");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bootstrap_mode_approve_emits_approval_event_pair() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -923,13 +938,16 @@ mod tests {
                 "GateStageOutcomeCommitted",
             ],
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// A plan review outlives the generic run default: the gate keeps
     /// waiting and the operator's later approval still lands.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bootstrap_gate_without_timeout_outlives_the_run_default() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -942,7 +960,7 @@ mod tests {
         start_test_gate_occurrence(&writer, &mut mem, &node, 3).await;
 
         let (tx, rx) = oneshot::channel();
-        tokio::spawn(async move {
+        let operator = tokio::spawn(async move {
             // Well past the 10ms run default.
             tokio::time::sleep(Duration::from_millis(300)).await;
             let _ = tx.send(HumanGateResolution {
@@ -968,11 +986,15 @@ mod tests {
         assert_eq!(outcome.as_ref(), "approve");
         let kinds = collect_payload_kinds(&storage, run_id).await;
         assert!(!kinds.contains(&"HumanInputTimedOut"), "{kinds:?}");
+        operator.await.unwrap();
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bootstrap_mode_edit_emits_edit_requested_with_feedback() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1045,11 +1067,15 @@ mod tests {
             .expect("BootstrapEditRequested missing");
         assert_eq!(edit_event.0, BootstrapStage::Roadmap);
         assert_eq!(edit_event.1, feedback);
+        writer.close().await.unwrap();
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bootstrap_mode_reject_returns_rejected_error_with_decided_event() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1096,6 +1122,9 @@ mod tests {
                 "GateStageOutcomeCommitted",
             ],
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[test]
@@ -1127,7 +1156,7 @@ mod tests {
         // an `edit` outcome MUST emit BootstrapEditRequested and return the
         // outcome (no error). Captures the "happy" branch that the cap
         // arithmetic must not break.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1168,6 +1197,9 @@ mod tests {
             !kinds.contains(&"EscalationRequested"),
             "EscalationRequested must NOT appear before the cap is hit, got {kinds:?}",
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1176,7 +1208,7 @@ mod tests {
         // three prior edit cycles already happened. The fourth `edit`
         // outcome must hit the cap and abort the run with a clear error
         // plus the EscalationRequested event.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1238,6 +1270,9 @@ mod tests {
             !kinds.contains(&"BootstrapEditRequested"),
             "BootstrapEditRequested must NOT be emitted on the cap-exceeded edit attempt",
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1245,7 +1280,7 @@ mod tests {
         // cap = 0 disables the limit — the integration test path used by
         // mock-agent harnesses that need to drive arbitrarily long edit
         // loops. Even with a high prior count, the edit cycle proceeds.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -1281,5 +1316,8 @@ mod tests {
         let kinds = collect_payload_kinds(&storage, run_id).await;
         assert!(kinds.contains(&"BootstrapEditRequested"));
         assert!(!kinds.contains(&"EscalationRequested"));
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 }

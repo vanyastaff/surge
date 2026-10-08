@@ -1,0 +1,429 @@
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking gpui-pre-apple v0.3.7
+   Compiling enum-iterator-derive v1.5.0
+    Checking mach2 v0.5.0
+    Checking filetime v0.2.27
+    Checking fsevent-sys v4.1.0
+   Compiling gpui-component v0.7.0
+   Compiling cap-primitives v3.4.6
+    Checking unicode-segmentation v1.12.0
+   Compiling lb-wry v0.53.3
+    Checking notify v7.0.0
+    Checking gpui-base v0.7.0
+    Checking gpui-pre-macos v0.3.7
+    Checking dirs v6.0.0
+    Checking rust-i18n v4.2.3
+    Checking gpui-kit-assets v0.7.0
+    Checking io-extras v0.18.4
+    Checking cookie v0.18.2
+    Checking enum-iterator v2.3.0
+    Checking fs-set-times v0.20.3
+    Checking objc2-web-kit v0.3.2
+   Compiling gpui-component-macros v0.7.0
+    Checking maybe-owned v0.3.4
+    Checking ambient-authority v0.0.2
+   Compiling cap-std v3.4.6
+    Checking dpi v0.1.2
+    Checking unicode-width v0.2.2
+   Compiling pulldown-cmark v0.12.2
+    Checking getopts v0.2.24
+    Checking pulldown-cmark-escape v0.11.0
+    Checking gpui-pre-platform v0.3.7
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking gpui-wry v0.7.0
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+error: used `assert!` to check that a value is not empty
+   --> crates/surge-notify/src/webhook.rs:124:9
+    |
+124 |         assert!(!captured.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+    |
+124 -         assert!(!captured.is_empty());
+124 +         assert_ne!(captured, [] as [std::string::String; 0]);
+    |
+
+error: could not compile `surge-notify` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: used `assert!` to check that a value is empty
+  --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:98:5
+   |
+98 |     assert!(store.pending_admission_runs().unwrap().is_empty());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+   |
+98 -     assert!(store.pending_admission_runs().unwrap().is_empty());
+98 +     assert_eq!(store.pending_admission_runs().unwrap(), [] as [surge_core::RunId; 0]);
+   |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:128:5
+    |
+128 |     assert!(store.queued().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+128 -     assert!(store.queued().unwrap().is_empty());
+128 +     assert_eq!(store.queued().unwrap(), [] as [runs::bootstrap_operations::BootstrapOperationRecord; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:129:5
+    |
+129 |     assert!(store.pending_admission_runs().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+129 -     assert!(store.pending_admission_runs().unwrap().is_empty());
+129 +     assert_eq!(store.pending_admission_runs().unwrap(), [] as [surge_core::RunId; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:159:5
+    |
+159 |     assert!(store.queued().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+159 -     assert!(store.queued().unwrap().is_empty());
+159 +     assert_eq!(store.queued().unwrap(), [] as [runs::bootstrap_operations::BootstrapOperationRecord; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:160:5
+    |
+160 |     assert!(store.pending_admission_runs().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+160 -     assert!(store.pending_admission_runs().unwrap().is_empty());
+160 +     assert_eq!(store.pending_admission_runs().unwrap(), [] as [surge_core::RunId; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:381:5
+    |
+381 |     assert!(store.queued().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+381 -     assert!(store.queued().unwrap().is_empty());
+381 +     assert_eq!(store.queued().unwrap(), [] as [runs::bootstrap_operations::BootstrapOperationRecord; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/bootstrap_operations/tests.rs:382:5
+    |
+382 |     assert!(store.pending_admission_runs().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+382 -     assert!(store.pending_admission_runs().unwrap().is_empty());
+382 +     assert_eq!(store.pending_admission_runs().unwrap(), [] as [surge_core::RunId; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/escalations.rs:370:9
+    |
+370 |         assert!(fold_escalations(&[]).is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+370 -         assert!(fold_escalations(&[]).is_empty());
+370 +         assert_eq!(fold_escalations(&[]), [] as [runs::escalations::EscalationRecord; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/inbox_queue.rs:516:9
+    |
+516 |         assert!(list_due_cockpit_snoozes(&conn, early).unwrap().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+516 -         assert!(list_due_cockpit_snoozes(&conn, early).unwrap().is_empty());
+516 +         assert_eq!(list_due_cockpit_snoozes(&conn, early).unwrap(), [] as [runs::inbox_queue::DueCockpitSnooze; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/inbox_queue.rs:529:9
+    |
+529 |         assert!(list_due_cockpit_snoozes(&conn, late).unwrap().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+529 -         assert!(list_due_cockpit_snoozes(&conn, late).unwrap().is_empty());
+529 +         assert_eq!(list_due_cockpit_snoozes(&conn, late).unwrap(), [] as [runs::inbox_queue::DueCockpitSnooze; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/registry.rs:404:9
+    |
+404 | /         assert!(
+405 | |             find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5)
+406 | |                 .unwrap()
+407 | |                 .is_empty()
+408 | |         );
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+404 ~         assert_eq!(
+405 ~             find_ids_by_suffix(&pool, "ZZZZZZZZZZZZ", 5)
+406 +                 .unwrap(), [] as [surge_core::RunId; 0]
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/registry.rs:409:9
+    |
+409 |         assert!(find_ids_by_suffix(&pool, "", 5).unwrap().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+409 -         assert!(find_ids_by_suffix(&pool, "", 5).unwrap().is_empty());
+409 +         assert_eq!(find_ids_by_suffix(&pool, "", 5).unwrap(), [] as [surge_core::RunId; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/registry.rs:410:9
+    |
+410 |         assert!(find_ids_by_suffix(&pool, "%", 5).unwrap().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+410 -         assert!(find_ids_by_suffix(&pool, "%", 5).unwrap().is_empty());
+410 +         assert_eq!(find_ids_by_suffix(&pool, "%", 5).unwrap(), [] as [surge_core::RunId; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-persistence/src/runs/registry.rs:411:9
+    |
+411 |         assert!(find_ids_by_suffix(&pool, "_", 5).unwrap().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+411 -         assert!(find_ids_by_suffix(&pool, "_", 5).unwrap().is_empty());
+411 +         assert_eq!(find_ids_by_suffix(&pool, "_", 5).unwrap(), [] as [surge_core::RunId; 0]);
+    |
+
+error: could not compile `surge-persistence` (lib test) due to 14 previous errors
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/config.rs:367:9
+    |
+367 |         assert!(cfg.mcp_servers.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+367 -         assert!(cfg.mcp_servers.is_empty());
+367 +         assert_eq!(cfg.mcp_servers, [] as [surge_core::McpServerRef; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/config.rs:425:9
+    |
+425 |         assert!(parsed.mcp_servers.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+425 -         assert!(parsed.mcp_servers.is_empty());
+425 +         assert_eq!(parsed.mcp_servers, [] as [surge_core::McpServerRef; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/config.rs:426:9
+    |
+426 |         assert!(parsed.quota_recovery.stages().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+426 -         assert!(parsed.quota_recovery.stages().is_empty());
+426 +         assert_eq!(parsed.quota_recovery.stages(), []);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/config.rs:429:9
+    |
+429 |         assert!(parsed.initial_prompt.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+429 -         assert!(parsed.initial_prompt.is_empty());
+429 +         assert_eq!(parsed.initial_prompt, "");
+    |
+
+error: used `assert!` to check that a value is empty
+    --> crates/surge-orchestrator/src/engine/engine.rs:2201:9
+     |
+2201 |         assert!(snapshot.claims.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+2201 -         assert!(snapshot.claims.is_empty());
+2201 +         assert_eq!(snapshot.claims, [] as [surge_core::MemoryClaim; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/frames.rs:283:9
+    |
+283 |         assert!(frames.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+283 -         assert!(frames.is_empty());
+283 +         assert_eq!(frames, [] as [engine::frames::Frame; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/hooks/mod.rs:994:9
+    |
+994 |         assert!(spawner.calls().is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+994 -         assert!(spawner.calls().is_empty());
+994 +         assert_eq!(spawner.calls(), [] as [std::string::String; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+    --> crates/surge-orchestrator/src/engine/ipc.rs:1095:9
+     |
+1095 |         assert!(output.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+1095 -         assert!(output.is_empty());
+1095 +         assert_eq!(output, [] as [u8; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/snapshot.rs:492:9
+    |
+492 |         assert!(snap.frames.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+492 -         assert!(snap.frames.is_empty());
+492 +         assert_eq!(snap.frames, [] as [engine::snapshot::SerializableFrame; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/snapshot.rs:544:9
+    |
+544 |         assert!(snap.frames.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+544 -         assert!(snap.frames.is_empty());
+544 +         assert_eq!(snap.frames, [] as [engine::snapshot::SerializableFrame; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/snapshot.rs:708:9
+    |
+708 |         assert!(snap.frames.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+708 -         assert!(snap.frames.is_empty());
+708 +         assert_eq!(snap.frames, [] as [engine::snapshot::SerializableFrame; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/stage/bindings.rs:460:9
+    |
+460 |         assert!(resolved[0].1.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+460 -         assert!(resolved[0].1.is_empty());
+460 +         assert_eq!(resolved[0].1, "");
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/stage/bindings.rs:481:9
+    |
+481 |         assert!(resolved[0].1.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+481 -         assert!(resolved[0].1.is_empty());
+481 +         assert_eq!(resolved[0].1, "");
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-orchestrator/src/engine/stage/subgraph_stage.rs:418:9
+    |
+418 |         assert!(result.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+418 -         assert!(result.is_empty());
+418 +         assert_eq!(result, [] as [engine::frames::ResolvedSubgraphInput; 0]);
+    |
+
+error: could not compile `surge-orchestrator` (lib test) due to 14 previous errors

@@ -387,8 +387,7 @@ impl WorkItemStore {
             .join("runs")
             .join(claim.run().to_string())
             .join("events.sqlite");
-        let journal =
-            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let (schema, payload): (u32, Vec<u8>) = journal.query_row(
             "SELECT schema_version,payload FROM events WHERE seq=?",
             [opened_seq],
@@ -475,8 +474,7 @@ impl WorkItemStore {
             .join("events.sqlite");
         let history = crate::runs::inspection::read_folded_events(&path, claim.run())
             .map_err(|error| WorkItemError::Invalid(error.to_string()))?;
-        let journal =
-            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let (schema, payload): (u32, Vec<u8>) = journal.query_row(
             "SELECT schema_version,payload FROM events WHERE seq=?",
             [continued_seq],
@@ -916,8 +914,7 @@ impl WorkItemStore {
             .join("runs")
             .join(claim.run.to_string())
             .join("events.sqlite");
-        let journal =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let journal = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let mut query =
             journal.prepare("SELECT schema_version,payload FROM events ORDER BY seq")?;
         let rows = query.query_map([], |row| {
@@ -1086,7 +1083,7 @@ impl WorkItemStore {
                 "opening has no live trusted journal".into(),
             ));
         }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let conn = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let (schema, payload): (u32, Vec<u8>) = conn.query_row(
             "SELECT schema_version,payload FROM events WHERE seq=?",
             [sequence],

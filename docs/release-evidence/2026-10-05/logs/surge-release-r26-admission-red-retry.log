@@ -1,0 +1,56 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+warning: field `admission` is never read
+  --> crates/surge-telegram/src/cockpit/outgoing_admission.rs:10:16
+   |
+ 8 | pub(super) struct AdmittedTelegramApi<A> {
+   |                   ------------------- field in this struct
+ 9 |     pub(super) api: A,
+10 |     pub(super) admission: PairingsAdmission,
+   |                ^^^^^^^^^
+   |
+   = note: `AdmittedTelegramApi` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `surge-telegram` (lib) generated 1 warning
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.15s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-8b1eaa767c938271)
+
+running 10 tests
+test admission::tests::over_cap_queues_in_fifo ... ok
+test admission::tests::rejects_with_queue_full_when_both_caps_hit ... ok
+test admission::tests::snapshot_counts ... ok
+test admission::tests::complete_then_pop_admits_next ... ok
+test admission::tests::queue_full_does_not_block_admission_after_drain ... ok
+test admission::tests::cancel_queued_removes_from_fifo ... ok
+test admission::tests::try_admit_no_queue_rejects_at_cap ... ok
+test admission::tests::under_cap_admits ... ok
+
+thread 'admission::tests::bootstrap_rollback_before_wait_retains_queue_wake' (33323679) panicked at crates/surge-daemon/src/admission.rs:332:10:
+rollback must wake a drain that subscribes afterward: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'admission::tests::completion_before_wait_retains_queue_wake' (33323682) panicked at crates/surge-daemon/src/admission.rs:310:10:
+completion must wake a drain that subscribes afterward: Elapsed(())
+test admission::tests::bootstrap_rollback_before_wait_retains_queue_wake ... FAILED
+test admission::tests::completion_before_wait_retains_queue_wake ... FAILED
+
+failures:
+
+failures:
+    admission::tests::bootstrap_rollback_before_wait_retains_queue_wake
+    admission::tests::completion_before_wait_retains_queue_wake
+
+test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p surge-daemon --lib`

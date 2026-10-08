@@ -2,6 +2,10 @@
 #[path = "../../surge-orchestrator/tests/fixtures/mock_bridge.rs"]
 mod mock_bridge;
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use interprocess::local_socket::tokio::prelude::*;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -47,7 +51,7 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let home = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
         let project = tempfile::tempdir().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let bridge = Arc::new(mock_bridge::MockBridge::new());
@@ -56,7 +60,7 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
         ), EngineConfig::default()));
         let cancel = tokio_util::sync::CancellationToken::new();
         let socket = home.path().join("framing.sock");
-        let server = tokio::spawn(surge_daemon::run_runs_only(
+        let mut server = tokio::spawn(surge_daemon::run_runs_only(
             surge_daemon::ServerConfig { socket_path: socket.clone(), max_active: 1, max_queue: 2 },
             Arc::new(LocalEngineFacade::new(engine.clone())),
             surge_daemon::tracked_run::TrackingContext::new(engine, storage.clone()),
@@ -64,7 +68,18 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
             Arc::new(surge_daemon::admission::AdmissionController::new(1, 2)), cancel.clone(),
         ));
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !socket.exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+            loop {
+            if server.is_finished() {
+                panic!("daemon stopped before readiness: {:?}", (&mut server).await);
+            }
+            if surge_orchestrator::engine::daemon_facade::DaemonClient::connect(socket.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         }).await.unwrap();
         let sentinel = "PRIVATE-SOCKET-UNKNOWN-MCP-TRANSPORT";
         let request = serde_json::json!({"method":"owned_flow_start","request_id":1,"request":{
@@ -95,5 +110,7 @@ fn malformed_private_owner_frame_is_opaque_and_has_no_effects() {
         assert!(public.contains("read_request_frame failed; closing connection"), "real framing warning missing");
         assert!(public.contains("invalid JSON frame"), "typed safe framing metadata missing");
         assert!(!public.contains(sentinel), "private socket input escaped host TRACE diagnostics");
+        drop(storage);
+        home.close().unwrap();
     });
 }

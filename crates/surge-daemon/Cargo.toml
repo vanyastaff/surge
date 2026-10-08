@@ -53,6 +53,9 @@ tokio-stream = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dev-dependencies]
 git2.workspace = true
 agent-client-protocol.workspace = true

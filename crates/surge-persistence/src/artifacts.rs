@@ -73,14 +73,14 @@ impl ArtifactStore {
         &self.runs_root
     }
 
-    /// Resolve the default artifact root, mirroring `~/.surge/runs/`.
+    /// Resolve the default artifact root (`$SURGE_HOME/runs`, otherwise `~/.surge/runs`).
     ///
     /// # Errors
     /// Returns [`ArtifactStoreError::HomeMissing`] when the home directory
     /// cannot be determined.
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().ok_or(ArtifactStoreError::HomeMissing)?;
-        Ok(home.join(".surge").join("runs"))
+        let home = surge_core::home::surge_home_dir().ok_or(ArtifactStoreError::HomeMissing)?;
+        Ok(home.join("runs"))
     }
 
     /// Create a store rooted at [`Self::default_path`].
@@ -285,6 +285,35 @@ fn safe_relative_fallback_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_path_respects_isolated_surge_home() {
+        const CHILD_MARKER: &str = "SURGE_ARTIFACTSTORE_PATH_TEST_CHILD";
+        if let Some(home) = std::env::var_os(CHILD_MARKER) {
+            let expected = PathBuf::from(home).join("runs");
+            assert_eq!(ArtifactStore::default_path().unwrap(), expected);
+            return;
+        }
+
+        // A subprocess owns its environment: no global mutation races with other tests.
+        let isolated_home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "artifacts::tests::default_path_respects_isolated_surge_home",
+                "--nocapture",
+            ])
+            .env("SURGE_HOME", isolated_home.path())
+            .env(CHILD_MARKER, isolated_home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated path test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
 
     fn test_store(root: &Path) -> ArtifactStore {
         ArtifactStore::new(root.join("runs"))

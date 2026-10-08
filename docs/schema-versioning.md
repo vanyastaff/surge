@@ -1,15 +1,14 @@
 # Schema Versioning
 
-Surge persists and exchanges four versioned formats. v0.1 **freezes the
-first three at version 1** and defines how future bumps are handled; the
-memory database versions independently (see below).
+Surge persists and exchanges four versioned formats. The current release keeps config and graph formats at version 1; event payloads and
+the memory database version independently (see below).
 
 | Format | Where | Version constant | v0.1 |
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **11** (see below) |
-| Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **2** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **21** (see below) |
+| Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **3** (see below) |
 
 ## `surge.toml` (config)
 
@@ -105,6 +104,48 @@ enum/struct encoding is positional, so an unrecognized field is not
 ignorable, it desyncs the decode. Rewrite this paragraph then, don't carry
 it forward on the strength of the *last* format's guarantee.
 
+Versions 12–15 add recoverable execution fences, human-decision effect and route
+commitments, immutable owned-flow startup snapshots, and informational owned-flow
+wake refusals respectively. Version 16 adds the nested
+`EscalationCause::McpSelectedCatalogUnavailable` (an MCP server a stage selected
+could not produce its tool catalog; see ADR-0014 decision 8). This is the same
+nested-enum rule as v8: v15 readers reject v16 envelopes with `SchemaTooNew`, and
+every earlier payload still decodes through the existing identity migrations. The
+current maximum supported payload version is 21.
+
+Version 17 adds `EventPayload::ExecutionWriterGroupStopped`, the ADR-0021
+best-effort cleanup record for a host-launched MCP writer whose process group
+was observed empty. It is a new top-level variant, so v16 readers reject v17
+envelopes with `SchemaTooNew`; that is deliberate, because a reader that
+ignored it could not tell best-effort cleanup from confirmed closure. Earlier
+payloads decode through the identity migrations unchanged.
+
+Version 18 adds `EventPayload::TaskSplit`, the verifier ladder's split rung: a
+loop's current task replaced by smaller tasks inserted right after it. It is a
+new top-level variant, so v17 readers reject v18 envelopes with `SchemaTooNew`.
+A stage route batch may now begin with one `TaskSplit`, committed atomically
+with the route and its snapshot.
+
+Version 19 adds `EventPayload::TaskAcceptedByHuman` and
+`EventPayload::RequirementRevised`, a human's answers on a default escalation
+gate. A v18 reader would show a human-accepted task as merely completed, so v18
+readers reject v19 envelopes with `SchemaTooNew`. Either event may lead a stage
+route batch (at most two task records per batch). The per-run `task_ledger`
+view and the registry `task_ledger_index` gain `accepted_by_human` and
+`requirement_revised` columns (per-run migration 0009, registry 0031).
+
+Version 20 adds `EscalationCause::LoopGuardNoProgress` and
+`EscalationCause::LoopGuardToolCallCap` (loop protection). Same nested-enum rule
+as v8: v19 readers reject v20 envelopes with `SchemaTooNew`.
+
+Version 21 adds `EventPayload::StageRuntimeRotated`: a stage moved to a
+fallback agent because its own agent's usage limit was exhausted
+(`[capacity].fallback_agents`). A v20 reader would replay the stage on the
+exhausted agent, so it rejects v21 envelopes with `SchemaTooNew`.
+Older binaries may reject these envelopes before decoding; forward readability does
+not provide downgrade support. SQLite storage migrations are separate from payload
+versions. See [Release and rollback procedure](release-procedure.md).
+
 ## Memory DB (`surge-persistence`)
 
 A separate, locally-scoped SQLite database (`~/.surge/memory.db`) versioned
@@ -139,6 +180,8 @@ called once per version behind on open).
   exactly the case the "Principles" section's additive-fields exception
   does not cover.
 
+- **v3:** repairs external-content FTS update/delete triggers and rebuilds indexes.
+
 ## Migration plan for future bumps
 
 When a breaking change to any format is unavoidable:
@@ -156,7 +199,7 @@ When a breaking change to any format is unavoidable:
    ambiguous cases.
 4. **Document** the change here and in the release notes; keep the previous
    version's reader for at least one minor release (deprecation window).
-5. **CI** asserts the version constants (`SCHEMA_VERSION == 1` today) so an
+5. **CI** asserts the version constants (config/graph 1, event payload 16, memory DB 3 today) so an
    accidental bump cannot land without updating this document and the
    migration tests.
 

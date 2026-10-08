@@ -455,6 +455,8 @@ impl Engine {
             capacity_ledger,
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
+            escalation: self.config.escalation.clone(),
+            fallback_agents: self.config.fallback_agents.clone(),
             storage: self.storage.clone(),
             // A fresh run was never parked — nothing to bypass.
             capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(false),
@@ -1011,6 +1013,17 @@ impl Engine {
             return Err(EngineError::RunAlreadyActive(run_id));
         }
 
+        // Historical suspension fences may predate complete MCP ownership checks.
+        // Validate current evidence before changing registry state or admitting effects.
+        // ADR-0021: stop prior MCP groups still led by their recorded process;
+        // refuse only when a group cannot be stopped or ownership is unclear.
+        if let Err(diagnostic) =
+            super::writer_coverage::stop_and_assess_mcp_cleanup(&self.storage, run_id).await?
+        {
+            tracing::warn!(%run_id, %diagnostic, "resume refused: prior MCP process group is not stopped");
+            return Err(EngineError::WorkItemRejected(diagnostic));
+        }
+
         // Task 12 M3 review, BLOCKING #3: a parked run's registry row
         // (`status = 'parked'`, `wake_at` = the original park time) must
         // not survive unchanged into this resumed execution — otherwise it
@@ -1299,6 +1312,8 @@ impl Engine {
             capacity_ledger,
             capacity_estimator,
             capacity_policy: self.config.capacity.clone(),
+            escalation: self.config.escalation.clone(),
+            fallback_agents: self.config.fallback_agents.clone(),
             storage: self.storage.clone(),
             capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(
                 was_parked || capacity_continue,
@@ -2189,7 +2204,7 @@ mod memory_claim_snapshot_artifact_tests {
         let bytes = store.open(run_id, artifact).await.unwrap();
         let snapshot: crate::project_context::MemoryClaimSnapshot =
             serde_json::from_slice(&bytes).unwrap();
-        assert!(snapshot.claims.is_empty());
+        assert_eq!(snapshot.claims.len(), 0);
         assert_eq!(
             snapshot.budget,
             surge_core::context_pack::ContextPackConfig::default()

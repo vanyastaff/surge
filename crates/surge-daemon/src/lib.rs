@@ -26,6 +26,8 @@ pub mod lifecycle;
 pub mod pidfile;
 pub mod recovery;
 pub mod server;
+#[cfg(unix)]
+mod socket_security;
 pub mod tracked_run;
 pub mod wake_scheduler;
 
@@ -36,3 +38,13 @@ pub use server::{
 
 mod owned_flows;
 mod work_items;
+
+#[cfg(test)]
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}

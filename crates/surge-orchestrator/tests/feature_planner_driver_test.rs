@@ -1,4 +1,6 @@
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -89,7 +91,7 @@ system = "Request: {{request}}\nRoadmap: {{roadmap}}"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn feature_planner_driver_reuses_agent_stage_artifact_validation() {
-    let storage_dir = tempfile::tempdir().unwrap();
+    let storage_dir = FixtureHome::new().unwrap();
     let profiles_dir = storage_dir.path().join("profiles");
     std::fs::create_dir_all(&profiles_dir).unwrap();
     std::fs::write(
@@ -179,4 +181,8 @@ async fn feature_planner_driver_reuses_agent_stage_artifact_validation() {
         },
         other => panic!("expected Patched, got {other:?}"),
     }
+
+    writer.close().await.unwrap();
+    drop(storage);
+    storage_dir.close().unwrap();
 }

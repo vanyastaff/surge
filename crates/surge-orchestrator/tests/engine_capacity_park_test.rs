@@ -15,6 +15,8 @@
 #![allow(clippy::too_many_lines)]
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -213,71 +215,74 @@ async fn estimate_none_and_never_observed_does_not_block_dispatch() {
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig::default(),
-    );
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig::default(),
+        );
 
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-dispatch-unblocked",
-        "agent_1",
-        vec![
-            agent_node("agent_1", "fresh-role@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![edge("agent_to_end", "agent_1", "done", "end")],
-    );
-    let handle = engine
-        .start_run(
-            run_id,
-            g,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-dispatch-unblocked",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "fresh-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let handle = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
-        .await
-        .expect("run timed out")
-        .expect("run handle join");
-    pump.await.unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+            .await
+            .expect("run timed out")
+            .expect("run handle join");
+        pump.await.unwrap();
 
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => {
-            panic!("expected Completed (no estimate must never block dispatch), got {other:?}")
-        },
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => {
+                panic!("expected Completed (no estimate must never block dispatch), got {other:?}")
+            },
+        }
     }
+    dir.close().unwrap();
 }
 
 /// Acceptance criterion B, on the production path: `EngineConfig::capacity`
@@ -294,84 +299,88 @@ async fn configured_blind_backoff_reaches_the_park_decision_not_the_hardcoded_de
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached, no reset time given".into(),
-    })
-    .await;
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached, no reset time given".into(),
+        })
+        .await;
 
-    // Exactly the shape `surge-cli`/`surge-daemon` build from
-    // `SurgeConfig.capacity` — see `capacity_config.rs`'s `From` impl.
-    let configured_backoff = Duration::from_secs(42);
-    let capacity_config = CapacityConfig {
-        blind_backoff: Some(configured_backoff),
-        blind_park_limit: 5,
-        // Task 12 M4: this test's assertion window below is exact-ish
-        // (30..=55s) and is about `blind_backoff` plumbing specifically —
-        // holding jitter at zero keeps that assertion decoupled from the
-        // unrelated jitter default (see the M4 jitter tests in
-        // `capacity.rs`/`capacity_config.rs` for jitter's own coverage).
-        jitter_max: Duration::ZERO,
-        rotation_profile: None,
-    };
-    let capacity_policy: CapacityPolicy = (&capacity_config).into();
-    assert_eq!(capacity_policy.rotation, RotationPolicy::Disabled);
+        // Exactly the shape `surge-cli`/`surge-daemon` build from
+        // `SurgeConfig.capacity` — see `capacity_config.rs`'s `From` impl.
+        let configured_backoff = Duration::from_secs(42);
+        let capacity_config = CapacityConfig {
+            blind_backoff: Some(configured_backoff),
+            blind_park_limit: 5,
+            // Task 12 M4: this test's assertion window below is exact-ish
+            // (30..=55s) and is about `blind_backoff` plumbing specifically —
+            // holding jitter at zero keeps that assertion decoupled from the
+            // unrelated jitter default (see the M4 jitter tests in
+            // `capacity.rs`/`capacity_config.rs` for jitter's own coverage).
+            jitter_max: Duration::ZERO,
+            rotation_profile: None,
+            fallback_agents: Vec::new(),
+        };
+        let capacity_policy: CapacityPolicy = (&capacity_config).into();
+        assert_eq!(capacity_policy.rotation, RotationPolicy::Disabled);
 
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig {
-            capacity: capacity_policy,
-            ..EngineConfig::default()
-        },
-    );
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig {
+                capacity: capacity_policy,
+                ..EngineConfig::default()
+            },
+        );
 
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-configured-backoff",
-        "agent_1",
-        vec![
-            agent_node("agent_1", "b-role@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![edge("agent_to_end", "agent_1", "done", "end")],
-    );
-    let before = chrono::Utc::now();
-    let handle = engine
-        .start_run(
-            run_id,
-            g,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-configured-backoff",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "b-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let before = chrono::Utc::now();
+        let handle = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
-        .await
-        .expect("run timed out")
-        .expect("run handle join");
+        let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+            .await
+            .expect("run timed out")
+            .expect("run handle join");
 
-    let RunOutcome::Parked { wake_at } = outcome else {
-        panic!("expected Parked, got {outcome:?}");
-    };
-    let elapsed = (wake_at - before).num_seconds();
-    assert!(
-        (30..=55).contains(&elapsed),
-        "wake_at must reflect the configured 42s backoff (got {elapsed}s until wake) — the \
+        let RunOutcome::Parked { wake_at } = outcome else {
+            panic!("expected Parked, got {outcome:?}");
+        };
+        let elapsed = (wake_at - before).num_seconds();
+        assert!(
+            (30..=55).contains(&elapsed),
+            "wake_at must reflect the configured 42s backoff (got {elapsed}s until wake) — the \
          module's own hardcoded default is 5 minutes (300s), so a value near that would mean \
          SurgeConfig.capacity never reached the decision"
-    );
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// The central park-mechanics test: a rate-limited dispatch parks instead
@@ -419,175 +428,180 @@ async fn assert_rate_limited_agent_parks(
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    // `agent_2`'s scripted `SessionNotFound` is only reachable if the
-    // capacity gate this test guards is broken — but if it ever is, that
-    // dispatch is a genuine `StageError` reaching a terminal
-    // `RunOutcome::Failed`, which trips
-    // `engine::hooks::memory_writeback::record_node_failure`. Route it at a
-    // throwaway store instead of the developer's real `~/.surge/memory.db`.
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        // `agent_2`'s scripted `SessionNotFound` is only reachable if the
+        // capacity gate this test guards is broken — but if it ever is, that
+        // dispatch is a genuine `StageError` reaching a terminal
+        // `RunOutcome::Failed`, which trips
+        // `engine::hooks::memory_writeback::record_node_failure`. Route it at a
+        // throwaway store instead of the developer's real `~/.surge/memory.db`.
 
-    // First call (agent_1): the rate limit this test is actually about.
-    *mock.next_close_error.lock().await = close_error;
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached".into(),
-    })
-    .await;
-    // Second call (agent_2, reachable only if the gate is broken): scripted
-    // to fail fast and distinctly (a plain `SessionNotFound`, nothing to do
-    // with rate limits) rather than left unscripted-but-successful. An
-    // unscripted success would hang the run waiting forever for an
-    // `OutcomeReported`/`SessionEnded` event nobody enqueued — turning a
-    // real bug into a 10-second timeout instead of an assertion that fires
-    // in milliseconds naming exactly what happened (Task 12 M3 review,
-    // "misc": the zero-retries test must fail fast, not by hanging).
-    mock.fail_next_send_message(SendMessageError::SessionNotFound {
-        session: SessionId::new(),
-    })
-    .await;
+        let store_path = memory_dir.path().join("memory.db");
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig::default(),
-    );
+        // First call (agent_1): the rate limit this test is actually about.
+        *mock.next_close_error.lock().await = close_error;
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached".into(),
+        })
+        .await;
+        // Second call (agent_2, reachable only if the gate is broken): scripted
+        // to fail fast and distinctly (a plain `SessionNotFound`, nothing to do
+        // with rate limits) rather than left unscripted-but-successful. An
+        // unscripted success would hang the run waiting forever for an
+        // `OutcomeReported`/`SessionEnded` event nobody enqueued — turning a
+        // real bug into a 10-second timeout instead of an assertion that fires
+        // in milliseconds naming exactly what happened (Task 12 M3 review,
+        // "misc": the zero-retries test must fail fast, not by hanging).
+        mock.fail_next_send_message(SendMessageError::SessionNotFound {
+            session: SessionId::new(),
+        })
+        .await;
 
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-zero-retries",
-        "agent_1",
-        vec![
-            agent_node(
-                "agent_1",
-                "alias-claude@1.0",
-                vec![suppress_to_hook("recover", dir.path(), "continue")],
-                &["continue"],
-            ),
-            agent_node("agent_2", "alias-claude-code@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![
-            edge("agent1_to_agent2", "agent_1", "continue", "agent_2"),
-            edge("agent2_to_end", "agent_2", "done", "end"),
-        ],
-    );
-    let handle = engine
-        .start_run(
-            run_id,
-            g,
-            dir.path().to_path_buf(),
-            EngineRunConfig {
-                memory_store_path: Some(store_path),
-                ..EngineRunConfig::default()
-            },
-        )
-        .await
-        .expect("start_run");
-
-    // A generous margin over the fixed build's near-instant park, but far
-    // short of the old 10s: a regression now fails on the `SessionNotFound`
-    // assertion below in milliseconds, not on a timeout in seconds.
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
-        .await
-        .expect(
-            "run must not hang: agent_2's scripted SessionNotFound (reachable only if the \
-             capacity gate is broken) fails fast, so a hang here means something else is wrong",
-        )
-        .expect("run handle join");
-
-    let RunOutcome::Parked { wake_at } = outcome else {
-        panic!(
-            "expected Parked after the first rate limit, got {outcome:?} — a retry via the \
-             on_error-suppressed route must not have been allowed to dispatch agent_2"
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig::default(),
         );
-    };
 
-    let send_message_count = mock
-        .recorded_calls
-        .lock()
-        .await
-        .iter()
-        .filter(|c| matches!(c, fixtures::mock_bridge::RecordedCall::SendMessage { .. }))
-        .count();
-    assert_eq!(
-        send_message_count, 1,
-        "zero retries after a 429: exactly one SendMessage (agent_1's) may have reached the \
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-zero-retries",
+            "agent_1",
+            vec![
+                agent_node(
+                    "agent_1",
+                    "alias-claude@1.0",
+                    vec![suppress_to_hook("recover", dir.path(), "continue")],
+                    &["continue"],
+                ),
+                agent_node("agent_2", "alias-claude-code@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![
+                edge("agent1_to_agent2", "agent_1", "continue", "agent_2"),
+                edge("agent2_to_end", "agent_2", "done", "end"),
+            ],
+        );
+        let handle = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig {
+                    memory_store_path: Some(store_path),
+                    ..EngineRunConfig::default()
+                },
+            )
+            .await
+            .expect("start_run");
+
+        // A generous margin over the fixed build's near-instant park, but far
+        // short of the old 10s: a regression now fails on the `SessionNotFound`
+        // assertion below in milliseconds, not on a timeout in seconds.
+        let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+            .await
+            .expect(
+                "run must not hang: agent_2's scripted SessionNotFound (reachable only if the \
+             capacity gate is broken) fails fast, so a hang here means something else is wrong",
+            )
+            .expect("run handle join");
+
+        let RunOutcome::Parked { wake_at } = outcome else {
+            panic!(
+                "expected Parked after the first rate limit, got {outcome:?} — a retry via the \
+             on_error-suppressed route must not have been allowed to dispatch agent_2"
+            );
+        };
+
+        let send_message_count = mock
+            .recorded_calls
+            .lock()
+            .await
+            .iter()
+            .filter(|c| matches!(c, fixtures::mock_bridge::RecordedCall::SendMessage { .. }))
+            .count();
+        assert_eq!(
+            send_message_count, 1,
+            "zero retries after a 429: exactly one SendMessage (agent_1's) may have reached the \
          bridge, never a second (agent_2's)"
-    );
+        );
 
-    // Registry-level effect: `Storage::set_run_parked` must have run.
-    let summary = storage.get_run(&run_id).await.unwrap().expect("run row");
-    assert_eq!(summary.status, RunStatus::Parked);
-    assert_eq!(summary.wake_at_ms, Some(wake_at.timestamp_millis()));
+        // Registry-level effect: `Storage::set_run_parked` must have run.
+        let summary = storage.get_run(&run_id).await.unwrap().expect("run row");
+        assert_eq!(summary.status, RunStatus::Parked);
+        assert_eq!(summary.wake_at_ms, Some(wake_at.timestamp_millis()));
 
-    // Per-run event log: `RunParked` with the fields the fold/inbox depend on.
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-    let mut saw_run_parked = false;
-    for ev in &events {
-        if let EventPayload::RunParked {
-            wake_at: event_wake_at,
-            runtime,
-            basis,
-            worktree,
-            reason,
-        } = &ev.payload.payload
-        {
-            saw_run_parked = true;
-            assert_eq!(*event_wake_at, wake_at);
-            assert_eq!(
-                runtime.as_deref(),
-                Some("claude-acp"),
-                "runtime must be the canonical registry id, not the raw alias \"claude\""
-            );
-            assert_eq!(*basis, surge_core::capacity::WakeBasis::PolicyBackoff);
-            // Real check, not `dir.path().exists()` (that TempDir is
-            // guaranteed to exist regardless of anything the code under
-            // test does — asserting it proves nothing). This proves the
-            // plumbing threaded the *actual* worktree path through, not a
-            // placeholder or a reconstructed guess.
-            assert_eq!(
+        // Per-run event log: `RunParked` with the fields the fold/inbox depend on.
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        let mut saw_run_parked = false;
+        for ev in &events {
+            if let EventPayload::RunParked {
+                wake_at: event_wake_at,
+                runtime,
+                basis,
                 worktree,
-                dir.path(),
-                "RunParked must carry the run's real worktree path"
-            );
-            assert!(
-                reason.contains("usage limit reached"),
-                "the raw provider error text must survive into RunParked.reason for an \
+                reason,
+            } = &ev.payload.payload
+            {
+                saw_run_parked = true;
+                assert_eq!(*event_wake_at, wake_at);
+                assert_eq!(
+                    runtime.as_deref(),
+                    Some("claude-acp"),
+                    "runtime must be the canonical registry id, not the raw alias \"claude\""
+                );
+                assert_eq!(*basis, surge_core::capacity::WakeBasis::PolicyBackoff);
+                // Real check, not `dir.path().exists()` (that TempDir is
+                // guaranteed to exist regardless of anything the code under
+                // test does — asserting it proves nothing). This proves the
+                // plumbing threaded the *actual* worktree path through, not a
+                // placeholder or a reconstructed guess.
+                assert_eq!(
+                    worktree,
+                    dir.path(),
+                    "RunParked must carry the run's real worktree path"
+                );
+                assert!(
+                    reason.contains("usage limit reached"),
+                    "the raw provider error text must survive into RunParked.reason for an \
                  operator reading `surge inbox`, got: {reason}"
+                );
+            }
+            assert!(
+                !matches!(ev.payload.payload, EventPayload::StageFailed { .. }),
+                "a parked rate limit must never also persist StageFailed: {ev:?}"
             );
         }
+        assert!(saw_run_parked, "expected a RunParked event in the log");
         assert!(
-            !matches!(ev.payload.payload, EventPayload::StageFailed { .. }),
-            "a parked rate limit must never also persist StageFailed: {ev:?}"
+            events.iter().any(|event| matches!(
+                event.payload.payload,
+                EventPayload::SessionClosed {
+                    disposition: surge_core::run_event::SessionDisposition::ForcedClose,
+                    ..
+                }
+            )),
+            "the parked run must retain confirmed session cleanup evidence"
         );
     }
-    assert!(saw_run_parked, "expected a RunParked event in the log");
-    assert!(
-        events.iter().any(|event| matches!(
-            event.payload.payload,
-            EventPayload::SessionClosed {
-                disposition: surge_core::run_event::SessionDisposition::ForcedClose,
-                ..
-            }
-        )),
-        "the parked run must retain confirmed session cleanup evidence"
-    );
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
 }
 
 /// Task 12 M3 review, BLOCKING #4 (honesty gap #1): the literal R37
@@ -614,75 +628,79 @@ async fn rotation_without_durable_task_owner_refuses_before_any_provider_effect(
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
 
-    // Seeded *before* `start_run` — this run never gets a chance to
-    // observe anything itself. `resets_at: None` (never learned) so the
-    // `resets_at: None` (never learned), so the configured blind backoff
-    // applies, matching the review's stale-but-exhausted probe shape.
-    storage
-        .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
-            "claude-acp",
+        // Seeded *before* `start_run` — this run never gets a chance to
+        // observe anything itself. `resets_at: None` (never learned) so the
+        // `resets_at: None` (never learned), so the configured blind backoff
+        // applies, matching the review's stale-but-exhausted probe shape.
+        storage
+            .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
+                "claude-acp",
+                None,
+                chrono::Utc::now() - chrono::Duration::days(365),
+            ))
+            .await
+            .unwrap();
+
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+
+        let capacity = CapacityConfig {
+            blind_backoff: Some(Duration::from_secs(77)),
+            blind_park_limit: 5,
+            jitter_max: Duration::ZERO,
+            rotation_profile: Some("alternate-role@1.0".into()),
+            fallback_agents: Vec::new(),
+        };
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
             None,
-            chrono::Utc::now() - chrono::Duration::days(365),
-        ))
-        .await
-        .unwrap();
+            Some(registry),
+            EngineConfig {
+                capacity: (&capacity).into(),
+                ..EngineConfig::default()
+            },
+        );
 
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-
-    let capacity = CapacityConfig {
-        blind_backoff: Some(Duration::from_secs(77)),
-        blind_park_limit: 5,
-        jitter_max: Duration::ZERO,
-        rotation_profile: Some("alternate-role@1.0".into()),
-    };
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig {
-            capacity: (&capacity).into(),
-            ..EngineConfig::default()
-        },
-    );
-
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-pre-dispatch-refusal",
-        "agent_1",
-        vec![
-            agent_node("agent_1", "pre-exhausted-role@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![edge("agent_to_end", "agent_1", "done", "end")],
-    );
-    let result = engine
-        .start_run(
-            run_id,
-            g,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await;
-    assert!(
-        matches!(result, Err(surge_orchestrator::engine::EngineError::GraphInvalid(ref reason))
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-pre-dispatch-refusal",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "pre-exhausted-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let result = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(surge_orchestrator::engine::EngineError::GraphInvalid(ref reason))
         if reason.contains("durable task ownership") && reason.contains("task Start"))
-    );
-    assert!(
-        mock.recorded_calls.lock().await.is_empty(),
-        "unowned rotation must not open or prompt"
-    );
-    assert!(
-        storage.get_run(&run_id).await.unwrap().is_none(),
-        "refusal must precede session journal creation"
-    );
+        );
+        assert!(
+            mock.recorded_calls.lock().await.is_empty(),
+            "unowned rotation must not open or prompt"
+        );
+        assert!(
+            storage.get_run(&run_id).await.unwrap().is_none(),
+            "refusal must precede session journal creation"
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// Task 12 M3 review, BLOCKING #4 (honesty gap #2): the existing
@@ -704,88 +722,91 @@ async fn surge_toml_blind_backoff_reaches_the_park_decision_through_surge_config
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    // A distinctive value unlikely to collide with any other test's or the
-    // module's own default (300s) or the sibling test's (42s).
-    std::fs::write(
-        dir.path().join("surge.toml"),
-        // jitter_max pinned to 0s for the same reason as the sibling
-        // hardcoded-backoff test above: this test's assertion window is
-        // about `blind_backoff` plumbing, not jitter.
-        "[capacity]\nblind_backoff = \"77s\"\njitter_max = \"0s\"\n",
-    )
-    .unwrap();
-    let app_config = surge_core::config::SurgeConfig::discover_from(dir.path())
-        .expect("discover_from must load the surge.toml just written");
-    assert_eq!(
-        app_config.capacity.blind_backoff,
-        Some(Duration::from_secs(77)),
-        "test premise: surge.toml's blind_backoff must actually parse to 77s"
-    );
-
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached, no reset time given".into(),
-    })
-    .await;
-
-    // The exact conversion `surge-cli::commands::engine`,
-    // `surge-cli::commands::bootstrap`, and `surge-daemon::main` all apply
-    // to `SurgeConfig.capacity` at startup.
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig {
-            capacity: (&app_config.capacity).into(),
-            ..EngineConfig::default()
-        },
-    );
-
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-surge-toml-wiring",
-        "agent_1",
-        vec![
-            agent_node("agent_1", "toml-role@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![edge("agent_to_end", "agent_1", "done", "end")],
-    );
-    let before = chrono::Utc::now();
-    let handle = engine
-        .start_run(
-            run_id,
-            g,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
+    let dir = FixtureHome::new().unwrap();
+    {
+        // A distinctive value unlikely to collide with any other test's or the
+        // module's own default (300s) or the sibling test's (42s).
+        std::fs::write(
+            dir.path().join("surge.toml"),
+            // jitter_max pinned to 0s for the same reason as the sibling
+            // hardcoded-backoff test above: this test's assertion window is
+            // about `blind_backoff` plumbing, not jitter.
+            "[capacity]\nblind_backoff = \"77s\"\njitter_max = \"0s\"\n",
         )
-        .await
-        .expect("start_run");
+        .unwrap();
+        let app_config = surge_core::config::SurgeConfig::discover_from(dir.path())
+            .expect("discover_from must load the surge.toml just written");
+        assert_eq!(
+            app_config.capacity.blind_backoff,
+            Some(Duration::from_secs(77)),
+            "test premise: surge.toml's blind_backoff must actually parse to 77s"
+        );
 
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
-        .await
-        .expect("run must not hang")
-        .expect("run handle join");
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    let RunOutcome::Parked { wake_at } = outcome else {
-        panic!("expected Parked, got {outcome:?}");
-    };
-    let elapsed = (wake_at - before).num_seconds();
-    assert!(
-        (65..=90).contains(&elapsed),
-        "wake_at must reflect surge.toml's 77s blind_backoff (got {elapsed}s until wake) — \
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached, no reset time given".into(),
+        })
+        .await;
+
+        // The exact conversion `surge-cli::commands::engine`,
+        // `surge-cli::commands::bootstrap`, and `surge-daemon::main` all apply
+        // to `SurgeConfig.capacity` at startup.
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig {
+                capacity: (&app_config.capacity).into(),
+                ..EngineConfig::default()
+            },
+        );
+
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-surge-toml-wiring",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "toml-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let before = chrono::Utc::now();
+        let handle = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+            .await
+            .expect("run must not hang")
+            .expect("run handle join");
+
+        let RunOutcome::Parked { wake_at } = outcome else {
+            panic!("expected Parked, got {outcome:?}");
+        };
+        let elapsed = (wake_at - before).num_seconds();
+        assert!(
+            (65..=90).contains(&elapsed),
+            "wake_at must reflect surge.toml's 77s blind_backoff (got {elapsed}s until wake) — \
          a value near 300s would mean the config file never reached the decision, and a value \
          near 42s would mean a different test's hardcoded value leaked in"
-    );
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// Task 12 M3 review, BLOCKING #1 — end-to-end proof that the livelock is
@@ -805,175 +826,178 @@ async fn resuming_a_parked_run_makes_one_real_attempt_and_clears_the_stale_row()
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    // First attempt: rate-limited, no reset time learned at all.
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached".into(),
-    })
-    .await;
+        // First attempt: rate-limited, no reset time learned at all.
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached".into(),
+        })
+        .await;
 
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig::default(),
-    );
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig::default(),
+        );
 
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-resume-refreshes-row",
-        "agent_1",
-        vec![
-            agent_node("agent_1", "resume-role@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![edge("agent_to_end", "agent_1", "done", "end")],
-    );
-    let handle = engine
-        .start_run(
-            run_id,
-            g,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
-
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
-        .await
-        .expect("run must not hang")
-        .expect("run handle join");
-    assert!(
-        matches!(outcome, RunOutcome::Parked { .. }),
-        "expected Parked, got {outcome:?}"
-    );
-    assert!(
-        matches!(
-            storage.capacity_status("claude-acp").await.unwrap(),
-            surge_core::capacity::CapacityStatus::Known(w) if w.resets_at().is_none()
-        ),
-        "test premise: the row must have no learned reset time (the exact shape blind_backoff \
-         alone governs, and the shape the elapsed-reset fix does not touch)"
-    );
-
-    // Simulate the wake (crash-recovery-due today; Task 12 M4's scheduler
-    // eventually) by resuming the same run_id directly. Scripted to
-    // succeed this time — if the bypass mechanism is broken, this dispatch
-    // never happens at all and the run just re-parks (or hangs).
-    let second_session = SessionId::new();
-    mock.pin_next_session_id(second_session).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: second_session,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok on resume".into(),
-        artifacts_produced: vec![],
-
-        verification_report: None,
-    })
-    .await;
-
-    let resumed_handle = engine
-        .resume_run(run_id, dir.path().to_path_buf())
-        .await
-        .expect("resume_run");
-    // `wait_for_subscribe_count(2)`, not `pump_after_subscribe(1)`:
-    // `execute_agent_stage` subscribes *before* `send_message`, so
-    // agent_1's first (rate-limited) attempt already brought the
-    // cumulative count to 1 — waiting for "1" again would be satisfied
-    // immediately by that stale count and pump before this resumed
-    // session's own subscription exists, dropping the event.
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.wait_for_subscribe_count(2).await;
-        mock_for_pump.pump_scripted_events().await;
-    });
-
-    let resumed_outcome =
-        tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
-            .await
-            .expect(
-                "resumed run must not hang: the bypass must let a real attempt happen instead \
-                 of silently re-parking on the same unrefreshed row",
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-resume-refreshes-row",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "resume-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let handle = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
             )
+            .await
+            .expect("start_run");
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+            .await
+            .expect("run must not hang")
             .expect("run handle join");
-    pump.await.unwrap();
+        assert!(
+            matches!(outcome, RunOutcome::Parked { .. }),
+            "expected Parked, got {outcome:?}"
+        );
+        assert!(
+            matches!(
+                storage.capacity_status("claude-acp").await.unwrap(),
+                surge_core::capacity::CapacityStatus::Known(w) if w.resets_at().is_none()
+            ),
+            "test premise: the row must have no learned reset time (the exact shape blind_backoff \
+         alone governs, and the shape the elapsed-reset fix does not touch)"
+        );
 
-    assert!(
-        matches!(resumed_outcome, RunOutcome::Completed { .. }),
-        "the resumed run must actually attempt dispatch and succeed, not re-park blindly on \
+        // Simulate the wake (crash-recovery-due today; Task 12 M4's scheduler
+        // eventually) by resuming the same run_id directly. Scripted to
+        // succeed this time — if the bypass mechanism is broken, this dispatch
+        // never happens at all and the run just re-parks (or hangs).
+        let second_session = SessionId::new();
+        mock.pin_next_session_id(second_session).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: second_session,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok on resume".into(),
+            artifacts_produced: vec![],
+
+            verification_report: None,
+        })
+        .await;
+
+        let resumed_handle = engine
+            .resume_run(run_id, dir.path().to_path_buf())
+            .await
+            .expect("resume_run");
+        // `wait_for_subscribe_count(2)`, not `pump_after_subscribe(1)`:
+        // `execute_agent_stage` subscribes *before* `send_message`, so
+        // agent_1's first (rate-limited) attempt already brought the
+        // cumulative count to 1 — waiting for "1" again would be satisfied
+        // immediately by that stale count and pump before this resumed
+        // session's own subscription exists, dropping the event.
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.wait_for_subscribe_count(2).await;
+            mock_for_pump.pump_scripted_events().await;
+        });
+
+        let resumed_outcome =
+            tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
+                .await
+                .expect(
+                    "resumed run must not hang: the bypass must let a real attempt happen instead \
+                 of silently re-parking on the same unrefreshed row",
+                )
+                .expect("run handle join");
+        pump.await.unwrap();
+
+        assert!(
+            matches!(resumed_outcome, RunOutcome::Completed { .. }),
+            "the resumed run must actually attempt dispatch and succeed, not re-park blindly on \
          the same stale row; got {resumed_outcome:?}"
-    );
+        );
 
-    let send_message_count = mock
-        .recorded_calls
-        .lock()
-        .await
-        .iter()
-        .filter(|c| matches!(c, fixtures::mock_bridge::RecordedCall::SendMessage { .. }))
-        .count();
-    assert_eq!(
-        send_message_count, 2,
-        "exactly two real attempts: the original 429, then the post-resume retry — never a \
+        let send_message_count = mock
+            .recorded_calls
+            .lock()
+            .await
+            .iter()
+            .filter(|c| matches!(c, fixtures::mock_bridge::RecordedCall::SendMessage { .. }))
+            .count();
+        assert_eq!(
+            send_message_count, 2,
+            "exactly two real attempts: the original 429, then the post-resume retry — never a \
          third (no further blind re-park happened)"
-    );
+        );
 
-    assert_eq!(
-        storage.capacity_status("claude-acp").await.unwrap(),
-        surge_core::capacity::CapacityStatus::NeverObserved,
-        "a successful post-resume dispatch must clear the stale exhaustion row, or the next \
+        assert_eq!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            surge_core::capacity::CapacityStatus::NeverObserved,
+            "a successful post-resume dispatch must clear the stale exhaustion row, or the next \
          run on this runtime would still read it as exhausted"
-    );
+        );
 
-    let after_resume = storage.get_run(&run_id).await.unwrap().unwrap();
-    assert_eq!(
-        after_resume.status,
-        RunStatus::Completed,
-        "resume_run must transition the registry out of Parked, and the engine records the \
+        let after_resume = storage.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_resume.status,
+            RunStatus::Completed,
+            "resume_run must transition the registry out of Parked, and the engine records the \
          resumed run's terminal status when it completes"
-    );
-    assert_eq!(
-        after_resume.wake_at_ms, None,
-        "wake_at must be cleared in the same write as the status transition, not left stale"
-    );
+        );
+        assert_eq!(
+            after_resume.wake_at_ms, None,
+            "wake_at must be cleared in the same write as the status transition, not left stale"
+        );
 
-    // Task 12 M4: `RunWokeFromPark` was declared and folded (clears
-    // `RunState::Pipeline.parked`) since M1, but nothing wrote it — this is
-    // the write, and this is its first behavioral test. Must land AFTER
-    // the original `RunParked` and appear exactly once.
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-    let parked_seq = events
-        .iter()
-        .find(|ev| matches!(ev.payload.payload, EventPayload::RunParked { .. }))
-        .map(|ev| ev.seq)
-        .expect("RunParked must still be in the log");
-    let woke_events: Vec<_> = events
-        .iter()
-        .filter(|ev| matches!(ev.payload.payload, EventPayload::RunWokeFromPark { .. }))
-        .collect();
-    assert_eq!(
-        woke_events.len(),
-        1,
-        "expected exactly one RunWokeFromPark event, got {}: {events:?}",
-        woke_events.len()
-    );
-    assert!(
-        woke_events[0].seq > parked_seq,
-        "RunWokeFromPark must follow RunParked in the log"
-    );
+        // Task 12 M4: `RunWokeFromPark` was declared and folded (clears
+        // `RunState::Pipeline.parked`) since M1, but nothing wrote it — this is
+        // the write, and this is its first behavioral test. Must land AFTER
+        // the original `RunParked` and appear exactly once.
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        let parked_seq = events
+            .iter()
+            .find(|ev| matches!(ev.payload.payload, EventPayload::RunParked { .. }))
+            .map(|ev| ev.seq)
+            .expect("RunParked must still be in the log");
+        let woke_events: Vec<_> = events
+            .iter()
+            .filter(|ev| matches!(ev.payload.payload, EventPayload::RunWokeFromPark { .. }))
+            .collect();
+        assert_eq!(
+            woke_events.len(),
+            1,
+            "expected exactly one RunWokeFromPark event, got {}: {events:?}",
+            woke_events.len()
+        );
+        assert!(
+            woke_events[0].seq > parked_seq,
+            "RunWokeFromPark must follow RunParked in the log"
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// Task 12 M4 acceptance criterion: "the frozen budget survives a wake" —
@@ -992,141 +1016,144 @@ async fn resuming_a_parked_run_re_arms_its_frozen_token_budget() {
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    // First attempt: rate-limited, no reset time learned — same shape as
-    // the sibling resume test, so the run parks before spending anything.
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached".into(),
-    })
-    .await;
+        // First attempt: rate-limited, no reset time learned — same shape as
+        // the sibling resume test, so the run parks before spending anything.
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached".into(),
+        })
+        .await;
 
-    let engine = Engine::new_full(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig::default(),
-    );
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig::default(),
+        );
 
-    let run_id = RunId::new();
-    let g = graph(
-        "capacity-resume-budget",
-        "agent_1",
-        vec![
-            agent_node("agent_1", "budget-role@1.0", vec![], &["done"]),
-            terminal_node("end"),
-        ],
-        vec![edge("agent_to_end", "agent_1", "done", "end")],
-    );
-    // A real, tight token budget — not the default (unlimited). If resume
-    // ever reverts to `EngineRunConfig::default()`'s budget, this is the
-    // dimension that would silently stop being enforced.
-    let run_config = EngineRunConfig {
-        budget: BudgetGuard {
-            limits: BudgetLimits {
-                usd: None,
-                tokens: Some(1_000),
-                warn_threshold_pct: 80,
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-resume-budget",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "budget-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        // A real, tight token budget — not the default (unlimited). If resume
+        // ever reverts to `EngineRunConfig::default()`'s budget, this is the
+        // dimension that would silently stop being enforced.
+        let run_config = EngineRunConfig {
+            budget: BudgetGuard {
+                limits: BudgetLimits {
+                    usd: None,
+                    tokens: Some(1_000),
+                    warn_threshold_pct: 80,
+                },
+                policy: BudgetPolicy::Abort,
             },
-            policy: BudgetPolicy::Abort,
-        },
-        ..EngineRunConfig::default()
-    };
-    let handle = engine
-        .start_run(run_id, g, dir.path().to_path_buf(), run_config)
-        .await
-        .expect("start_run");
-
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
-        .await
-        .expect("run must not hang")
-        .expect("run handle join");
-    assert!(
-        matches!(outcome, RunOutcome::Parked { .. }),
-        "expected Parked before any token spend, got {outcome:?}"
-    );
-
-    // Wake: resume the same run, scripted to report 15_000 tokens (well
-    // over the 1_000-token budget) before its outcome.
-    let second_session = SessionId::new();
-    mock.pin_next_session_id(second_session).await;
-    mock.enqueue_event(BridgeEvent::TokenUsage {
-        session: second_session,
-        prompt_tokens: 10_000,
-        output_tokens: 5_000,
-        cache_hits: 0,
-        model: "mock-model".into(),
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: second_session,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok on resume".into(),
-        artifacts_produced: vec![],
-
-        verification_report: None,
-    })
-    .await;
-
-    let resumed_handle = engine
-        .resume_run(run_id, dir.path().to_path_buf())
-        .await
-        .expect("resume_run");
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.wait_for_subscribe_count(2).await;
-        mock_for_pump.pump_scripted_events().await;
-    });
-
-    let resumed_outcome =
-        tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
+            ..EngineRunConfig::default()
+        };
+        let handle = engine
+            .start_run(run_id, g, dir.path().to_path_buf(), run_config)
             .await
-            .expect("resumed run must not hang")
-            .expect("run handle join");
-    pump.await.unwrap();
+            .expect("start_run");
 
-    match &resumed_outcome {
-        RunOutcome::Aborted { reason } => {
-            assert!(
-                reason.contains("budget"),
-                "abort reason should cite the budget, got: {reason}"
-            );
-        },
-        other => panic!(
-            "expected Aborted on budget breach after resume (proves the frozen 1_000-token \
+        let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+            .await
+            .expect("run must not hang")
+            .expect("run handle join");
+        assert!(
+            matches!(outcome, RunOutcome::Parked { .. }),
+            "expected Parked before any token spend, got {outcome:?}"
+        );
+
+        // Wake: resume the same run, scripted to report 15_000 tokens (well
+        // over the 1_000-token budget) before its outcome.
+        let second_session = SessionId::new();
+        mock.pin_next_session_id(second_session).await;
+        mock.enqueue_event(BridgeEvent::TokenUsage {
+            session: second_session,
+            prompt_tokens: 10_000,
+            output_tokens: 5_000,
+            cache_hits: 0,
+            model: "mock-model".into(),
+        })
+        .await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: second_session,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok on resume".into(),
+            artifacts_produced: vec![],
+
+            verification_report: None,
+        })
+        .await;
+
+        let resumed_handle = engine
+            .resume_run(run_id, dir.path().to_path_buf())
+            .await
+            .expect("resume_run");
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.wait_for_subscribe_count(2).await;
+            mock_for_pump.pump_scripted_events().await;
+        });
+
+        let resumed_outcome =
+            tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
+                .await
+                .expect("resumed run must not hang")
+                .expect("run handle join");
+        pump.await.unwrap();
+
+        match &resumed_outcome {
+            RunOutcome::Aborted { reason } => {
+                assert!(
+                    reason.contains("budget"),
+                    "abort reason should cite the budget, got: {reason}"
+                );
+            },
+            other => panic!(
+                "expected Aborted on budget breach after resume (proves the frozen 1_000-token \
              budget survived the wake, per commit 1ed5caa's mechanism) — a resumed run that \
              silently reverted to the unlimited default would instead show Completed; got \
              {other:?}"
-        ),
-    }
+            ),
+        }
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-    let saw_exceeded = events.iter().any(|ev| {
-        matches!(
-            &ev.payload.payload,
-            EventPayload::BudgetExceeded {
-                dimension: BudgetDimension::Tokens,
-                ..
-            }
-        )
-    });
-    assert!(
-        saw_exceeded,
-        "expected a BudgetExceeded(Tokens) event in the post-resume log"
-    );
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        let saw_exceeded = events.iter().any(|ev| {
+            matches!(
+                &ev.payload.payload,
+                EventPayload::BudgetExceeded {
+                    dimension: BudgetDimension::Tokens,
+                    ..
+                }
+            )
+        });
+        assert!(
+            saw_exceeded,
+            "expected a BudgetExceeded(Tokens) event in the post-resume log"
+        );
+    }
+    dir.close().unwrap();
 }
 
 /// Task 12 M4 review: `EngineRunConfig::memory_store_path` is deliberately
@@ -1155,29 +1182,253 @@ async fn resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_sto
     let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
     let registry = Arc::new(ProfileRegistry::new(disk));
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+
+        // First attempt: rate-limited, no reset time learned — parks before
+        // ever reaching the memory-store question.
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached".into(),
+        })
+        .await;
+
+        let configured_store = memory_dir.path().join("memory.db");
+
+        // The fix under test: the override lives on `EngineConfig`, set once
+        // at construction — `start_run` below is deliberately given a plain
+        // `EngineRunConfig::default()` (no per-run override at all), so any
+        // write that lands in `configured_store` can only have come from the
+        // engine-level fallback, never from a per-run field this test forgot
+        // to set.
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig {
+                memory_store_path: Some(configured_store.clone()),
+                ..EngineConfig::default()
+            },
+        );
+
+        let run_id = RunId::new();
+        let g = graph(
+            "capacity-resume-memory-store",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "memstore-role@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let handle = engine
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+            .await
+            .expect("run must not hang")
+            .expect("run handle join");
+        assert!(
+            matches!(outcome, RunOutcome::Parked { .. }),
+            "expected Parked before any memory write-back question arises, got {outcome:?}"
+        );
+
+        // Wake: resume, scripted to fail hard on the bypass-granted attempt —
+        // NOT rate-limited, so the capacity gate lets it fall through to a
+        // genuine `StageFailed` instead of re-parking.
+        mock.fail_next_send_message(SendMessageError::AgentAuthenticationFailed {
+            details: "not a rate limit — must reach StageFailed, not re-park".into(),
+        })
+        .await;
+
+        let resumed_handle = engine
+            .resume_run(run_id, dir.path().to_path_buf())
+            .await
+            .expect("resume_run");
+        let resumed_outcome =
+            tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
+                .await
+                .expect("resumed run must not hang")
+                .expect("run handle join");
+        assert!(
+            matches!(resumed_outcome, RunOutcome::Failed { .. }),
+            "expected the resumed dispatch to fail the stage (not re-park, not succeed), got \
+         {resumed_outcome:?}"
+        );
+
+        assert!(
+            matches!(
+                storage.capacity_status("claude-acp").await.unwrap(),
+                surge_core::capacity::CapacityStatus::Known(_)
+            ),
+            "authentication failure is not evidence that the exhausted provider recovered"
+        );
+
+        assert!(
+            configured_store.exists(),
+            "the resumed run's stage failure must write to the store this test configured at the \
+         engine level; before the fix, `resume_run` rebuilds EngineRunConfig::default() with \
+         no way to recover a per-run override, and this file would never be created"
+        );
+        let claims = MemoryStore::open(&configured_store)
+            .expect("open configured memory store")
+            .list_claims()
+            .expect("list claims");
+        assert_eq!(
+            claims.len(),
+            1,
+            "expected exactly one memory claim from the resumed run's stage failure, got {claims:?}"
+        );
+        assert!(
+            claims[0].text().contains("agent_1"),
+            "claim text should name the failing node: {}",
+            claims[0].text()
+        );
+    }
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn binding_failure_before_provider_open_preserves_exhaustion() {
+    let profiles = tempfile::tempdir().unwrap();
+    drop_profile(profiles.path(), "binding-role", "claude-code", &["done"]);
+    let registry = Arc::new(ProfileRegistry::new(
+        DiskProfileSet::scan(profiles.path()).unwrap(),
+    ));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        storage
+            .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
+                "claude-acp",
+                Some(Duration::from_secs(1)),
+                chrono::Utc::now() - chrono::Duration::seconds(2),
+            ))
+            .await
+            .unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let engine = Engine::new_full(
+            mock.clone(),
+            storage.clone(),
+            Arc::new(UnusedDispatcher),
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(registry),
+            EngineConfig::default(),
+        );
+        let mut node = agent_node("agent_1", "binding-role@1.0", vec![], &["done"]);
+        let NodeConfig::Agent(config) = &mut node.config else {
+            unreachable!()
+        };
+        config.bindings.push(surge_core::agent_config::Binding {
+            source: surge_core::agent_config::ArtifactSource::RunArtifact {
+                name: "missing_context".into(),
+            },
+            target: surge_core::agent_config::TemplateVar("context".into()),
+            optional: false,
+        });
+        let handle = engine
+            .start_run(
+                RunId::new(),
+                graph(
+                    "capacity-binding-failure",
+                    "agent_1",
+                    vec![node, terminal_node("end")],
+                    vec![edge("finish", "agent_1", "done", "end")],
+                ),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Failed { .. }), "{outcome:?}");
+        assert!(
+            mock.recorded_calls
+                .lock()
+                .await
+                .iter()
+                .all(|call| !matches!(call, fixtures::mock_bridge::RecordedCall::OpenSession)),
+            "binding failure must occur before opening a provider"
+        );
+        assert!(
+            matches!(
+                storage.capacity_status("claude-acp").await.unwrap(),
+                surge_core::capacity::CapacityStatus::Known(_)
+            ),
+            "pre-provider failure cannot prove quota recovery"
+        );
+    }
+    dir.close().unwrap();
+}
+
+/// The successful-dispatch capacity clear is a best-effort registry write.
+/// Registry connections wait up to 5 s in SQLite's busy handler, so when it
+/// ran before the route commit, contention on the registry delayed every
+/// stage's durable route by that long. Holding the registry write lock across
+/// the stage's completion, the route must commit well inside that timeout,
+/// and the clear (still keyed on this dispatch's own provider opening) must
+/// land once the lock is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registry_contention_does_not_delay_route_commit_behind_capacity_clear() {
+    let profiles_dir = tempfile::tempdir().unwrap();
+    drop_profile(
+        profiles_dir.path(),
+        "contended-role",
+        "claude-code",
+        &["done"],
+    );
+    let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
+    let registry = Arc::new(ProfileRegistry::new(disk));
+
+    let dir = FixtureHome::new().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
+    // Not exhausted, so the precheck dispatches; the success must clear it.
+    storage
+        .observe_capacity(&surge_core::capacity::CapacityWindow::from_parts(
+            "claude-acp",
+            None,
+            Some(surge_core::capacity::RemainingShare::new(0.9).unwrap()),
+            None,
+            surge_core::capacity::CapacitySource::Observed429,
+        ))
+        .await
+        .unwrap();
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
 
-    // First attempt: rate-limited, no reset time learned — parks before
-    // ever reaching the memory-store question.
-    mock.fail_next_send_message(SendMessageError::RateLimited {
-        retry_after: None,
-        details: "usage limit reached".into(),
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::try_from("done").unwrap(),
+        summary: "ok".into(),
+        artifacts_produced: vec![],
+
+        verification_report: None,
     })
     .await;
 
-    let memory_dir = tempfile::tempdir().unwrap();
-    let configured_store = memory_dir.path().join("memory.db");
-
-    // The fix under test: the override lives on `EngineConfig`, set once
-    // at construction — `start_run` below is deliberately given a plain
-    // `EngineRunConfig::default()` (no per-run override at all), so any
-    // write that lands in `configured_store` can only have come from the
-    // engine-level fallback, never from a per-run field this test forgot
-    // to set.
     let engine = Engine::new_full(
         bridge,
         storage.clone(),
@@ -1185,18 +1436,15 @@ async fn resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_sto
         Arc::new(surge_notify::MultiplexingNotifier::new()),
         None,
         Some(registry),
-        EngineConfig {
-            memory_store_path: Some(configured_store.clone()),
-            ..EngineConfig::default()
-        },
+        EngineConfig::default(),
     );
 
     let run_id = RunId::new();
     let g = graph(
-        "capacity-resume-memory-store",
+        "capacity-clear-after-route",
         "agent_1",
         vec![
-            agent_node("agent_1", "memstore-role@1.0", vec![], &["done"]),
+            agent_node("agent_1", "contended-role@1.0", vec![], &["done"]),
             terminal_node("end"),
         ],
         vec![edge("agent_to_end", "agent_1", "done", "end")],
@@ -1211,138 +1459,56 @@ async fn resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_sto
         .await
         .expect("start_run");
 
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+    // The stage is mid-turn: its precheck read is done and the provider
+    // session is subscribed. Take the registry write lock before it reports.
+    mock.wait_for_subscribe_count(1).await;
+    let holder = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let locked_at = std::time::Instant::now();
+    mock.pump_scripted_events().await;
+
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    tokio::time::timeout(Duration::from_millis(2_500), async {
+        loop {
+            let last = reader.current_seq().await.unwrap();
+            let events = reader
+                .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+                .await
+                .unwrap();
+            if events
+                .iter()
+                .any(|ev| matches!(ev.payload.payload, EventPayload::StageRouteCommitted { .. }))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "route commit waited on the registry lock for {:?}; the 5 s busy timeout gates it",
+            locked_at.elapsed()
+        )
+    });
+
+    holder.execute_batch("ROLLBACK").unwrap();
+    drop(holder);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
         .await
-        .expect("run must not hang")
+        .expect("run timed out")
         .expect("run handle join");
     assert!(
-        matches!(outcome, RunOutcome::Parked { .. }),
-        "expected Parked before any memory write-back question arises, got {outcome:?}"
+        matches!(outcome, RunOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
     );
-
-    // Wake: resume, scripted to fail hard on the bypass-granted attempt —
-    // NOT rate-limited, so the capacity gate lets it fall through to a
-    // genuine `StageFailed` instead of re-parking.
-    mock.fail_next_send_message(SendMessageError::AgentAuthenticationFailed {
-        details: "not a rate limit — must reach StageFailed, not re-park".into(),
-    })
-    .await;
-
-    let resumed_handle = engine
-        .resume_run(run_id, dir.path().to_path_buf())
-        .await
-        .expect("resume_run");
-    let resumed_outcome =
-        tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
-            .await
-            .expect("resumed run must not hang")
-            .expect("run handle join");
-    assert!(
-        matches!(resumed_outcome, RunOutcome::Failed { .. }),
-        "expected the resumed dispatch to fail the stage (not re-park, not succeed), got \
-         {resumed_outcome:?}"
-    );
-
-    assert!(
-        matches!(
-            storage.capacity_status("claude-acp").await.unwrap(),
-            surge_core::capacity::CapacityStatus::Known(_)
-        ),
-        "authentication failure is not evidence that the exhausted provider recovered"
-    );
-
-    assert!(
-        configured_store.exists(),
-        "the resumed run's stage failure must write to the store this test configured at the \
-         engine level; before the fix, `resume_run` rebuilds EngineRunConfig::default() with \
-         no way to recover a per-run override, and this file would never be created"
-    );
-    let claims = MemoryStore::open(&configured_store)
-        .expect("open configured memory store")
-        .list_claims()
-        .expect("list claims");
     assert_eq!(
-        claims.len(),
-        1,
-        "expected exactly one memory claim from the resumed run's stage failure, got {claims:?}"
+        storage.capacity_status("claude-acp").await.unwrap(),
+        surge_core::capacity::CapacityStatus::NeverObserved,
+        "the deferred clear must still apply the recovery this dispatch proved"
     );
-    assert!(
-        claims[0].text().contains("agent_1"),
-        "claim text should name the failing node: {}",
-        claims[0].text()
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn binding_failure_before_provider_open_preserves_exhaustion() {
-    let profiles = tempfile::tempdir().unwrap();
-    drop_profile(profiles.path(), "binding-role", "claude-code", &["done"]);
-    let registry = Arc::new(ProfileRegistry::new(
-        DiskProfileSet::scan(profiles.path()).unwrap(),
-    ));
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    storage
-        .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
-            "claude-acp",
-            Some(Duration::from_secs(1)),
-            chrono::Utc::now() - chrono::Duration::seconds(2),
-        ))
-        .await
-        .unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let engine = Engine::new_full(
-        mock.clone(),
-        storage.clone(),
-        Arc::new(UnusedDispatcher),
-        Arc::new(surge_notify::MultiplexingNotifier::new()),
-        None,
-        Some(registry),
-        EngineConfig::default(),
-    );
-    let mut node = agent_node("agent_1", "binding-role@1.0", vec![], &["done"]);
-    let NodeConfig::Agent(config) = &mut node.config else {
-        unreachable!()
-    };
-    config.bindings.push(surge_core::agent_config::Binding {
-        source: surge_core::agent_config::ArtifactSource::RunArtifact {
-            name: "missing_context".into(),
-        },
-        target: surge_core::agent_config::TemplateVar("context".into()),
-        optional: false,
-    });
-    let handle = engine
-        .start_run(
-            RunId::new(),
-            graph(
-                "capacity-binding-failure",
-                "agent_1",
-                vec![node, terminal_node("end")],
-                vec![edge("finish", "agent_1", "done", "end")],
-            ),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(matches!(outcome, RunOutcome::Failed { .. }), "{outcome:?}");
-    assert!(
-        mock.recorded_calls
-            .lock()
-            .await
-            .iter()
-            .all(|call| !matches!(call, fixtures::mock_bridge::RecordedCall::OpenSession)),
-        "binding failure must occur before opening a provider"
-    );
-    assert!(
-        matches!(
-            storage.capacity_status("claude-acp").await.unwrap(),
-            surge_core::capacity::CapacityStatus::Known(_)
-        ),
-        "pre-provider failure cannot prove quota recovery"
-    );
+    drop(reader);
+    drop(engine);
+    drop(storage);
+    dir.close().unwrap();
 }

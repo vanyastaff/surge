@@ -1,0 +1,68 @@
+   Compiling futures-util v0.3.34
+   Compiling ring v0.17.14
+   Compiling libz-sys v1.1.25
+   Compiling openssl-sys v0.9.112
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling objc2 v0.6.4
+   Compiling libsqlite3-sys v0.30.1
+   Compiling serde_with v3.24.0
+   Compiling libssh2-sys v0.3.1
+   Compiling mac-notification-sys v0.6.12
+   Compiling objc2-core-foundation v0.3.2
+   Compiling block2 v0.6.2
+   Compiling psm v0.1.32
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling futures-executor v0.3.34
+   Compiling tokio-util v0.7.18
+   Compiling hyper-util v0.1.20
+   Compiling futures v0.3.34
+   Compiling objc2-foundation v0.3.2
+   Compiling rusqlite v0.32.1
+   Compiling tower v0.5.3
+   Compiling rustls v0.23.45
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-timeout v0.5.2
+   Compiling tower-http v0.6.8
+   Compiling r2d2_sqlite v0.25.0
+   Compiling process-wrap v9.1.0
+   Compiling stacker v0.1.25
+   Compiling rmcp v1.6.0
+   Compiling rustls-webpki v0.103.15
+   Compiling jsonwebtoken v9.3.1
+   Compiling dptree v0.3.0
+   Compiling libgit2-sys v0.18.8+1.9.7
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.7
+   Compiling reqwest v0.12.28
+   Compiling octocrab v0.42.1
+   Compiling lettre v0.11.22
+   Compiling lineark-sdk v3.0.1
+   Compiling agent-client-protocol v2.2.0
+   Compiling teloxide-core v0.11.2
+   Compiling notify-rust v4.12.0
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling git2 v0.21.0
+   Compiling teloxide v0.14.0
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 43s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 45203b4e-d8c5-4cc4-94cf-74fd1a6e2d09 with nextest profile: default
+    Starting 7 tests across 2 binaries (65 tests skipped)
+        PASS [   1.553s] (1/7) surge-daemon::owned_flow_mcp_recovery legacy_engine_catalog_enforces_actual_configured_275ms_deadline
+        PASS [   1.887s] (2/7) surge-daemon::owned_flow_mcp_recovery unresolved_mcp_domain_requires_attention_and_blocks_actual_cold_dispatch
+        PASS [   2.085s] (3/7) surge-daemon::owned_flow_mcp_recovery host_default_empty_survives_real_cold_wake_and_changed_global_defaults
+        PASS [   2.148s] (4/7) surge-daemon::owned_flow_mcp_recovery explicit_empty_survives_real_cold_wake_and_changed_global_defaults
+        PASS [   6.524s] (5/7) surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice
+        PASS [   6.539s] (6/7) surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch
+        PASS [   6.551s] (7/7) surge-daemon::work_item_route_test cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider_dispatch
+────────────
+     Summary [   6.553s] 7 tests run: 7 passed, 65 skipped

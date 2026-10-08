@@ -1,5 +1,7 @@
 //! Real workspace oracle for current proof across operator, ledger and reports.
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use surge_core::{
     ContentHash, Graph, NodeKey, RunId,
@@ -18,14 +20,34 @@ use surge_orchestrator::operator::{
 use surge_persistence::runs::{Storage, run_writer::RunWriter};
 
 struct Fixture {
-    _home: tempfile::TempDir,
-    _worktree: tempfile::TempDir,
     path: PathBuf,
     storage: Arc<Storage>,
     writer: Arc<RunWriter>,
     run: RunId,
     binding: VerificationBinding,
     item: Option<surge_core::id::WorkItemId>,
+    _home: FixtureHome,
+    _worktree: tempfile::TempDir,
+}
+impl Fixture {
+    async fn close(self) {
+        let Self {
+            writer,
+            storage,
+            _home,
+            _worktree,
+            ..
+        } = self;
+        Arc::try_unwrap(writer)
+            .ok()
+            .expect("fixture writer still shared")
+            .close()
+            .await
+            .unwrap();
+        drop(storage);
+        _home.close().unwrap();
+        _worktree.close().unwrap();
+    }
 }
 async fn fixture() -> Fixture {
     fixture_with_error_hook(None).await
@@ -34,7 +56,7 @@ async fn fixture_with_error_hook(command: Option<&str>) -> Fixture {
     fixture_owned(command, false).await
 }
 async fn fixture_owned(command: Option<&str>, owned: bool) -> Fixture {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let worktree = tempfile::tempdir().unwrap();
     let path = worktree.path().to_path_buf();
     std::fs::write(path.join("code.rs"), "fn answer() -> u8 { 42 }\n").unwrap();
@@ -328,6 +350,7 @@ async fn dirty_same_head_invalidates_current_proof_on_every_surface() {
     assert_all(&f, ProofFreshness::Stale).await;
     std::fs::remove_file(f.path.join(".git/HEAD")).unwrap();
     assert_all(&f, ProofFreshness::Unknown).await;
+    f.close().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn durable_criteria_a_b_a_and_rebuild_never_revive_old_proof() {
@@ -381,6 +404,7 @@ async fn durable_criteria_a_b_a_and_rebuild_never_revive_old_proof() {
         .await
         .unwrap();
     assert_all(&f, ProofFreshness::Stale).await;
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -411,6 +435,7 @@ async fn missing_or_corrupt_sealed_blob_is_unknown_and_rebuild_cannot_credit_it(
         .iter()
         .any(|row| row.is_evidence_backed())
     );
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -453,6 +478,7 @@ async fn fresh_task_cannot_hide_another_authorized_legacy_claim() {
         collect_entries(&f.storage, None, 10).await.unwrap()[0].evidence_backed,
         Some(true)
     );
+    f.close().await;
 }
 
 fn accepted_task() -> surge_core::roadmap::RoadmapTask {
@@ -632,6 +658,7 @@ async fn same_task_no_edit_reviewer_preserves_current_proof() {
         .await
         .unwrap();
     assert_all(&f, ProofFreshness::Current).await;
+    f.close().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn verifier_rejects_observed_invalidation_even_when_code_returns() {
@@ -655,6 +682,7 @@ async fn verifier_rejects_observed_invalidation_even_when_code_returns() {
         result.is_err(),
         "observed invalidation during the attempt must reject the candidate"
     );
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -714,6 +742,7 @@ async fn observed_code_return_and_task_transition_reject_late_old_proof() {
             .await
             .unwrap();
         assert_all(&f, ProofFreshness::Stale).await;
+        f.close().await;
     }
 }
 
@@ -800,6 +829,10 @@ async fn on_error_shell_mutation_fences_old_proof_even_after_restore() {
                 .freshness,
             ProofFreshness::Stale
         );
+        drop(engine);
+        drop(f.storage);
+        f._home.close().unwrap();
+        f._worktree.close().unwrap();
     }
 }
 
@@ -864,4 +897,5 @@ async fn superseded_accepted_requirements_cannot_reuse_a_still_current_historica
         page.entries[0].accepted_revision_relation,
         AcceptedRevisionRelation::Superseded
     );
+    f.close().await;
 }

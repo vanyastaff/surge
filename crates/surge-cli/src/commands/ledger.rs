@@ -95,8 +95,15 @@ fn print_ledger_table(out: &mut impl std::io::Write, records: &[TaskLedgerIndexR
             "{:<20} {:<22} {:<9} {:<16} {}",
             truncate(&r.task_id, 20),
             r.status.to_string(),
-            if r.is_evidence_backed() {
+            if r.is_evidence_backed() && r.requirement_revised {
+                // Verified against a requirement a human revised.
+                "yes·rev"
+            } else if r.is_evidence_backed() {
                 "yes"
+            } else if r.accepted_by_human {
+                // Accepted by a human after an exhausted retry ladder: never
+                // verified (v1 task 1.2).
+                "by human"
             } else if r.freshness == surge_core::verification_evidence::ProofFreshness::Current {
                 "no"
             } else {
@@ -107,7 +114,19 @@ fn print_ledger_table(out: &mut impl std::io::Write, records: &[TaskLedgerIndexR
         );
     }
     let verified = records.iter().filter(|r| r.is_evidence_backed()).count();
-    let _ = writeln!(out, "\n{} task(s), {verified} verified.", records.len());
+    let accepted = records
+        .iter()
+        .filter(|r| r.accepted_by_human && !r.is_evidence_backed())
+        .count();
+    if accepted == 0 {
+        let _ = writeln!(out, "\n{} task(s), {verified} verified.", records.len());
+    } else {
+        let _ = writeln!(
+            out,
+            "\n{} task(s), {verified} verified, {accepted} accepted by a human (not verified).",
+            records.len()
+        );
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -139,6 +158,8 @@ mod tests {
             last_authority_node: Some("verify_1".into()),
             updated_seq: 1,
             updated_at_ms: 0,
+            accepted_by_human: false,
+            requirement_revised: false,
             freshness: if verified {
                 surge_core::verification_evidence::ProofFreshness::Current
             } else {
@@ -151,6 +172,21 @@ mod tests {
         let mut buf = Vec::new();
         print_ledger_table(&mut buf, records);
         String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn human_acceptance_reads_by_human_and_never_counts_as_verified() {
+        let mut accepted = record("login", RoadmapStatus::Completed, false);
+        accepted.accepted_by_human = true;
+        let mut revised = record("logout", RoadmapStatus::Completed, true);
+        revised.requirement_revised = true;
+        let out = rendered(&[accepted, revised]);
+        assert!(out.contains("by human"), "{out}");
+        assert!(out.contains("yes·rev"), "{out}");
+        assert!(
+            out.contains("2 task(s), 1 verified, 1 accepted by a human (not verified)."),
+            "{out}"
+        );
     }
 
     #[test]

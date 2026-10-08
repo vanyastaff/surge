@@ -1,0 +1,21 @@
+{
+  "status": "test-only seam source frozen for deterministic race RED; no Cargo executed for this seam yet",
+  "supersedes_reader_context_only_of": "persistence-source-freeze.json",
+  "historical_receipts": "Original freeze and logs remain unchanged; their original reader hash is not attributed to this revision.",
+  "source": "crates/surge-persistence/src/runs/reader.rs",
+  "before_sha256": "b081f406e900b31243fe05dcb231ef200efcd278cddacde88c7ddf5424552d36",
+  "after_sha256": "1b7a0f6327d0392eef7638ecc67fe9ba31df35dc44ea1e5011fdcde7f4073915",
+  "api": "RunEventFeed::install_post_read_gate_for_test(&mut self) -> Result<FeedReadGate, StorageError>",
+  "scope": "cfg(test or feature=test-support); separate per-feed one-shot slot; only successful actual empty read result; after query/statement teardown before result return; real connection and same writer lease remain owned; controller Drop releases worker",
+  "checks": [
+    {
+      "command": "rustfmt +1.99.0 --edition 2024 crates/surge-persistence/src/runs/reader.rs",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0
+    }
+  ],
+  "required_next": "Caller adds deterministic Running empty read -> append+seal -> release test, captures actual RED before production forwarder fix."
+}

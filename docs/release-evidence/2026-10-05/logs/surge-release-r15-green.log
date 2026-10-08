@@ -1,0 +1,12 @@
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.81s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_telegram-c57878d2b855a05b)
+
+running 3 tests
+test cockpit::production::outgoing_admission::tests::pairing_lookup_failure_is_reported_without_network_delegation ... ok
+test cockpit::production::outgoing_admission::tests::outgoing_cards_recheck_pair_revoke_and_repair ... ok
+test cockpit::production::outgoing_admission::tests::revoked_reconcile_preserves_card_until_repair_without_sending ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.12s

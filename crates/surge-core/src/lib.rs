@@ -32,6 +32,8 @@ pub mod state;
 
 // New modules — Surge data model.
 pub mod agent_config;
+pub mod agent_restrictions;
+pub mod agent_rotation;
 pub mod approvals;
 pub mod archetype;
 pub mod artifact_contract;
@@ -46,6 +48,7 @@ pub mod content_hash;
 pub mod context_pack;
 pub mod doctor;
 pub mod edge;
+pub mod escalation;
 pub mod evidence;
 pub mod graph;
 pub mod home;

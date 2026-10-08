@@ -13,6 +13,8 @@
 //! or RunAborted depending on escalation routing.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -150,47 +152,50 @@ fn build_5_item_loop_graph() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn loop_max_iterations_2_runs_at_most_2_body_executions() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
 
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            build_5_item_loop_graph(),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                build_5_item_loop_graph(),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    // Run completes (MaxIterations=2 exits cleanly after 2 iterations).
-    let _outcome = handle.await_completion().await.expect("await_completion");
-    storage
-        .inspect_folded_run(run_id)
-        .await
-        .expect("actual loop policy journal must retain trusted routing scope");
+        // Run completes (MaxIterations=2 exits cleanly after 2 iterations).
+        let _outcome = handle.await_completion().await.expect("await_completion");
+        storage
+            .inspect_folded_run(run_id)
+            .await
+            .expect("actual loop policy journal must retain trusted routing scope");
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(EventSeq::ZERO..EventSeq(i64::MAX as u64))
-        .await
-        .unwrap();
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(EventSeq::ZERO..EventSeq(i64::MAX as u64))
+            .await
+            .unwrap();
 
-    let payloads: Vec<&EventPayload> = events.iter().map(|e| e.payload.payload()).collect();
+        let payloads: Vec<&EventPayload> = events.iter().map(|e| e.payload.payload()).collect();
 
-    let completed_count = payloads
-        .iter()
-        .filter(|p| matches!(p, EventPayload::LoopIterationCompleted { .. }))
-        .count();
+        let completed_count = payloads
+            .iter()
+            .filter(|p| matches!(p, EventPayload::LoopIterationCompleted { .. }))
+            .count();
 
-    // The loop exits after 2 iterations (MaxIterations { n: 2 }).
-    assert!(
-        completed_count >= 2,
-        "expected at least 2 LoopIterationCompleted events, got {completed_count}"
-    );
+        // The loop exits after 2 iterations (MaxIterations { n: 2 }).
+        assert!(
+            completed_count >= 2,
+            "expected at least 2 LoopIterationCompleted events, got {completed_count}"
+        );
+    }
+    dir.close().unwrap();
 }

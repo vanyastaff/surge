@@ -1,0 +1,29 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Finished `test` profile [unoptimized] target(s) in 28.55s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (target/debug/deps/surge-88c81fc876bc8761)
+
+running 1 test
+
+thread 'commands::engine::tests::owned_startup_waits_for_schema_publication_and_preserves_errors' (35285561) panicked at crates/surge-cli/src/commands/engine.rs:978:18:
+called `Result::unwrap()` on an `Err` value: sqlite error: no such table: events
+
+Caused by:
+    0: no such table: events
+    1: Error code 1: SQL error or missing database
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test commands::engine::tests::owned_startup_waits_for_schema_publication_and_preserves_errors ... FAILED
+
+failures:
+
+failures:
+    commands::engine::tests::owned_startup_waits_for_schema_publication_and_preserves_errors
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p surge-cli --bin surge`

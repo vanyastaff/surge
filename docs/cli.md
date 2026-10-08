@@ -66,21 +66,28 @@ for newly emitted input requests; previously resolved gates are not answered aga
 
 `surge engine run <flow.toml>` and `surge engine run --template <name>` both skip bootstrap. `SPEC_PATH` and `--template` are mutually exclusive; use a path for a custom graph, or a template name such as `linear-3`, `linear-with-review`, `multi-milestone`, `bug-fix`, `refactor`, `spike`, or `single-task`.
 
-Local `engine run` waits for execution and cleanup even without `--watch`; that
-flag adds event output. A completed run exits successfully. Failed, aborted,
+Both paths submit to the durable daemon owner and require a clean committed Git
+source checkout. Review and commit generated project context and workflow files;
+ignore local configuration and runtime state. Dirty-source refusal preserves
+existing files and does not accept a run.
+
+Foreground `engine run` waits for a confirmed run outcome, including without
+`--watch`. A completed run exits successfully. Failed, aborted,
 parked (not yet completed), or unconfirmed execution exits nonzero. Only
 `engine run --daemon` without `--watch` returns after admission while the daemon
 continues running; its successful exit confirms acceptance, not completion.
 
 `engine watch --daemon` reports an error if the event stream fails, closes before
 terminal confirmation, or loses events. This means observation is incomplete; it
-does not mark the run aborted or failed. An explicit terminal event confirms that
-watching finished and prints the run's outcome.
+does not mark the run aborted or failed. An explicit terminal event prints the outcome. Watching succeeds only for
+completed execution; failed or aborted outcomes return an error. Disk-history
+fallback also rejects missing, duplicate or conflicting terminal evidence.
 
-Local `engine run` cannot answer human approval requests. On a request, or lost
-events that could hide one, it cancels and joins the run and reports an error.
-Use daemon execution with an approval client, or `surge bootstrap` for its
-console approval flow. The bootstrap console never treats closed input (EOF)
+Foreground `engine run` cannot answer human approval requests; it waits for an
+approval client to resolve the durable gate. Interrupting the observer does not
+automatically abort the daemon-owned run. `engine stop <id> --daemon` requests
+suspension; inspect the durable outcome before claiming the task stopped cleanly.
+Use an approval client, or `surge bootstrap` for its console approval flow. The bootstrap console never treats closed input (EOF)
 as approval; an actual blank Enter retains its approve default. Bootstrap also
 reports failures in the generated follow-up run. Console prompting remains
 synchronous, so signal responsiveness while waiting for input is limited.

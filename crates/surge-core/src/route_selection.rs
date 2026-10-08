@@ -106,23 +106,30 @@ pub fn select_edge_with_counters(
 
 /// Apply the execution rule including a declared max-traversal escalation route.
 /// Escalation retains the failed original increment and increments the alternate.
+/// Whenever the selected escalation edge is itself exhausted with `Escalate`,
+/// routing takes the next rung of [`crate::escalation::ESCALATION_RUNGS`].
 pub fn resolve_stage_route(
     edges: &[Edge],
     current: &NodeKey,
     outcome: &OutcomeKey,
     counts: &mut HashMap<EdgeKey, u32>,
 ) -> Result<RoutedEdge, RoutingError> {
-    match select_edge_with_counters(edges, current, outcome, counts) {
-        Err(RoutingError::ExceededTraversal {
-            action: ExceededAction::Escalate,
-            ..
-        }) => {
-            let synthetic = OutcomeKey::try_from("max_traversals_exceeded")
-                .map_err(|_| RoutingError::InvalidEscalationOutcome)?;
-            select_edge_with_counters(edges, current, &synthetic, counts)
-        },
-        result => result,
+    let mut result = select_edge_with_counters(edges, current, outcome, counts);
+    for rung in crate::escalation::ESCALATION_RUNGS {
+        if !matches!(
+            result,
+            Err(RoutingError::ExceededTraversal {
+                action: ExceededAction::Escalate,
+                ..
+            })
+        ) {
+            break;
+        }
+        let synthetic =
+            OutcomeKey::try_from(rung).map_err(|_| RoutingError::InvalidEscalationOutcome)?;
+        result = select_edge_with_counters(edges, current, &synthetic, counts);
     }
+    result
 }
 
 #[cfg(test)]

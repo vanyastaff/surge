@@ -12,9 +12,8 @@
 //!   before `--version`, for runtimes launched through a wrapper command
 //!   (e.g. `npx -y @deepseek-ai/dsh --version`) that has no standalone
 //!   binary of its own to probe.
-//! - [`VersionCache`] — per-daemon-lifetime cache, keyed by canonicalised
-//!   binary path, so the engine probes each runtime at most once per
-//!   process start.
+//! - [`VersionCache`] — per-daemon-lifetime cache, keyed by absolute invocation
+//!   path, preserving multicall launcher aliases and sharing concurrent probes.
 //! - [`evaluate_against_policy`] — compares a parsed version against the
 //!   bundled [`surge_core::RuntimeVersionPolicy`] and yields a
 //!   ready-to-append [`surge_core::EventPayload::RuntimeVersionWarning`]
@@ -29,7 +28,7 @@ use semver::Version;
 use surge_core::runtime::{RuntimeKind, RuntimeVersionPolicy};
 use thiserror::Error;
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 use tokio::time::timeout;
 
 /// Probe timeout. Tight on purpose — production callers run this on the hot
@@ -248,15 +247,17 @@ pub struct RuntimeVersionWarningPayload {
     pub min_version: String,
 }
 
+type VersionCell = Arc<OnceCell<Result<Version, ProbeError>>>;
+
 /// Per-daemon-lifetime cache wrapping [`probe_version`].
 ///
-/// Keyed by the canonicalised binary path so different `PATH` entries for
-/// the same logical agent (e.g. `~/.local/bin/claude` vs
-/// `/usr/local/bin/claude`) probe separately — the user may have installed
-/// each from a different source.
+/// Each absolute invocation path has its own result cell: aliases may select
+/// different runtimes through argv[0], even when they target the same file.
+/// Concurrent callers share initialization without holding the map lock during
+/// process execution. Cancellation before initialization completes permits retry.
 #[derive(Debug, Default)]
 pub struct VersionCache {
-    inner: Mutex<HashMap<PathBuf, Result<Version, ProbeError>>>,
+    inner: Mutex<HashMap<PathBuf, VersionCell>>,
 }
 
 impl VersionCache {
@@ -266,19 +267,27 @@ impl VersionCache {
         Arc::new(Self::default())
     }
 
-    /// Probe (or return a cached result) for `binary`. Paths are canonicalised
-    /// before lookup so callers can pass relative paths without breaking
-    /// cache reuse.
+    /// Probe (or return a cached result) for `binary`. Resolve bare program
+    /// names through PATH, then make the invocation path absolute without
+    /// resolving symlinks: launcher aliases must retain their argv[0].
     pub async fn probe(&self, binary: &Path) -> Result<Version, ProbeError> {
-        let key = binary
-            .canonicalize()
-            .unwrap_or_else(|_| binary.to_path_buf());
-        if let Some(cached) = self.inner.lock().await.get(&key) {
-            return cached.clone();
-        }
-        let result = probe_version(&key).await;
-        self.inner.lock().await.insert(key, result.clone());
-        result
+        let invocation = if binary.components().count() == 1 {
+            which::which(binary).unwrap_or_else(|_| binary.to_path_buf())
+        } else {
+            binary.to_path_buf()
+        };
+        let key = std::path::absolute(&invocation).map_err(|error| ProbeError::SpawnFailed {
+            binary: binary.display().to_string(),
+            message: error.to_string(),
+        })?;
+        let cell = self
+            .inner
+            .lock()
+            .await
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        cell.get_or_init(|| probe_version(&key)).await.clone()
     }
 
     /// Current cache size (for tests and observability).
@@ -409,17 +418,61 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    #[cfg(unix)]
+    fn counter_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("launcher");
+        let counter = dir.path().join("calls");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+printf 'call\n' >> "${0%/*}/calls"
+case "$0" in
+  */alias) printf 'runtime 2.0.0\n' ;;
+  *) printf 'runtime 1.0.0\n' ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        (dir, binary, counter)
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
-    async fn version_cache_is_idempotent_per_path() {
-        let cargo = which::which("cargo").ok();
-        let Some(cargo) = cargo else {
-            eprintln!("skipping: cargo not on PATH");
-            return;
-        };
+    async fn version_cache_preserves_launcher_aliases_and_probes_once() {
+        let (dir, binary, counter) = counter_fixture();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&binary, &alias).unwrap();
         let cache = VersionCache::new();
-        let first = cache.probe(&cargo).await.expect("probe");
-        let second = cache.probe(&cargo).await.expect("probe");
-        assert_eq!(first, second);
+        assert_eq!(cache.probe(&alias).await.unwrap(), Version::new(2, 0, 0));
+        assert_eq!(cache.probe(&binary).await.unwrap(), Version::new(1, 0, 0));
+        assert_eq!(cache.probe(&alias).await.unwrap(), Version::new(2, 0, 0));
+        assert_eq!(std::fs::read_to_string(counter).unwrap().lines().count(), 2);
+        assert_eq!(cache.len().await, 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn version_cache_concurrent_probes_execute_once() {
+        let (_dir, binary, counter) = counter_fixture();
+        let cache = VersionCache::new();
+        let (first, second) = tokio::join!(cache.probe(&binary), cache.probe(&binary));
+        assert_eq!(first.unwrap(), Version::new(1, 0, 0));
+        assert_eq!(second.unwrap(), Version::new(1, 0, 0));
+        assert_eq!(std::fs::read_to_string(counter).unwrap().lines().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn version_cache_caches_typed_spawn_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-runtime");
+        let cache = VersionCache::new();
+        for _ in 0..2 {
+            assert!(matches!(cache.probe(&missing).await,
+                Err(ProbeError::SpawnFailed { binary, .. }) if binary == missing.display().to_string()));
+        }
         assert_eq!(cache.len().await, 1);
     }
 }

@@ -136,6 +136,10 @@ pub(crate) struct RunTaskParams {
     /// carries `surge_core::capacity_config::CapacityConfig::default`'s
     /// conservative backoff, matching what `surge init` writes.
     pub capacity_policy: surge_core::capacity::CapacityPolicy,
+    /// Engine-level `[escalation]` settings for the extra retry attempt.
+    pub escalation: surge_core::escalation::EscalationConfig,
+    /// `[capacity].fallback_agents`: where a stage moves on an exhausted limit.
+    pub fallback_agents: Vec<String>,
     /// Registry-level storage handle (Task 12 M3) — the run task's own
     /// door onto `runs.status`/`runs.wake_at`, used only to call
     /// [`surge_persistence::runs::Storage::set_run_parked`] when
@@ -192,23 +196,41 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
         }
     }
     if let Some((fence, blob)) = params.pending_suspension.take() {
-        match params.writer.seal_suspension(fence.clone(), blob).await {
-            Ok(seq) => {
-                let _ = params.event_tx.send(EngineRunEvent::Persisted {
-                    seq: seq.as_u64(),
-                    payload: Box::new(EventPayload::RunSuspended {
-                        fence: fence.clone(),
-                    }),
-                });
-                outcome = RunOutcome::Suspended {
-                    fence: Box::new(fence),
-                };
-            },
-            Err(error) => {
-                let _ = params.event_tx.send(EngineRunEvent::StreamError {
-                    message: format!("suspension fence was not committed: {error}"),
-                });
-            },
+        // ADR-0021: stop any MCP group still led by its recorded process and accept
+        // empty groups as best-effort cleanup. The record is written when the run
+        // resumes: appending here would move the log past the fence's snapshot.
+        let refusal = match super::writer_coverage::stop_and_assess_mcp_cleanup(
+            &params.storage,
+            params.run_id,
+        )
+        .await
+        {
+            Ok(Ok(_)) => None,
+            Ok(Err(diagnostic)) => Some(diagnostic),
+            Err(error) => Some(format!("MCP cleanup evidence unavailable: {error}")),
+        };
+        if let Some(diagnostic) = refusal {
+            tracing::warn!(run_id = %params.run_id, %diagnostic, "suspension requires recovery attention");
+            outcome = recovery_required(&params, diagnostic).await;
+        } else {
+            match params.writer.seal_suspension(fence.clone(), blob).await {
+                Ok(seq) => {
+                    let _ = params.event_tx.send(EngineRunEvent::Persisted {
+                        seq: seq.as_u64(),
+                        payload: Box::new(EventPayload::RunSuspended {
+                            fence: fence.clone(),
+                        }),
+                    });
+                    outcome = RunOutcome::Suspended {
+                        fence: Box::new(fence),
+                    };
+                },
+                Err(error) => {
+                    let _ = params.event_tx.send(EngineRunEvent::StreamError {
+                        message: format!("suspension fence was not committed: {error}"),
+                    });
+                },
+            }
         }
     }
     if let Err(error) = params.writer.close().await {
@@ -222,6 +244,19 @@ async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
         Ok(state) => state,
         Err(error) => return failed(params, error).await,
     };
+
+    // ADR-0021: a resumed run records best-effort cleanup for prior MCP groups
+    // that the resume check observed empty.
+    match super::writer_coverage::assess_mcp_cleanup(&state.memory) {
+        Ok(stopped) => {
+            if let Err(error) =
+                super::writer_coverage::record_mcp_groups_stopped(&params.writer, &stopped).await
+            {
+                return failed(params, error).await;
+            }
+        },
+        Err(diagnostic) => return recovery_required(params, diagnostic).await,
+    }
 
     let had_suspended_phase = state.memory.suspension.is_some();
     if let Err(outcome) = Box::pin(restore_suspended_phase(params, &mut state)).await {
@@ -528,7 +563,8 @@ async fn execute_stage_step(
     if let Some(outcome) = abort_if_cancelled(params).await {
         return StageLoopStep::Done(outcome);
     }
-    let Some(node) = lookup_in_active_frame(&state.active_graph, &state.cursor.node, &state.frames)
+    let Some(node) =
+        lookup_in_active_frame(&state.routing_graph, &state.cursor.node, &state.frames)
     else {
         return StageLoopStep::Done(
             failed(
@@ -539,7 +575,12 @@ async fn execute_stage_step(
         );
     };
     let node = node.clone();
-    match execute_current_stage(params, state, &node).await {
+    let step = execute_current_stage(params, state, &node).await;
+    // The registry clear is best-effort and can wait out registry contention;
+    // it must not delay the durable route commit. It still precedes the next
+    // stage's capacity precheck, so that precheck observes the recovery.
+    clear_proven_capacity_recovery(params, state, &node).await;
+    match step {
         StageLoopStep::Continue => StageLoopStep::Continue,
         StageLoopStep::Done(outcome) => StageLoopStep::Done(outcome),
     }
@@ -1124,7 +1165,13 @@ async fn abort_run_for_budget(
 #[derive(Clone)]
 struct RunExecutionState {
     memory_applied_seq: u64,
+    /// The persisted graph (initial or latest applied revision). Amendments
+    /// and hashes use this graph.
     active_graph: Graph,
+    /// `active_graph` plus default escalation gates
+    /// (`surge_core::escalation`); node lookup and routing use this graph.
+    /// Recomputed whenever `active_graph` changes.
+    routing_graph: Graph,
     cursor: Cursor,
     hook_executor: HookExecutor,
     memory: RunMemory,
@@ -1151,6 +1198,10 @@ struct RunExecutionState {
     skill_catalog: Option<std::sync::Arc<surge_core::skill::SkillCatalog>>,
     /// Inspected original unadmitted occurrence, without effect authority.
     restored_quota_entry: Option<u64>,
+    /// Runtime whose exhaustion the current stage's successful dispatch
+    /// refuted, resolved from that dispatch's own events. Cleared from the
+    /// capacity ledger only after the stage's route commit.
+    proven_capacity_recovery: Option<crate::engine::capacity::CanonicalRuntimeId>,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -1178,6 +1229,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
     let budget_exceeded_noted = memory.budget_exceeded_noted;
 
     Ok(RunExecutionState {
+        routing_graph: surge_core::escalation::with_default_escalation_gates(&active_graph),
         active_graph,
         cursor,
         hook_executor: HookExecutor::new(),
@@ -1196,6 +1248,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         budget_exceeded_noted,
         skill_catalog: None,
         restored_quota_entry: None,
+        proven_capacity_recovery: None,
     })
 }
 
@@ -1209,7 +1262,8 @@ async fn drain_roadmap_queue(
         run_id: params.run_id,
         receiver: &mut params.roadmap_amendments,
     };
-    roadmap_queue
+    let applied = state.applied_graph_revision_seq;
+    let drained = roadmap_queue
         .drain(
             &mut state.active_graph,
             &state.cursor,
@@ -1218,10 +1272,15 @@ async fn drain_roadmap_queue(
             &mut state.processed_graph_revision_seq,
             &mut state.applied_graph_revision_seq,
         )
-        .await
+        .await;
+    if state.applied_graph_revision_seq != applied {
+        state.refresh_routing_graph();
+    }
+    drained
 }
 
 fn apply_pending_revisions(state: &mut RunExecutionState) {
+    let applied = state.applied_graph_revision_seq;
     maybe_apply_pending_graph_revision(
         &mut state.active_graph,
         &state.cursor,
@@ -1230,6 +1289,16 @@ fn apply_pending_revisions(state: &mut RunExecutionState) {
         &mut state.processed_graph_revision_seq,
         &mut state.applied_graph_revision_seq,
     );
+    if state.applied_graph_revision_seq != applied {
+        state.refresh_routing_graph();
+    }
+}
+
+impl RunExecutionState {
+    fn refresh_routing_graph(&mut self) {
+        self.routing_graph =
+            surge_core::escalation::with_default_escalation_gates(&self.active_graph);
+    }
 }
 
 async fn abort_if_cancelled(params: &RunTaskParams) -> Option<RunOutcome> {
@@ -1338,6 +1407,224 @@ enum StageDispatch {
     },
 }
 
+/// The node's config moved to the agent of its active rotation
+/// (`StageRuntimeRotated`, v1 task 1.4). `None` keeps `cfg`. Stages under a
+/// frozen quota plan keep their planned runtime.
+fn runtime_rotation_config(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> Option<surge_core::agent_config::AgentConfig> {
+    let node = &state.cursor.node;
+    let rotation = state.memory.runtime_rotations.get(node)?;
+    if params.run_config.quota_recovery.stage(node).is_some() {
+        return None;
+    }
+    Some(cfg.with_runtime_override(&rotation.to, None))
+}
+
+/// Canonical capacity-ledger key for a configured agent id.
+fn canonical_runtime(id: &str) -> crate::engine::capacity::CanonicalRuntimeId {
+    crate::engine::capacity::CanonicalRuntimeId::resolve(&surge_acp::Registry::builtin(), id)
+}
+
+/// Runtimes of the agent nodes paired with `node` by a capped retry edge in
+/// its scope (a verifier and the implementer it sends work back to), with
+/// their active rotations applied.
+fn partner_runtimes(params: &RunTaskParams, state: &RunExecutionState) -> Vec<String> {
+    let node = &state.cursor.node;
+    let graph = &state.routing_graph;
+    let Some((nodes, edges)) = std::iter::once((&graph.nodes, graph.edges.as_slice()))
+        .chain(
+            graph
+                .subgraphs
+                .values()
+                .map(|sg| (&sg.nodes, sg.edges.as_slice())),
+        )
+        .find(|(nodes, _)| nodes.contains_key(node))
+    else {
+        return Vec::new();
+    };
+    let partners: std::collections::BTreeSet<&surge_core::keys::NodeKey> = edges
+        .iter()
+        .filter(|edge| edge.policy.max_traversals.is_some() && edge.from.node != edge.to)
+        .filter_map(|edge| {
+            if &edge.from.node == node {
+                Some(&edge.to)
+            } else if &edge.to == node {
+                Some(&edge.from.node)
+            } else {
+                None
+            }
+        })
+        .collect();
+    partners
+        .into_iter()
+        .filter_map(|partner| {
+            let NodeConfig::Agent(cfg) = &nodes.get(partner)?.config else {
+                return None;
+            };
+            let cfg = match state.memory.runtime_rotations.get(partner) {
+                Some(rotation) => cfg.with_runtime_override(&rotation.to, None),
+                None => cfg.clone(),
+            };
+            crate::engine::stage::agent::resolve_node_runtime_id(
+                params.profile_registry.as_deref(),
+                &cfg,
+            )
+            .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
+        })
+        .collect()
+}
+
+/// Move the current stage to a fallback agent when `current` is exhausted
+/// (v1 task 1.4): choose among the node's own agent and
+/// `[capacity].fallback_agents`, record `StageRuntimeRotated` before any
+/// provider effect of the next attempt, and fold it into memory. `false`
+/// means nothing fits (or rotation is off) and the caller parks.
+async fn try_rotate_agent(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    current: &crate::engine::capacity::CanonicalRuntimeId,
+    reason: &str,
+) -> bool {
+    if params.fallback_agents.is_empty()
+        || params
+            .run_config
+            .quota_recovery
+            .stage(&state.cursor.node)
+            .is_some()
+    {
+        return false;
+    }
+    let moves = state
+        .memory
+        .runtime_rotations
+        .get(&state.cursor.node)
+        .map_or(0, |rotation| rotation.count);
+    if moves as usize > params.fallback_agents.len() {
+        tracing::warn!(target: "engine::capacity", node = %state.cursor.node, moves,
+            "every fallback agent was tried this visit; parking");
+        return false;
+    }
+    let NodeConfig::Agent(own) = &node.config else {
+        return false;
+    };
+    let own_runtime = crate::engine::stage::agent::resolve_node_runtime_id(
+        params.profile_registry.as_deref(),
+        own,
+    )
+    .map(crate::engine::capacity::CanonicalRuntimeId::into_string);
+    let builtin = surge_acp::Registry::builtin();
+    let registry = params.agent_registry.as_deref().unwrap_or(&builtin);
+    let now = chrono::Utc::now();
+    let mut candidates = Vec::new();
+    for id in own_runtime.iter().chain(params.fallback_agents.iter()) {
+        let canonical = canonical_runtime(id);
+        let runnable = registry
+            .find_normalized(id)
+            .is_some_and(|entry| surge_acp::agent_env::resolve(&entry.id, &entry.env).is_ok());
+        let fresh = match params.capacity_ledger.status(&canonical).await {
+            Ok(status) => crate::engine::capacity::exhausted_reason(&status, now).is_none(),
+            Err(_) => false,
+        };
+        candidates.push(surge_core::agent_rotation::Candidate {
+            id: id.clone(),
+            canonical: canonical.into_string(),
+            available: runnable && fresh,
+        });
+    }
+    let partners = partner_runtimes(params, state);
+    let Some(choice) = surge_core::agent_rotation::choose(&candidates, current.as_str(), &partners)
+    else {
+        tracing::info!(target: "engine::capacity", node = %state.cursor.node, runtime = %current,
+            "no fallback agent has capacity; parking");
+        return false;
+    };
+    if choice.same_as_partner {
+        tracing::warn!(target: "engine::capacity", node = %state.cursor.node, to = %choice.to,
+            "only available fallback agent matches the stage's verifier/implementer partner");
+    }
+    let event = EventPayload::StageRuntimeRotated {
+        node: state.cursor.node.clone(),
+        from: current.as_str().to_owned(),
+        to: choice.to.clone(),
+        reason: reason.to_owned(),
+        same_as_partner: choice.same_as_partner,
+    };
+    if let Err(error) = params
+        .writer
+        .append_event(VersionedEventPayload::new(event))
+        .await
+    {
+        tracing::warn!(target: "engine::capacity", node = %state.cursor.node, %error,
+            "could not record the agent rotation; parking instead");
+        return false;
+    }
+    match apply_memory_events_after(
+        &params.writer,
+        params.run_id,
+        surge_persistence::runs::EventSeq(state.memory_applied_seq),
+        &mut state.memory,
+    )
+    .await
+    {
+        Ok(applied) => {
+            state
+                .pending_graph_revisions
+                .extend(applied.graph_revisions);
+            if let Ok(current) = params.writer.current_seq().await {
+                state.memory_applied_seq = current.as_u64();
+            }
+        },
+        Err(error) => {
+            tracing::warn!(target: "engine::capacity", node = %state.cursor.node, %error,
+                "could not refresh memory after the rotation; parking instead");
+            return false;
+        },
+    }
+    tracing::info!(target: "engine::capacity", node = %state.cursor.node, from = %current,
+        to = %choice.to, "usage limit exhausted; moving the stage to a fallback agent");
+    true
+}
+
+/// The node's config for this occurrence when it is the extra attempt of an
+/// exhausted retry loop (entered through a derived edge marked by
+/// `surge_core::escalation::is_alternate_attempt`): its runtime moved to the
+/// configured retry agent. `None` keeps the node's own config. Derived from
+/// the durable `entered_via` fold, so a restarted host decides the same way.
+fn alternate_attempt_config(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> Option<surge_core::agent_config::AgentConfig> {
+    let node = &state.cursor.node;
+    if !surge_core::escalation::entered_by_alternate_attempt(
+        &state.routing_graph,
+        node,
+        state.memory.entered_via.get(node),
+    ) {
+        return None;
+    }
+    if params.run_config.quota_recovery.stage(node).is_some() {
+        tracing::info!(
+            target: "engine::escalation",
+            %node,
+            "extra attempt keeps the stage's frozen quota runtime"
+        );
+        return None;
+    }
+    let retry = params.escalation.retry_config(cfg);
+    tracing::info!(
+        target: "engine::escalation",
+        %node,
+        retry_agent = params.escalation.retry_agent().unwrap_or("(stage agent)"),
+        "running the extra attempt of an exhausted retry loop"
+    );
+    retry
+}
+
 async fn dispatch_node_stage(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1345,6 +1632,10 @@ async fn dispatch_node_stage(
 ) -> StageDispatch {
     let stage_result = match &node.config {
         NodeConfig::Agent(cfg) => {
+            let retry = alternate_attempt_config(params, state, cfg);
+            let cfg = retry.as_ref().unwrap_or(cfg);
+            let rotated = runtime_rotation_config(params, state, cfg);
+            let cfg = rotated.as_ref().unwrap_or(cfg);
             return dispatch_agent_node_with_capacity_gate(params, state, node, cfg).await;
         },
         NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
@@ -1477,6 +1768,68 @@ fn has_configured_task_capacity(params: &RunTaskParams, node: &surge_core::NodeK
             })
 }
 
+/// Pre-dispatch capacity check for an agent stage: park when its runtime is
+/// exhausted (after trying a fallback agent, v1 task 1.4), otherwise let it
+/// dispatch. `Some` is the dispatch decision that replaces the stage run.
+async fn capacity_precheck(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    runtime: crate::engine::capacity::CanonicalRuntimeId,
+) -> Option<StageDispatch> {
+    match capacity_decision_for(params, &state.cursor.node, &runtime).await {
+        surge_core::capacity::Decision::Park { wake_at, basis } => {
+            let reason = format!("{runtime} usage limit exhausted until {wake_at}");
+            if try_rotate_agent(params, state, node, &runtime, &reason).await {
+                return Some(StageDispatch::Continue);
+            }
+            return Some(StageDispatch::Park {
+                wake_at,
+                basis,
+                runtime: Some(runtime.into_string()),
+                details: None,
+            });
+        },
+        surge_core::capacity::Decision::Dispatch { degraded } => {
+            warn_on_degraded_dispatch(&state.cursor.node, degraded);
+        },
+        surge_core::capacity::Decision::Rotate { to } => {
+            tracing::warn!(target: "engine::capacity", node = %state.cursor.node,
+                candidate = %to, "rotation requires a persisted quota handoff; applying configured park policy");
+            let status = params
+                .capacity_ledger
+                .status(&runtime)
+                .await
+                .unwrap_or(surge_core::capacity::CapacityStatus::NeverObserved);
+            let mut park_policy = params.capacity_policy.clone();
+            park_policy.rotation = surge_core::capacity::RotationPolicy::Disabled;
+            match park_policy.decide(None, &status, chrono::Utc::now()) {
+                surge_core::capacity::Decision::Park { wake_at, basis } => {
+                    let reason = format!("{runtime} usage limit exhausted until {wake_at}");
+                    if try_rotate_agent(params, state, node, &runtime, &reason).await {
+                        return Some(StageDispatch::Continue);
+                    }
+                    return Some(StageDispatch::Park {
+                        wake_at,
+                        basis,
+                        runtime: Some(runtime.into_string()),
+                        details: None,
+                    });
+                },
+                surge_core::capacity::Decision::Dispatch { degraded } => {
+                    warn_on_degraded_dispatch(&state.cursor.node, degraded);
+                },
+                surge_core::capacity::Decision::Rotate { .. } => {
+                    return Some(StageDispatch::Failed(
+                        "capacity fallback policy unexpectedly selected rotation".into(),
+                    ));
+                },
+            }
+        },
+    }
+    None
+}
+
 async fn dispatch_agent_node_with_capacity_gate(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1514,49 +1867,9 @@ async fn dispatch_agent_node_with_capacity_gate(
     if !bypass_precheck
         && !host_planned_capacity
         && let Some(runtime) = runtime.clone()
+        && let Some(dispatch) = capacity_precheck(params, state, node, runtime).await
     {
-        match capacity_decision_for(params, &state.cursor.node, &runtime).await {
-            surge_core::capacity::Decision::Park { wake_at, basis } => {
-                return StageDispatch::Park {
-                    wake_at,
-                    basis,
-                    runtime: Some(runtime.into_string()),
-                    details: None,
-                };
-            },
-            surge_core::capacity::Decision::Dispatch { degraded } => {
-                warn_on_degraded_dispatch(&state.cursor.node, degraded);
-            },
-            surge_core::capacity::Decision::Rotate { to } => {
-                tracing::warn!(target: "engine::capacity", node = %state.cursor.node,
-                    candidate = %to, "rotation requires a persisted quota handoff; applying configured park policy");
-                let status = params
-                    .capacity_ledger
-                    .status(&runtime)
-                    .await
-                    .unwrap_or(surge_core::capacity::CapacityStatus::NeverObserved);
-                let mut park_policy = params.capacity_policy.clone();
-                park_policy.rotation = surge_core::capacity::RotationPolicy::Disabled;
-                match park_policy.decide(None, &status, chrono::Utc::now()) {
-                    surge_core::capacity::Decision::Park { wake_at, basis } => {
-                        return StageDispatch::Park {
-                            wake_at,
-                            basis,
-                            runtime: Some(runtime.into_string()),
-                            details: None,
-                        };
-                    },
-                    surge_core::capacity::Decision::Dispatch { degraded } => {
-                        warn_on_degraded_dispatch(&state.cursor.node, degraded);
-                    },
-                    surge_core::capacity::Decision::Rotate { .. } => {
-                        return StageDispatch::Failed(
-                            "capacity fallback policy unexpectedly selected rotation".into(),
-                        );
-                    },
-                }
-            },
-        }
+        return dispatch;
     }
 
     let dispatch_prefix = params.writer.current_seq().await.ok();
@@ -1580,7 +1893,8 @@ async fn dispatch_agent_node_with_capacity_gate(
         if result.is_ok()
             && let Some(prefix) = dispatch_prefix
         {
-            clear_successful_dispatch_capacity(params, &state.cursor.node, prefix).await;
+            state.proven_capacity_recovery =
+                successful_dispatch_runtime(params, &state.cursor.node, prefix).await;
         }
         return StageDispatch::StageResult(result);
     };
@@ -1588,6 +1902,19 @@ async fn dispatch_agent_node_with_capacity_gate(
     match observe_rate_limited_runtime(params, &state.cursor.node, &raw_runtime, retry_after).await
     {
         surge_core::capacity::Decision::Park { wake_at, basis } => {
+            let reason = format!("{raw_runtime} rate limited: {details}");
+            if suspension_requested(params).is_none()
+                && try_rotate_agent(
+                    params,
+                    state,
+                    node,
+                    &canonical_runtime(&raw_runtime),
+                    &reason,
+                )
+                .await
+            {
+                return StageDispatch::Continue;
+            }
             capacity_park_dispatch(params, result, wake_at, basis, raw_runtime, details)
         },
         // Rule 4's explicit operator opt-out (`blind_backoff` removed):
@@ -1601,18 +1928,20 @@ async fn dispatch_agent_node_with_capacity_gate(
 }
 
 /// A successful stage proves recovery only for its last actual provider opening.
-/// Read strictly after the dispatch prefix so previous attempts cannot supply it.
-async fn clear_successful_dispatch_capacity(
+/// Read strictly after the dispatch prefix so previous attempts cannot supply it,
+/// and immediately on dispatch return so later route, hook or stage events cannot
+/// either. The resulting ledger clear is deferred past the route commit.
+async fn successful_dispatch_runtime(
     params: &RunTaskParams,
     node: &surge_core::keys::NodeKey,
     prefix: surge_persistence::runs::EventSeq,
-) {
+) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
     let events = match read_stage_events(params, prefix.next(), "capacity dispatch").await {
         Ok(events) => events,
         Err((_, error)) => {
             tracing::warn!(target: "engine::capacity", %node, %error,
                 "cannot establish successful provider identity; retaining capacity observations");
-            return;
+            return None;
         },
     };
     let runtime = events
@@ -1626,14 +1955,24 @@ async fn clear_successful_dispatch_capacity(
             } if opened_node == node => Some(agent_id.as_deref()),
             _ => None,
         })
-        .flatten();
-    let Some(runtime) = runtime else {
-        return;
-    };
-    let runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
+        .flatten()?;
+    Some(crate::engine::capacity::CanonicalRuntimeId::resolve(
         &surge_acp::Registry::builtin(),
         runtime,
-    );
+    ))
+}
+
+/// Apply the recovery proven by this stage's successful dispatch. Losing it to
+/// cancellation only retains a stale exhaustion row until the next success.
+async fn clear_proven_capacity_recovery(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+) {
+    let Some(runtime) = state.proven_capacity_recovery.take() else {
+        return;
+    };
+    let node = &node.id;
     if let Err(error) = params.capacity_ledger.clear(&runtime).await {
         tracing::warn!(target: "engine::capacity", %node, %runtime, %error,
             "capacity ledger clear failed; stale exhaustion may persist");
@@ -2232,7 +2571,7 @@ async fn finish_loop_iteration(
     };
     match crate::engine::stage::loop_stage::on_loop_iteration_done(
         &just_completed,
-        &state.active_graph,
+        &state.routing_graph,
         &mut state.frames,
         &mut state.cursor,
         &params.writer,
@@ -2285,7 +2624,7 @@ fn current_subgraph_outputs(
         return Err("SubgraphDone signal but no Subgraph frame on top".into());
     };
     match lookup_in_active_frame(
-        &state.active_graph,
+        &state.routing_graph,
         &frame.outer_node,
         &state.frames[..state.frames.len() - 1],
     )
@@ -2385,7 +2724,7 @@ async fn enter_loop_node(
     cfg: &surge_core::loop_config::LoopConfig,
 ) -> StageDispatch {
     let return_to =
-        match return_to_after_completed(&state.active_graph, &state.cursor, &state.frames) {
+        match return_to_after_completed(&state.routing_graph, &state.cursor, &state.frames) {
             Ok(node) => node,
             Err(error) => return StageDispatch::Failed(format!("loop return_to: {error}")),
         };
@@ -2394,7 +2733,7 @@ async fn enter_loop_node(
             node: &state.cursor.node,
             loop_config: cfg,
             worktree_path: &params.worktree_path,
-            graph: &state.active_graph,
+            graph: &state.routing_graph,
             run_memory: &state.memory,
             writer: &params.writer,
             frames: &mut state.frames,
@@ -2422,7 +2761,7 @@ async fn enter_subgraph_node(
     cfg: &surge_core::subgraph_config::SubgraphConfig,
 ) -> StageDispatch {
     let return_to =
-        match return_to_after_completed(&state.active_graph, &state.cursor, &state.frames) {
+        match return_to_after_completed(&state.routing_graph, &state.cursor, &state.frames) {
             Ok(node) => node,
             Err(error) => return StageDispatch::Failed(format!("subgraph return_to: {error}")),
         };
@@ -2430,7 +2769,7 @@ async fn enter_subgraph_node(
         crate::engine::stage::subgraph_stage::SubgraphStageParams {
             node: &state.cursor.node,
             subgraph_config: cfg,
-            graph: &state.active_graph,
+            graph: &state.routing_graph,
             run_memory: &state.memory,
             writer: &params.writer,
             frames: &mut state.frames,
@@ -2552,6 +2891,39 @@ async fn resolve_stage_error(
         return record_suppressed_error(params, state, suppressed, &raw_reason).await;
     }
 
+    // Loop protection (v1 task 1.3): a tripped attempt is a failed attempt,
+    // not a failed run, when the stage has a retry loop to count it against.
+    if let StageError::LoopGuardTripped(trip) = &error
+        && let Some(retry) = loop_protection_retry(state)
+    {
+        tracing::info!(
+            target: "engine::escalation",
+            node = %state.cursor.node,
+            outcome = %retry,
+            reason = %trip,
+            "loop protection ended the attempt; routing it as a failed attempt"
+        );
+        if let Err(write_err) = params
+            .writer
+            .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
+                node: state.cursor.node.clone(),
+                outcome: retry.clone(),
+                summary: format!(
+                    "Loop protection ended this attempt: {}",
+                    trip.operator_message()
+                ),
+            }))
+            .await
+        {
+            return Err(failed(
+                params,
+                format!("write OutcomeReported (loop protection): {write_err}"),
+            )
+            .await);
+        }
+        return Ok(retry);
+    }
+
     let stage_failed_seq = params
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
@@ -2578,6 +2950,22 @@ async fn resolve_stage_error(
         .await;
     }
     Err(failed(params, raw_reason).await)
+}
+
+/// The current stage's retry-loop outcome in the routing graph scope that
+/// holds it (see `surge_core::escalation::retry_outcome`).
+fn loop_protection_retry(state: &RunExecutionState) -> Option<OutcomeKey> {
+    let graph = &state.routing_graph;
+    let node = &state.cursor.node;
+    std::iter::once((&graph.nodes, graph.edges.as_slice()))
+        .chain(
+            graph
+                .subgraphs
+                .values()
+                .map(|sg| (&sg.nodes, sg.edges.as_slice())),
+        )
+        .find(|(nodes, _)| nodes.contains_key(node))
+        .and_then(|(nodes, edges)| surge_core::escalation::retry_outcome(nodes, edges, node))
 }
 
 async fn record_suppressed_error(
@@ -2643,6 +3031,234 @@ async fn route_commit_exit_if_requested(
     }
 }
 
+/// A human override answered on a default escalation gate (v1 task 1.2):
+/// `accept_as_is` records `TaskAcceptedByHuman` with the exhausted stage's
+/// latest findings; `revise_requirement` records `RequirementRevised` from the
+/// answer's comment. Committed in the route batch, so it is never lost or
+/// doubled across a crash.
+fn human_override_effect(
+    state: &RunExecutionState,
+    outcome: &OutcomeKey,
+) -> Option<VersionedEventPayload> {
+    use surge_core::escalation::{ACCEPT_OUTCOME, REVISE_OUTCOME};
+    if outcome.as_str() != ACCEPT_OUTCOME && outcome.as_str() != REVISE_OUTCOME {
+        return None;
+    }
+    let gate = &state.cursor.node;
+    let graph = &state.routing_graph;
+    let source = std::iter::once(graph.edges.as_slice())
+        .chain(graph.subgraphs.values().map(|sg| sg.edges.as_slice()))
+        .find_map(|edges| surge_core::escalation::escalation_gate_source(edges, gate))?
+        .clone();
+    let task = crate::engine::frames::active_task_id(&state.frames);
+    let comment = state
+        .memory
+        .gate_decisions
+        .values()
+        .filter(|record| &record.node == gate)
+        .find_map(|record| record.response.as_ref())
+        .and_then(|response| response.get("comment"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|comment| !comment.is_empty())
+        .map(str::to_owned);
+    let payload = if outcome.as_str() == ACCEPT_OUTCOME {
+        let findings = state
+            .memory
+            .artifacts_by_node
+            .get(&source)
+            .into_iter()
+            .flatten()
+            .rfind(|artifact| artifact.name == "verification-report")
+            .map(|artifact| artifact.hash);
+        tracing::info!(
+            target: "engine::escalation",
+            node = %source,
+            task = task.as_ref().map_or("(none)", |task| task.as_str()),
+            with_findings = findings.is_some(),
+            "work accepted by a human after an exhausted retry ladder"
+        );
+        EventPayload::TaskAcceptedByHuman {
+            node: source,
+            task,
+            findings,
+            comment,
+        }
+    } else {
+        let Some(text) = comment else {
+            tracing::warn!(
+                target: "engine::escalation",
+                node = %source,
+                "revise requirement answered without a revised requirement; checking again unchanged"
+            );
+            return None;
+        };
+        tracing::info!(
+            target: "engine::escalation",
+            node = %source,
+            task = task.as_ref().map_or("(none)", |task| task.as_str()),
+            "requirement revised by a human"
+        );
+        EventPayload::RequirementRevised {
+            node: source,
+            task,
+            text,
+        }
+    };
+    Some(VersionedEventPayload::new(payload))
+}
+
+/// Largest `discovered-tasks` artifact a split planner may hand back.
+const SPLIT_TASKS_MAX_BYTES: usize = 256 * 1024;
+/// Most replacement tasks one split may insert.
+const SPLIT_TASKS_MAX: usize = 12;
+
+/// The split rung of the verifier ladder: when a derived split planner
+/// (`surge_core::escalation::is_split_planner`) routes `split`, insert the
+/// tasks from its `discovered-tasks` artifact right after the current item of
+/// the innermost loop frame and return the `TaskSplit` record. The caller
+/// commits it in the same batch as the route and snapshot, so a crash never
+/// splices twice or loses the splice.
+/// The validated `discovered-tasks` the split planner produced in this occurrence.
+async fn read_split_tasks(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    node: &surge_core::keys::NodeKey,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+) -> Result<surge_core::roadmap::DiscoveredTasksArtifact, String> {
+    let artifact = state
+        .memory
+        .artifacts_by_node
+        .get(node)
+        .into_iter()
+        .flatten()
+        .rfind(|artifact| {
+            artifact.name == "discovered-tasks"
+                && artifact.produced_at_seq > stage_start_seq.as_u64()
+        })
+        .ok_or_else(|| {
+            format!("split planner {node} reported split without discovered-tasks.toml")
+        })?;
+    let bytes = params
+        .artifact_store
+        .open_bounded(params.run_id, artifact.hash, SPLIT_TASKS_MAX_BYTES)
+        .await
+        .map_err(|error| format!("read split tasks: {error}"))?;
+    let text = String::from_utf8(bytes).map_err(|_| "split tasks are not UTF-8".to_owned())?;
+    let tasks: surge_core::roadmap::DiscoveredTasksArtifact =
+        toml::from_str(&text).map_err(|error| format!("parse split tasks: {error}"))?;
+    if let Some(issue) = tasks.validate().first() {
+        return Err(format!("split tasks are invalid: {issue}"));
+    }
+    if tasks.tasks.is_empty() || tasks.tasks.len() > SPLIT_TASKS_MAX {
+        return Err(format!(
+            "split must produce 1..={SPLIT_TASKS_MAX} tasks, got {}",
+            tasks.tasks.len()
+        ));
+    }
+    Ok(tasks)
+}
+
+/// Loop items for the replacement tasks, linked to the replaced task.
+fn split_items(
+    tasks: &surge_core::roadmap::DiscoveredTasksArtifact,
+    origin: Option<&str>,
+) -> Vec<toml::Value> {
+    tasks
+        .tasks
+        .iter()
+        .map(|entry| {
+            let mut item = toml::map::Map::new();
+            item.insert("id".into(), entry.id.as_str().into());
+            item.insert("title".into(), entry.title.clone().into());
+            if let Some(description) = &entry.description {
+                item.insert("description".into(), description.clone().into());
+            }
+            if !entry.acceptance_criteria.is_empty() {
+                let criteria = entry
+                    .acceptance_criteria
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect();
+                item.insert("acceptance_criteria".into(), toml::Value::Array(criteria));
+            }
+            if let Some(origin) = origin {
+                item.insert("discovered_from".into(), origin.into());
+            }
+            toml::Value::Table(item)
+        })
+        .collect()
+}
+
+async fn task_split_effect(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    outcome: &OutcomeKey,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+) -> Result<Option<VersionedEventPayload>, String> {
+    if outcome.as_str() != surge_core::escalation::SPLIT_OUTCOME {
+        return Ok(None);
+    }
+    let node = state.cursor.node.clone();
+    let is_split = lookup_in_active_frame(&state.routing_graph, &node, &state.frames)
+        .is_some_and(surge_core::escalation::is_split_planner);
+    if !is_split {
+        return Ok(None);
+    }
+    let tasks = read_split_tasks(params, state, &node, stage_start_seq).await?;
+    let Some(crate::engine::frames::Frame::Loop(frame)) = state
+        .frames
+        .iter_mut()
+        .rev()
+        .find(|frame| matches!(frame, crate::engine::frames::Frame::Loop(_)))
+    else {
+        return Err(format!("split planner {node} runs outside a loop"));
+    };
+    let index = frame.current_index;
+    let current = frame
+        .items
+        .get(index as usize)
+        .ok_or_else(|| "split loop has no current item".to_owned())?;
+    let task = current
+        .get("id")
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    let taken: std::collections::BTreeSet<&str> = frame
+        .items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(toml::Value::as_str))
+        .collect();
+    if let Some(clash) = tasks
+        .tasks
+        .iter()
+        .find(|entry| taken.contains(entry.id.as_str()))
+    {
+        return Err(format!("split task id {} is already in the loop", clash.id));
+    }
+    let into = split_items(&tasks, task.as_deref());
+    if frame.items.len() + into.len() > crate::engine::frames::MAX_LOOP_ITEMS_RESOLVED {
+        return Err("split would exceed the loop item limit".into());
+    }
+    let at = index as usize + 1;
+    frame.items.splice(at..at, into.iter().cloned());
+    tracing::info!(
+        target: "engine::escalation",
+        %node,
+        loop_id = %frame.loop_node,
+        index,
+        task = task.as_deref().unwrap_or("(no id)"),
+        count = into.len(),
+        "task split into smaller tasks"
+    );
+    Ok(Some(VersionedEventPayload::new(EventPayload::TaskSplit {
+        loop_id: frame.loop_node.clone(),
+        index,
+        task,
+        into,
+    })))
+}
+
 async fn route_and_snapshot(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -2670,8 +3286,11 @@ async fn route_and_snapshot(
         .pending_graph_revisions
         .extend(applied_events.graph_revisions);
     apply_pending_revisions(&mut prepared);
+    let human_override = human_override_effect(&prepared, outcome);
+    let split = task_split_effect(params, &mut prepared, outcome, stage_start_seq).await?;
     let routed = route_stage_outcome(&mut prepared, outcome)?;
-    let mut events = routing_events(&prepared, outcome, &routed);
+    let mut events: Vec<VersionedEventPayload> = human_override.into_iter().chain(split).collect();
+    events.extend(routing_events(&prepared, outcome, &routed));
     if let Some(record) = outstanding_stage_outcome(&prepared)? {
         if record.commit.outcome() != outcome {
             return Err("committed stage outcome differs from routed outcome".into());
@@ -2771,7 +3390,7 @@ fn route_stage_outcome(
     outcome: &OutcomeKey,
 ) -> Result<crate::engine::routing::RoutedEdge, String> {
     match crate::engine::routing::next_node_after_with_counters(
-        &state.active_graph,
+        &state.routing_graph,
         &state.cursor.node,
         outcome,
         &mut state.frames,
@@ -2790,25 +3409,56 @@ fn route_after_max_traversal(
     edge: &surge_core::keys::EdgeKey,
     action: surge_core::edge::ExceededAction,
 ) -> Result<crate::engine::routing::RoutedEdge, String> {
-    match action {
-        surge_core::edge::ExceededAction::Escalate => {
-            let synthetic = OutcomeKey::try_from("max_traversals_exceeded")
-                .map_err(|e| format!("synthetic outcome: {e}"))?;
-            crate::engine::routing::next_node_after_with_counters(
-                &state.active_graph,
-                &state.cursor.node,
-                &synthetic,
-                &mut state.frames,
-                &mut state.root_traversal_counts,
-            )
-            .map_err(|_| {
-                format!("max_traversals exceeded on edge {edge} and no escalate route declared")
-            })
-        },
-        surge_core::edge::ExceededAction::Fail => Err(format!(
+    use crate::engine::routing::RoutingError;
+    use surge_core::edge::ExceededAction;
+    if action == ExceededAction::Fail {
+        return Err(format!(
             "max_traversals exceeded on edge {edge} (action: Fail)"
-        )),
+        ));
     }
+    // Mirrors `surge_core::route_selection::resolve_stage_route`, which the
+    // journal inspector replays: an exhausted escalation edge takes the next rung.
+    let mut result = Err(RoutingError::ExceededTraversal {
+        edge: edge.clone(),
+        count: 0,
+        max: 0,
+        action: ExceededAction::Escalate,
+    });
+    for rung in surge_core::escalation::ESCALATION_RUNGS {
+        if !matches!(
+            result,
+            Err(RoutingError::ExceededTraversal {
+                action: ExceededAction::Escalate,
+                ..
+            })
+        ) {
+            break;
+        }
+        let synthetic =
+            OutcomeKey::try_from(rung).map_err(|_| format!("escalation outcome {rung}"))?;
+        result = crate::engine::routing::next_node_after_with_counters(
+            &state.routing_graph,
+            &state.cursor.node,
+            &synthetic,
+            &mut state.frames,
+            &mut state.root_traversal_counts,
+        );
+    }
+    let routed = result.map_err(|_| {
+        format!(
+            "max_traversals exceeded on edge {edge} and no escalation route exists \
+             (several capped targets from one stage get no default gate)"
+        )
+    })?;
+    tracing::info!(
+        target: "engine::escalation",
+        node = %state.cursor.node,
+        %edge,
+        to = %routed.target,
+        via = %routed.edge_id,
+        "retry loop exhausted; escalating"
+    );
+    Ok(routed)
 }
 
 fn routing_events(
@@ -3236,7 +3886,12 @@ fn maybe_apply_pending_graph_revision(
         return;
     }
 
-    if !revision.graph.nodes.contains_key(&cursor.node) {
+    // The cursor may rest on a default escalation gate the revision's
+    // effective graph keeps under the same key.
+    if !surge_core::escalation::with_default_escalation_gates(&revision.graph)
+        .nodes
+        .contains_key(&cursor.node)
+    {
         tracing::warn!(
             target: "engine::roadmap_update",
             patch_id = %revision.patch_id,

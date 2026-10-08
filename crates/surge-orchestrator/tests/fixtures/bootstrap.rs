@@ -20,31 +20,31 @@ use surge_persistence::runs::{EventSeq, ReadEvent, Storage};
 use tokio::task::JoinHandle;
 
 use super::mock_bridge::{MockBridge, RecordedCall};
+use super::runtime_home::FixtureHome;
 
 pub struct BootstrapHarness {
-    pub dir: tempfile::TempDir,
     pub storage: Arc<Storage>,
     pub mock: Arc<MockBridge>,
     pub engine: Arc<Engine>,
     pub run_id: RunId,
     pub sessions: Vec<SessionId>,
-    /// Backing directory for `memory_dir`/`memory_store_path` below. Held
-    /// only to keep the tempdir alive for the harness's lifetime; never
-    /// read directly.
-    _memory_dir: tempfile::TempDir,
     /// Test-only `EngineRunConfig::memory_store_path` override so a
     /// bootstrap run driven to a terminal failure (e.g. the edit-loop cap)
     /// writes its failure claim here instead of the developer's real
     /// `~/.surge/memory.db` (`engine::hooks::memory_writeback::record_node_failure`).
     memory_store_path: std::path::PathBuf,
+    _home: FixtureHome,
+    _memory_dir: FixtureHome,
+    pub dir: tempfile::TempDir,
 }
 
 impl BootstrapHarness {
     pub async fn new(session_count: usize) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let memory_dir = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
+        let memory_dir = FixtureHome::new().unwrap();
         let memory_store_path = memory_dir.path().join("memory.db");
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
         let mock = Arc::new(MockBridge::new());
         let bridge: Arc<dyn BridgeFacade> = mock.clone();
         let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
@@ -70,9 +70,41 @@ impl BootstrapHarness {
             engine,
             run_id: RunId::new(),
             sessions,
+            _home: home,
             _memory_dir: memory_dir,
             memory_store_path,
         }
+    }
+
+    /// Close after every driver returned by `start` has been awaited or aborted and joined.
+    pub fn close(self) {
+        let Self {
+            storage,
+            mock,
+            engine,
+            run_id: _,
+            sessions: _,
+            memory_store_path: _,
+            _home: home,
+            _memory_dir: memory_dir,
+            dir,
+        } = self;
+        assert_eq!(
+            Arc::strong_count(&engine),
+            1,
+            "bootstrap driver is still live"
+        );
+        drop(engine);
+        drop(mock);
+        assert_eq!(
+            Arc::strong_count(&storage),
+            1,
+            "bootstrap storage is still retained"
+        );
+        drop(storage);
+        home.close().unwrap();
+        memory_dir.close().unwrap();
+        dir.close().unwrap();
     }
 
     pub fn start(&self, prompt: &str) -> JoinHandle<Result<MaterializedRun, BootstrapError>> {

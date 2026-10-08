@@ -23,6 +23,18 @@ pub struct McpToolEntry {
     pub input_schema: serde_json::Value,
 }
 
+/// One selected server's catalog outcome, returned by
+/// [`McpRegistry::list_tools_per_server`].
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct McpServerCatalog {
+    /// Configured server name.
+    pub server: String,
+    /// The server's tools, or why its catalog could not be built
+    /// (startup timeout, `tools/list` timeout, transport failure, …).
+    pub tools: Result<Vec<McpToolEntry>, McpError>,
+}
+
 /// Result of a single MCP call, surge-flavoured (decoupled from
 /// rmcp's exact types so callers don't need to depend on rmcp).
 #[non_exhaustive]
@@ -280,10 +292,43 @@ impl McpRegistry {
 
     /// Query only configured selected servers without starting health monitors.
     /// All names are validated before any query; duplicates are queried once.
+    /// All-or-nothing: the first failing server fails the whole listing (see
+    /// [`Self::list_tools_per_server`] for per-server outcomes).
     pub async fn list_tools_for_servers(
         &self,
         names: &[String],
     ) -> Result<Vec<McpToolEntry>, McpError> {
+        let selected = self.selected_servers(names)?;
+        self.query_tools(selected).await
+    }
+
+    /// Query configured selected servers and report each server's catalog
+    /// outcome separately, so one failing server neither hides the others'
+    /// tools nor loses its own identity. Does not start health monitors.
+    ///
+    /// Outcomes are in sorted server order, duplicates queried once; each
+    /// server's tools are sorted by name.
+    ///
+    /// # Errors
+    /// [`McpError::ServerNotConfigured`] when any name is not configured;
+    /// names are validated before any server is queried.
+    pub async fn list_tools_per_server(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<McpServerCatalog>, McpError> {
+        let selected = self.selected_servers(names)?;
+        let mut out = Vec::with_capacity(selected.len());
+        for server in selected {
+            let tools = self.server_tools(&server).await.map(|mut tools| {
+                tools.sort_by(|a, b| a.tool.cmp(&b.tool));
+                tools
+            });
+            out.push(McpServerCatalog { server, tools });
+        }
+        Ok(out)
+    }
+
+    fn selected_servers(&self, names: &[String]) -> Result<Vec<String>, McpError> {
         let mut selected = names.to_vec();
         selected.sort();
         selected.dedup();
@@ -292,32 +337,13 @@ impl McpRegistry {
                 return Err(McpError::ServerNotConfigured(name.clone()));
             }
         }
-        self.query_tools(selected).await
+        Ok(selected)
     }
 
     async fn query_tools(&self, server_names: Vec<String>) -> Result<Vec<McpToolEntry>, McpError> {
         let mut out = Vec::new();
         for name in server_names {
-            let conn = self
-                .servers
-                .get(&name)
-                .ok_or_else(|| McpError::ServerNotConfigured(name.clone()))?;
-            let tools = conn.list_tools().await?;
-            for t in tools {
-                // Call `schema_as_json_value()` first (borrows `t`) before
-                // moving any fields out of `t`. Then extract owned fields.
-                // `schema_as_json_value()` returns
-                // `Value::Object(self.input_schema.as_ref().clone())`.
-                let input_schema = t.schema_as_json_value();
-                let tool_name = t.name.to_string();
-                let description = t.description.map(|c| c.to_string());
-                out.push(McpToolEntry {
-                    server: name.clone(),
-                    tool: tool_name,
-                    description,
-                    input_schema,
-                });
-            }
+            out.extend(self.server_tools(&name).await?);
         }
         // Final sort by (server, tool) to be doubly safe — server-side
         // tools/list ordering is implementation-defined.
@@ -325,14 +351,37 @@ impl McpRegistry {
         Ok(out)
     }
 
+    async fn server_tools(&self, name: &str) -> Result<Vec<McpToolEntry>, McpError> {
+        let conn = self
+            .servers
+            .get(name)
+            .ok_or_else(|| McpError::ServerNotConfigured(name.to_owned()))?;
+        let tools = conn.list_tools().await?;
+        Ok(tools
+            .into_iter()
+            .map(|t| {
+                // Call `schema_as_json_value()` first (borrows `t`) before
+                // moving any fields out of `t`. Then extract owned fields.
+                // `schema_as_json_value()` returns
+                // `Value::Object(self.input_schema.as_ref().clone())`.
+                let input_schema = t.schema_as_json_value();
+                McpToolEntry {
+                    server: name.to_owned(),
+                    tool: t.name.to_string(),
+                    description: t.description.map(|c| c.to_string()),
+                    input_schema,
+                }
+            })
+            .collect())
+    }
+
     /// Call a tool on a specific server.
     ///
-    /// `timeout` is enforced as a hard deadline via
-    /// [`tokio::time::timeout`]. The effective bound is
-    /// `min(timeout, server_config_timeout)` — whichever fires first
-    /// wins. On caller-timeout expiry this returns
-    /// [`McpError::Timeout`]; the server-config timeout is enforced
-    /// independently by [`McpServerConnection::call_tool`].
+    /// `timeout` bounds the RPC: the effective bound is
+    /// `min(timeout, server_config_timeout)` and expiry returns
+    /// [`McpError::Timeout`]. A lazy (re)connect before the RPC is bounded
+    /// by the server's startup deadline instead (see
+    /// [`McpServerConnection::call_tool_within`]).
     pub async fn call_tool(
         &self,
         server: &str,
@@ -345,11 +394,7 @@ impl McpRegistry {
             .servers
             .get(server)
             .ok_or_else(|| McpError::ServerNotConfigured(server.into()))?;
-        let r = match tokio::time::timeout(timeout, conn.call_tool(tool, arguments)).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_elapsed) => return Err(McpError::Timeout(timeout)),
-        };
+        let r = conn.call_tool_within(tool, arguments, timeout).await?;
         let r = crate::connection::opaque_error_result(r);
         // `r.content: Vec<Content>` where `Content = Annotated<RawContent>`.
         // `Annotated<T>` exposes the inner value as `pub raw: T`.

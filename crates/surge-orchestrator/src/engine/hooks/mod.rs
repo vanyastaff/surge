@@ -307,12 +307,16 @@ async fn spawn_via_shell(
     env: &[(&'static str, String)],
     ctx: &HookContext<'_>,
 ) -> Result<HookCommandResult, std::io::Error> {
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
     use tokio::process::Command;
 
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(command);
+        c.args(["/D", "/S", "/C"]);
+        // cmd parses shell programs itself; standard argv escaping changes quotes.
+        c.as_std_mut().raw_arg(format!("\"{command}\""));
         c
     };
 
@@ -991,7 +995,7 @@ mod tests {
         let outcome = exec.run_hooks(&hooks, HookTrigger::OnOutcome, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
-        assert!(spawner.calls().is_empty());
+        assert_eq!(spawner.calls().len(), 0);
     }
 
     #[tokio::test]
@@ -1035,6 +1039,38 @@ mod tests {
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_shell_preserves_quoted_executable_arguments_and_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("working directory");
+        std::fs::create_dir(&cwd).unwrap();
+        let executable = cwd.join("quoted command.exe");
+        std::fs::copy(std::env::var_os("ComSpec").unwrap(), &executable).unwrap();
+        let command = format!(
+            "\"{}\" /D /C echo \"quoted argument\">\"output file.txt\"&type \"output file.txt\"&echo compound",
+            executable.display()
+        );
+        let node = NodeKey::try_from("quoted_hook").unwrap();
+        let context = HookContext::for_node(&node).with_worktree_path(&cwd);
+        let result = spawn_via_shell(
+            &command,
+            Some(Duration::from_secs(5)),
+            Some(&cwd),
+            &[],
+            &context,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_status, 0, "{}", result.stderr);
+        assert_eq!(result.stdout, "\"quoted argument\"\r\ncompound\r\n");
+        assert_eq!(
+            std::fs::read(cwd.join("output file.txt")).unwrap(),
+            b"\"quoted argument\"\r\n"
+        );
+        assert!(!result.timed_out);
+    }
+
     #[tokio::test]
     async fn process_spawner_runs_real_command() {
         let exec = HookExecutor::new();
@@ -1068,7 +1104,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn real_hook_commits_writer_intent_before_its_first_side_effect() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -1091,16 +1127,28 @@ mod tests {
             id: "writer-boundary".into(),
             trigger: HookTrigger::PostToolUse,
             matcher: MatcherSpec::default(),
-            command: format!(
-                "python3 '{}' '{}' '{}'",
-                oracle.display(),
-                home.path()
+            command: {
+                let database = home
+                    .path()
                     .join("runs")
                     .join(run.to_string())
-                    .join("events.sqlite")
-                    .display(),
-                marker.display()
-            ),
+                    .join("events.sqlite");
+                #[cfg(target_os = "windows")]
+                let command = format!(
+                    "python \"{}\" \"{}\" \"{}\"",
+                    oracle.display(),
+                    database.display(),
+                    marker.display()
+                );
+                #[cfg(not(target_os = "windows"))]
+                let command = format!(
+                    "python3 '{}' '{}' '{}'",
+                    oracle.display(),
+                    database.display(),
+                    marker.display()
+                );
+                command
+            },
             on_failure: HookFailureMode::Reject,
             timeout_seconds: Some(5),
             inherit: HookInheritance::Extend,
@@ -1136,11 +1184,13 @@ mod tests {
             "a real hook wrote without durable pre-dispatch ownership"
         );
         writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rejected_hook_journal_write_prevents_shell_side_effect() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -1171,5 +1221,7 @@ mod tests {
             !marker.exists(),
             "a hook escaped rejected durable ownership intent"
         );
+        drop(storage);
+        home.close().unwrap();
     }
 }

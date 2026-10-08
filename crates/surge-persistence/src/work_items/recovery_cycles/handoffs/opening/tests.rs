@@ -2,6 +2,7 @@
 //! Seeding a Reserved record here is not a production cleanup/domain producer.
 use super::*;
 use crate::runs::{RunWriter, Storage};
+use crate::runtime_home_fixture::FixtureHome;
 use surge_core::{
     NodeKey, VersionedEventPayload as V,
     execution_recovery::{OpenedSession, ProviderSessionId, SessionRestoreCapabilities},
@@ -9,7 +10,6 @@ use surge_core::{
 };
 
 struct Fixture {
-    _home: tempfile::TempDir,
     store: WorkItemStore,
     claim: WorkItemLaunchClaim,
     writer: RunWriter,
@@ -18,6 +18,16 @@ struct Fixture {
     reservation: CandidateReservation,
     original: OpenedSession,
     opening_seq: u64,
+    _home: FixtureHome,
+}
+
+impl Fixture {
+    async fn close(self) {
+        self.writer.close().await.expect("close writer");
+        drop(self.claim);
+        drop(self.store);
+        self._home.close().expect("close runtime home");
+    }
 }
 
 fn descriptor(invocation: StageInvocationId, cwd: std::path::PathBuf) -> ProviderSessionDescriptor {
@@ -48,7 +58,7 @@ async fn fixture_with_options(admit: bool, pinned: bool) -> Fixture {
 }
 
 async fn fixture_with_loop(admit: bool, pinned: bool, loop_graph: bool) -> Fixture {
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let storage = Storage::open(home.path()).await.unwrap();
     let store = storage.work_items();
     let workspace = WorkItemWorkspace {
@@ -249,7 +259,6 @@ async fn fixture_with_loop(admit: bool, pinned: bool, loop_graph: bool) -> Fixtu
     };
     seed_reserved(&store, &body);
     Fixture {
-        _home: home,
         store,
         claim,
         writer,
@@ -258,6 +267,7 @@ async fn fixture_with_loop(admit: bool, pinned: bool, loop_graph: bool) -> Fixtu
         reservation,
         original,
         opening_seq: sequences[4].0,
+        _home: home,
     }
 }
 
@@ -302,7 +312,7 @@ async fn production_reservation_creates_one_opening_epoch_and_replay_cannot_spen
             .admit_provider_open(&f.claim, created.operation())
             .is_err()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -365,7 +375,7 @@ async fn next_frozen_candidate_requires_typed_origin_and_is_reserved_once_in_pol
             .is_err(),
         "an unconfirmed B opening must block another candidate grant"
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 fn seed_reserved(store: &WorkItemStore, body: &HandoffBody) {
@@ -459,7 +469,7 @@ async fn resume_store_admission_is_spent_once_without_an_rpc() {
         f.store.quota_handoff(epoch).unwrap().state(),
         QuotaHandoffState::OpeningUnknown
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -493,7 +503,7 @@ async fn exact_resume_epoch_preserves_provider_and_confirms_fresh_internal_sessi
             .admit_provider_open(&f.claim, f.body.operation)
             .is_err()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -582,7 +592,7 @@ async fn other_epoch_reused_internal_session_wrong_stage_and_stale_control_never
                 .is_err(),
             "{scenario}"
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }
 
@@ -604,7 +614,7 @@ async fn terminal_journal_cannot_spend_reserved_opening_admission() {
         f.store.quota_handoff(f.body.operation).unwrap().state(),
         QuotaHandoffState::Reserved
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -692,7 +702,7 @@ async fn two_store_restore_epochs_retain_provider_invocation_and_distinct_intern
             .confirm_provider_open(&f.claim, second.operation, first_seq)
             .is_err()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 fn quota_source(f: &Fixture) -> QuotaRateLimitSource {
@@ -744,7 +754,7 @@ async fn generic_false_probe_has_no_typed_origin_and_cannot_authorize_cleanup_st
             .unwrap(),
         current
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -831,7 +841,8 @@ async fn alternate_origin_replay_preserves_newer_available_without_open_authorit
             .admit_provider_open(&f.claim, f.body.operation)
             .is_err()
     );
-    f.writer.close().await.unwrap();
+    drop(reopened);
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -909,7 +920,8 @@ async fn host_origin_reopens_and_replays_without_replacing_later_available_probe
             .is_err()
     );
     assert_eq!(reopened.execution_control(f.claim.run).unwrap(), None);
-    f.writer.close().await.unwrap();
+    drop(reopened);
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -957,7 +969,7 @@ async fn stopped_source_and_later_closed_cycle_cannot_create_a_typed_origin() {
                 .unwrap(),
             current
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }
 
@@ -1028,7 +1040,7 @@ async fn typed_origin_survives_unknown_probe_and_closed_source_for_nonwake_clean
             .unwrap(),
         stop
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1099,7 +1111,7 @@ async fn automatic_wake_requires_current_confirmed_capacity_control_without_part
         )
         .unwrap();
     assert_eq!(controls, 0, "rejection must not reserve Continue");
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1394,7 +1406,7 @@ async fn automatic_wake_authorization_order(acknowledge: bool) {
             .is_err(),
         "a consumed automatic wake cannot issue a second provider-open permit"
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 async fn seal_fixture_exhaustion(f: &Fixture) -> RecoveryCycle {
@@ -1483,7 +1495,8 @@ async fn fresh_typed_exhaustion_is_reservation_and_recipe_scoped_after_reopen() 
                 .is_none()
         );
     }
-    f.writer.close().await.unwrap();
+    drop(reopened);
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1517,7 +1530,7 @@ async fn fresh_typed_exhaustion_requires_original_and_latest_false_windows() {
                 .is_some(),
             fresh
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }
 
@@ -1561,7 +1574,7 @@ async fn fresh_typed_exhaustion_unknown_probes_never_extend_typed_ttl_or_create_
             f.store.typed_rate_limit(&f.body.reservation).unwrap(),
             marker
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
     let f = fixture().await;
     f.store
@@ -1578,7 +1591,7 @@ async fn fresh_typed_exhaustion_unknown_probes_never_extend_typed_ttl_or_create_
             .unwrap()
             .is_none()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1635,7 +1648,7 @@ async fn fresh_typed_exhaustion_original_ttl_and_reset_each_bound_latest_probe()
                 .unwrap()
                 .is_none()
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }
 
@@ -1730,7 +1743,7 @@ async fn fresh_typed_exhaustion_rejects_corrupted_original_or_latest_bounds() {
                 .is_err(),
             "{corruption}"
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }
 
@@ -1761,7 +1774,7 @@ async fn newer_opening_without_quota_supersedes_exact_exhaustion() {
             .is_none(),
         "newer attempted opening is Unknown, even without quota policy or successful RPC"
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1781,7 +1794,7 @@ async fn historical_exhaustion_without_admission_is_not_actionable() {
             .unwrap()
             .is_some()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1833,7 +1846,7 @@ async fn late_old_origin_is_audit_only_and_unrelated_recipes_do_not_supersede() 
             .unwrap()
             .is_none()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 
     let f = fixture_with_admission(true).await;
     let expected = &f.body.launch.candidate;
@@ -1861,7 +1874,7 @@ async fn late_old_origin_is_audit_only_and_unrelated_recipes_do_not_supersede() 
             .is_none(),
         "late A error cannot resurrect exhaustion past a newer opening"
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1892,7 +1905,7 @@ async fn one_opening_cannot_attach_a_conflicting_exhaustion_origin() {
             .is_none(),
         "conflicting association rolls back new origin atomically"
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2033,6 +2046,8 @@ async fn planned_binding_retains_real_occurrence_and_first_open_is_one_shot() {
             .is_err(),
         "old same-node stage occurrence cannot become new authority"
     );
+    drop(connection);
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2056,7 +2071,7 @@ async fn unexecuted_cancellation_never_erases_historical_provider_uncertainty() 
             .admit_provider_open(&f.claim, f.body.operation)
             .is_err()
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2094,7 +2109,7 @@ async fn fresh_skip_and_actual_exhaustion_park_with_the_real_provider_origin() {
     assert!(
         matches!(association.evidence_origin().unwrap(),CapacityEvidenceOrigin::ProviderReservation(receipt) if receipt==reservation.receipt)
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2218,7 +2233,7 @@ async fn malformed_or_advanced_plans_never_create_a_binding() {
             before,
             "rejected {case} plan must make no registry writes"
         );
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }
 
@@ -2384,7 +2399,7 @@ async fn authenticated_same_node_reentry_retains_a_newer_unadmitted_plan() {
             .is_err(),
         "missing original registry binding cannot grant a new occurrence"
     );
-    f.writer.close().await.unwrap();
+    f.close().await;
 }
 
 async fn fixture_with_two_fresh_pinned_sources()
@@ -2687,6 +2702,6 @@ async fn planned_park_rejects_advanced_journal_without_mutating_capacity_authori
                     .is_empty()
             );
         }
-        f.writer.close().await.unwrap();
+        f.close().await;
     }
 }

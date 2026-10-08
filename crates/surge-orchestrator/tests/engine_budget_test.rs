@@ -6,6 +6,10 @@
 //! must emit `BudgetExceeded` and abort the run at the stage boundary — proving
 //! the `enforce_budget` hook fires against the freshly-folded cumulative cost.
 
+#[path = "fixtures/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
@@ -241,186 +245,195 @@ fn one_agent_graph() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_aborts_when_token_budget_exceeded() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    // 15_000 tokens reported by the stage, against a 1_000-token budget.
-    let bridge = Arc::new(BudgetMockBridge::new(10_000, 5_000)) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        // 15_000 tokens reported by the stage, against a 1_000-token budget.
+        let bridge = Arc::new(BudgetMockBridge::new(10_000, 5_000)) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_config = EngineRunConfig {
-        budget: BudgetGuard {
-            limits: BudgetLimits {
-                usd: None,
-                tokens: Some(1_000),
-                warn_threshold_pct: 80,
+        let run_config = EngineRunConfig {
+            budget: BudgetGuard {
+                limits: BudgetLimits {
+                    usd: None,
+                    tokens: Some(1_000),
+                    warn_threshold_pct: 80,
+                },
+                policy: BudgetPolicy::Abort,
             },
-            policy: BudgetPolicy::Abort,
-        },
-        ..EngineRunConfig::default()
-    };
+            ..EngineRunConfig::default()
+        };
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            one_agent_graph(),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await
-        .unwrap();
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                one_agent_graph(),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await
+            .unwrap();
 
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .expect("run hung > 30s")
-        .expect("await_completion");
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("run hung > 30s")
+            .expect("await_completion");
 
-    match outcome {
-        RunOutcome::Aborted { reason } => {
-            assert!(
-                reason.contains("budget exceeded"),
-                "abort reason should cite the budget, got: {reason}"
-            );
-        },
-        other => panic!("expected Aborted on budget breach, got {other:?}"),
+        match outcome {
+            RunOutcome::Aborted { reason } => {
+                assert!(
+                    reason.contains("budget exceeded"),
+                    "abort reason should cite the budget, got: {reason}"
+                );
+            },
+            other => panic!("expected Aborted on budget breach, got {other:?}"),
+        }
+
+        drop(engine);
+
+        // The event log must carry a BudgetExceeded record (Tokens dimension) and
+        // must NOT reach the terminal `end` node (RunCompleted).
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+
+        let saw_exceeded = events.iter().any(|ev| {
+            matches!(
+                &ev.payload.payload,
+                EventPayload::BudgetExceeded {
+                    dimension: surge_core::budget::BudgetDimension::Tokens,
+                    ..
+                }
+            )
+        });
+        assert!(
+            saw_exceeded,
+            "expected a BudgetExceeded(Tokens) event in the log"
+        );
+
+        let completed = events
+            .iter()
+            .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. }));
+        assert!(!completed, "run must not complete after a budget breach");
     }
-
-    drop(engine);
-
-    // The event log must carry a BudgetExceeded record (Tokens dimension) and
-    // must NOT reach the terminal `end` node (RunCompleted).
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-
-    let saw_exceeded = events.iter().any(|ev| {
-        matches!(
-            &ev.payload.payload,
-            EventPayload::BudgetExceeded {
-                dimension: surge_core::budget::BudgetDimension::Tokens,
-                ..
-            }
-        )
-    });
-    assert!(
-        saw_exceeded,
-        "expected a BudgetExceeded(Tokens) event in the log"
-    );
-
-    let completed = events
-        .iter()
-        .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. }));
-    assert!(!completed, "run must not complete after a budget breach");
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_completes_within_budget() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    // 150 tokens reported, well under a 10_000-token budget.
-    let bridge = Arc::new(BudgetMockBridge::new(100, 50)) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        // 150 tokens reported, well under a 10_000-token budget.
+        let bridge = Arc::new(BudgetMockBridge::new(100, 50)) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_config = EngineRunConfig {
-        budget: BudgetGuard {
-            limits: BudgetLimits {
-                usd: None,
-                tokens: Some(10_000),
-                warn_threshold_pct: 80,
+        let run_config = EngineRunConfig {
+            budget: BudgetGuard {
+                limits: BudgetLimits {
+                    usd: None,
+                    tokens: Some(10_000),
+                    warn_threshold_pct: 80,
+                },
+                policy: BudgetPolicy::Abort,
             },
-            policy: BudgetPolicy::Abort,
-        },
-        ..EngineRunConfig::default()
-    };
+            ..EngineRunConfig::default()
+        };
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            one_agent_graph(),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await
-        .unwrap();
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                one_agent_graph(),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await
+            .unwrap();
 
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .expect("run hung > 30s")
-        .expect("await_completion");
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("run hung > 30s")
+            .expect("await_completion");
 
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed within budget, got {other:?}"),
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => panic!("expected Completed within budget, got {other:?}"),
+        }
+        drop(engine);
     }
-    drop(engine);
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn warn_only_records_breach_but_completes() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    // 15_000 tokens reported, against a 1_000-token budget under WarnOnly.
-    let bridge = Arc::new(BudgetMockBridge::new(10_000, 5_000)) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        // 15_000 tokens reported, against a 1_000-token budget under WarnOnly.
+        let bridge = Arc::new(BudgetMockBridge::new(10_000, 5_000)) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_config = EngineRunConfig {
-        budget: BudgetGuard {
-            limits: BudgetLimits {
-                usd: None,
-                tokens: Some(1_000),
-                warn_threshold_pct: 80,
+        let run_config = EngineRunConfig {
+            budget: BudgetGuard {
+                limits: BudgetLimits {
+                    usd: None,
+                    tokens: Some(1_000),
+                    warn_threshold_pct: 80,
+                },
+                policy: BudgetPolicy::WarnOnly,
             },
-            policy: BudgetPolicy::WarnOnly,
-        },
-        ..EngineRunConfig::default()
-    };
+            ..EngineRunConfig::default()
+        };
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            one_agent_graph(),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await
-        .unwrap();
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                one_agent_graph(),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await
+            .unwrap();
 
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
-        .await
-        .expect("run hung > 30s")
-        .expect("await_completion");
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("run hung > 30s")
+            .expect("await_completion");
 
-    // WarnOnly never stops the run — it completes.
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed under WarnOnly, got {other:?}"),
+        // WarnOnly never stops the run — it completes.
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => panic!("expected Completed under WarnOnly, got {other:?}"),
+        }
+        drop(engine);
+
+        // ...but the breach is still recorded for visibility (no abort).
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        let saw_exceeded = events
+            .iter()
+            .any(|ev| matches!(ev.payload.payload, EventPayload::BudgetExceeded { .. }));
+        let saw_aborted = events
+            .iter()
+            .any(|ev| matches!(ev.payload.payload, EventPayload::RunAborted { .. }));
+        assert!(saw_exceeded, "WarnOnly must still record the breach");
+        assert!(!saw_aborted, "WarnOnly must not abort the run");
     }
-    drop(engine);
-
-    // ...but the breach is still recorded for visibility (no abort).
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-    let saw_exceeded = events
-        .iter()
-        .any(|ev| matches!(ev.payload.payload, EventPayload::BudgetExceeded { .. }));
-    let saw_aborted = events
-        .iter()
-        .any(|ev| matches!(ev.payload.payload, EventPayload::RunAborted { .. }));
-    assert!(saw_exceeded, "WarnOnly must still record the breach");
-    assert!(!saw_aborted, "WarnOnly must not abort the run");
+    dir.close().unwrap();
 }

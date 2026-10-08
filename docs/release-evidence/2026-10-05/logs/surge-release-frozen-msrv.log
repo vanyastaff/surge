@@ -1,0 +1,22 @@
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+error: failed to write query cache to `/Users/vanyastafford/Develop/surge/target/debug/incremental/memory_writeback_test-18wd4g2n19pyk/s-hmxg72u0xz-0665rqp-working/query-cache.bin`: No space left on device (os error 28)
+
+error: could not compile `surge-orchestrator` (test "memory_writeback_test") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: couldn't create a temp dir: No space left on device (os error 28) at path "/Users/vanyastafford/Develop/surge/target/debug/deps/rmetampOnke"
+
+error: could not compile `surge-cli` (bin "surge" test) due to 1 previous error
+error: couldn't create a temp dir: No space left on device (os error 28) at path "/Users/vanyastafford/Develop/surge/target/debug/deps/rmetaUdlMfe"
+
+error: could not compile `surge-telegram` (lib test) due to 1 previous error

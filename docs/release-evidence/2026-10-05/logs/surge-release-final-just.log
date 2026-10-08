@@ -1,0 +1,53 @@
+Available recipes:
+    default                # Show all available recipes
+
+    [bench]
+    bench                  # Run all surge-core criterion benchmarks
+    bench-one name         # Run a specific bench by name (e.g. just bench-one fold_events). Available: fold_events, validate_graphs, toml_roundtrip, bincode_roundtrip
+
+    [build]
+    build                  # Build the core workspace (excludes the GPUI desktop shell)
+    build-all              # Build everything, including the surge-ui desktop shell
+    build-mock-agent       # Build the mock ACP agent (needed for ignored integration tests)
+    build-release          # Build the surge CLI and daemon in release mode
+    build-ui               # Build only the surge-ui desktop shell
+    bundle-ui *args        # Build surge-ui and wrap it in a macOS Surge.app bundle (macOS only)
+
+    [ci]
+    ci                     # Mirror the GitHub Actions ci.yml workflow — fmt + clippy + tests
+    ci-full                # Full local check suite — ci + audit + deny + local integration tests
+
+    [lint]
+    clippy                 # Strict clippy on the whole workspace (all and default features)
+    clippy-strict          # Strict clippy on surge-core and surge-acp (warnings → errors)
+    fmt                    # Apply rustfmt to the whole workspace
+    fmt-check              # Check code formatting without modifying files
+    lint                   # Run all lints — fmt-check + clippy-strict + clippy (mirrors ci.yml)
+
+    [maintenance]
+    clean                  # Remove cargo build artifacts (target/)
+    clean-worktrees        # Clean up orphaned surge worktrees and merged branches (delegates to surge CLI)
+
+    [run]
+    daemon-start           # Start the surge daemon detached
+    daemon-stop            # Stop the surge daemon
+    engine flow            # Run a flow.toml through the engine in-process (e.g. just engine examples/flow_minimal_agent.toml)
+    ping agent             # Ping a configured ACP agent (e.g. just ping claude)
+    prompt agent message   # Send a one-shot prompt to a configured ACP agent (e.g. just prompt claude "summarize")
+    smoke                  # Smoke-test the smallest flow (terminal node only — no agent needed)
+    smoke-agent            # Smoke-test the minimal agent flow (requires a configured ACP agent on PATH)
+
+    [security]
+    audit                  # Audit Cargo.lock against the RustSec advisory DB (install: just install-tools)
+    deny                   # Check locked dependencies against advisory, license and source policy
+
+    [test]
+    nextest *args          # Run tests via cargo-nextest (faster runner; install: just install-tools)
+    test *args             # Run the workspace test suite (excludes surge-ui). Pass extra args after --
+    test-all               # Run the full test suite — workspace tests + ignored integration tests
+    test-crate crate *args # Run tests for a single crate (e.g. just test-crate surge-core)
+    test-ignored           # Run the required local mock/restart integration allowlist
+
+    [tooling]
+    install-tools          # Install dev tooling used by recipes above (audit, deny, nextest)
+    version                # Print project name and current commit derived from git

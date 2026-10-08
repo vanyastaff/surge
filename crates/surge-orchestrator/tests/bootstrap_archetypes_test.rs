@@ -1,6 +1,7 @@
 //! Task 23 — bootstrap materializes the remaining bundled archetypes.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use surge_orchestrator::engine::validate::validate_for_m6;
 
@@ -39,5 +40,6 @@ async fn bootstrap_materializes_bug_fix_refactor_and_spike_archetypes() {
         let materialized = driver.await.unwrap().expect("bootstrap succeeds");
         assert_eq!(materialized.materialized_graph.metadata.name, archetype);
         validate_for_m6(&materialized.materialized_graph).unwrap();
+        harness.close();
     }
 }

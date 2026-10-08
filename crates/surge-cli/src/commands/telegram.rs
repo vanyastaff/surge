@@ -114,17 +114,18 @@ fn setup(
     document["telegram"] = toml_edit::Item::Table(telegram);
     // The replaced table removes unsupported inline credentials during migration.
     std::fs::write(&path, document.to_string()).context("save Telegram environment reference")?;
-    let conn = open_registry_connection()?;
-    secrets::delete_secret(&conn, TELEGRAM_BOT_TOKEN_KEY)
-        .context("remove legacy plaintext Telegram credential")?;
-    let pairing_token = mint_pairing_token(
-        &conn,
-        &label,
-        chat_id,
-        Duration::from_secs(ttl_secs),
-        now_ms(),
-    )
-    .context("mint pairing code")?;
+    let pairing_token = with_registry_connection(|conn| {
+        secrets::delete_secret(conn, TELEGRAM_BOT_TOKEN_KEY)
+            .context("remove legacy plaintext Telegram credential")?;
+        mint_pairing_token(
+            conn,
+            &label,
+            chat_id,
+            Duration::from_secs(ttl_secs),
+            now_ms(),
+        )
+        .context("mint pairing code")
+    })?;
     println!(
         "Telegram configured for chat {chat_id}; supply the token environment variable to the daemon."
     );
@@ -135,8 +136,9 @@ fn setup(
 
 /// `surge telegram revoke <chat_id>` — soft-delete the allowlist row.
 fn revoke(chat_id: i64) -> Result<()> {
-    let conn = open_registry_connection()?;
-    pairings::revoke(&conn, chat_id, now_ms()).context("revoke pairing")?;
+    with_registry_connection(|conn| {
+        pairings::revoke(conn, chat_id, now_ms()).context("revoke pairing")
+    })?;
     tracing::info!(
         target: "cli::telegram",
         chat_id = %chat_id,
@@ -148,8 +150,9 @@ fn revoke(chat_id: i64) -> Result<()> {
 
 /// `surge telegram list` — print every active pairing.
 fn list() -> Result<()> {
-    let conn = open_registry_connection()?;
-    let rows = pairings::list_active(&conn).context("list active pairings")?;
+    let rows = with_registry_connection(|conn| {
+        pairings::list_active(conn).context("list active pairings")
+    })?;
     if rows.is_empty() {
         println!("No active pairings.");
         return Ok(());
@@ -169,20 +172,16 @@ fn list() -> Result<()> {
 /// Open a single connection on the registry SQLite. Applies migrations as
 /// a side-effect via the existing `Storage`-less path so this command
 /// works on a fresh install where the daemon has never run.
-fn open_registry_connection() -> Result<rusqlite::Connection> {
+fn with_registry_connection<T>(
+    operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+) -> Result<T> {
     let home = surge_home_dir()?;
     let clock = surge_persistence::runs::SystemClock;
     let pool = surge_persistence::runs::registry::open_registry_pool(&home, &clock)
         .map_err(|e| anyhow!("open registry pool: {e}"))?;
     let conn = pool.get().context("acquire registry connection")?;
-    // The pool returns a managed connection that drops back into the pool
-    // on `Drop`. Detaching to an owned rusqlite::Connection requires
-    // opening the underlying file directly — simpler than threading a
-    // pool through every callsite for a one-shot CLI command.
-    let db_path = home.join("db").join("registry.sqlite");
-    drop(conn);
-    drop(pool);
-    rusqlite::Connection::open(&db_path).map_err(|e| anyhow!("open registry: {e}"))
+    // Keep the actual pool/connection and its native owner through the operation.
+    operation(&conn)
 }
 
 /// `$SURGE_HOME` if set and non-empty, otherwise `~/.surge/`.

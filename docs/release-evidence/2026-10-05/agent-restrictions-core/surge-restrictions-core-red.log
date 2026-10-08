@@ -1,0 +1,54 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.54s
+     Running unittests src/lib.rs (target/debug/deps/surge_core-bf6f14784d2b9d1e)
+
+running 7 tests
+test agent_restrictions::tests::effort_floor_retains_legacy_but_required_unknown_fails ... ok
+test agent_restrictions::tests::rejects_blank_and_unknown_fields ... ok
+test agent_restrictions::tests::omitted_empty_and_exact_case_are_distinct ... FAILED
+test agent_restrictions::tests::independent_selectors_cannot_be_merged ... FAILED
+test agent_restrictions::tests::deny_models_and_independent_thinking ... FAILED
+test agent_restrictions::tests::route_and_family_precede_values ... FAILED
+test agent_restrictions::tests::rejects_contradictory_declarations ... FAILED
+
+failures:
+
+---- agent_restrictions::tests::omitted_empty_and_exact_case_are_distinct stdout ----
+
+thread 'agent_restrictions::tests::omitted_empty_and_exact_case_are_distinct' (39287111) panicked at crates/surge-core/src/agent_restrictions.rs:177:9:
+assertion failed: rules(r#"{"allowed_models":[]}"#).check_selection(RestrictionDimension::Model,
+        None, Some("M")).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- agent_restrictions::tests::independent_selectors_cannot_be_merged stdout ----
+
+thread 'agent_restrictions::tests::independent_selectors_cannot_be_merged' (39287110) panicked at crates/surge-core/src/agent_restrictions.rs:195:9:
+assertion failed: current.check_selection(RestrictionDimension::Effort, Some("old"),
+        Some("high")).is_err()
+
+---- agent_restrictions::tests::deny_models_and_independent_thinking stdout ----
+
+thread 'agent_restrictions::tests::deny_models_and_independent_thinking' (39287108) panicked at crates/surge-core/src/agent_restrictions.rs:202:9:
+assertion failed: rule.check_selection(RestrictionDimension::Model, None, Some("M")).is_err()
+
+---- agent_restrictions::tests::route_and_family_precede_values stdout ----
+
+thread 'agent_restrictions::tests::route_and_family_precede_values' (39287114) panicked at crates/surge-core/src/agent_restrictions.rs:185:9:
+assertion failed: matches!(policy.check_route("canonical",Some("other")),Err(RestrictionViolation::DisabledAgent(_)))
+
+---- agent_restrictions::tests::rejects_contradictory_declarations stdout ----
+
+thread 'agent_restrictions::tests::rejects_contradictory_declarations' (39287113) panicked at crates/surge-core/src/agent_restrictions.rs:171:9:
+assertion failed: serde_json::from_str::<AgentRestrictions>(r#"{"allowed_models":["M"],"disabled_models":["M"]}"#).is_err()
+
+
+failures:
+    agent_restrictions::tests::deny_models_and_independent_thinking
+    agent_restrictions::tests::independent_selectors_cannot_be_merged
+    agent_restrictions::tests::omitted_empty_and_exact_case_are_distinct
+    agent_restrictions::tests::rejects_contradictory_declarations
+    agent_restrictions::tests::route_and_family_precede_values
+
+test result: FAILED. 2 passed; 5 failed; 0 ignored; 0 measured; 855 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p surge-core --lib`

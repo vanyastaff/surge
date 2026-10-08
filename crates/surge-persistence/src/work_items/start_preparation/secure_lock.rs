@@ -146,19 +146,12 @@ impl PreparationLock {
         }
     }
 }
+/// Private owned-flow objects exist only on Linux and macOS
+/// (`owned_flow::private_files`), so this check has no other callers.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::work_items) fn validate_private_acl(file: &std::fs::File) -> Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        unix::check_acl(file)
-            .map_err(|()| WorkItemError::Invalid("unsafe private preparation ACL".into()))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = file;
-        Err(WorkItemError::Invalid(
-            "private preparation unsupported on this platform".into(),
-        ))
-    }
+    unix::check_acl(file)
+        .map_err(|()| WorkItemError::Invalid("unsafe private preparation ACL".into()))
 }
 #[cfg(windows)]
 pub(in crate::work_items) mod windows;

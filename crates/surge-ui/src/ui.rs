@@ -476,9 +476,16 @@ pub fn abbreviate_home(path: &std::path::Path) -> String {
 pub fn current_branch(path: &std::path::Path) -> Option<String> {
     let repo = git2::Repository::discover(path).ok()?;
     let head = repo.head().ok()?;
-    head.is_branch()
-        .then(|| head.shorthand().map(str::to_string))
-        .flatten()
+    if !head.is_branch() {
+        return None;
+    }
+    match head.shorthand() {
+        Ok(branch) => Some(branch.to_string()),
+        Err(error) => {
+            tracing::warn!(%error, "cannot display repository branch name");
+            None
+        },
+    }
 }
 
 #[cfg(test)]

@@ -320,3 +320,13 @@ pub fn fold(state: RunState, event: &RunEvent) -> RunState {
 - ❌ **`HashMap` in serialized event payloads.** Iteration order is non-deterministic; use `BTreeMap` or `Vec<(K, V)>`.
 - ❌ **Telegram / Slack / email logic outside `surge-notify`.** Notification channels live behind one trait in one crate. New channels are new impls, not new crates.
 - ❌ **A second user-facing config format alongside `surge.toml`.** If you need new config, extend the existing schema and update `surge.example.toml`.
+
+## MCP cold recovery (accepted, not implemented)
+
+[ADR-0021](../docs/adr/0021-mcp-restart-recovery.md) replaces the managed VM and
+effect-broker direction of [ADR-0020](../docs/adr/0020-managed-mcp-recovery.md). On cold
+recovery the daemon stops the prior MCP server's process group, records that
+best-effort (`GroupOnly`) cleanup, starts a fresh server from the frozen
+manifest and resumes. Interrupted tool calls are reported to the agent and never
+replayed. Identity conflicts, changed manifests and bad private inputs still
+refuse. ACP enforcement remains delegated.

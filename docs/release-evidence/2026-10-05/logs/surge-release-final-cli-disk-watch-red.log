@@ -1,0 +1,37 @@
+['git', 'init'] 0 Initialized empty Git repository in /private/var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/surge-watch-red-x1oplnrk/project/.git/
+ hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+
+['git', 'add', 'flow.toml'] 0
+['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Fixture'] 0 [master (root-commit) 6772531] Fixture
+ 1 file changed, 30 insertions(+)
+ create mode 100644 flow.toml
+
+[PosixPath('/Users/vanyastafford/Develop/surge/target/debug/surge'), 'engine', 'run', 'flow.toml', '--watch'] 0 started surge-daemon (pid 79385)
+daemon log: /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/surge-watch-red-x1oplnrk/home/daemon/daemon.log
+daemon ready: /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/surge-watch-red-x1oplnrk/home/daemon/daemon.sock
+run-01M45YW84BKMMAQC1ABXRTYXTQ
+ note: daemon not running; auto-spawning…
+run run-01M45YW84BKMMAQC1ABXRTYXTQ is not currently active in the daemon; attempting to read event history from disk.
+[1] RunStarted
+[2] PipelineMaterialized
+[3] OwnedFlowInputsBound
+[4] ArtifactProduced
+[5] ArtifactProduced
+[6] WorkItemAttemptBound
+[7] StageEntered
+[8] RunFailed
+
+[PosixPath('/Users/vanyastafford/Develop/surge/target/debug/surge'), 'daemon', 'stop'] 0 requested daemon stop (pid 79385)
+
+Traceback (most recent call last):
+  File "<stdin>", line 10, in <module>
+AssertionError

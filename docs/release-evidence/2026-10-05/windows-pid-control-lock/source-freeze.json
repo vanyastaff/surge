@@ -1,0 +1,19 @@
+{
+  "files": {
+    "crates/surge-persistence/src/state_home/windows/namespace.rs": "f47e8a4523c3790bf210d917a3d6b995b3fd9d80913bcb6cce6e9e069a867955",
+    "crates/surge-persistence/src/state_home.rs": "b5e8ab0f9781216a12c2fa011ac58fa4f76520ae766cd48cc6489dc2faa6f37a",
+    "crates/surge-persistence/src/state_home/control_lock_tests.rs": "538802d9e20068ab11176bc959e7be698cdaf0fa3e33736910b4d9d4e3c69eb4",
+    "crates/surge-daemon/src/pidfile/windows.rs": "e818e139b01a956830e0e4a487820fd47007c9101d38aab877c375dc6112ea66",
+    "scripts/windows-native-probe.ps1": "793f9478cf1160750a5731d4e2a2d7b5c636a8fd43dfb1a2375a5b9fdb36118d"
+  },
+  "cross_clippy": {
+    "toolchain": "1.99.0",
+    "jobs": 1,
+    "exit": 0,
+    "scope": "Actual native/security/namespace/creation_observation modules including cfg(test); no fake validators. Wrapper dead_code allowance covers unconsumed module surface. Outer control_lock_tests and daemon PID test are not compiled by this harness."
+  },
+  "full_workspace_fmt_exit": 0,
+  "diff_check": "PASS",
+  "native_execution": "PENDING",
+  "review": "Independent pre-code plan and frozen-source/incremental security preflight ACCEPTABLE; full native 5a/5b remain open."
+}

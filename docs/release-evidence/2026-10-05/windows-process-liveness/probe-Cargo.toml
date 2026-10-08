@@ -1,0 +1,10 @@
+[package]
+name = "surge-process-tracker-source-probe"
+version = "0.0.0"
+edition = "2024"
+[dependencies]
+surge-core = { path = "/Users/vanyastafford/Develop/surge/crates/surge-core" }
+tracing = "0.1"
+windows = { version = "=0.58.0", features = ["Win32_Foundation", "Win32_System_Threading"] }
+[dev-dependencies]
+tempfile = "=3.27.0"

@@ -46,6 +46,36 @@ struct Args {
     detached: bool,
 }
 
+/// The guard is created before spawn, including the never-polled abort path.
+struct DaemonTaskExit {
+    name: &'static str,
+    shutdown: CancellationToken,
+}
+
+impl Drop for DaemonTaskExit {
+    fn drop(&mut self) {
+        if !self.shutdown.is_cancelled() {
+            tracing::error!(
+                task = self.name,
+                "daemon owner exited before shutdown; beginning drain"
+            );
+        }
+        self.shutdown.cancel();
+    }
+}
+
+fn supervise_daemon_task<F: std::future::Future>(
+    name: &'static str,
+    shutdown: CancellationToken,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    let guard = DaemonTaskExit { name, shutdown };
+    async move {
+        let _guard = guard;
+        future.await
+    }
+}
+
 fn parse_humantime(s: &str) -> Result<Duration, String> {
     humantime::parse_duration(s).map_err(|e| e.to_string())
 }
@@ -65,19 +95,14 @@ fn main() -> std::process::ExitCode {
     let args = Args::parse();
 
     // Acquire PID lock before touching the runtime — failure exits cheaply.
-    if let Err(e) = pidfile::acquire_lock(std::process::id()) {
-        eprintln!("surge-daemon: {e}");
-        return std::process::ExitCode::from(2);
-    }
-
-    let socket_path = match pidfile::socket_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("surge-daemon: socket_path: {e}");
-            let _ = pidfile::release_lock();
+    let pid_guard = match pidfile::PidfileGuard::acquire(std::process::id()) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("surge-daemon: {error}");
             return std::process::ExitCode::from(2);
         },
     };
+    let socket_path = pidfile::socket_path_in(pid_guard.home());
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -86,7 +111,6 @@ fn main() -> std::process::ExitCode {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("surge-daemon: tokio runtime: {e}");
-            let _ = pidfile::release_lock();
             return std::process::ExitCode::from(2);
         },
     };
@@ -97,7 +121,7 @@ fn main() -> std::process::ExitCode {
         lifecycle::install_signal_handlers(shutdown.clone());
 
         // Storage::open returns Arc<Storage> directly.
-        let storage = match Storage::open(&surge_runs_dir()).await {
+        let storage = match Storage::open(pid_guard.home()).await {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("surge-daemon: storage: {e}");
@@ -179,6 +203,8 @@ fn main() -> std::process::ExitCode {
                 // daemon-dispatched run resolves a custom provider exactly
                 // like a builtin one.
                 agent_registry: Some(agent_registry.clone()),
+                escalation: surge_orchestrator::engine::escalation_config(&config, &agent_registry),
+                fallback_agents: config.capacity.fallback_agents.clone(),
                 ..EngineConfig::default()
             },
         ));
@@ -192,8 +218,9 @@ fn main() -> std::process::ExitCode {
             Arc::new(LocalEngineFacade::new(engine));
 
         // Write version file so the CLI can read the running daemon's version.
-        if let Ok(path) = pidfile::version_path() {
-            let _ = std::fs::write(path, env!("CARGO_PKG_VERSION"));
+        if let Err(error) = pid_guard.write_version(env!("CARGO_PKG_VERSION")) {
+            tracing::error!(%error, "daemon version publication failed");
+            return 2u8;
         }
 
         // --- Plan C T9.2: spawn TaskRouter from the config already loaded
@@ -301,7 +328,7 @@ fn main() -> std::process::ExitCode {
         // try to resume or re-status a run that is already live. Resumes
         // flow through the shared admission + broadcast registry so
         // recovered runs publish RunFinished globally.
-        let worktrees_root = surge_runs_dir().join("worktrees");
+        let worktrees_root = storage.home().join("worktrees");
         let bootstrap_runtime = if bootstrap_configured {
             surge_orchestrator::profile_loader::profiles_dir().ok().and_then(|profiles_root| {
                 surge_daemon::bootstrap_runtime::BootstrapRuntime::new(
@@ -367,7 +394,11 @@ fn main() -> std::process::ExitCode {
         tokio::spawn(wake_scheduler.run(shutdown_for_wake));
 
         // Completion reconciliation also serves inbox-only and previously configured sources.
-        match rusqlite::Connection::open(storage.registry_db_path()) {
+        // Used synchronously from async code; keep lock waits off the worker.
+        match rusqlite::Connection::open(storage.registry_db_path()).and_then(|conn| {
+            surge_persistence::runs::busy::install(&conn)?;
+            Ok(conn)
+        }) {
             Ok(conn) => {
                 intake_completion::spawn(
                     completion_rx,
@@ -411,7 +442,7 @@ fn main() -> std::process::ExitCode {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
 
-        spawn_inbox_subsystems(
+        let consumer_handle = spawn_inbox_subsystems(
             Arc::clone(&storage),
             Arc::clone(&source_registry),
             Arc::clone(&facade),
@@ -425,7 +456,7 @@ fn main() -> std::process::ExitCode {
             max_queue,
             socket_path: socket_path.clone(),
         };
-        let server_handle = tokio::spawn({
+        let server_handle = tokio::spawn(supervise_daemon_task("server", shutdown.clone(), {
             let facade = facade.clone();
             let shutdown_for_server = shutdown.clone();
             // F1: keep a second clone so that a server error (e.g. bind failure)
@@ -435,51 +466,68 @@ fn main() -> std::process::ExitCode {
             let broadcast = Arc::clone(&broadcast_registry);
             let admission = Arc::clone(&admission);
             async move {
-                if let Err(e) =
-                    run_with_supervisor(server_cfg, facade, tracking, broadcast, admission, shutdown_for_server, bootstrap)
-                        .await
-                {
+                let result = run_with_supervisor(server_cfg, facade, tracking, broadcast, admission, shutdown_for_server, bootstrap)
+                    .await;
+                if let Err(e) = &result {
                     tracing::error!(err = %e, "server exited with error; cancelling shutdown token");
                     shutdown_for_cancel.cancel();
                 }
+                result
             }
-        });
+        }));
 
         // Keep the grace deadline, but exit early once every tracked owner and
         // connection has settled and run forwarders have deregistered.
         lifecycle::drain_until(shutdown, args.shutdown_grace, || async {
             server_handle.is_finished()
+                && consumer_handle.is_finished()
                 && bootstrap_handle.is_finished()
                 && admission.snapshot().await.active == 0
                 && broadcast_registry.active_count().await == 0
         }).await;
-        server_handle.abort();
+        let server_completed = server_handle.is_finished();
+        if !server_completed {
+            server_handle.abort();
+        }
+        let mut server_exit = match server_handle.await {
+            Ok(Ok(())) => 0u8,
+            Ok(Err(_)) => 1u8,
+            Err(error) if !server_completed && error.is_cancelled() => 0u8,
+            Err(error) => {
+                tracing::error!(%error, "server task failed");
+                1u8
+            },
+        };
+        let consumer_completed = consumer_handle.is_finished();
+        if !consumer_completed {
+            tracing::warn!("inbox shutdown grace expired; execution settlement remains unconfirmed");
+            consumer_handle.abort();
+        }
+        match consumer_handle.await {
+            Ok(()) => {},
+            Err(error) if !consumer_completed && error.is_cancelled() => {},
+            Err(error) => {
+                tracing::error!(%error, "inbox consumer task failed");
+                server_exit = 1;
+            },
+        }
+        // Aborting a consumer drops its engine completion handles; that is not
+        // an engine join. HostRuntime remains the final owner after grace.
         if !bootstrap_handle.is_finished() {
             tracing::warn!("bootstrap shutdown grace expired; unfinished journal phases remain recoverable");
             bootstrap_handle.abort();
         }
         let _ = bootstrap_handle.await;
-        0u8
+        server_exit
     });
 
     drop(rt);
-    let _ = pidfile::release_lock();
-    let _ = std::fs::remove_file(&socket_path);
-    std::process::ExitCode::from(exit)
-}
-
-fn surge_runs_dir() -> std::path::PathBuf {
-    // `SURGE_HOME` (set and non-empty) relocates the surge home — keeps the
-    // daemon's runs/worktrees/intake in the same sandbox as its pid/socket
-    // (see `pidfile::daemon_dir`) and matches the CLI contract.
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return std::path::PathBuf::from(custom);
+    if let Err(error) = pid_guard.release() {
+        tracing::error!(%error, "daemon PID release failed");
+        #[cfg(windows)]
+        return std::process::ExitCode::from(2);
     }
-    dirs::home_dir()
-        .map(|h| h.join(".surge"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".surge"))
+    std::process::ExitCode::from(exit)
 }
 
 /// Deliver a Medium-priority placeholder InboxCard for `event` via the inbox queue.
@@ -650,7 +698,7 @@ async fn handle_triage_event(
         candidates,
         active_runs,
     };
-    let scratch_root = surge_runs_dir().join("intake").join("triage");
+    let scratch_root = storage.home().join("intake").join("triage");
     let opts = surge_orchestrator::triage::TriageOptions::with_scratch_root(
         scratch_root,
         surge_orchestrator::triage::find_claude_binary(),
@@ -1382,6 +1430,12 @@ async fn spawn_task_router(
         },
     };
 
+    // Used synchronously from async code; keep lock waits off the worker.
+    if let Err(e) = surge_persistence::runs::busy::install(&conn) {
+        tracing::error!(error = %e, "failed to install registry busy handler on dedup connection; intake disabled");
+        return None;
+    }
+
     // Enable foreign keys for consistency with the registry pool's pragmas.
     if let Err(e) = conn.execute("PRAGMA foreign_keys = ON;", []) {
         tracing::error!(error = %e, "failed to enable foreign keys on dedup connection; intake disabled");
@@ -1488,7 +1542,7 @@ async fn spawn_inbox_subsystems(
     cockpit_engine: Arc<surge_orchestrator::engine::Engine>,
     config: &surge_core::config::SurgeConfig,
     shutdown: CancellationToken,
-) {
+) -> tokio::task::JoinHandle<()> {
     use surge_daemon::inbox::{
         consumer::InboxActionConsumer, desktop_listener::DesktopActionListener,
         snooze_scheduler::SnoozeScheduler, tg_bot::TgInboxBot,
@@ -1503,7 +1557,7 @@ async fn spawn_inbox_subsystems(
             ArchetypeRegistry::from_dir(std::path::Path::new("definitely-missing"))
                 .expect("from_dir on missing path returns empty registry")
         }));
-    let worktrees_root = surge_runs_dir().join("worktrees");
+    let worktrees_root = storage.home().join("worktrees");
     if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
         tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");
     }
@@ -1522,7 +1576,11 @@ async fn spawn_inbox_subsystems(
         poll_interval: std::time::Duration::from_millis(500),
     };
     let shutdown_for_consumer = shutdown.clone();
-    tokio::spawn(consumer.run(shutdown_for_consumer));
+    let consumer_handle = tokio::spawn(supervise_daemon_task(
+        "inbox consumer",
+        shutdown.clone(),
+        consumer.run(shutdown_for_consumer),
+    ));
 
     // Snooze scheduler.
     let scheduler = SnoozeScheduler {
@@ -1539,7 +1597,7 @@ async fn spawn_inbox_subsystems(
 
     if let Some(tg_cfg) = config.telegram.as_ref() {
         if !telegram_legacy_credentials_absent(&storage) {
-            return;
+            return consumer_handle;
         }
         match surge_telegram::credentials::TelegramCredentials::load(tg_cfg) {
             Ok(credentials) => {
@@ -1566,6 +1624,7 @@ async fn spawn_inbox_subsystems(
     } else {
         tracing::info!("no [telegram] config — TgInboxBot skipped");
     }
+    consumer_handle
 }
 
 /// Never read or fall back to the legacy plaintext value.
@@ -1733,21 +1792,76 @@ mod telegram_credentials_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn legacy_plaintext_presence_disables_telegram_until_migrated() {
         use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, delete_secret, set_secret};
-        let home = tempfile::tempdir().unwrap();
-        let storage = surge_persistence::runs::Storage::open(home.path())
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = surge_persistence::runs::Storage::open(home.path())
+                .await
+                .unwrap();
+            assert!(super::telegram_legacy_credentials_absent(&storage));
+            let conn = storage.acquire_registry_conn().unwrap();
+            set_secret(
+                &conn,
+                TELEGRAM_BOT_TOKEN_KEY,
+                "73123:LEGACY_RUNTIME_LITERAL",
+                0,
+            )
+            .unwrap();
+            assert!(!super::telegram_legacy_credentials_absent(&storage));
+            delete_secret(&conn, TELEGRAM_BOT_TOKEN_KEY).unwrap();
+            assert!(super::telegram_legacy_credentials_absent(&storage));
+        }
+        home.close().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+
+#[cfg(test)]
+mod daemon_task_exit_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unexpected_return_and_panic_cancel_shutdown() {
+        let normal = CancellationToken::new();
+        tokio::spawn(supervise_daemon_task("server", normal.clone(), async {}))
             .await
             .unwrap();
-        assert!(super::telegram_legacy_credentials_absent(&storage));
-        let conn = storage.acquire_registry_conn().unwrap();
-        set_secret(
-            &conn,
-            TELEGRAM_BOT_TOKEN_KEY,
-            "73123:LEGACY_RUNTIME_LITERAL",
-            0,
-        )
-        .unwrap();
-        assert!(!super::telegram_legacy_credentials_absent(&storage));
-        delete_secret(&conn, TELEGRAM_BOT_TOKEN_KEY).unwrap();
-        assert!(super::telegram_legacy_credentials_absent(&storage));
+        assert!(normal.is_cancelled());
+        let panicked = CancellationToken::new();
+        let result = tokio::spawn(supervise_daemon_task("consumer", panicked.clone(), async {
+            panic!("injected owner failure");
+        }))
+        .await;
+        assert!(result.unwrap_err().is_panic());
+        assert!(panicked.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn abort_before_first_poll_cancels_shutdown() {
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(supervise_daemon_task("consumer", shutdown.clone(), async {
+            panic!("task must never be polled");
+        }));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(shutdown.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn expected_shutdown_preserves_completion_value() {
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        assert_eq!(
+            supervise_daemon_task("consumer", shutdown, async { 17 }).await,
+            17
+        );
     }
 }

@@ -1,43 +1,72 @@
 //! Foreground commands report durable outcomes, not merely successful startup.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
+#[path = "common/owned_flow.rs"]
+mod owned_flow;
+
 use assert_cmd::Command;
 use std::time::Duration;
 
 fn terminal_run(watch: bool, failure: bool) {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("surge-home");
-    let source = include_str!("../../../examples/flow_terminal_only.toml");
-    let source = if failure {
-        source.replace("type = \"success\"", "type = \"failure\"\nexit_code = 1")
-    } else {
-        source.to_owned()
-    };
-    let flow = temp.path().join("flow.toml");
-    std::fs::write(&flow, source).unwrap();
-    let mut command = Command::cargo_bin("surge").unwrap();
-    command
-        .args(["engine", "run"])
-        .arg(&flow)
-        .current_dir(temp.path())
-        .env("SURGE_HOME", &home)
-        .timeout(Duration::from_secs(15));
-    if watch {
-        command.arg("--watch");
+    let home_dir = FixtureHome::new().unwrap();
+    {
+        let home = home_dir.path();
+        let source = include_str!("../../../examples/flow_terminal_only.toml");
+        let source = if failure {
+            source.replace("type = \"success\"", "type = \"failure\"\nexit_code = 1")
+        } else {
+            source.to_owned()
+        };
+        let flow = temp.path().join("flow.toml");
+        std::fs::write(&flow, source).unwrap();
+        owned_flow::commit_project(temp.path());
+        let daemon = owned_flow::start_daemon(home, temp.path(), None);
+        let mut command = Command::cargo_bin("surge").unwrap();
+        command
+            .args(["engine", "run"])
+            .arg("flow.toml")
+            .current_dir(temp.path())
+            .env("SURGE_HOME", home)
+            .timeout(Duration::from_secs(15));
+        if watch {
+            command.arg("--watch");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.success(), !failure, "{output:?}");
+        let run_id = String::from_utf8(output.stdout).unwrap();
+        let disk_watch = Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "watch", run_id.trim()])
+            .env("SURGE_HOME", home)
+            .current_dir(temp.path())
+            .timeout(Duration::from_secs(15))
+            .output()
+            .unwrap();
+        assert_eq!(disk_watch.status.success(), !failure, "{disk_watch:?}");
+        let replay = Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "replay", run_id.trim(), "--format", "json"])
+            .env("SURGE_HOME", home)
+            .current_dir(temp.path())
+            .timeout(Duration::from_secs(15))
+            .assert()
+            .success();
+        let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
+        assert_eq!(state["terminal"], true, "{state}");
+        assert_eq!(state["failed"], failure, "{state}");
+        daemon.close().unwrap();
     }
-    let output = command.output().unwrap();
-    assert_eq!(output.status.success(), !failure, "{output:?}");
-    let run_id = String::from_utf8(output.stdout).unwrap();
-    let replay = Command::cargo_bin("surge")
-        .unwrap()
-        .args(["engine", "replay", run_id.trim(), "--format", "json"])
-        .env("SURGE_HOME", &home)
-        .current_dir(temp.path())
-        .timeout(Duration::from_secs(15))
-        .assert()
-        .success();
-    let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
-    assert_eq!(state["terminal"], true, "{state}");
-    assert_eq!(state["failed"], failure, "{state}");
+    home_dir.close().unwrap();
 }
 
 #[test]
@@ -63,39 +92,47 @@ fn watched_failure_is_nonzero_and_durable() {
 #[test]
 fn user_template_executes_to_completion() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(home.join("templates")).unwrap();
-    std::fs::write(
-        home.join("templates/quick.toml"),
-        include_str!("../../../examples/flow_terminal_only.toml"),
-    )
-    .unwrap();
-    let run = Command::cargo_bin("surge")
-        .unwrap()
-        .args(["engine", "run", "--template", "quick"])
-        .env("SURGE_HOME", &home)
-        .current_dir(temp.path())
-        .timeout(Duration::from_secs(15))
-        .assert()
-        .success();
-    let id = String::from_utf8(run.get_output().stdout.clone()).unwrap();
-    let replay = Command::cargo_bin("surge")
-        .unwrap()
-        .args(["engine", "replay", id.trim(), "--format", "json"])
-        .env("SURGE_HOME", &home)
-        .current_dir(temp.path())
-        .timeout(Duration::from_secs(15))
-        .assert()
-        .success();
-    let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
-    assert_eq!(state["view"]["terminal"], "completed");
+    let home_dir = FixtureHome::new().unwrap();
+    {
+        let home = home_dir.path();
+        std::fs::create_dir_all(home.join("templates")).unwrap();
+        std::fs::write(
+            home.join("templates/quick.toml"),
+            include_str!("../../../examples/flow_terminal_only.toml"),
+        )
+        .unwrap();
+        owned_flow::commit_project(temp.path());
+        let daemon = owned_flow::start_daemon(home, temp.path(), None);
+        let run = Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "run", "--template", "quick"])
+            .env("SURGE_HOME", home)
+            .current_dir(temp.path())
+            .timeout(Duration::from_secs(15))
+            .assert()
+            .success();
+        let id = String::from_utf8(run.get_output().stdout.clone()).unwrap();
+        let replay = Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "replay", id.trim(), "--format", "json"])
+            .env("SURGE_HOME", home)
+            .current_dir(temp.path())
+            .timeout(Duration::from_secs(15))
+            .assert()
+            .success();
+        let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
+        assert_eq!(state["view"]["terminal"], "completed");
+        daemon.close().unwrap();
+    }
+    home_dir.close().unwrap();
 }
 
 #[test]
-fn local_gate_aborts_with_actionable_error() {
-    for watch in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
+fn daemon_gate_remains_pending_until_explicit_suspension() {
+    let temp = tempfile::tempdir().unwrap();
+    let home_dir = FixtureHome::new().unwrap();
+    {
+        let home = home_dir.path();
         let flow = temp.path().join("gate.toml");
         let mut source = include_str!("../../../examples/flow_terminal_only.toml")
             .replace("start = \"end\"", "start = \"gate\"")
@@ -133,31 +170,111 @@ on_max_exceeded = "escalate"
 "#,
         );
         std::fs::write(&flow, source).unwrap();
-        let mut command = Command::cargo_bin("surge").unwrap();
-        command
-            .args(["engine", "run"])
-            .arg(&flow)
-            .env("SURGE_HOME", &home)
-            .current_dir(temp.path())
-            .timeout(Duration::from_secs(15));
-        if watch {
-            command.arg("--watch");
-        }
-        let run = command
-            .assert()
-            .failure()
-            .stderr(predicates::str::contains("needs human input"))
-            .stderr(predicates::str::contains("--daemon"));
-        let id = String::from_utf8(run.get_output().stdout.clone()).unwrap();
-        let replay = Command::cargo_bin("surge")
+        owned_flow::commit_project(temp.path());
+        let daemon = owned_flow::start_daemon(home, temp.path(), None);
+        let run = Command::cargo_bin("surge")
             .unwrap()
-            .args(["engine", "replay", id.trim(), "--format", "json"])
-            .env("SURGE_HOME", &home)
+            .args(["engine", "run", "gate.toml", "--daemon"])
+            .env("SURGE_HOME", home)
             .current_dir(temp.path())
             .timeout(Duration::from_secs(15))
             .assert()
             .success();
-        let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
-        assert_eq!(state["view"]["terminal"], "aborted");
+        let id = String::from_utf8(run.get_output().stdout.clone()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let log = Command::cargo_bin("surge")
+                .unwrap()
+                .args(["engine", "logs", id.trim()])
+                .env("SURGE_HOME", home)
+                .current_dir(temp.path())
+                .timeout(Duration::from_secs(15))
+                .output()
+                .unwrap();
+            if log.status.success()
+                && String::from_utf8_lossy(&log.stderr).contains("HumanInputRequested")
+            {
+                // Read the projection only after observing the durable request.
+                // A replay fetched before the log can legitimately predate StageEntered.
+                let replay = Command::cargo_bin("surge")
+                    .unwrap()
+                    .args(["engine", "replay", id.trim(), "--format", "json"])
+                    .env("SURGE_HOME", home)
+                    .current_dir(temp.path())
+                    .timeout(Duration::from_secs(15))
+                    .assert()
+                    .success();
+                let state: serde_json::Value =
+                    serde_json::from_slice(&replay.get_output().stdout).unwrap();
+                assert_eq!(state["view"]["active_node"], "gate", "{state}");
+                assert_eq!(state["terminal"], false, "{state}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "gate did not become pending"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "watch", id.trim()])
+            .env("SURGE_HOME", home)
+            .current_dir(temp.path())
+            .timeout(Duration::from_secs(15))
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("no durable terminal"));
+        Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "stop", id.trim(), "--daemon"])
+            .env("SURGE_HOME", home)
+            .current_dir(temp.path())
+            .timeout(Duration::from_secs(15))
+            .assert()
+            .success();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let log = Command::cargo_bin("surge")
+                .unwrap()
+                .args(["engine", "logs", id.trim()])
+                .env("SURGE_HOME", home)
+                .current_dir(temp.path())
+                .timeout(Duration::from_secs(15))
+                .output()
+                .unwrap();
+            if log.status.success() && String::from_utf8_lossy(&log.stderr).contains("RunSuspended")
+            {
+                let replay = Command::cargo_bin("surge")
+                    .unwrap()
+                    .args(["engine", "replay", id.trim(), "--format", "json"])
+                    .env("SURGE_HOME", home)
+                    .current_dir(temp.path())
+                    .timeout(Duration::from_secs(15))
+                    .assert()
+                    .success();
+                let state: serde_json::Value =
+                    serde_json::from_slice(&replay.get_output().stdout).unwrap();
+                assert_eq!(state["terminal"], false, "{state}");
+                assert!(state["view"]["terminal"].is_null(), "{state}");
+                Command::cargo_bin("surge")
+                    .unwrap()
+                    .args(["engine", "watch", id.trim()])
+                    .env("SURGE_HOME", home)
+                    .current_dir(temp.path())
+                    .timeout(Duration::from_secs(15))
+                    .assert()
+                    .failure()
+                    .stderr(predicates::str::contains("no durable terminal"));
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "gate suspension not durable"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        daemon.close().unwrap();
     }
+    home_dir.close().unwrap();
 }

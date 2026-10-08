@@ -1,0 +1,24 @@
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/daemon_restart.rs (target/debug/deps/daemon_restart-354cec1906983bf3)
+
+running 1 test
+test restart_waits_for_grace_then_starts_a_new_healthy_daemon ... FAILED
+
+failures:
+
+---- restart_waits_for_grace_then_starts_a_new_healthy_daemon stdout ----
+
+thread 'restart_waits_for_grace_then_starts_a_new_healthy_daemon' (33791307) panicked at crates/surge-cli/tests/daemon_restart.rs:68:5:
+grace was bypassed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    restart_waits_for_grace_then_starts_a_new_healthy_daemon
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.45s
+
+error: test failed, to rerun pass `-p surge-cli --test daemon_restart`

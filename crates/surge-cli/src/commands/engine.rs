@@ -219,15 +219,12 @@ async fn run_command(
 }
 
 async fn wait_owned_startup(run: RunId) -> Result<()> {
-    let storage = Storage::open(&surge_runs_dir()?)
+    let home = surge_runs_dir()?;
+    let storage = Storage::open(&home)
         .await
         .context("open accepted run storage")?;
     loop {
-        let inspected = storage.inspect_folded_run(run).await?;
-        if inspected
-            .database
-            .is_some_and(|history| history.event_count > 0)
-        {
+        if owned_startup_ready(&storage, &home, run).await? {
             return Ok(());
         }
         let attempt = storage
@@ -245,12 +242,30 @@ async fn wait_owned_startup(run: RunId) -> Result<()> {
     }
 }
 
+async fn owned_startup_ready(
+    storage: &std::sync::Arc<Storage>,
+    home: &std::path::Path,
+    run: RunId,
+) -> Result<bool> {
+    // create_run publishes this exact registry row only after schema migration.
+    // Acceptance can precede launch: an existing SQLite file alone is not ready.
+    if Storage::inspect_existing_run_summary(home.to_path_buf(), run)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let inspected = storage.inspect_folded_run(run).await?;
+    Ok(inspected
+        .database
+        .is_some_and(|history| history.event_count > 0))
+}
+
 async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
     let id = parse_run_id(&run_id)?;
     if !daemon {
-        // Existing M6 disk-tail behavior preserved.
         follow_log_from(id, 0).await?;
-        return Ok(());
+        return require_completed_history(id).await;
     }
 
     // M7 daemon path: subscribe to per-run events and stream live.
@@ -283,20 +298,21 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
                      and not yet admitted, or unknown to this daemon)"
                 )
             })?;
-            return Ok(());
+            return require_completed_history(id).await;
         },
         Err(e) => return Err(e.into()),
     };
 
     eprintln!("watching {id} (Ctrl+C to stop)…");
 
-    let result = watch_daemon_events(&mut rx).await;
+    let result = watch_daemon_events(id, &mut rx).await;
     // Always unsubscribe, including when delivery ends without a confirmed outcome.
     let _ = facade.unsubscribe_from_run(id).await;
     result
 }
 
 async fn watch_daemon_events(
+    run_id: RunId,
     rx: &mut tokio::sync::broadcast::Receiver<surge_orchestrator::engine::handle::EngineRunEvent>,
 ) -> Result<()> {
     use std::time::Duration;
@@ -309,8 +325,8 @@ async fn watch_daemon_events(
             },
             Ok(Ok(event)) => {
                 print_event(&event);
-                if matches!(event, EngineRunEvent::Terminal { .. }) {
-                    break;
+                if let EngineRunEvent::Terminal { outcome } = event {
+                    return super::run_lifecycle::require_completed(run_id, outcome);
                 }
             },
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
@@ -326,8 +342,46 @@ async fn watch_daemon_events(
             Err(_timeout) => continue, // 60s without events; keep waiting
         }
     }
+}
 
-    Ok(())
+async fn require_completed_history(run_id: RunId) -> Result<()> {
+    use surge_persistence::runs::EventSeq;
+    let storage = Storage::open(&surge_runs_dir()?).await?;
+    let reader = storage.open_run_reader(run_id).await?;
+    let events = reader.read_events(EventSeq(0)..EventSeq(u64::MAX)).await?;
+    require_completed_events(run_id, &events)
+}
+
+fn require_completed_events(
+    run_id: RunId,
+    events: &[surge_persistence::runs::reader::ReadEvent],
+) -> Result<()> {
+    use surge_core::run_event::EventPayload;
+    use surge_orchestrator::engine::handle::RunOutcome;
+    let mut outcome = None;
+    for event in events {
+        let candidate = match event.payload.payload() {
+            EventPayload::RunCompleted { terminal_node } => RunOutcome::Completed {
+                terminal: terminal_node.clone(),
+            },
+            EventPayload::RunFailed { error } => RunOutcome::Failed {
+                error: error.clone(),
+            },
+            EventPayload::RunAborted { reason } => RunOutcome::Aborted {
+                reason: reason.clone(),
+            },
+            _ => continue,
+        };
+        if outcome.replace(candidate).is_some() {
+            return Err(anyhow!(
+                "run {run_id} has conflicting terminal history; completion is unconfirmed"
+            ));
+        }
+    }
+    let outcome = outcome.ok_or_else(|| anyhow!(
+        "run {run_id} has no durable terminal outcome; completion is unconfirmed; inspect `surge engine replay {run_id}`"
+    ))?;
+    super::run_lifecycle::require_completed(run_id, outcome)
 }
 
 async fn resume_command(run_id: String, daemon: bool) -> Result<()> {
@@ -671,8 +725,11 @@ fn surge_runs_dir() -> Result<PathBuf> {
             .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
             .join(".surge"),
     };
-    let runs = surge_home.join("runs");
-    std::fs::create_dir_all(&runs).with_context(|| format!("create {}", runs.display()))?;
+    #[cfg(not(windows))]
+    {
+        let runs = surge_home.join("runs");
+        std::fs::create_dir_all(&runs).with_context(|| format!("create {}", runs.display()))?;
+    }
     // Storage::open expects the surge-home dir (parent of runs/), which it
     // populates with the runs/ subdir itself.
     Ok(surge_home)
@@ -758,6 +815,61 @@ mod watch_tests {
     use super::watch_daemon_events;
     use surge_orchestrator::engine::handle::{EngineRunEvent, RunOutcome};
 
+    fn history(
+        payloads: Vec<surge_core::run_event::EventPayload>,
+    ) -> Vec<surge_persistence::runs::reader::ReadEvent> {
+        payloads
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, payload)| surge_persistence::runs::reader::ReadEvent {
+                    seq: surge_persistence::runs::EventSeq(index as u64 + 1),
+                    timestamp_ms: 0,
+                    kind: payload.discriminant_str().into(),
+                    payload: surge_core::run_event::VersionedEventPayload::new(payload),
+                },
+            )
+            .collect()
+    }
+
+    #[test]
+    fn disk_history_requires_one_successful_terminal() {
+        use surge_core::run_event::EventPayload;
+        let run = surge_core::id::RunId::new();
+        let completed = EventPayload::RunCompleted {
+            terminal_node: "end".try_into().unwrap(),
+        };
+        super::require_completed_events(run, &history(vec![completed.clone()])).unwrap();
+        for (events, diagnostic) in [
+            (vec![], "no durable terminal"),
+            (
+                vec![EventPayload::RunFailed {
+                    error: "agent failed".into(),
+                }],
+                "agent failed",
+            ),
+            (
+                vec![EventPayload::RunAborted {
+                    reason: "operator cancelled".into(),
+                }],
+                "operator cancelled",
+            ),
+            (
+                vec![
+                    completed.clone(),
+                    EventPayload::RunFailed {
+                        error: "conflict".into(),
+                    },
+                ],
+                "conflicting",
+            ),
+            (vec![completed.clone(), completed], "conflicting"),
+        ] {
+            let error = super::require_completed_events(run, &history(events)).unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error}");
+        }
+    }
+
     #[tokio::test]
     async fn stream_error_is_not_successful_observation() {
         let (tx, mut rx) = tokio::sync::broadcast::channel(2);
@@ -766,7 +878,9 @@ mod watch_tests {
         })
         .unwrap();
         drop(tx);
-        let error = watch_daemon_events(&mut rx).await.unwrap_err();
+        let error = watch_daemon_events(surge_core::id::RunId::new(), &mut rx)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("durable catch-up failed"));
     }
 
@@ -774,7 +888,9 @@ mod watch_tests {
     async fn closed_stream_without_terminal_is_unconfirmed() {
         let (tx, mut rx) = tokio::sync::broadcast::channel(2);
         drop(tx);
-        let error = watch_daemon_events(&mut rx).await.unwrap_err();
+        let error = watch_daemon_events(surge_core::id::RunId::new(), &mut rx)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("unconfirmed"));
     }
 
@@ -790,12 +906,29 @@ mod watch_tests {
             .unwrap();
         }
         drop(tx);
-        let error = watch_daemon_events(&mut rx).await.unwrap_err();
+        let error = watch_daemon_events(surge_core::id::RunId::new(), &mut rx)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("missed"));
     }
 
     #[tokio::test]
     async fn explicit_terminal_confirms_observation() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        tx.send(EngineRunEvent::Terminal {
+            outcome: RunOutcome::Completed {
+                terminal: "end".try_into().unwrap(),
+            },
+        })
+        .unwrap();
+        drop(tx);
+        watch_daemon_events(surge_core::id::RunId::new(), &mut rx)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_terminal_is_not_a_successful_command() {
         let (tx, mut rx) = tokio::sync::broadcast::channel(1);
         tx.send(EngineRunEvent::Terminal {
             outcome: RunOutcome::Failed {
@@ -804,7 +937,26 @@ mod watch_tests {
         })
         .unwrap();
         drop(tx);
-        watch_daemon_events(&mut rx).await.unwrap();
+        let error = watch_daemon_events(surge_core::id::RunId::new(), &mut rx)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("agent failed"));
+    }
+
+    #[tokio::test]
+    async fn aborted_terminal_is_not_a_successful_command() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        tx.send(EngineRunEvent::Terminal {
+            outcome: RunOutcome::Aborted {
+                reason: "operator cancelled".into(),
+            },
+        })
+        .unwrap();
+        drop(tx);
+        let error = watch_daemon_events(surge_core::id::RunId::new(), &mut rx)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("operator cancelled"));
     }
 }
 
@@ -815,6 +967,88 @@ mod tests {
     use surge_core::id::RunId;
     use surge_core::run_status::RunStatus;
     use surge_persistence::runs::RunSummary;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owned_startup_waits_for_schema_publication_and_preserves_errors() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let run = RunId::new();
+        let db = home
+            .path()
+            .join("runs")
+            .join(run.to_string())
+            .join("events.sqlite");
+        #[cfg(not(windows))]
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        #[cfg(windows)]
+        let run_namespace = surge_persistence::RuntimeHomeOwner::prepare(home.path())
+            .unwrap()
+            .reserve_run_directory(run)
+            .unwrap();
+        // Deterministic create_run window: file exists, migration and registry
+        // publication have not happened. Inspection must not treat it as ready.
+        #[cfg(windows)]
+        {
+            let empty = run_namespace
+                .open_append(std::ffi::OsStr::new("events.sqlite"))
+                .unwrap();
+            empty.flush().unwrap();
+        }
+        #[cfg(not(windows))]
+        drop(rusqlite::Connection::open(&db).unwrap());
+        assert!(
+            !super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .unwrap()
+        );
+        let writer = storage.create_run(run, home.path(), None).await.unwrap();
+        assert!(
+            !super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .unwrap()
+        );
+        writer
+            .append_event(surge_core::VersionedEventPayload::new(
+                surge_core::EventPayload::RunStarted {
+                    project_path: home.path().into(),
+                    pipeline_template: None,
+                    initial_prompt: String::new(),
+                    config: surge_core::run_event::RunConfig {
+                        bootstrap_edit_loop_cap: None,
+                        sandbox_default: surge_core::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: surge_core::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                        budget: surge_core::budget::BudgetGuard::default(),
+                    },
+                },
+            ))
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        assert!(
+            super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .unwrap()
+        );
+        writer.close().await.unwrap();
+        // Once published, invalid schema is a real error, never pending startup.
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute("DROP TABLE events", [])
+            .unwrap();
+        assert!(
+            super::owned_startup_ready(&storage, home.path(), run)
+                .await
+                .is_err()
+        );
+        drop(storage);
+        #[cfg(windows)]
+        drop(run_namespace);
+        home.close().unwrap();
+    }
 
     #[test]
     fn run_table_lists_registry_runs_with_status_not_home_dirs() {

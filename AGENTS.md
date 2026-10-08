@@ -64,7 +64,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │   └── rules/
 │       └── base.md
 │
-├── scripts/                        # Release archive packaging and validation
+├── scripts/                        # Release packaging, provenance, notices and shared test support
 ├── .github/                         # CI workflows
 ├── .worktrees/                      # Local convention for in-progress branches (gitignored)
 └── target/                          # cargo build output (gitignored)
@@ -84,10 +84,13 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-cli/src/commands/` | Other per-subcommand modules. |
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
 | `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
+| `crates/surge-daemon/src/socket_security.rs` | Unix daemon socket publication, private directory/ACL checks and identity-preserving cleanup. |
 | `crates/surge-core/src/verification_evidence.rs` | Shared revision/criteria claim gate and invalidation projection. |
 | `crates/surge-git/src/fingerprint.rs` | Read-only identity of current working files, including dirty and untracked code. |
 | `crates/surge-orchestrator/src/engine/stage/verification.rs` | Host-owned verification input and inline report sealing. |
 | `crates/surge-persistence/src/runs/verification.rs` | Transactional normalized verification context and stored-proof inspection. |
+| `crates/surge-persistence/src/state_home.rs` | Retained Windows runtime-home, directory, append and control capabilities; native security and routing implementations live in `state_home/windows/`. |
+| `crates/surge-persistence/src/runs/connection.rs` | Checked Windows SQLite ownership through actual connection close, including independently retained pool-manager fences. |
 | `crates/surge-core/src/work_item.rs` | Persistent work-item identities, immutable accepted requirements, attempts and typed controls. |
 | `crates/surge-core/src/work_item/origin.rs` | Accepted requirement/Flow origins, exact graph and raw prompt contracts, and domain-separated hashes. |
 | `crates/surge-core/src/work_item/flow_inputs.rs` | Public frozen MCP manifests and opaque private-object references; structural validation does not grant runtime authority. |
@@ -112,6 +115,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-cli/src/commands/task.rs` | `surge task` controls routed to the durable daemon owner. |
 | `crates/surge-git/src/checkpoint.rs` | Immutable Git snapshots of stage-boundary working files, preserving the user index and HEAD. |
 | `crates/surge-process/src/owner_panic.rs` | Shared once-installed panic hook and fatal protected ownership scope. |
+| `scripts/test-support/runtime_home.rs` | Shared test-only retained runtime homes; callers settle actual writers, tasks and pools before explicit cleanup. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
 | `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
 | `crates/surge-ui/src/project_init.rs` | Empty-folder desktop project initialization: Git base commit and ignored local runtime configuration. |
@@ -137,6 +141,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Bootstrap | `docs/bootstrap.md` | Adaptive prompt → description → roadmap → flow generation, approvals, archetypes, template skip. |
 | Workflow | `docs/workflow.md` | AFK workflow, flow model, intake sources, run lifecycle. |
 | Architecture | `docs/ARCHITECTURE.md` | Canonical architecture document: positioning, principles, flow model, engine, ACP bridge, intake, storage, crate layout, non-goals. |
+| MCP restart recovery | `docs/adr/0021-mcp-restart-recovery.md` | Accepted: group cleanup + restart from frozen manifest, interrupted calls never replayed; supersedes ADR-0020. Implementation open. |
 | Decisions (ADRs) | `docs/adr/` | Architectural decision records with rationale, alternatives rejected, and revisit triggers. |
 | Artifact Conventions | `docs/conventions/README.md` | Canonical generated artifact names, schemas, validators, minimal examples, and profile author guidance. |
 | Agent OS Landscape | `docs/agent-os-landscape.md` | Research note on adjacent agent tools, Agent OS patterns, and Surge product direction. |
@@ -146,6 +151,9 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Native UI Automation | `docs/ui-automation-evaluation.md` | GPUI/egui native interaction evidence and migration criteria. |
 | Desktop Design QA | `design-qa.md` | Selected conversation design, native visual comparisons and interaction evidence. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
+| Release Procedure | `docs/release-procedure.md` | Revision-bound release gates, complete runtime backups and restore-only rollback. |
+| Release Readiness | `docs/release-readiness-2026-10-05.md` | Current release preparation task ledger and executed evidence. |
+| Release Evidence | `docs/release-evidence/2026-10-05/README.md` | Command receipts, 32 role reports and native candidate identity. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
 
 ## AI Context Files

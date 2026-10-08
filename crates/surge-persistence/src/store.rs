@@ -2,7 +2,9 @@
 
 use crate::models::{CircuitBreakerState, SessionUsage, SpecUsage, SubtaskUsage};
 use crate::{PersistenceError, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+#[cfg(not(windows))]
+use rusqlite::Connection;
+use rusqlite::{OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_core::state::TaskState;
@@ -127,7 +129,7 @@ where
 /// usage data using SQLite. Handles schema creation, migrations, and CRUD
 /// operations.
 pub struct Store {
-    conn: Connection,
+    conn: crate::runs::connection::ManagedConnection,
     path: PathBuf,
 }
 
@@ -137,11 +139,21 @@ impl Store {
     /// Creates the database file and initializes the schema if it doesn't exist.
     /// If the database exists, verifies the schema version.
     pub fn open(path: &Path) -> Result<Self> {
-        // Ensure parent directory exists
+        #[cfg(windows)]
+        let namespace = crate::state_home::SqliteNamespaceOwner::standalone(path)?;
+        // Unix parent policy is unchanged.
+        #[cfg(not(windows))]
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::open_owned(
+            path,
+            rusqlite::OpenFlags::default(),
+            namespace,
+        )?;
+        #[cfg(not(windows))]
         let conn = Connection::open(path)?;
         let mut store = Self {
             conn,
@@ -154,6 +166,9 @@ impl Store {
 
     /// Create an in-memory store (for testing).
     pub fn in_memory() -> Result<Self> {
+        #[cfg(windows)]
+        let conn = crate::runs::connection::RetainedConnection::in_memory()?;
+        #[cfg(not(windows))]
         let conn = Connection::open_in_memory()?;
         let mut store = Self {
             conn,
@@ -164,11 +179,11 @@ impl Store {
         Ok(store)
     }
 
-    /// Get the path to the default store location (~/.surge/usage.db).
+    /// Get the default store path (`$SURGE_HOME/usage.db`, otherwise `~/.surge/usage.db`).
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = surge_core::home::surge_home_dir()
             .ok_or_else(|| PersistenceError::Storage("Cannot determine home directory".into()))?;
-        Ok(home.join(".surge").join("usage.db"))
+        Ok(home.join("usage.db"))
     }
 
     /// Initialize or verify the database schema.
@@ -889,6 +904,35 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_path_respects_isolated_surge_home() {
+        const CHILD_MARKER: &str = "SURGE_STORE_PATH_TEST_CHILD";
+        if let Some(home) = std::env::var_os(CHILD_MARKER) {
+            let expected = PathBuf::from(home).join("usage.db");
+            assert_eq!(Store::default_path().unwrap(), expected);
+            return;
+        }
+
+        // A subprocess owns its environment: no global mutation races with other tests.
+        let isolated_home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::tests::default_path_respects_isolated_surge_home",
+                "--nocapture",
+            ])
+            .env("SURGE_HOME", isolated_home.path())
+            .env(CHILD_MARKER, isolated_home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated path test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
 
     fn sample_session() -> SessionUsage {
         SessionUsage {

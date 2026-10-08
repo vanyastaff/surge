@@ -60,7 +60,7 @@ pub mod validate;
 pub mod version_probe;
 pub(crate) mod writer_coverage;
 
-pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
+pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy, escalation_config};
 pub use daemon_facade::{DaemonClient, DaemonEngineFacade};
 pub use engine::Engine;
 pub use engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME;

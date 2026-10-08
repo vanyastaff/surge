@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "reviews": [
+    {
+      "package_name": "openssl-sys",
+      "package_version": "0.9.112",
+      "crate_sha256": "57d55af3b3e226502be1526dfdba67ab0e9c96fc293004e79576b2b9edb0dbdb",
+      "origin_kind": "system-package",
+      "origin_version": "3.6.4",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "crypto",
+        "ssl"
+      ],
+      "proof_sha256": [
+        "2dd65a99ef6eb39ada27244df6b90bf2aaae68fb1198a9b80b499b5dcf40465c",
+        "c1941c5dbb9aabf9c02105918290918c1ba457f7c50e89ff7defa11431b58575"
+      ],
+      "license_sha256": [
+        "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+      ],
+      "archive_sha256": {
+        "ssl": "eaf963fdbd83356365fb4de2dc2eeb586d31948638fc2adf57a3234556d052bf",
+        "crypto": "6e6288edfc69717ab49b490ffc9584fe8f539175ec674ef86c00e1a694f9910f"
+      },
+      "evidence": "docs/release-evidence/2026-10-05/agents/surge-release-r06-openssl-license.md",
+      "scope": "Actual OpenSSL3.6.4 Homebrew arm64 package; complete official Apache terms match, upstream no NOTICE; no generic version allowance."
+    },
+    {
+      "package_name": "libsqlite3-sys",
+      "package_version": "0.30.1",
+      "crate_sha256": "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149",
+      "notice_inventory_sha256": "977bc32aed91fab8cda919fc922b6458253d568cf93c08589a1565d8e4e4bb44",
+      "build_recipe_sha256": "11bebc3787657749279375ab2e875e52259f995dce8916b4907103975e2a76ee",
+      "origin_kind": "crate-vendor",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "sqlite3"
+      ],
+      "scope": "Exact R32 independently reviewed checksum-bound notice inventory and observed vendored build recipe; no broader target or version allowance."
+    },
+    {
+      "package_name": "libssh2-sys",
+      "package_version": "0.3.1",
+      "crate_sha256": "220e4f05ad4a218192533b300327f5150e809b54c4ec83b5a1d91833601811b9",
+      "notice_inventory_sha256": "50aee705a51a72673ef744914a4a4b0093034589a0cb82fec6311d26368d6f5b",
+      "build_recipe_sha256": "e49368c5037b9ca3a08dcd6cc34004f941ccd3b1b9761669bf6f5eb20291cb58",
+      "origin_kind": "crate-vendor",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "ssh2"
+      ],
+      "scope": "Exact R32 independently reviewed checksum-bound notice inventory and observed vendored build recipe; no broader target or version allowance."
+    },
+    {
+      "package_name": "mac-notification-sys",
+      "package_version": "0.6.12",
+      "crate_sha256": "29a16783dd1a47849b8c8133c9cd3eb2112cfbc6901670af3dba47c8bbfb07d3",
+      "notice_inventory_sha256": "676017034f9a7b0127832128730ce5db8a3792908b20860e835e5ec7455afb5c",
+      "build_recipe_sha256": "3e3fddfa8d01f020e86d6eedd1615e4c0e18a73bf4df0ebae33960d7c2d7e17e",
+      "origin_kind": "crate-vendor",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "notify"
+      ],
+      "scope": "Exact R32 independently reviewed checksum-bound notice inventory and observed vendored build recipe; no broader target or version allowance."
+    },
+    {
+      "package_name": "psm",
+      "package_version": "0.1.32",
+      "crate_sha256": "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622",
+      "notice_inventory_sha256": "7503ebb01ff5cc7d24a0092d326de181f319c2784bb15525317a34f0a1a17111",
+      "build_recipe_sha256": "c9bae07a7bf7a1760798fc4307accd306fcce93a766f399d99978b6a022341d6",
+      "origin_kind": "crate-vendor",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "psm_s"
+      ],
+      "scope": "Exact R32 independently reviewed checksum-bound notice inventory and observed vendored build recipe; no broader target or version allowance."
+    },
+    {
+      "package_name": "ring",
+      "package_version": "0.17.14",
+      "crate_sha256": "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7",
+      "notice_inventory_sha256": "ec917fe627347c0a8c60fa11a9080ad6a07038de2a87fda31d33d2f3cae3edcc",
+      "build_recipe_sha256": "9d1928ffb1d8e15766c1c1b9ead73e4b81a21703dd25f7c27b87842a2e6e9cee",
+      "origin_kind": "crate-vendor",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "ring_core_0_17_14_",
+        "ring_core_0_17_14__test"
+      ],
+      "scope": "Exact R32 independently reviewed checksum-bound notice inventory and observed vendored build recipe; no broader target or version allowance."
+    },
+    {
+      "package_name": "libgit2-sys",
+      "package_version": "0.18.8+1.9.7",
+      "crate_sha256": "7f7c568b25d7489bc3fb2988ed69ab111d2944d2f5fec3d5c987fe545ea97b50",
+      "notice_inventory_sha256": "b422dff1e808311b1df8591d0bda846c6c6d2038c71dc17594a9e11bc2a4f34e",
+      "build_recipe_sha256": "0428eccc1a527dba5b208d84e622935821bdf89a4a396ba706857cb3298acd45",
+      "origin_kind": "crate-vendor",
+      "target": "aarch64-apple-darwin",
+      "libraries": [
+        "git2"
+      ],
+      "scope": "R32 independently reviewed exact complete notice inventory; vendored cfg and selected source/build provenance mandatory. No other version/target allowance."
+    }
+  ]
+}

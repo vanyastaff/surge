@@ -1,4 +1,8 @@
 //! Recovery must distinguish unreadable evidence from an absent run.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use surge_core::id::RunId;
 use surge_persistence::runs::Storage;
 use surge_telegram::cockpit::production::PersistenceSnapshots;
@@ -6,43 +10,65 @@ use surge_telegram::commands::status::RunSnapshotProvider;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unreadable_database_is_not_an_unknown_run() {
-    let home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(home.path()).await.unwrap();
-    let id = RunId::new();
-    let directory = home.path().join("runs").join(id.to_string());
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(directory.join("events.sqlite"), b"not a SQLite database").unwrap();
-    use surge_telegram::CardStore;
-    let store = surge_telegram::cockpit::production::SqliteCardStore {
-        storage: storage.clone(),
-    };
-    let card_id = store
-        .upsert(&id.to_string(), "gate", 4, "human_gate", 42, "hash", 0)
-        .await
-        .unwrap();
-    let provider = PersistenceSnapshots { storage };
-    let result = provider.snapshot(id).await;
-    assert!(
-        result.is_err(),
-        "read failure must not authorize closing a valid card: {result:?}"
-    );
-    let reconcile = surge_telegram::cockpit::reconcile_open_cards(
-        &store,
-        &provider,
-        &RecordingApi::default(),
-        1,
-    )
-    .await;
-    assert!(reconcile.is_err());
-    assert!(
-        store
-            .find_by_id(&card_id)
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let id = RunId::new();
+        let directory = home.path().join("runs").join(id.to_string());
+        #[cfg(not(windows))]
+        std::fs::create_dir_all(&directory).unwrap();
+        #[cfg(windows)]
+        let run_namespace = surge_persistence::RuntimeHomeOwner::prepare(home.path())
+            .unwrap()
+            .reserve_run_directory(id)
+            .unwrap();
+        #[cfg(windows)]
+        {
+            let empty = run_namespace
+                .open_append(std::ffi::OsStr::new("events.sqlite"))
+                .unwrap();
+            empty.flush().unwrap();
+        }
+        std::fs::write(directory.join("events.sqlite"), b"not a SQLite database").unwrap();
+        let inspection_error = storage.inspect_run(id).await.unwrap_err();
+        let surge_persistence::runs::StorageError::Sqlite(sqlite_error) = inspection_error else {
+            panic!("corrupt bytes must reach SQLite inspection: {inspection_error:?}");
+        };
+        // SQLITE_NOTADB: ACL/open failures must not satisfy the corruption oracle.
+        assert_eq!(sqlite_error.sqlite_error().unwrap().extended_code, 26);
+        use surge_telegram::CardStore;
+        let store = surge_telegram::cockpit::production::SqliteCardStore {
+            storage: storage.clone(),
+        };
+        let card_id = store
+            .upsert(&id.to_string(), "gate", 4, "human_gate", 42, "hash", 0)
             .await
-            .unwrap()
-            .unwrap()
-            .closed_at
-            .is_none()
-    );
+            .unwrap();
+        let provider = PersistenceSnapshots { storage };
+        let result = provider.snapshot(id).await;
+        assert!(
+            result.is_err(),
+            "read failure must not authorize closing a valid card: {result:?}"
+        );
+        let reconcile = surge_telegram::cockpit::reconcile_open_cards(
+            &store,
+            &provider,
+            &RecordingApi::default(),
+            1,
+        )
+        .await;
+        assert!(reconcile.is_err());
+        assert!(
+            store
+                .find_by_id(&card_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .closed_at
+                .is_none()
+        );
+    }
+    home.close().unwrap();
 }
 
 async fn pending_log(
@@ -102,20 +128,23 @@ async fn pending_log(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_missed_before_card_creation_is_recovered_from_durable_events() {
-    let home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(home.path()).await.unwrap();
-    let id = RunId::new();
-    let writer = pending_log(&storage, id).await;
-    let provider = PersistenceSnapshots { storage };
-    let requests = provider.pending_requests().await.unwrap().requests;
-    assert_eq!(
-        requests.len(),
-        1,
-        "no card row or live tap exists; durable request must be discovered"
-    );
-    assert_eq!(requests[0].run_id, id);
-    assert_eq!(requests[0].event.seq.0, 4);
-    writer.close().await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let id = RunId::new();
+        let writer = pending_log(&storage, id).await;
+        let provider = PersistenceSnapshots { storage };
+        let requests = provider.pending_requests().await.unwrap().requests;
+        assert_eq!(
+            requests.len(),
+            1,
+            "no card row or live tap exists; durable request must be discovered"
+        );
+        assert_eq!(requests[0].run_id, id);
+        assert_eq!(requests[0].event.seq.0, 4);
+        writer.close().await.unwrap();
+    }
+    home.close().unwrap();
 }
 
 #[derive(Clone, Default)]
@@ -155,7 +184,7 @@ async fn runtime_startup_delivers_a_card_without_receiving_any_tap() {
         run::{CockpitRuntime, drive_tap_loop},
     };
     use surge_telegram::{CardEmitter, CardStore};
-    let home = tempfile::tempdir().unwrap();
+    let home = FixtureHome::new().unwrap();
     let storage = Storage::open(home.path()).await.unwrap();
     let id = RunId::new();
     let writer = pending_log(&storage, id).await;
@@ -193,147 +222,156 @@ async fn runtime_startup_delivers_a_card_without_receiving_any_tap() {
     stop.cancel();
     task.await.unwrap();
     writer.close().await.unwrap();
+    drop(store);
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_selects_only_current_bound_unresolved_request() {
     use surge_core::{EventPayload, VersionedEventPayload};
-    let home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(home.path()).await.unwrap();
-    let id = RunId::new();
-    let writer = pending_log(&storage, id).await;
-    let provider = PersistenceSnapshots { storage };
-    let first = provider
-        .pending_requests()
-        .await
-        .unwrap()
-        .requests
-        .remove(0);
-    let EventPayload::HumanInputRequested { node, call_id, .. } = first.event.payload.payload
-    else {
-        panic!()
-    };
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputResolved {
-                node: node.clone(),
-                call_id,
-                response: serde_json::json!({"outcome":"edit"}),
-            },
-        ))
-        .await
-        .unwrap();
-    assert!(
-        provider
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let id = RunId::new();
+        let writer = pending_log(&storage, id).await;
+        let provider = PersistenceSnapshots { storage };
+        let first = provider
             .pending_requests()
             .await
             .unwrap()
             .requests
-            .is_empty()
-    );
-    for current_id in [None, Some(surge_core::id::GateRequestId::new().to_string())] {
+            .remove(0);
+        let EventPayload::HumanInputRequested { node, call_id, .. } = first.event.payload.payload
+        else {
+            panic!()
+        };
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputResolved {
+                    node: node.clone(),
+                    call_id,
+                    response: serde_json::json!({"outcome":"edit"}),
+                },
+            ))
+            .await
+            .unwrap();
+        assert!(
+            provider
+                .pending_requests()
+                .await
+                .unwrap()
+                .requests
+                .is_empty()
+        );
+        for current_id in [None, Some(surge_core::id::GateRequestId::new().to_string())] {
+            writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::HumanInputRequested {
+                        node: node.clone(),
+                        session: None,
+                        call_id: current_id.clone(),
+                        prompt: "new".into(),
+                        schema: None,
+                    },
+                ))
+                .await
+                .unwrap();
+            let requests = provider.pending_requests().await.unwrap().requests;
+            assert_eq!(
+                requests.len(),
+                usize::from(current_id.is_some()),
+                "legacy unbound requests must not be actionable"
+            );
+        }
+        let current = provider
+            .pending_requests()
+            .await
+            .unwrap()
+            .requests
+            .remove(0);
+        assert!(current.event.seq.0 > first.event.seq.0);
+        let EventPayload::HumanInputRequested { call_id, .. } = current.event.payload.payload
+        else {
+            panic!()
+        };
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputTimedOut {
+                    node: node.clone(),
+                    call_id,
+                    elapsed_seconds: 1,
+                },
+            ))
+            .await
+            .unwrap();
+        assert!(
+            provider
+                .pending_requests()
+                .await
+                .unwrap()
+                .requests
+                .is_empty()
+        );
         writer
             .append_event(VersionedEventPayload::new(
                 EventPayload::HumanInputRequested {
-                    node: node.clone(),
+                    node: "other".try_into().unwrap(),
                     session: None,
-                    call_id: current_id.clone(),
-                    prompt: "new".into(),
+                    call_id: Some(surge_core::id::GateRequestId::new().to_string()),
+                    prompt: "wrong node".into(),
                     schema: None,
                 },
             ))
             .await
             .unwrap();
-        let requests = provider.pending_requests().await.unwrap().requests;
-        assert_eq!(
-            requests.len(),
-            usize::from(current_id.is_some()),
-            "legacy unbound requests must not be actionable"
+        assert!(
+            provider
+                .pending_requests()
+                .await
+                .unwrap()
+                .requests
+                .is_empty()
         );
+        writer.close().await.unwrap();
     }
-    let current = provider
-        .pending_requests()
-        .await
-        .unwrap()
-        .requests
-        .remove(0);
-    assert!(current.event.seq.0 > first.event.seq.0);
-    let EventPayload::HumanInputRequested { call_id, .. } = current.event.payload.payload else {
-        panic!()
-    };
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputTimedOut {
-                node: node.clone(),
-                call_id,
-                elapsed_seconds: 1,
-            },
-        ))
-        .await
-        .unwrap();
-    assert!(
-        provider
-            .pending_requests()
-            .await
-            .unwrap()
-            .requests
-            .is_empty()
-    );
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputRequested {
-                node: "other".try_into().unwrap(),
-                session: None,
-                call_id: Some(surge_core::id::GateRequestId::new().to_string()),
-                prompt: "wrong node".into(),
-                schema: None,
-            },
-        ))
-        .await
-        .unwrap();
-    assert!(
-        provider
-            .pending_requests()
-            .await
-            .unwrap()
-            .requests
-            .is_empty()
-    );
-    writer.close().await.unwrap();
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_registered_database_is_unconfirmed_and_inspection_does_not_create_it() {
-    let home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(home.path()).await.unwrap();
-    let id = RunId::new();
-    storage
-        .create_run(id, "/fixture", None)
-        .await
-        .unwrap()
-        .close()
-        .await
-        .unwrap();
-    let database = home
-        .path()
-        .join("runs")
-        .join(id.to_string())
-        .join("events.sqlite");
-    std::fs::remove_file(&database).unwrap();
-    let provider = PersistenceSnapshots { storage };
-    let snapshot = provider.snapshot(id).await.unwrap().unwrap();
-    assert_eq!(
-        snapshot.display,
-        surge_core::run_display::RunDisplayState::Unknown
-    );
-    assert!(
-        !snapshot.terminal,
-        "missing evidence cannot retire request cards"
-    );
-    assert!(!database.exists());
-    let unknown = RunId::new();
-    assert!(provider.snapshot(unknown).await.unwrap().is_none());
-    assert!(!home.path().join("runs").join(unknown.to_string()).exists());
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let id = RunId::new();
+        storage
+            .create_run(id, "/fixture", None)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+        let database = home
+            .path()
+            .join("runs")
+            .join(id.to_string())
+            .join("events.sqlite");
+        std::fs::remove_file(&database).unwrap();
+        let provider = PersistenceSnapshots { storage };
+        let snapshot = provider.snapshot(id).await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.display,
+            surge_core::run_display::RunDisplayState::Unknown
+        );
+        assert!(
+            !snapshot.terminal,
+            "missing evidence cannot retire request cards"
+        );
+        assert!(!database.exists());
+        let unknown = RunId::new();
+        assert!(provider.snapshot(unknown).await.unwrap().is_none());
+        assert!(!home.path().join("runs").join(unknown.to_string()).exists());
+    }
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -343,176 +381,183 @@ async fn corrupt_run_does_not_starve_healthy_missed_card() {
         run::{CockpitRuntime, drive_tap_loop},
     };
     use surge_telegram::{CardEmitter, CardStore};
-    let home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(home.path()).await.unwrap();
-    let healthy = RunId::new();
-    let corrupt = RunId::new();
-    let writer = pending_log(&storage, healthy).await;
-    pending_log(&storage, corrupt).await.close().await.unwrap();
-    std::fs::write(
-        home.path()
-            .join("runs")
-            .join(corrupt.to_string())
-            .join("events.sqlite"),
-        b"corrupt journal",
-    )
-    .unwrap();
-    let store = SqliteCardStore {
-        storage: storage.clone(),
-    };
-    let existing = store
-        .upsert(&corrupt.to_string(), "gate", 4, "human_gate", 42, "hash", 0)
-        .await
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let healthy = RunId::new();
+        let corrupt = RunId::new();
+        let writer = pending_log(&storage, healthy).await;
+        pending_log(&storage, corrupt).await.close().await.unwrap();
+        std::fs::write(
+            home.path()
+                .join("runs")
+                .join(corrupt.to_string())
+                .join("events.sqlite"),
+            b"corrupt journal",
+        )
         .unwrap();
-    let batch = PersistenceSnapshots {
-        storage: storage.clone(),
-    }
-    .pending_requests()
-    .await
-    .unwrap();
-    assert_eq!(batch.requests.len(), 1);
-    assert_eq!(batch.requests[0].run_id, healthy);
-    assert_eq!(batch.failures.len(), 1);
-    assert_eq!(batch.failures[0].run_id, corrupt);
-    assert!(matches!(
-        batch.failures[0].error,
-        surge_telegram::error::TelegramCockpitError::Persistence(_)
-    ));
-    let api = RecordingApi::default();
-    let runtime = std::sync::Arc::new(CockpitRuntime {
-        dispatch_ctx: surge_telegram::CockpitCtx {
-            emitter: CardEmitter::new(store.clone(), api.clone()),
-            admin_chat_id: 42,
-        },
-        snapshots: PersistenceSnapshots { storage },
-        routes: NoUpdates,
-    });
-    let (_sender, tap) = tokio::sync::broadcast::channel(1);
-    let stop = tokio_util::sync::CancellationToken::new();
-    let task = tokio::spawn(drive_tap_loop(runtime, tap, stop.clone()));
-    let delivered = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while api.0.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let store = SqliteCardStore {
+            storage: storage.clone(),
+        };
+        let existing = store
+            .upsert(&corrupt.to_string(), "gate", 4, "human_gate", 42, "hash", 0)
+            .await
+            .unwrap();
+        let batch = PersistenceSnapshots {
+            storage: storage.clone(),
         }
-    })
-    .await;
-    if delivered.is_ok() {
-        tokio::time::sleep(std::time::Duration::from_millis(5100)).await;
-    }
-    stop.cancel();
-    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .pending_requests()
         .await
-        .unwrap()
         .unwrap();
-    writer.close().await.unwrap();
-    assert!(
-        delivered.is_ok(),
-        "corrupt journal starved healthy missed card"
-    );
-    assert_eq!(api.0.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(
-        store
-            .find_by_id(&existing)
+        assert_eq!(batch.requests.len(), 1);
+        assert_eq!(batch.requests[0].run_id, healthy);
+        assert_eq!(batch.failures.len(), 1);
+        assert_eq!(batch.failures[0].run_id, corrupt);
+        assert!(matches!(
+            batch.failures[0].error,
+            surge_telegram::error::TelegramCockpitError::Persistence(_)
+        ));
+        let api = RecordingApi::default();
+        let runtime = std::sync::Arc::new(CockpitRuntime {
+            dispatch_ctx: surge_telegram::CockpitCtx {
+                emitter: CardEmitter::new(store.clone(), api.clone()),
+                admin_chat_id: 42,
+            },
+            snapshots: PersistenceSnapshots { storage },
+            routes: NoUpdates,
+        });
+        let (_sender, tap) = tokio::sync::broadcast::channel(1);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(drive_tap_loop(runtime, tap, stop.clone()));
+        let delivered = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while api.0.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        if delivered.is_ok() {
+            tokio::time::sleep(std::time::Duration::from_millis(5100)).await;
+        }
+        stop.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
             .await
             .unwrap()
-            .unwrap()
-            .closed_at
-            .is_none()
-    );
-    assert_eq!(store.find_open().await.unwrap().len(), 2);
+            .unwrap();
+        writer.close().await.unwrap();
+        assert!(
+            delivered.is_ok(),
+            "corrupt journal starved healthy missed card"
+        );
+        assert_eq!(api.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            store
+                .find_by_id(&existing)
+                .await
+                .unwrap()
+                .unwrap()
+                .closed_at
+                .is_none()
+        );
+        assert_eq!(store.find_open().await.unwrap().len(), 2);
+    }
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exact_timeout_closes_old_card_but_wrong_identity_never_does() {
     use surge_core::{EventPayload, run_event::VersionedEventPayload};
     use surge_telegram::{CardStore, cockpit::production::SqliteCardStore};
-    let home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(home.path()).await.unwrap();
-    let id = RunId::new();
-    let writer = pending_log(&storage, id).await;
-    let provider = PersistenceSnapshots {
-        storage: storage.clone(),
-    };
-    let request = provider
-        .pending_requests()
-        .await
-        .unwrap()
-        .requests
-        .remove(0);
-    let EventPayload::HumanInputRequested { call_id, .. } = request.event.payload.payload else {
-        panic!("request required")
-    };
-    let store = SqliteCardStore {
-        storage: storage.clone(),
-    };
-    let old = store
-        .upsert(&id.to_string(), "gate", 4, "human_gate", 42, "old", 0)
-        .await
-        .unwrap();
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputTimedOut {
-                node: "gate".try_into().unwrap(),
-                call_id: Some(surge_core::id::GateRequestId::new().to_string()),
-                elapsed_seconds: 1,
-            },
-        ))
-        .await
-        .unwrap();
-    let card = store.find_by_id(&old).await.unwrap().unwrap();
-    assert!(!provider.request_settled(&card).await.unwrap());
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputTimedOut {
-                node: "gate".try_into().unwrap(),
-                call_id,
-                elapsed_seconds: 1,
-            },
-        ))
-        .await
-        .unwrap();
-    writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::HumanInputRequested {
-                node: "gate".try_into().unwrap(),
-                session: None,
-                call_id: Some(surge_core::id::GateRequestId::new().to_string()),
-                prompt: "New request".into(),
-                schema: None,
-            },
-        ))
-        .await
-        .unwrap();
-    let newer = store
-        .upsert(&id.to_string(), "gate", 7, "human_gate", 42, "new", 1)
-        .await
-        .unwrap();
-    let report = surge_telegram::cockpit::reconcile_open_cards(
-        &store,
-        &provider,
-        &RecordingApi::default(),
-        2,
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.closed, 1);
-    assert!(
-        store
-            .find_by_id(&old)
+    let home = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(home.path()).await.unwrap();
+        let id = RunId::new();
+        let writer = pending_log(&storage, id).await;
+        let provider = PersistenceSnapshots {
+            storage: storage.clone(),
+        };
+        let request = provider
+            .pending_requests()
             .await
             .unwrap()
-            .unwrap()
-            .closed_at
-            .is_some()
-    );
-    assert!(
-        store
-            .find_by_id(&newer)
+            .requests
+            .remove(0);
+        let EventPayload::HumanInputRequested { call_id, .. } = request.event.payload.payload
+        else {
+            panic!("request required")
+        };
+        let store = SqliteCardStore {
+            storage: storage.clone(),
+        };
+        let old = store
+            .upsert(&id.to_string(), "gate", 4, "human_gate", 42, "old", 0)
             .await
-            .unwrap()
-            .unwrap()
-            .closed_at
-            .is_none()
-    );
-    writer.close().await.unwrap();
+            .unwrap();
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputTimedOut {
+                    node: "gate".try_into().unwrap(),
+                    call_id: Some(surge_core::id::GateRequestId::new().to_string()),
+                    elapsed_seconds: 1,
+                },
+            ))
+            .await
+            .unwrap();
+        let card = store.find_by_id(&old).await.unwrap().unwrap();
+        assert!(!provider.request_settled(&card).await.unwrap());
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputTimedOut {
+                    node: "gate".try_into().unwrap(),
+                    call_id,
+                    elapsed_seconds: 1,
+                },
+            ))
+            .await
+            .unwrap();
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputRequested {
+                    node: "gate".try_into().unwrap(),
+                    session: None,
+                    call_id: Some(surge_core::id::GateRequestId::new().to_string()),
+                    prompt: "New request".into(),
+                    schema: None,
+                },
+            ))
+            .await
+            .unwrap();
+        let newer = store
+            .upsert(&id.to_string(), "gate", 7, "human_gate", 42, "new", 1)
+            .await
+            .unwrap();
+        let report = surge_telegram::cockpit::reconcile_open_cards(
+            &store,
+            &provider,
+            &RecordingApi::default(),
+            2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.closed, 1);
+        assert!(
+            store
+                .find_by_id(&old)
+                .await
+                .unwrap()
+                .unwrap()
+                .closed_at
+                .is_some()
+        );
+        assert!(
+            store
+                .find_by_id(&newer)
+                .await
+                .unwrap()
+                .unwrap()
+                .closed_at
+                .is_none()
+        );
+        writer.close().await.unwrap();
+    }
+    home.close().unwrap();
 }

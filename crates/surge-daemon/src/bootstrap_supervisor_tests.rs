@@ -145,11 +145,12 @@ impl BridgeFacade for AuthorBridge {
 }
 
 struct Fixture {
-    root: tempfile::TempDir,
     project: std::path::PathBuf,
     owner: Arc<BootstrapSupervisor>,
     engine: Arc<Engine>,
     storage: Arc<Storage>,
+    home: crate::runtime_home_fixture::FixtureHome,
+    root: tempfile::TempDir,
 }
 fn git(path: &std::path::Path, args: &[&str]) {
     let output = std::process::Command::new("git")
@@ -198,7 +199,8 @@ impl Fixture {
             DiskProfileSet::scan(&profiles_root).unwrap(),
         ));
         let agents = Arc::new(surge_acp::Registry::for_run(&config));
-        let storage = Storage::open(root.path().join("home")).await.unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
         let engine = Arc::new(Engine::new_full(
             Arc::new(AuthorBridge::new()),
             storage.clone(),
@@ -209,7 +211,7 @@ impl Fixture {
             EngineConfig {
                 agent_registry: Some(agents.clone()),
                 capacity: (&config.capacity).into(),
-                memory_store_path: Some(root.path().join("memory.db")),
+                memory_store_path: Some(home.path().join("memory.db")),
                 ..Default::default()
             },
         ));
@@ -231,12 +233,34 @@ impl Fixture {
             shutdown: CancellationToken::new(),
         });
         Self {
-            root,
             project,
             owner,
             engine,
             storage,
+            home,
+            root,
         }
+    }
+    async fn close(self) {
+        self.owner.services.shutdown.cancel();
+        let workers = std::mem::take(&mut *self.owner.workers.lock().await);
+        for (_, worker) in workers {
+            worker.await.unwrap();
+        }
+        assert_eq!(self.engine.snapshot_active_runs().await.len(), 0);
+        let Self {
+            project: _,
+            owner,
+            engine,
+            storage,
+            home,
+            root,
+        } = self;
+        drop(owner);
+        drop(engine);
+        drop(storage);
+        home.close().unwrap();
+        root.close().unwrap();
     }
     async fn reopened_owner(&self) -> Arc<BootstrapSupervisor> {
         let capacity = self.owner.services.admission.snapshot().await;
@@ -257,7 +281,7 @@ impl Fixture {
             EngineConfig {
                 agent_registry: Some(agents),
                 capacity: (&config.capacity).into(),
-                memory_store_path: Some(self.root.path().join("restarted-memory.db")),
+                memory_store_path: Some(self.home.path().join("restarted-memory.db")),
                 ..Default::default()
             },
         ));
@@ -373,6 +397,7 @@ async fn real_planning_continues_to_child_with_one_admission_slot_and_isolation(
     fixture.owner.services.shutdown.cancel();
     supervisor.await.unwrap();
     approvals.abort();
+    assert!(approvals.await.unwrap_err().is_cancelled());
     if terminal.state != State::Completed {
         let inspection = fixture
             .storage
@@ -416,7 +441,7 @@ async fn real_planning_continues_to_child_with_one_admission_slot_and_isolation(
         .unwrap(),
         DESCRIPTION
     );
-    assert!(fixture.root.path().join("home").exists());
+    assert!(fixture.home.path().exists());
     assert!(
         fixture
             .storage
@@ -426,6 +451,7 @@ async fn real_planning_continues_to_child_with_one_admission_slot_and_isolation(
             .registry
             .is_some()
     );
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -435,8 +461,7 @@ async fn inactive_started_and_parked_cancel_once_and_reopen_as_cancelled() {
 }
 
 async fn check_inactive_cancel(parked: bool) {
-    use surge_core::{RunStatus, VersionedEventPayload};
-    use surge_persistence::runs::inspection::RunDatabaseInspection;
+    use surge_core::VersionedEventPayload;
     let fixture = Fixture::new().await;
     let id = RunId::new();
     fixture.owner.submit(id, &fixture.intent()).await.unwrap();
@@ -502,7 +527,15 @@ async fn check_inactive_cancel(parked: bool) {
     fixture.owner.process(id, ordered).await.unwrap();
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
     let reopened = Storage::open(fixture.storage.home()).await.unwrap();
-    let status = reopened
+    assert_cancelled_history(&reopened, id, launch.run_id).await;
+    drop(reopened);
+    fixture.close().await;
+}
+
+async fn assert_cancelled_history(storage: &Arc<Storage>, id: RunId, run: RunId) {
+    use surge_core::RunStatus;
+    use surge_persistence::runs::inspection::RunDatabaseInspection;
+    let status = storage
         .bootstrap_operation_store()
         .get(id)
         .unwrap()
@@ -510,7 +543,7 @@ async fn check_inactive_cancel(parked: bool) {
         .status;
     assert_eq!(status.state, State::Cancelled);
     assert_eq!(status.result, Some(BootstrapTerminal::Cancelled));
-    let inspection = reopened.inspect_run(launch.run_id).await.unwrap();
+    let inspection = storage.inspect_run(run).await.unwrap();
     assert_eq!(inspection.registry.unwrap().status, RunStatus::Aborted);
     let RunDatabaseInspection::Present { events } = inspection.database else {
         panic!("missing database")
@@ -533,89 +566,93 @@ async fn check_inactive_cancel(parked: bool) {
 async fn restart_after_child_commit_uses_committed_artifact_not_newer_parent_version() {
     use surge_core::{VersionedEventPayload, keys::NodeKey};
     let fixture = Fixture::new().await;
-    let approvals = fixture.approve();
-    let id = RunId::new();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    // Run exactly one owned phase, then stop before implementation admission.
-    let ordered = fixture.owner.admission_order.clone().lock_owned().await;
-    fixture.owner.process(id, ordered).await.unwrap();
-    approvals.abort();
-    let committed = fixture.owner.record(id).unwrap();
-    assert_eq!(
-        committed.status.state,
-        State::Pending {
-            phase: Phase::QueuedImplementation
-        }
-    );
-    let child = committed.child.as_ref().unwrap();
-    assert_eq!(
-        child.artifacts()[0].hash,
-        surge_core::ContentHash::compute(DESCRIPTION.as_bytes())
-    );
-    let artifact =
-        surge_persistence::artifacts::ArtifactStore::new(fixture.storage.home().join("runs"))
-            .put(
-                committed.status.planning_run,
-                "description",
-                DESCRIPTION
-                    .replace("Build the app", "Different later description")
-                    .as_bytes(),
-            )
+    {
+        let approvals = fixture.approve();
+        let id = RunId::new();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        // Run exactly one owned phase, then stop before implementation admission.
+        let ordered = fixture.owner.admission_order.clone().lock_owned().await;
+        fixture.owner.process(id, ordered).await.unwrap();
+        approvals.abort();
+        assert!(approvals.await.unwrap_err().is_cancelled());
+        let committed = fixture.owner.record(id).unwrap();
+        assert_eq!(
+            committed.status.state,
+            State::Pending {
+                phase: Phase::QueuedImplementation
+            }
+        );
+        let child = committed.child.as_ref().unwrap();
+        assert_eq!(
+            child.artifacts()[0].hash,
+            surge_core::ContentHash::compute(DESCRIPTION.as_bytes())
+        );
+        let artifact =
+            surge_persistence::artifacts::ArtifactStore::new(fixture.storage.home().join("runs"))
+                .put(
+                    committed.status.planning_run,
+                    "description",
+                    DESCRIPTION
+                        .replace("Build the app", "Different later description")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+        let writer = fixture
+            .storage
+            .open_run_writer(committed.status.planning_run)
             .await
             .unwrap();
-    let writer = fixture
-        .storage
-        .open_run_writer(committed.status.planning_run)
-        .await
-        .unwrap();
-    writer
-        .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-            node: NodeKey::try_new("description_author").unwrap(),
-            artifact: artifact.hash,
-            path: artifact.path,
-            name: "description".into(),
-            source_path: None,
-        }))
-        .await
-        .unwrap();
-    writer.flush().await.unwrap();
-    writer.close().await.unwrap();
-    let restarted = fixture.reopened_owner().await;
-    let storage = restarted.services.storage.clone();
-    let ordered = restarted.admission_order.clone().lock_owned().await;
-    restarted.process(id, ordered).await.unwrap();
-    let result = restarted.record(id).unwrap();
-    assert_eq!(result.status.state, State::Completed);
-    let BootstrapStoredPayload::V1 { capture, .. } = result.payload else {
-        panic!("v1")
-    };
-    assert_eq!(
-        tokio::fs::read_to_string(
-            capture
-                .fields()
-                .implementation_worktree
-                .join("description.md")
-        )
-        .await
-        .unwrap(),
-        DESCRIPTION
-    );
-    let inspection = storage
-        .inspect_run(committed.status.implementation_run)
-        .await
-        .unwrap();
-    let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
-        inspection.database
-    else {
-        panic!("database")
-    };
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(event.payload.payload, EventPayload::RunStarted { .. }))
-            .count(),
-        1
-    );
+        writer
+            .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: NodeKey::try_new("description_author").unwrap(),
+                artifact: artifact.hash,
+                path: artifact.path,
+                name: "description".into(),
+                source_path: None,
+            }))
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        writer.close().await.unwrap();
+        let restarted = fixture.reopened_owner().await;
+        let storage = restarted.services.storage.clone();
+        let ordered = restarted.admission_order.clone().lock_owned().await;
+        restarted.process(id, ordered).await.unwrap();
+        let result = restarted.record(id).unwrap();
+        assert_eq!(result.status.state, State::Completed);
+        let BootstrapStoredPayload::V1 { capture, .. } = result.payload else {
+            panic!("v1")
+        };
+        assert_eq!(
+            tokio::fs::read_to_string(
+                capture
+                    .fields()
+                    .implementation_worktree
+                    .join("description.md")
+            )
+            .await
+            .unwrap(),
+            DESCRIPTION
+        );
+        let inspection = storage
+            .inspect_run(committed.status.implementation_run)
+            .await
+            .unwrap();
+        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+            inspection.database
+        else {
+            panic!("database")
+        };
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.payload.payload, EventPayload::RunStarted { .. }))
+                .count(),
+            1
+        );
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -653,7 +690,7 @@ async fn live_planning_gate_cancel_joins_and_never_launches_child() {
     fixture.owner.services.shutdown.cancel();
     supervisor.await.unwrap();
     assert_eq!(result.state, State::Cancelled);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
     assert!(
         fixture
@@ -664,29 +701,35 @@ async fn live_planning_gate_cancel_joins_and_never_launches_child() {
             .registry
             .is_none()
     );
+    drop(global);
+    drop(tap);
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn production_lost_reply_retry_precedes_changed_environment_and_conflict() {
     let fixture = Fixture::new().await;
-    let id = RunId::new();
-    let intent = fixture.intent();
-    let accepted = fixture.owner.submit(id, &intent).await.unwrap();
-    std::fs::write(fixture.project.join("surge.toml"), "invalid config [").unwrap();
-    std::fs::write(fixture.project.join("dirty.txt"), "new user work").unwrap();
-    assert_eq!(fixture.owner.submit(id, &intent).await.unwrap(), accepted);
-    let changed = BootstrapIntent::new(
-        fixture.project.clone(),
-        "changed prompt".into(),
-        surge_core::budget::BudgetGuard::default(),
-    )
-    .unwrap();
-    assert!(matches!(
-        fixture.owner.submit(id, &changed).await,
-        Err(BootstrapError::Store(BootstrapStoreError::IntentConflict))
-    ));
-    assert!(fixture.owner.submit(RunId::new(), &intent).await.is_err());
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    {
+        let id = RunId::new();
+        let intent = fixture.intent();
+        let accepted = fixture.owner.submit(id, &intent).await.unwrap();
+        std::fs::write(fixture.project.join("surge.toml"), "invalid config [").unwrap();
+        std::fs::write(fixture.project.join("dirty.txt"), "new user work").unwrap();
+        assert_eq!(fixture.owner.submit(id, &intent).await.unwrap(), accepted);
+        let changed = BootstrapIntent::new(
+            fixture.project.clone(),
+            "changed prompt".into(),
+            surge_core::budget::BudgetGuard::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.owner.submit(id, &changed).await,
+            Err(BootstrapError::Store(BootstrapStoreError::IntentConflict))
+        ));
+        assert!(fixture.owner.submit(RunId::new(), &intent).await.is_err());
+        assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -764,418 +807,448 @@ async fn production_ipc_accepts_durable_operation_and_fences_raw_reserved_runs()
     let terminal = client.bootstrap_status(id).await.unwrap();
     assert_eq!(terminal.state, State::Cancelled);
     assert_eq!(client.cancel_bootstrap(id).await.unwrap(), terminal);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
     fixture.owner.services.shutdown.cancel();
     supervisor.await.unwrap();
     server.await.unwrap().unwrap();
+    drop(client);
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_engine_startup_is_preserved_for_attention_without_retrying_agents() {
     let fixture = Fixture::new().await;
-    let id = RunId::new();
-    let accepted = fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    let record = fixture.owner.record(id).unwrap();
-    let launch = expected(&record).unwrap();
-    let writer = fixture
-        .storage
-        .create_run(
-            accepted.planning_run,
-            launch.worktree.to_str().unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-    writer
-        .append_event(surge_core::VersionedEventPayload::new(
-            EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: launch.worktree,
-                initial_prompt: launch.initial_prompt,
-                config: launch.config,
-            },
-        ))
-        .await
-        .unwrap();
-    writer.flush().await.unwrap();
-    writer.close().await.unwrap();
-    fixture.owner.reconcile().await.unwrap();
-    let status = fixture.terminal(id).await;
-    assert!(matches!(
-        status.state,
-        State::NeedsAttention {
-            reason: Attention::PartialStartup,
-            ..
-        }
-    ));
-    assert!(!status.cancel_requested);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
-    let inspection = fixture
-        .storage
-        .inspect_run(accepted.planning_run)
-        .await
-        .unwrap();
-    let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
-        inspection.database
-    else {
-        panic!("database")
-    };
-    assert_eq!(events.len(), 1);
-    assert!(fixture.owner.retry(id, status.revision).await.is_err());
+    {
+        let id = RunId::new();
+        let accepted = fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        let record = fixture.owner.record(id).unwrap();
+        let launch = expected(&record).unwrap();
+        let writer = fixture
+            .storage
+            .create_run(
+                accepted.planning_run,
+                launch.worktree.to_str().unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+        writer
+            .append_event(surge_core::VersionedEventPayload::new(
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: launch.worktree,
+                    initial_prompt: launch.initial_prompt,
+                    config: launch.config,
+                },
+            ))
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        writer.close().await.unwrap();
+        fixture.owner.reconcile().await.unwrap();
+        let status = fixture.terminal(id).await;
+        assert!(matches!(
+            status.state,
+            State::NeedsAttention {
+                reason: Attention::PartialStartup,
+                ..
+            }
+        ));
+        assert!(!status.cancel_requested);
+        assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+        let inspection = fixture
+            .storage
+            .inspect_run(accepted.planning_run)
+            .await
+            .unwrap();
+        let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
+            inspection.database
+        else {
+            panic!("database")
+        };
+        assert_eq!(events.len(), 1);
+        assert!(fixture.owner.retry(id, status.revision).await.is_err());
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn explicit_attention_retry_requires_restored_git_ownership() {
     let fixture = Fixture::new().await;
-    let id = RunId::new();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    let record = fixture.owner.record(id).unwrap();
-    let BootstrapStoredPayload::V1 { capture, .. } = &record.payload else {
-        panic!("v1")
-    };
-    let path = &capture.fields().planning_worktree;
-    std::fs::create_dir_all(path).unwrap();
-    let blocked = fixture
-        .owner
-        .store
-        .block(id, record.status.revision, Attention::WorktreeConflict)
-        .unwrap();
-    assert!(
-        fixture
+    {
+        let id = RunId::new();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        let record = fixture.owner.record(id).unwrap();
+        let BootstrapStoredPayload::V1 { capture, .. } = &record.payload else {
+            panic!("v1")
+        };
+        let path = &capture.fields().planning_worktree;
+        std::fs::create_dir_all(path).unwrap();
+        let blocked = fixture
+            .owner
+            .store
+            .block(id, record.status.revision, Attention::WorktreeConflict)
+            .unwrap();
+        assert!(
+            fixture
+                .owner
+                .retry(id, blocked.status.revision)
+                .await
+                .is_err()
+        );
+        assert_eq!(fixture.owner.status(id).unwrap(), blocked.status);
+        std::fs::remove_dir(path).unwrap();
+        let restored = fixture
             .owner
             .retry(id, blocked.status.revision)
             .await
-            .is_err()
-    );
-    assert_eq!(fixture.owner.status(id).unwrap(), blocked.status);
-    std::fs::remove_dir(path).unwrap();
-    let restored = fixture
-        .owner
-        .retry(id, blocked.status.revision)
-        .await
-        .unwrap();
-    assert_eq!(
-        restored.state,
-        State::Pending {
-            phase: Phase::QueuedPlanning
-        }
-    );
-    assert!(path.join(".git").exists());
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+            .unwrap();
+        assert_eq!(
+            restored.state,
+            State::Pending {
+                phase: Phase::QueuedPlanning
+            }
+        );
+        assert!(path.join(".git").exists());
+        assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_attention_retry_after_reopen_only_settles_owned_run() {
     use surge_persistence::runs::inspection::RunDatabaseInspection;
     let fixture = Fixture::new().await;
-    let id = RunId::new();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    let record = fixture.owner.record(id).unwrap();
-    let launch = expected(&record).unwrap();
-    let writer = fixture.started_writer(&launch).await;
-    writer.flush().await.unwrap();
-    fixture.owner.cancel(id).unwrap();
-    // A separately held writer prevents confirmation; cancellation must remain durable.
-    fixture.owner.reconcile().await.unwrap();
-    let blocked = fixture.terminal(id).await;
-    assert!(matches!(blocked.state, State::NeedsAttention { .. }));
-    assert!(blocked.cancel_requested);
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
-    writer.close().await.unwrap();
-    let storage = Storage::open(fixture.storage.home()).await.unwrap();
-    let restarted = BootstrapSupervisor::new(BootstrapServices {
-        engine: fixture.engine.clone(),
-        facade: fixture.owner.services.facade.clone(),
-        storage: storage.clone(),
-        runtime: None,
-        admission: Arc::new(AdmissionController::new(1, 0)),
-        broadcast: Arc::new(BroadcastRegistry::new()),
-        shutdown: CancellationToken::new(),
-    });
-    let retry = restarted.retry(id, blocked.revision).await.unwrap();
-    assert!(retry.cancel_requested);
-    assert!(matches!(retry.state, State::Cancelling { .. }));
-    let ordered = restarted.admission_order.clone().lock_owned().await;
-    restarted.process(id, ordered).await.unwrap();
-    let terminal = restarted.status(id).unwrap();
-    assert_eq!(terminal.state, State::Cancelled);
-    assert_eq!(restarted.cancel(id).unwrap(), terminal);
-    assert_eq!(restarted.services.admission.snapshot().await.active, 0);
-    let inspection = storage.inspect_run(launch.run_id).await.unwrap();
-    let RunDatabaseInspection::Present { events } = inspection.database else {
-        panic!("database")
-    };
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(event.payload.payload, EventPayload::RunAborted { .. }))
-            .count(),
-        1
-    );
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event.payload.payload, EventPayload::SessionOpened { .. }))
-    );
-    assert!(
-        storage
-            .inspect_run(record.status.implementation_run)
-            .await
-            .unwrap()
-            .registry
-            .is_none()
-    );
+    {
+        let id = RunId::new();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        let record = fixture.owner.record(id).unwrap();
+        let launch = expected(&record).unwrap();
+        let writer = fixture.started_writer(&launch).await;
+        writer.flush().await.unwrap();
+        fixture.owner.cancel(id).unwrap();
+        // A separately held writer prevents confirmation; cancellation must remain durable.
+        fixture.owner.reconcile().await.unwrap();
+        let blocked = fixture.terminal(id).await;
+        assert!(matches!(blocked.state, State::NeedsAttention { .. }));
+        assert!(blocked.cancel_requested);
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+        writer.close().await.unwrap();
+        let storage = Storage::open(fixture.storage.home()).await.unwrap();
+        let restarted = BootstrapSupervisor::new(BootstrapServices {
+            engine: fixture.engine.clone(),
+            facade: fixture.owner.services.facade.clone(),
+            storage: storage.clone(),
+            runtime: None,
+            admission: Arc::new(AdmissionController::new(1, 0)),
+            broadcast: Arc::new(BroadcastRegistry::new()),
+            shutdown: CancellationToken::new(),
+        });
+        let retry = restarted.retry(id, blocked.revision).await.unwrap();
+        assert!(retry.cancel_requested);
+        assert!(matches!(retry.state, State::Cancelling { .. }));
+        let ordered = restarted.admission_order.clone().lock_owned().await;
+        restarted.process(id, ordered).await.unwrap();
+        let terminal = restarted.status(id).unwrap();
+        assert_eq!(terminal.state, State::Cancelled);
+        assert_eq!(restarted.cancel(id).unwrap(), terminal);
+        assert_eq!(restarted.services.admission.snapshot().await.active, 0);
+        let inspection = storage.inspect_run(launch.run_id).await.unwrap();
+        let RunDatabaseInspection::Present { events } = inspection.database else {
+            panic!("database")
+        };
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.payload.payload, EventPayload::RunAborted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event.payload.payload, EventPayload::SessionOpened { .. }))
+        );
+        assert!(
+            storage
+                .inspect_run(record.status.implementation_run)
+                .await
+                .unwrap()
+                .registry
+                .is_none()
+        );
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn restart_after_parent_completion_before_child_commit_reuses_parent_evidence() {
     let fixture = Fixture::new().await;
-    let approvals = fixture.approve();
-    let id = RunId::new();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    fixture.storage.acquire_registry_conn().unwrap().execute_batch(
+    {
+        let approvals = fixture.approve();
+        let id = RunId::new();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        fixture.storage.acquire_registry_conn().unwrap().execute_batch(
         "CREATE TRIGGER fail_child_commit BEFORE UPDATE OF child_json ON bootstrap_operations WHEN NEW.child_json IS NOT NULL BEGIN SELECT RAISE(FAIL, 'fixture interrupted child commit'); END;"
     ).unwrap();
-    let ordered = fixture.owner.admission_order.clone().lock_owned().await;
-    assert_eq!(
-        fixture.owner.process(id, ordered).await.unwrap_err(),
-        Attention::StorageUnconfirmed
-    );
-    approvals.abort();
-    let pending = fixture.owner.record(id).unwrap();
-    assert!(pending.child.is_none());
-    assert_eq!(
-        pending.status.state,
-        State::Pending {
-            phase: Phase::Planning
-        }
-    );
-    fixture
-        .storage
-        .acquire_registry_conn()
-        .unwrap()
-        .execute_batch("DROP TRIGGER fail_child_commit")
-        .unwrap();
-    let restarted = fixture.reopened_owner().await;
-    let ordered = restarted.admission_order.clone().lock_owned().await;
-    restarted.process(id, ordered).await.unwrap();
-    let committed = restarted.record(id).unwrap();
-    assert_eq!(
-        committed.status.state,
-        State::Pending {
-            phase: Phase::QueuedImplementation
-        }
-    );
-    assert_eq!(
-        committed.child.as_ref().unwrap().parent(),
-        pending.status.planning_run
-    );
-    let ordered = restarted.admission_order.clone().lock_owned().await;
-    restarted.process(id, ordered).await.unwrap();
-    assert_eq!(restarted.status(id).unwrap().state, State::Completed);
-    assert!(
-        restarted
-            .services
-            .engine
-            .snapshot_active_runs()
-            .await
-            .is_empty()
-    );
-    let next = RunId::new();
-    restarted.submit(next, &fixture.intent()).await.unwrap();
-    restarted.cancel(next).unwrap();
-    let ordered = restarted.admission_order.clone().lock_owned().await;
-    restarted.process(next, ordered).await.unwrap();
-    assert_eq!(restarted.services.admission.snapshot().await.active, 0);
+        let ordered = fixture.owner.admission_order.clone().lock_owned().await;
+        assert_eq!(
+            fixture.owner.process(id, ordered).await.unwrap_err(),
+            Attention::StorageUnconfirmed
+        );
+        approvals.abort();
+        assert!(approvals.await.unwrap_err().is_cancelled());
+        let pending = fixture.owner.record(id).unwrap();
+        assert!(pending.child.is_none());
+        assert_eq!(
+            pending.status.state,
+            State::Pending {
+                phase: Phase::Planning
+            }
+        );
+        fixture
+            .storage
+            .acquire_registry_conn()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_child_commit")
+            .unwrap();
+        let restarted = fixture.reopened_owner().await;
+        let ordered = restarted.admission_order.clone().lock_owned().await;
+        restarted.process(id, ordered).await.unwrap();
+        let committed = restarted.record(id).unwrap();
+        assert_eq!(
+            committed.status.state,
+            State::Pending {
+                phase: Phase::QueuedImplementation
+            }
+        );
+        assert_eq!(
+            committed.child.as_ref().unwrap().parent(),
+            pending.status.planning_run
+        );
+        let ordered = restarted.admission_order.clone().lock_owned().await;
+        restarted.process(id, ordered).await.unwrap();
+        assert_eq!(restarted.status(id).unwrap().state, State::Completed);
+        assert_eq!(
+            restarted.services.engine.snapshot_active_runs().await.len(),
+            0
+        );
+        let next = RunId::new();
+        restarted.submit(next, &fixture.intent()).await.unwrap();
+        restarted.cancel(next).unwrap();
+        let ordered = restarted.admission_order.clone().lock_owned().await;
+        restarted.process(next, ordered).await.unwrap();
+        assert_eq!(restarted.services.admission.snapshot().await.active, 0);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_after_child_commit_cannot_admit_implementation() {
     let fixture = Fixture::new().await;
-    let approvals = fixture.approve();
-    let id = RunId::new();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    let ordered = fixture.owner.admission_order.clone().lock_owned().await;
-    fixture.owner.process(id, ordered).await.unwrap();
-    approvals.abort();
-    let committed = fixture.owner.record(id).unwrap();
-    assert!(committed.child.is_some());
-    fixture.owner.cancel(id).unwrap();
-    let ordered = fixture.owner.admission_order.clone().lock_owned().await;
-    fixture.owner.process(id, ordered).await.unwrap();
-    assert_eq!(fixture.owner.status(id).unwrap().state, State::Cancelled);
-    assert!(
-        fixture
-            .storage
-            .inspect_run(committed.status.implementation_run)
-            .await
-            .unwrap()
-            .registry
-            .is_none()
-    );
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+    {
+        let approvals = fixture.approve();
+        let id = RunId::new();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        let ordered = fixture.owner.admission_order.clone().lock_owned().await;
+        fixture.owner.process(id, ordered).await.unwrap();
+        approvals.abort();
+        assert!(approvals.await.unwrap_err().is_cancelled());
+        let committed = fixture.owner.record(id).unwrap();
+        assert!(committed.child.is_some());
+        fixture.owner.cancel(id).unwrap();
+        let ordered = fixture.owner.admission_order.clone().lock_owned().await;
+        fixture.owner.process(id, ordered).await.unwrap();
+        assert_eq!(fixture.owner.status(id).unwrap().state, State::Cancelled);
+        assert!(
+            fixture
+                .storage
+                .inspect_run(committed.status.implementation_run)
+                .await
+                .unwrap()
+                .registry
+                .is_none()
+        );
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_bootstrap_admission_is_bounded_without_orphan_operations() {
     let fixture = Fixture::with_capacity(1, 1).await;
-    let barrier = Arc::new(tokio::sync::Barrier::new(8));
-    let mut requests = Vec::new();
-    for _ in 0..8 {
-        let owner = fixture.owner.clone();
-        let intent = fixture.intent();
-        let barrier = barrier.clone();
-        requests.push(tokio::spawn(async move {
-            barrier.wait().await;
-            owner.submit(RunId::new(), &intent).await
-        }));
-    }
-    let mut accepted = Vec::new();
-    for request in requests {
-        match request.await.unwrap() {
-            Ok(status) => accepted.push(status),
-            Err(error) => assert!(
-                matches!(error, BootstrapError::Store(BootstrapStoreError::QueueFull)),
-                "{error:?}"
-            ),
+    {
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let mut requests = Vec::new();
+        for _ in 0..8 {
+            let owner = fixture.owner.clone();
+            let intent = fixture.intent();
+            let barrier = barrier.clone();
+            requests.push(tokio::spawn(async move {
+                barrier.wait().await;
+                owner.submit(RunId::new(), &intent).await
+            }));
         }
+        let mut accepted = Vec::new();
+        for request in requests {
+            match request.await.unwrap() {
+                Ok(status) => accepted.push(status),
+                Err(error) => assert!(
+                    matches!(error, BootstrapError::Store(BootstrapStoreError::QueueFull)),
+                    "{error:?}"
+                ),
+            }
+        }
+        assert_eq!(
+            accepted.len(),
+            2,
+            "durable admission exceeded active+queue bound"
+        );
+        assert_eq!(fixture.owner.store.list().unwrap().len(), 2);
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
+        assert_eq!(
+            fixture
+                .owner
+                .submit(accepted[0].operation_id, &fixture.intent())
+                .await
+                .unwrap(),
+            accepted[0]
+        );
     }
-    assert_eq!(
-        accepted.len(),
-        2,
-        "durable admission exceeded active+queue bound"
-    );
-    assert_eq!(fixture.owner.store.list().unwrap().len(), 2);
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
-    assert_eq!(
-        fixture
-            .owner
-            .submit(accepted[0].operation_id, &fixture.intent())
-            .await
-            .unwrap(),
-        accepted[0]
-    );
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn zero_bootstrap_queue_requires_immediate_shared_active_slot() {
     let fixture = Fixture::new().await;
-    let ordinary = RunId::new();
-    assert!(
+    {
+        let ordinary = RunId::new();
+        assert!(
+            fixture
+                .owner
+                .services
+                .admission
+                .try_admit_no_queue(ordinary)
+                .await
+        );
+        let id = RunId::new();
+        assert!(fixture.owner.submit(id, &fixture.intent()).await.is_err());
+        assert!(fixture.owner.store.get(id).unwrap().is_none());
         fixture
             .owner
             .services
             .admission
-            .try_admit_no_queue(ordinary)
-            .await
-    );
-    let id = RunId::new();
-    assert!(fixture.owner.submit(id, &fixture.intent()).await.is_err());
-    assert!(fixture.owner.store.get(id).unwrap().is_none());
-    fixture
-        .owner
-        .services
-        .admission
-        .notify_completed(ordinary)
-        .await;
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
+            .notify_completed(ordinary)
+            .await;
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bootstrap_admission_commit_failure_releases_provisional_slot_and_rolls_back_row() {
     let fixture = Fixture::new().await;
-    fixture.storage.acquire_registry_conn().unwrap().execute_batch(
+    {
+        fixture.storage.acquire_registry_conn().unwrap().execute_batch(
         "CREATE TABLE admission_parent (id TEXT PRIMARY KEY);
          CREATE TABLE admission_child (id TEXT REFERENCES admission_parent(id) DEFERRABLE INITIALLY DEFERRED);
          CREATE TRIGGER fail_admission AFTER INSERT ON bootstrap_operations
          BEGIN INSERT INTO admission_child VALUES ('missing'); END;"
     ).unwrap();
-    let id = RunId::new();
-    assert!(matches!(
-        fixture.owner.submit(id, &fixture.intent()).await,
-        Err(BootstrapError::Store(BootstrapStoreError::Sqlite(_)))
-    ));
-    assert!(fixture.owner.store.get(id).unwrap().is_none());
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
-    fixture
-        .storage
-        .acquire_registry_conn()
-        .unwrap()
-        .execute_batch("DROP TRIGGER fail_admission")
-        .unwrap();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
-    fixture.owner.cancel(id).unwrap();
-    let ordered = fixture.owner.admission_order.clone().lock_owned().await;
-    fixture.owner.process(id, ordered).await.unwrap();
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+        let id = RunId::new();
+        assert!(matches!(
+            fixture.owner.submit(id, &fixture.intent()).await,
+            Err(BootstrapError::Store(BootstrapStoreError::Sqlite(_)))
+        ));
+        assert!(fixture.owner.store.get(id).unwrap().is_none());
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+        fixture
+            .storage
+            .acquire_registry_conn()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_admission")
+            .unwrap();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
+        fixture.owner.cancel(id).unwrap();
+        let ordered = fixture.owner.admission_order.clone().lock_owned().await;
+        fixture.owner.process(id, ordered).await.unwrap();
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bootstrap_admission_reopen_counts_future_ownership_and_cancel_releases_capacity() {
     let fixture = Fixture::with_capacity(1, 1).await;
-    let first = RunId::new();
-    let second = RunId::new();
-    fixture
-        .owner
-        .submit(first, &fixture.intent())
-        .await
-        .unwrap();
-    fixture
-        .owner
-        .submit(second, &fixture.intent())
-        .await
-        .unwrap();
-    fixture
-        .storage
-        .acquire_registry_conn()
-        .unwrap()
-        .execute(
-            "UPDATE bootstrap_operations SET payload_version=99 WHERE operation_id=?1",
-            [first.to_string()],
-        )
-        .unwrap();
-    let restarted = fixture.reopened_owner().await;
-    let third = RunId::new();
-    assert!(matches!(
-        restarted.submit(third, &fixture.intent()).await,
-        Err(BootstrapError::Store(BootstrapStoreError::QueueFull))
-    ));
-    assert!(restarted.store.get(third).unwrap().is_none());
-    assert_eq!(restarted.services.admission.snapshot().await.active, 0);
-    restarted.cancel(second).unwrap();
-    let ordered = restarted.admission_order.clone().lock_owned().await;
-    restarted.process(second, ordered).await.unwrap();
-    assert_eq!(restarted.status(second).unwrap().state, State::Cancelled);
-    restarted.submit(third, &fixture.intent()).await.unwrap();
-    assert_eq!(restarted.services.admission.snapshot().await.active, 1);
-    assert!(matches!(
-        restarted.submit(RunId::new(), &fixture.intent()).await,
-        Err(BootstrapError::Store(BootstrapStoreError::QueueFull))
-    ));
+    {
+        let first = RunId::new();
+        let second = RunId::new();
+        fixture
+            .owner
+            .submit(first, &fixture.intent())
+            .await
+            .unwrap();
+        fixture
+            .owner
+            .submit(second, &fixture.intent())
+            .await
+            .unwrap();
+        fixture
+            .storage
+            .acquire_registry_conn()
+            .unwrap()
+            .execute(
+                "UPDATE bootstrap_operations SET payload_version=99 WHERE operation_id=?1",
+                [first.to_string()],
+            )
+            .unwrap();
+        let restarted = fixture.reopened_owner().await;
+        let third = RunId::new();
+        assert!(matches!(
+            restarted.submit(third, &fixture.intent()).await,
+            Err(BootstrapError::Store(BootstrapStoreError::QueueFull))
+        ));
+        assert!(restarted.store.get(third).unwrap().is_none());
+        assert_eq!(restarted.services.admission.snapshot().await.active, 0);
+        restarted.cancel(second).unwrap();
+        let ordered = restarted.admission_order.clone().lock_owned().await;
+        restarted.process(second, ordered).await.unwrap();
+        assert_eq!(restarted.status(second).unwrap().state, State::Cancelled);
+        restarted.submit(third, &fixture.intent()).await.unwrap();
+        assert_eq!(restarted.services.admission.snapshot().await.active, 1);
+        assert!(matches!(
+            restarted.submit(RunId::new(), &fixture.intent()).await,
+            Err(BootstrapError::Store(BootstrapStoreError::QueueFull))
+        ));
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bootstrap_preflight_error_releases_execution_slot_but_retains_ownership() {
     let fixture = Fixture::new().await;
-    let id = RunId::new();
-    fixture.owner.submit(id, &fixture.intent()).await.unwrap();
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
-    std::fs::write(fixture.project.join("surge.toml"), "invalid [").unwrap();
-    fixture.owner.reconcile().await.unwrap();
-    let blocked = fixture.terminal(id).await;
-    assert!(matches!(
-        blocked.state,
-        State::NeedsAttention {
-            reason: Attention::ConfigurationChanged,
-            ..
-        }
-    ));
-    assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
-    assert!(fixture.engine.snapshot_active_runs().await.is_empty());
-    assert_eq!(fixture.owner.store.list().unwrap().len(), 1);
+    {
+        let id = RunId::new();
+        fixture.owner.submit(id, &fixture.intent()).await.unwrap();
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 1);
+        std::fs::write(fixture.project.join("surge.toml"), "invalid [").unwrap();
+        fixture.owner.reconcile().await.unwrap();
+        let blocked = fixture.terminal(id).await;
+        assert!(matches!(
+            blocked.state,
+            State::NeedsAttention {
+                reason: Attention::ConfigurationChanged,
+                ..
+            }
+        ));
+        assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+        assert_eq!(fixture.engine.snapshot_active_runs().await.len(), 0);
+        assert_eq!(fixture.owner.store.list().unwrap().len(), 1);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1239,4 +1312,6 @@ async fn incoming_bootstrap_cannot_bypass_older_durable_queue() {
         "new acceptance bypassed durable FIFO"
     );
     assert_eq!(fixture.owner.services.admission.snapshot().await.active, 0);
+    drop(tap);
+    fixture.close().await;
 }

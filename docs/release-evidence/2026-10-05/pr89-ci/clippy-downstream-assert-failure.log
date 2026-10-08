@@ -1,0 +1,203 @@
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking gpui-component v0.7.0
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+    Checking surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Checking surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+    Checking surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Checking gpui-kit v0.7.0
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Checking surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking surge-ui v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-ui)
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/automation_merge_gate.rs:962:9
+    |
+962 | /         assert!(
+963 | |             reconciliation_candidates(&conn, "mock:test#063")
+964 | |                 .unwrap()
+965 | |                 .is_empty()
+966 | |         );
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+962 ~         assert_eq!(
+963 ~             reconciliation_candidates(&conn, "mock:test#063")
+964 +                 .unwrap(), [] as [(std::string::String, std::string::String); 0]
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:656:5
+    |
+656 |     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+656 -     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+656 +     assert_eq!(fixture.engine.snapshot_active_runs().await, [] as [surge_orchestrator::engine::RunSummary; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:689:5
+    |
+689 |     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+689 -     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+689 +     assert_eq!(fixture.engine.snapshot_active_runs().await, [] as [surge_orchestrator::engine::RunSummary; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:767:5
+    |
+767 |     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+767 -     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+767 +     assert_eq!(fixture.engine.snapshot_active_runs().await, [] as [surge_orchestrator::engine::RunSummary; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:812:5
+    |
+812 |     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+812 -     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+812 +     assert_eq!(fixture.engine.snapshot_active_runs().await, [] as [surge_orchestrator::engine::RunSummary; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:865:5
+    |
+865 |     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+865 -     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+865 +     assert_eq!(fixture.engine.snapshot_active_runs().await, [] as [surge_orchestrator::engine::RunSummary; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:977:5
+    |
+977 | /     assert!(
+978 | |         restarted
+979 | |             .services
+980 | |             .engine
+...   |
+983 | |             .is_empty()
+984 | |     );
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+977 ~     assert_eq!(
+978 ~         restarted
+979 +             .services
+980 +             .engine
+981 +             .snapshot_active_runs()
+982 +             .await, [] as [surge_orchestrator::engine::RunSummary; 0]
+    |
+
+error: used `assert!` to check that a value is empty
+    --> crates/surge-daemon/src/bootstrap_supervisor_tests.rs:1177:5
+     |
+1177 |     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+1177 -     assert!(fixture.engine.snapshot_active_runs().await.is_empty());
+1177 +     assert_eq!(fixture.engine.snapshot_active_runs().await, [] as [surge_orchestrator::engine::RunSummary; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/inbox/state_sync.rs:243:9
+    |
+243 |         assert!(source.posted_comments().await.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+243 -         assert!(source.posted_comments().await.is_empty());
+243 +         assert_eq!(source.posted_comments().await, [] as [(surge_intake::TaskId, std::string::String); 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/inbox/state_sync.rs:279:9
+    |
+279 |         assert!(source.posted_comments().await.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+279 -         assert!(source.posted_comments().await.is_empty());
+279 +         assert_eq!(source.posted_comments().await, [] as [(surge_intake::TaskId, std::string::String); 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/inbox/state_sync.rs:307:9
+    |
+307 |         assert!(source.posted_comments().await.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+307 -         assert!(source.posted_comments().await.is_empty());
+307 +         assert_eq!(source.posted_comments().await, [] as [(surge_intake::TaskId, std::string::String); 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/inbox/state_sync.rs:355:9
+    |
+355 |         assert!(source.posted_comments().await.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+355 -         assert!(source.posted_comments().await.is_empty());
+355 +         assert_eq!(source.posted_comments().await, [] as [(surge_intake::TaskId, std::string::String); 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/surge-daemon/src/inbox/tg_bot.rs:392:13
+    |
+392 |             assert!(inbox_queue::list_pending_actions(&conn).unwrap().is_empty());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+392 -             assert!(inbox_queue::list_pending_actions(&conn).unwrap().is_empty());
+392 +             assert_eq!(inbox_queue::list_pending_actions(&conn).unwrap(), [] as [surge_persistence::inbox_queue::InboxActionRow; 0]);
+    |
+
+error: could not compile `surge-daemon` (lib test) due to 13 previous errors
+warning: build failed, waiting for other jobs to finish...

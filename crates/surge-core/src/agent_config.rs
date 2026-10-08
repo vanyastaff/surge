@@ -87,6 +87,24 @@ impl AgentConfig {
         self.runtime_field("effort")
     }
 
+    /// This config with its runtime moved to `agent_id` (and `model`, when
+    /// given): `custom_fields["runtime"]` becomes `{ agent_id, model? }`. The
+    /// profile (role and prompts) is kept; the previous model and effort are
+    /// dropped because they belong to the previous agent.
+    #[must_use]
+    pub fn with_runtime_override(&self, agent_id: &str, model: Option<&str>) -> Self {
+        let mut runtime = toml::map::Map::new();
+        runtime.insert("agent_id".into(), toml::Value::String(agent_id.into()));
+        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+            runtime.insert("model".into(), toml::Value::String(model.into()));
+        }
+        let mut moved = self.clone();
+        moved
+            .custom_fields
+            .insert("runtime".into(), toml::Value::Table(runtime));
+        moved
+    }
+
     fn runtime_field(&self, key: &str) -> Option<&str> {
         self.custom_fields
             .get("runtime")?

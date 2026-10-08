@@ -134,3 +134,13 @@ fn main() {
         std::process::exit(status);
     }
 }
+
+#[cfg(test)]
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}

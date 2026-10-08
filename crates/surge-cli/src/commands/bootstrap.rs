@@ -467,6 +467,11 @@ async fn build_local_engine(
             // so it resolves providers through the same unified catalog
             // (user `[agents.*]` over builtins).
             agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::for_run(config))),
+            escalation: surge_orchestrator::engine::escalation_config(
+                config,
+                &surge_acp::Registry::for_run(config),
+            ),
+            fallback_agents: config.capacity.fallback_agents.clone(),
             ..EngineConfig::default()
         },
     ));
@@ -559,6 +564,12 @@ fn parse_run_id(s: &str) -> Result<RunId> {
         .map_err(|e| anyhow!("invalid bootstrap run id '{s}': {e}"))
 }
 
+#[cfg(windows)]
+fn surge_home_dir() -> Result<PathBuf> {
+    super::common::surge_home_dir()
+}
+
+#[cfg(not(windows))]
 fn surge_home_dir() -> Result<PathBuf> {
     // Honour SURGE_HOME like the rest of the orchestrator so tests can
     // isolate per-tempdir; see `feature::surge_home_dir` for the same note.
@@ -682,96 +693,105 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resumed_console_answers_only_the_fresh_pending_gate() {
-        let temp = tempfile::tempdir().unwrap();
-        let storage = Storage::open(temp.path()).await.unwrap();
-        let bridge = Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap());
-        let build_engine = || {
-            Arc::new(Engine::new(
-                bridge.clone(),
-                storage.clone(),
-                Arc::new(
-                    surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
-                        temp.path().to_path_buf(),
+        let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(temp.path()).await.unwrap();
+            let bridge = Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap());
+            let build_engine = || {
+                Arc::new(Engine::new(
+                    bridge.clone(),
+                    storage.clone(),
+                    Arc::new(
+                        surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                            temp.path().to_path_buf(),
+                        ),
                     ),
-                ),
-                EngineConfig::default(),
-            ))
-        };
-        let engine = build_engine();
-        let mut graph: surge_core::graph::Graph =
-            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
-        graph.start = "first".try_into().unwrap();
-        for (name, target) in [("first", "second"), ("second", "end")] {
-            let node: surge_core::node::Node = serde_json::from_value(serde_json::json!({
+                    EngineConfig::default(),
+                ))
+            };
+            let engine = build_engine();
+            let mut graph: surge_core::graph::Graph =
+                toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml"))
+                    .unwrap();
+            graph.start = "first".try_into().unwrap();
+            for (name, target) in [("first", "second"), ("second", "end")] {
+                let node: surge_core::node::Node = serde_json::from_value(serde_json::json!({
                 "id": name, "position": {"x": 0.0, "y": 0.0},
                 "declared_outcomes": [{"id": "approve", "description": "approved", "edge_kind_hint": "forward", "is_terminal": false}],
                 "config": {"node_kind": "human_gate", "delivery_channels": [],
                     "summary": {"title": name, "body": name},
                     "options": [{"outcome": "approve", "label": "Approve"}]},
             })).unwrap();
-            graph.nodes.insert(node.id.clone(), node);
-            graph.edges.push(
-                serde_json::from_value(serde_json::json!({
-                    "id": name, "from": {"node": name, "outcome": "approve"},
-                    "to": target, "kind": "forward",
-                }))
-                .unwrap(),
-            );
-        }
-        let id = RunId::new();
-        let mut events = engine.subscribe_tap();
-        let handle = engine
-            .start_run(
-                id,
-                graph,
-                temp.path().to_path_buf(),
-                EngineRunConfig::default(),
+                graph.nodes.insert(node.id.clone(), node);
+                graph.edges.push(
+                    serde_json::from_value(serde_json::json!({
+                        "id": name, "from": {"node": name, "outcome": "approve"},
+                        "to": target, "kind": "forward",
+                    }))
+                    .unwrap(),
+                );
+            }
+            let id = RunId::new();
+            let mut events = engine.subscribe_tap();
+            let handle = engine
+                .start_run(
+                    id,
+                    graph,
+                    temp.path().to_path_buf(),
+                    EngineRunConfig::default(),
+                )
+                .await
+                .unwrap();
+            let (node, call_id) = wait_for_gate(&mut events, "first").await;
+            engine
+                .resolve_requested_input(
+                    id,
+                    node,
+                    call_id,
+                    serde_json::json!({"outcome": "approve"}),
+                )
+                .await
+                .unwrap();
+            wait_for_gate(&mut events, "second").await;
+            // Simulate interruption without a terminal event; resume replays history.
+            handle.completion.abort();
+            assert!(handle.completion.await.unwrap_err().is_cancelled());
+            drop(engine);
+            let resumed_engine = build_engine();
+            let reader = storage.open_run_reader(id).await.unwrap();
+            let after_seq = reader.current_seq().await.unwrap().as_u64();
+            let events = resumed_engine.subscribe_tap();
+            let handle = resumed_engine
+                .resume_run(id, temp.path().to_path_buf())
+                .await
+                .unwrap();
+            let prompts = std::sync::Mutex::new(Vec::new());
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(5),
+                drive_run_handle(
+                    resumed_engine,
+                    handle,
+                    events,
+                    after_seq,
+                    Vec::new(),
+                    |prompt| {
+                        prompts.lock().unwrap().push(prompt.to_string());
+                        Ok(serde_json::json!({"outcome": "approve"}))
+                    },
+                ),
             )
-            .await
-            .unwrap();
-        let (node, call_id) = wait_for_gate(&mut events, "first").await;
-        engine
-            .resolve_requested_input(id, node, call_id, serde_json::json!({"outcome": "approve"}))
-            .await
-            .unwrap();
-        wait_for_gate(&mut events, "second").await;
-        // Simulate interruption without a terminal event; resume replays history.
-        handle.completion.abort();
-        assert!(handle.completion.await.unwrap_err().is_cancelled());
-        drop(engine);
-        let resumed_engine = build_engine();
-        let reader = storage.open_run_reader(id).await.unwrap();
-        let after_seq = reader.current_seq().await.unwrap().as_u64();
-        let events = resumed_engine.subscribe_tap();
-        let handle = resumed_engine
-            .resume_run(id, temp.path().to_path_buf())
-            .await
-            .unwrap();
-        let prompts = std::sync::Mutex::new(Vec::new());
-        let outcome = tokio::time::timeout(
-            Duration::from_secs(5),
-            drive_run_handle(
-                resumed_engine,
-                handle,
-                events,
-                after_seq,
-                Vec::new(),
-                |prompt| {
-                    prompts.lock().unwrap().push(prompt.to_string());
-                    Ok(serde_json::json!({"outcome": "approve"}))
-                },
-            ),
-        )
-        .await;
-        let prompts = prompts.into_inner().unwrap();
-        assert!(
-            outcome.is_ok(),
-            "resume timed out after prompts {prompts:?}"
-        );
-        let outcome = outcome.unwrap();
-        assert_eq!(prompts.len(), 1, "{prompts:?}; outcome: {outcome:?}");
-        assert!(prompts[0].contains("second"), "{prompts:?}");
-        assert!(matches!(outcome.unwrap(), RunOutcome::Completed { .. }));
+            .await;
+            let prompts = prompts.into_inner().unwrap();
+            assert!(
+                outcome.is_ok(),
+                "resume timed out after prompts {prompts:?}"
+            );
+            let outcome = outcome.unwrap();
+            assert_eq!(prompts.len(), 1, "{prompts:?}; outcome: {outcome:?}");
+            assert!(prompts[0].contains("second"), "{prompts:?}");
+            assert!(matches!(outcome.unwrap(), RunOutcome::Completed { .. }));
+        }
+        temp.close().unwrap();
     }
 
     async fn wait_for_gate(
@@ -815,77 +835,83 @@ mod tests {
         use surge_core::run_event::VersionedEventPayload;
         use surge_persistence::artifacts::ArtifactStore;
 
-        let temp = tempfile::tempdir().unwrap();
-        let storage = Storage::open(temp.path()).await.unwrap();
-        let engine = Arc::new(Engine::new(
-            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
-            storage.clone(),
-            Arc::new(
-                surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
-                    temp.path().to_path_buf(),
+        let temp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(temp.path()).await.unwrap();
+            let engine = Arc::new(Engine::new(
+                Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+                storage.clone(),
+                Arc::new(
+                    surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                        temp.path().to_path_buf(),
+                    ),
                 ),
-            ),
-            EngineConfig::default(),
-        ));
-        let graph: surge_core::graph::Graph =
-            toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml")).unwrap();
-        let parent = RunId::new();
-        engine
-            .start_run(
-                parent,
-                graph.clone(),
-                temp.path().to_path_buf(),
-                EngineRunConfig::default(),
-            )
-            .await
-            .unwrap()
-            .await_completion()
-            .await
-            .unwrap();
-        let writer = storage.open_run_writer(parent).await.unwrap();
-        let artifacts = ArtifactStore::new(temp.path().join("runs"));
-        for name in ["description", "roadmap", "flow"] {
-            let reference = artifacts.put(parent, name, b"fixture").await.unwrap();
-            writer
-                .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                    node: "end".try_into().unwrap(),
-                    artifact: reference.hash,
-                    path: reference.path,
-                    name: name.into(),
-                    source_path: None,
-                }))
+                EngineConfig::default(),
+            ));
+            let graph: surge_core::graph::Graph =
+                toml::from_str(include_str!("../../../../examples/flow_terminal_only.toml"))
+                    .unwrap();
+            let parent = RunId::new();
+            engine
+                .start_run(
+                    parent,
+                    graph.clone(),
+                    temp.path().to_path_buf(),
+                    EngineRunConfig::default(),
+                )
+                .await
+                .unwrap()
+                .await_completion()
                 .await
                 .unwrap();
+            let writer = storage.open_run_writer(parent).await.unwrap();
+            let artifacts = ArtifactStore::new(temp.path().join("runs"));
+            for name in ["description", "roadmap", "flow"] {
+                let reference = artifacts.put(parent, name, b"fixture").await.unwrap();
+                writer
+                    .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                        node: "end".try_into().unwrap(),
+                        artifact: reference.hash,
+                        path: reference.path,
+                        name: name.into(),
+                        source_path: None,
+                    }))
+                    .await
+                    .unwrap();
+            }
+            writer.close().await.unwrap();
+            let mut failure = graph;
+            failure.nodes.get_mut(&failure.start).unwrap().config =
+                surge_core::node::NodeConfig::Terminal(
+                    surge_core::terminal_config::TerminalConfig {
+                        kind: surge_core::terminal_config::TerminalKind::Failure { exit_code: 1 },
+                        message: None,
+                    },
+                );
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                start_followup_run(
+                    engine,
+                    MaterializedRun {
+                        bootstrap_run_id: parent,
+                        materialized_graph: failure,
+                        artifacts: vec![],
+                    },
+                    temp.path().to_path_buf(),
+                    temp.path().to_path_buf(),
+                    SurgeConfig::default(),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("failed: terminal failure node")
+            );
         }
-        writer.close().await.unwrap();
-        let mut failure = graph;
-        failure.nodes.get_mut(&failure.start).unwrap().config =
-            surge_core::node::NodeConfig::Terminal(surge_core::terminal_config::TerminalConfig {
-                kind: surge_core::terminal_config::TerminalKind::Failure { exit_code: 1 },
-                message: None,
-            });
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            start_followup_run(
-                engine,
-                MaterializedRun {
-                    bootstrap_run_id: parent,
-                    materialized_graph: failure,
-                    artifacts: vec![],
-                },
-                temp.path().to_path_buf(),
-                temp.path().to_path_buf(),
-                SurgeConfig::default(),
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("failed: terminal failure node")
-        );
+        temp.close().unwrap();
     }
 
     #[test]

@@ -43,9 +43,11 @@
 )]
 
 pub mod bootstrap_operations;
+pub mod busy;
 pub mod capacity;
 pub mod clock;
 pub mod config;
+pub(crate) mod connection;
 pub mod error;
 pub mod escalations;
 pub(crate) mod file_lock;
@@ -54,12 +56,14 @@ pub mod inspection;
 mod inspection_route;
 mod macros;
 pub mod migrations;
+mod pool;
 pub mod pragmas;
 pub mod process;
 pub mod query;
 pub mod reader;
 mod reader_views;
 pub mod registry;
+mod registry_exec;
 pub mod run_writer;
 pub mod seq;
 pub mod storage;

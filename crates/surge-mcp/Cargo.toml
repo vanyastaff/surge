@@ -22,6 +22,9 @@ rand.workspace = true
 
 surge-core.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
 [features]
 mock-server = []
 

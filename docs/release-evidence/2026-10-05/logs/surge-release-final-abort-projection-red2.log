@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-4e809714c96ec25c)
+
+running 1 test
+test runs::query::tests::run_aborted_marks_terminal_not_failed_consistent_with_display ... FAILED
+
+failures:
+
+---- runs::query::tests::run_aborted_marks_terminal_not_failed_consistent_with_display stdout ----
+
+thread 'runs::query::tests::run_aborted_marks_terminal_not_failed_consistent_with_display' (33612908) panicked at crates/surge-persistence/src/runs/query.rs:496:9:
+assertion failed: snap.terminal
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    runs::query::tests::run_aborted_marks_terminal_not_failed_consistent_with_display
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 495 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p surge-persistence --lib`

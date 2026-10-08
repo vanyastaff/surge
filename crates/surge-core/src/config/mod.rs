@@ -102,6 +102,10 @@ pub struct SurgeConfig {
     /// L3 (`surge:auto`) auto-merge gate configuration (spec §10/R31).
     #[serde(default)]
     pub merge_gate: MergeGateConfig,
+    /// Where the extra attempt of an exhausted retry loop runs
+    /// (`crate::escalation`). Unset: the stage's own agent.
+    #[serde(default)]
+    pub escalation: crate::escalation::EscalationConfig,
 }
 
 impl Default for SurgeConfig {
@@ -127,6 +131,7 @@ impl Default for SurgeConfig {
             context_pack: ContextPackConfig::default(),
             capacity: CapacityConfig::default(),
             merge_gate: MergeGateConfig::default(),
+            escalation: crate::escalation::EscalationConfig::default(),
         }
     }
 }

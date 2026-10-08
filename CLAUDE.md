@@ -54,3 +54,9 @@ Multi-crate workspace. See `docs/ARCHITECTURE.md` for vision and design notes (i
 - ACP spec: https://agentclientprotocol.com
 - ACP Rust SDK: https://docs.rs/agent-client-protocol
 - Project docs: docs/
+
+MCP cold recovery stops the prior server's process group and restarts it from the
+frozen manifest; there is no managed VM or effect broker (ADR-0020 is superseded).
+See [ADR-0021](docs/adr/0021-mcp-restart-recovery.md). Group cleanup is
+best-effort: never record or display it as confirmed writer closure, and never
+replay an interrupted tool call.

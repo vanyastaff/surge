@@ -15,6 +15,8 @@ pub(crate) struct WriterSlotError;
 pub(crate) struct WriterLease {
     pub(crate) _token: Arc<WriterToken>,
     pub(crate) _file_lock: FileLock,
+    #[cfg(windows)]
+    pub(crate) namespace: Arc<crate::state_home::SqliteNamespaceOwner>,
 }
 
 /// Sentinel object whose Arc lifetime represents an active writer slot.
