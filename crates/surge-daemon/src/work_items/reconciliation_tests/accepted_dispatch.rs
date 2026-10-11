@@ -162,7 +162,7 @@ async fn accepted_terminal_run_is_supervised(failure: ProjectionFailure) {
     assert_eq!(persisted.state, WorkItemAttemptState::Completed);
     assert_eq!(item.active_run, None);
     assert_eq!(admission_active, 0);
-    assert!(active_runs.is_empty());
+    assert_eq!(active_runs, []);
     assert!(provider_calls_empty);
     if matches!(failure, ProjectionFailure::Superseded) {
         assert_eq!(control.unwrap().state, ExecutionControlState::Terminal);

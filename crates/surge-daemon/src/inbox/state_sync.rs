@@ -476,7 +476,7 @@ mod tests {
         assert!(was_pending);
         assert_eq!(before_join, TicketState::Active);
         assert_eq!(fetch_ticket_state(&storage), TicketState::Active);
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await, []);
         let count: i64 = storage
             .acquire_registry_conn()
             .unwrap()
