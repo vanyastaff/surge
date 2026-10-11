@@ -2086,7 +2086,9 @@ const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
 /// liveness probes and every registry reader otherwise kept seeing
 /// `running`/`bootstrapping` until the next daemon restart ran recovery.
 /// Parked runs are written by `set_run_parked`; a stream error is not a
-/// terminal fact, so neither is recorded here. Best-effort, like the ledger
+/// terminal fact, so neither is recorded here. A settlement failure is
+/// recorded as `Crashed` so registry readers cannot mistake an unconfirmed
+/// run for a successful historical completion. Best-effort, like the ledger
 /// mirror: a failed write is logged and never changes the outcome.
 async fn record_terminal_status(
     storage: &Arc<surge_persistence::runs::Storage>,
@@ -2099,8 +2101,8 @@ async fn record_terminal_status(
         RunOutcome::Completed { .. } => RunStatus::Completed,
         RunOutcome::Failed { .. } => RunStatus::Failed,
         RunOutcome::Aborted { .. } => RunStatus::Aborted,
-        RunOutcome::SettlementFailed { .. }
-        | RunOutcome::RecoveryRequired { .. }
+        RunOutcome::SettlementFailed { .. } => RunStatus::Crashed,
+        RunOutcome::RecoveryRequired { .. }
         | RunOutcome::Suspended { .. }
         | RunOutcome::Parked { .. } => return,
     };

@@ -347,6 +347,12 @@ async fn watch_daemon_events(
 async fn require_completed_history(run_id: RunId) -> Result<()> {
     use surge_persistence::runs::EventSeq;
     let storage = Storage::open(&surge_runs_dir()?).await?;
+    if matches!(
+        storage.get_run(&run_id).await?.map(|run| run.status),
+        Some(surge_core::RunStatus::Crashed)
+    ) {
+        return Err(anyhow!("run {run_id} settlement is unconfirmed"));
+    }
     let reader = storage.open_run_reader(run_id).await?;
     let events = reader.read_events(EventSeq(0)..EventSeq(u64::MAX)).await?;
     require_completed_events(run_id, &events)

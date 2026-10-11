@@ -201,6 +201,18 @@ pub(crate) async fn durable_outcome(
     storage: &Arc<Storage>,
     run_id: surge_core::RunId,
 ) -> Option<RunOutcome> {
+    if matches!(
+        storage
+            .get_run(&run_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|run| run.status),
+        Some(surge_core::RunStatus::Crashed)
+    ) {
+        warn!(%run_id, "settlement is unconfirmed; refusing historical outcome");
+        return None;
+    }
     let inspection = match storage.inspect_run(run_id).await {
         Ok(inspection) => inspection,
         Err(error) => {
