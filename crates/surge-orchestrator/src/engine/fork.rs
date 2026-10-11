@@ -333,7 +333,7 @@ async fn prepare_child_files(
         )?;
         if let Some((checkpoint, destination)) = checkpoint {
             project_path =
-                restore_child_workspace(request.new_run, checkpoint, destination, &mut copied)?;
+                restore_child_workspace(request.new_run, &checkpoint, destination, &mut copied)?;
         }
         Ok(PreparedForkFiles {
             reservation,
@@ -347,11 +347,11 @@ async fn prepare_child_files(
 
 fn restore_child_workspace(
     child: RunId,
-    checkpoint: surge_git::checkpoint::WorkspaceCheckpoint,
+    checkpoint: &surge_git::checkpoint::WorkspaceCheckpoint,
     destination: std::path::PathBuf,
     copied: &mut [VersionedEventPayload],
 ) -> Result<std::path::PathBuf, EngineError> {
-    let restored = surge_git::checkpoint::restore(&checkpoint, child, destination)
+    let restored = surge_git::checkpoint::restore(checkpoint, child, destination)
         .map_err(|error| EngineError::ForkInvalid(format!("restore checkpoint: {error}")))?;
     if let Some(VersionedEventPayload {
         payload: EventPayload::RunStarted { project_path, .. },

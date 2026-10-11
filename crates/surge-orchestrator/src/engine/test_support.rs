@@ -73,9 +73,7 @@ impl Engine {
         let Some(request) = request else {
             return Ok(feed);
         };
-        let installed = if request.run != *feed.run_id() {
-            Err("feed test probe run identity mismatch".to_owned())
-        } else {
+        let installed = if request.run == *feed.run_id() {
             match request.kind {
                 FeedProbeKind::BeforeCheckout => feed
                     .install_pool_probe_for_test()
@@ -85,6 +83,8 @@ impl Engine {
                     .map(|gate| FeedProbe::AfterCheckout { gate }),
             }
             .map_err(|error| error.to_string())
+        } else {
+            Err("feed test probe run identity mismatch".to_owned())
         };
         match installed {
             Ok(probe) => request.reply.send(Ok(probe)).map_err(|_undelivered| {
