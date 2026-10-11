@@ -171,17 +171,17 @@ fn existing_parts(
     let token = token(writers, run)?;
     let root = RunRoot::existing(home)?;
     let run_path = home.join("runs").join(run.to_string());
+    let database_path = run_path.join("events.sqlite");
     let lock = match FileLock::try_acquire_existing(&run_path.join("events.sqlite.lock"), run) {
         Ok(lock) => lock,
         Err(OpenError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            if run_path.exists() {
+            if database_path.exists() {
                 return Err(OpenError::Io(error));
             }
             return Err(OpenError::RunNotFound(run));
         },
         Err(error) => return Err(error),
     };
-    let database_path = run_path.join("events.sqlite");
     if !database_path.exists() {
         return Err(OpenError::RunNotFound(run));
     }
