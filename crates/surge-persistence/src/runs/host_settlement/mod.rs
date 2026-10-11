@@ -170,7 +170,12 @@ fn existing_parts(
 ) -> Result<(Arc<WriterToken>, FileLock, Arc<RunRoute>, Database), OpenError> {
     let token = token(writers, run)?;
     let root = RunRoot::existing(home)?;
-    let route = Arc::new(root.run(run, false)?);
+    let route = Arc::new(root.run(run, false).map_err(|error| match error {
+        OpenError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound => {
+            OpenError::RunNotFound(run)
+        },
+        other => other,
+    })?);
     let lock = FileLock::try_acquire_existing(
         &home
             .join("runs")
