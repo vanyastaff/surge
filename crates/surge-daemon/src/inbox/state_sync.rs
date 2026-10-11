@@ -35,7 +35,7 @@ impl TicketStateSync {
 
     /// Drive the loop: consume events from `handle.events`, apply FSM
     /// transitions, and enqueue terminal tracker comments. Returns when the run
-    /// reaches a terminal state or the broadcast sender is dropped.
+    /// completion task returns; event history alone does not confirm settlement.
     pub async fn run(self, mut handle: RunHandle) {
         info!(task_id = %self.task_id, run_id = %handle.run_id, "TicketStateSync started");
         let mut went_active = false;
@@ -56,21 +56,18 @@ impl TicketStateSync {
                         went_active = true;
                     },
                     Ok(EngineRunEvent::Terminal { outcome }) => {
-                        self.on_terminal(&handle.run_id, &outcome).await;
                         observed = Some(outcome);
                     },
                     Ok(_) => {},
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!(skipped, "ticket subscriber lagged; checking durable run history");
                         if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
-                            self.on_terminal(&handle.run_id, &outcome).await;
                             observed = Some(outcome);
                         }
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         events_open = false;
                         if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
-                            self.on_terminal(&handle.run_id, &outcome).await;
                             observed = Some(outcome);
                         }
                     },
@@ -86,20 +83,17 @@ impl TicketStateSync {
         observed: Option<RunOutcome>,
     ) {
         match joined {
+            Ok(RunOutcome::SettlementFailed { failures, .. }) => {
+                warn!(%run_id, ?failures, "ticket completion unconfirmed: resource settlement failed");
+            },
             Ok(outcome) => match observed {
                 Some(previous) if previous != outcome => {
                     warn!(%run_id, ?previous, ?outcome, "ticket event disagrees with joined completion");
                 },
-                Some(_) => {},
-                None => self.on_terminal(&run_id, &outcome).await,
+                Some(_) | None => self.on_terminal(&run_id, &outcome).await,
             },
             Err(error) => {
                 warn!(%run_id, %error, "ticket execution completion failed");
-                if observed.is_none()
-                    && let Some(outcome) = durable_outcome(&self.storage, run_id).await
-                {
-                    self.on_terminal(&run_id, &outcome).await;
-                }
             },
         }
     }
@@ -443,6 +437,55 @@ mod tests {
         );
         assert_eq!(fetch_ticket_state(&storage), TicketState::Active);
         drop(sender);
+        drop(source);
+        drop(storage);
+        dir.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn observed_terminal_cannot_commit_before_failed_settlement_join() {
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
+        let original = RunOutcome::Completed {
+            terminal: "end".try_into().unwrap(),
+        };
+        let (events, receiver) = tokio::sync::broadcast::channel(2);
+        events
+            .send(EngineRunEvent::Terminal {
+                outcome: original.clone(),
+            })
+            .unwrap();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let completion = tokio::spawn(async move {
+            released.await.unwrap();
+            RunOutcome::SettlementFailed {
+                original: Box::new(original),
+                failures: vec![
+                    surge_orchestrator::engine::handle::RunSettlementFailure::ForwarderRead,
+                ],
+            }
+        });
+        let mut follower = Box::pin(sync.run(RunHandle {
+            run_id,
+            events: receiver,
+            completion,
+        }));
+        let was_pending = futures::poll!(follower.as_mut()).is_pending();
+        let before_join = fetch_ticket_state(&storage);
+        release.send(()).unwrap();
+        follower.await;
+        assert!(was_pending);
+        assert_eq!(before_join, TicketState::Active);
+        assert_eq!(fetch_ticket_state(&storage), TicketState::Active);
+        assert!(source.posted_comments().await.is_empty());
+        let count: i64 = storage
+            .acquire_registry_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(events);
         drop(source);
         drop(storage);
         dir.close().unwrap();

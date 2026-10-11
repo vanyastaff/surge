@@ -16,14 +16,45 @@ use crate::runs::error::OpenError;
 ///
 /// The owned file closes on every failed acquisition and on final lease drop.
 pub struct FileLock {
+    path: std::path::PathBuf,
     #[cfg(not(windows))]
-    _file: File,
+    file: File,
     #[cfg(windows)]
-    _native: crate::state_home::NativeJournalLock,
+    native: crate::state_home::NativeJournalLock,
 }
 
 impl FileLock {
+    pub(crate) fn identity(&self) -> Result<Vec<u8>, OpenError> {
+        #[cfg(windows)]
+        {
+            self.native
+                .identity(
+                    self.path
+                        .file_name()
+                        .ok_or_else(|| OpenError::Authority("lock filename missing".into()))?,
+                )
+                .map_err(Into::into)
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let held = self.file.metadata()?;
+            let linked = std::fs::symlink_metadata(&self.path)?;
+            if !held.is_file()
+                || held.nlink() != 1
+                || linked.file_type().is_symlink()
+                || held.dev() != linked.dev()
+                || held.ino() != linked.ino()
+            {
+                return Err(OpenError::Authority(
+                    "original journal lock identity changed".into(),
+                ));
+            }
+            Ok([held.dev().to_le_bytes(), held.ino().to_le_bytes()].concat())
+        }
+    }
     /// Obtain the normal run writer lock, creating its file when necessary.
+    #[cfg(test)]
     pub fn try_acquire(lock_path: &Path, run_id: surge_core::RunId) -> Result<Self, OpenError> {
         Self::acquire(lock_path, run_id, true)
     }
@@ -59,24 +90,34 @@ impl FileLock {
                     other => other.into(),
                 },
             )?;
-            Ok(Self { _native: native })
+            Ok(Self {
+                native,
+                path: lock_path.to_owned(),
+            })
         }
         #[cfg(not(windows))]
         {
             if create && let Some(parent) = lock_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            use std::os::unix::fs::OpenOptionsExt;
             let file = OpenOptions::new()
                 .create(create)
                 .read(true)
                 .write(true)
                 .truncate(false)
+                .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC | nix::libc::O_NONBLOCK)
                 .open(lock_path)?;
             file.try_lock().map_err(|error| match error {
                 std::fs::TryLockError::WouldBlock => OpenError::WriterAlreadyHeld { run_id },
                 std::fs::TryLockError::Error(error) => OpenError::Io(error),
             })?;
-            Ok(Self { _file: file })
+            let owner = Self {
+                file,
+                path: lock_path.to_owned(),
+            };
+            owner.identity()?;
+            Ok(owner)
         }
     }
 }

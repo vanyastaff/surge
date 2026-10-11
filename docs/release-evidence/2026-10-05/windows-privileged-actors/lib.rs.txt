@@ -1,0 +1,14 @@
+#![cfg(windows)]
+#![allow(dead_code)] // Harness omits Storage-consuming outer actors.
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/test_security.rs"]
+mod test_security;
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap.rs"]
+mod bootstrap;
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/context.rs"]
+mod context;
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/objects.rs"]
+mod objects;
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/privileges.rs"]
+mod privileges;
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/cleanup.rs"]
+mod cleanup;

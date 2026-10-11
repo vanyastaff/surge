@@ -1,0 +1,41 @@
+{
+  "status": "source frozen for independent review; privileged native acceptance pending",
+  "source_files": {
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests.rs": "3d9125e9ff4afe21c01ba2d521a822aac871bc89d545de71816c4ba41469b846",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap/handles.rs": "5dc7dc3493fb702bb14953f098a3715a7a2e5fa3371c13173548366ceb00950e",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap/paths.rs": "5a40a15584180f40d74a8bf6164988742561c89b06fab1638945d3fe7ed20ded",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap/security.rs": "e1924a8c2af52bcf91809c534ba9691f359c930055de0aaa204b9e969196dbe8",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap.rs": "645dc9fa4348ae285cf811b14a9aa9104c3fc5dcbcceaea20c94ae8d60ceb77b",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/cleanup.rs": "402f8969f777f752094bfe1f142effa30666cbe8bf242d92eaa1ad5b47d6defa",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/context.rs": "64dc472fe7e6b01d888491845a0236cd9082ccc8b45a05cea522ea7603aa1c9a",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/objects.rs": "50c1473201ce1aa3bd1a459702485898fd4ebccb2af598af580b87f04ae5adc2",
+    "crates/surge-persistence/src/state_home/privileged_fixture_tests/privileges.rs": "9f2a34cd48cf0f8f8016bf14c079e95482ee6fac6efcd5fd04a44f69f142384e"
+  },
+  "context_files": {
+    "crates/surge-persistence/src/state_home.rs": "132c0dda962b003d14522ae133b75d7da712d5165755346e5cada0949803a657",
+    "crates/surge-persistence/src/state_home/test_security.rs": "0315a6a096d63d4947c846d96472c3db12ca7cd95b87738714159791c0adcd24",
+    "crates/surge-persistence/Cargo.toml": "2d9d1b882bea44a2a536566d56c38ac17b8e2215eff1f23a2a893adf84ecd00c",
+    "docs/release-evidence/2026-10-05/windows-stage1-local/privileged-success-cleanup-plan.md": "b0d7b8b1aa278d36c628fb49f934363f1fc45648fd67b1283c89c8df8b278d33"
+  },
+  "checks": [
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/vanyastafford/Develop/surge/target/windows-pid-compile-harness/target cargo +1.99.0 clippy --manifest-path target/windows-privileged-actor-helper-harness/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings",
+      "first_exit": 101,
+      "final_exit": 0,
+      "scope": "actual SDK test_security/bootstrap/context/objects/privileges/cleanup modules and cfg(test) bootstrap tests; outer Storage-consuming actor module excluded; compile-only; no native tests executed"
+    },
+    {
+      "command": "rustfmt +1.99.0 --edition 2024 --check crates/surge-persistence/src/state_home.rs",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0
+    }
+  ],
+  "required_remaining": [
+    "independent full actor/bootstrap/cleanup source reviews",
+    "Windows compile of outer Storage-consuming actors",
+    "isolated provisioner native execution of all four actors covering two privileged acceptance cases"
+  ]
+}

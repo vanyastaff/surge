@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use surge_core::{NodeKey, RunId, VersionedEventPayload};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::runs::clock::Clock;
-use crate::runs::error::WriterError;
+use crate::runs::error::{WriterError, WriterFailure};
 use crate::runs::seq::EventSeq;
 use crate::runs::types::ArtifactRecord;
 use crate::runs::views;
@@ -112,7 +112,12 @@ pub enum WriterCommand {
         /// Reply channel; `Ok(())` once Flush is processed (everything before is done).
         reply: oneshot::Sender<Result<(), WriterError>>,
     },
-    /// Cooperative shutdown. Reply is sent right before the loop exits.
+    /// Stop accepting commands, close the actor connection, and acknowledge its exact prefix.
+    SealForReadDrain {
+        /// Sent only after the actor's actual connection has closed.
+        reply: oneshot::Sender<EventSeq>,
+    },
+    /// Cooperative shutdown. Reply is sent after the actor connection closes.
     Shutdown {
         /// Reply channel signalled just before the writer task exits.
         reply: oneshot::Sender<()>,
@@ -133,31 +138,70 @@ pub struct WriterConfig {
     pub checkpoint_interval_secs: u64,
 }
 
-/// Spawn the writer task. Returns a sender for commands and the join handle.
-///
-/// `capacity` bounds the mpsc channel; backpressure kicks in once full.
-#[must_use]
+/// Actual actor lifecycle observations; these values confer no write authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriterLifecycle {
+    /// The actor has not published a terminal receipt.
+    Running,
+    /// The actor closed its connection after sealing this exact journal prefix.
+    Sealed(EventSeq),
+    /// The actor stopped without a successful seal.
+    Failed(WriterFailure),
+}
+
+pub(crate) struct SpawnedWriter {
+    pub(crate) commands: mpsc::Sender<WriterCommand>,
+    pub(crate) join: tokio::task::JoinHandle<Result<(), WriterError>>,
+    pub(crate) stop: oneshot::Sender<()>,
+    pub(crate) lifecycle: watch::Receiver<WriterLifecycle>,
+}
+
+/// Spawn the actor with independent priority-stop and observation channels.
 pub(crate) fn spawn_writer(
     cfg: WriterConfig,
     capacity: usize,
     lease: Arc<WriterLease>,
-) -> (
-    mpsc::Sender<WriterCommand>,
-    tokio::task::JoinHandle<Result<(), WriterError>>,
-) {
+) -> SpawnedWriter {
     let (tx, rx) = mpsc::channel(capacity);
-    let join = tokio::spawn(async move { writer_loop(cfg, rx, lease).await });
-    (tx, join)
+    let (stop, stopped) = oneshot::channel();
+    let (lifecycle, observed) = watch::channel(WriterLifecycle::Running);
+    let join = tokio::spawn(async move {
+        let result = writer_loop(cfg, rx, lease, stopped, &lifecycle).await;
+        if result.is_err() {
+            lifecycle.send_replace(WriterLifecycle::Failed(WriterFailure::ActorFailed));
+        }
+        result
+    });
+    SpawnedWriter {
+        commands: tx,
+        join,
+        stop,
+        lifecycle: observed,
+    }
+}
+
+enum Stop {
+    Interrupted,
+    Shutdown(oneshot::Sender<()>),
+    Seal(oneshot::Sender<EventSeq>),
+}
+
+fn stop_pending(stop: &mut oneshot::Receiver<()>) -> bool {
+    !matches!(stop.try_recv(), Err(oneshot::error::TryRecvError::Empty))
 }
 
 async fn writer_loop(
     cfg: WriterConfig,
     mut rx: mpsc::Receiver<WriterCommand>,
     lease: Arc<WriterLease>,
+    mut stop: oneshot::Receiver<()>,
+    lifecycle: &watch::Sender<WriterLifecycle>,
 ) -> Result<(), WriterError> {
+    lease
+        .verify()
+        .map_err(|error| WriterError::Io(std::io::Error::other(error.to_string())))?;
     let span = tracing::info_span!("writer_task", run_id = %cfg.run_id);
     let _enter = span.enter();
-
     #[cfg(windows)]
     lease
         .namespace
@@ -166,26 +210,33 @@ async fn writer_loop(
     #[cfg(windows)]
     let mut conn = super::connection::RetainedConnection::open_owned(
         &cfg.events_db_path,
-        rusqlite::OpenFlags::default(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         lease.namespace.clone(),
     )?;
     #[cfg(not(windows))]
-    let mut conn = Connection::open(&cfg.events_db_path)?;
+    let mut conn = Connection::open_with_flags(
+        &cfg.events_db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     crate::runs::pragmas::apply(&conn, crate::runs::pragmas::PER_RUN_PRAGMAS)?;
-
     let mut checkpoint_interval = tokio::time::interval(std::time::Duration::from_secs(
         cfg.checkpoint_interval_secs.max(1),
     ));
     checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    checkpoint_interval.tick().await; // skip immediate first tick
-
-    loop {
+    checkpoint_interval.tick().await;
+    let reason = loop {
+        if stop_pending(&mut stop) {
+            break Stop::Interrupted;
+        }
         tokio::select! {
             biased;
+            _ = &mut stop => break Stop::Interrupted,
             cmd = rx.recv() => {
-                let Some(cmd) = cmd else { break };
-                if !handle_command(super::connection::raw_mut(&mut conn), &cfg, cmd).await {
-                    break;
+                let Some(cmd) = cmd else { break Stop::Interrupted };
+                // A stop arriving during dequeue wins before another SQL command starts.
+                if stop_pending(&mut stop) { break Stop::Interrupted; }
+                if let Some(reason) = handle_command(super::connection::raw_mut(&mut conn), &cfg, cmd).await {
+                    break reason;
                 }
             }
             _ = checkpoint_interval.tick() => {
@@ -194,15 +245,60 @@ async fn writer_loop(
                 }
             }
         }
-    }
-
-    tracing::debug!("writer task exiting");
+    };
+    rx.close();
+    drop(rx); // Fail queued replies, including commands queued after the seal.
+    let prefix = if matches!(reason, Stop::Interrupted) {
+        Ok(EventSeq::ZERO)
+    } else {
+        sealed_prefix(&conn)
+    };
+    // Existing native checked Drop closes or retains ownership and terminates under
+    // its established failed-close policy. No new fatal boundary is introduced.
+    #[cfg(windows)]
     drop(conn);
+    #[cfg(not(windows))]
+    let closed = conn
+        .close()
+        .map_err(|(_connection, error)| WriterError::Sqlite(error));
     drop(lease);
+    #[cfg(not(windows))]
+    closed?;
+    match reason {
+        Stop::Interrupted => {
+            lifecycle.send_replace(WriterLifecycle::Failed(WriterFailure::Interrupted));
+        },
+        Stop::Shutdown(reply) => {
+            lifecycle.send_replace(WriterLifecycle::Sealed(prefix?));
+            let _ = reply.send(());
+        },
+        Stop::Seal(reply) => {
+            let prefix = prefix?;
+            lifecycle.send_replace(WriterLifecycle::Sealed(prefix));
+            let _ = reply.send(prefix);
+        },
+    }
     Ok(())
 }
 
-async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCommand) -> bool {
+fn sealed_prefix(conn: &Connection) -> Result<EventSeq, WriterError> {
+    let max: Option<i64> = conn.query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))?;
+    match max {
+        None => Ok(EventSeq::ZERO),
+        Some(value) if value > 0 => {
+            Ok(EventSeq(u64::try_from(value).map_err(|_| {
+                WriterError::Internal("invalid journal sequence".into())
+            })?))
+        },
+        Some(_) => Err(WriterError::Internal("invalid journal sequence".into())),
+    }
+}
+
+async fn handle_command(
+    conn: &mut Connection,
+    cfg: &WriterConfig,
+    cmd: WriterCommand,
+) -> Option<Stop> {
     match cmd {
         WriterCommand::AppendEvent { payload, reply } => {
             let result = append_event(conn, cfg.clock.as_ref(), &payload);
@@ -389,12 +485,10 @@ async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCo
             })();
             let _ = reply.send(result);
         },
-        WriterCommand::Shutdown { reply } => {
-            let _ = reply.send(());
-            return false;
-        },
+        WriterCommand::Shutdown { reply } => return Some(Stop::Shutdown(reply)),
+        WriterCommand::SealForReadDrain { reply } => return Some(Stop::Seal(reply)),
     }
-    true
+    None
 }
 
 /// The single-event production transaction shared with informational recovery.

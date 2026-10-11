@@ -16,6 +16,7 @@ pub enum OutputFormat {
     Json,
 }
 
+
 /// Subcommands under `surge engine`.
 #[derive(Subcommand, Debug)]
 pub enum EngineCommands {
@@ -1073,3 +1074,7 @@ mod tests {
         assert!(!table.contains("profiles"));
     }
 }
+
+#[cfg(test)]
+#[path = "engine/history_bypass_tests.rs"]
+mod history_bypass_tests;

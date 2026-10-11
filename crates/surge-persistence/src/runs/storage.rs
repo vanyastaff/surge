@@ -18,8 +18,14 @@ use crate::runs::error::OpenError;
 use crate::runs::process::ProcessProbe;
 use crate::runs::writer_slot::{ActiveWriters, WriterLease};
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod reader_pool_witness;
+
 /// Top-level storage facade. Holds registry pool, active-writers, config.
 pub struct Storage {
+    #[cfg(feature = "test-support")]
+    reader_pool_witnesses: std::sync::Mutex<Vec<(RunId, reader_pool_witness::ReaderPoolWitness)>>,
     pub(crate) home: PathBuf,
     #[cfg(windows)]
     pub(crate) state_home_owner: Arc<crate::state_home::StateHomeOwner>,
@@ -78,6 +84,8 @@ impl Storage {
         let registry_pool = crate::runs::registry::open_registry_pool(&home, clock.as_ref())?;
 
         Ok(Arc::new(Self {
+            #[cfg(feature = "test-support")]
+            reader_pool_witnesses: std::sync::Mutex::new(Vec::new()),
             home,
             registry_pool,
             #[cfg(windows)]
@@ -204,7 +212,6 @@ impl Storage {
 
 use surge_core::RunStatus;
 
-use crate::runs::file_lock::FileLock;
 use crate::runs::pragmas::{PER_RUN_PRAGMAS, apply as apply_pragmas};
 use crate::runs::reader::RunReader;
 use crate::runs::registry::{self, RunFilter, RunSummary};
@@ -260,47 +267,24 @@ impl Storage {
         project_path: impl AsRef<Path>,
         pipeline_template: Option<String>,
     ) -> Result<RunWriter, OpenError> {
+        let reservation = self.reserve_new_run(run_id).await?;
+        self.create_reserved_run(reservation, project_path, pipeline_template)
+            .await
+    }
+
+    /// Initialize the exclusively reserved database under its original opening and guards.
+    /// The reservation must have returned from every actual artifact/checkpoint worker.
+    pub async fn create_reserved_run(
+        self: &Arc<Self>,
+        reservation: super::host_settlement::RunCreationReservation,
+        project_path: impl AsRef<Path>,
+        pipeline_template: Option<String>,
+    ) -> Result<RunWriter, OpenError> {
         let project_path = project_path.as_ref().to_path_buf();
-
-        // Per-run dirs + migrations FIRST (no registry commit until ready).
-        let run_dir = self.run_dir(&run_id);
-        let artifacts_dir = self.artifacts_dir(&run_id);
-        let events_path = self.events_db_path(&run_id);
-        let clock = self.clock.clone();
-        #[cfg(windows)]
-        let namespace = self.native_run_namespace(&run_id, true)?;
-        tokio::task::spawn_blocking(move || -> Result<(), OpenError> {
-            #[cfg(windows)]
-            namespace.verify()?;
-            #[cfg(not(windows))]
-            {
-                std::fs::create_dir_all(&run_dir)?;
-                std::fs::create_dir_all(&artifacts_dir)?;
-            }
-            #[cfg(windows)]
-            let _ = (&run_dir, &artifacts_dir);
-            #[cfg(windows)]
-            let mut conn = super::connection::RetainedConnection::open_owned(
-                &events_path,
-                rusqlite::OpenFlags::default(),
-                namespace,
-            )?;
-            #[cfg(not(windows))]
-            let mut conn = rusqlite::Connection::open(&events_path)?;
-            apply_pragmas(&conn, PER_RUN_PRAGMAS)?;
-            crate::runs::migrations::apply(
-                super::connection::raw_mut(&mut conn),
-                crate::runs::migrations::PER_RUN_MIGRATIONS,
-                clock.as_ref(),
-            )
-            .map_err(|e| OpenError::MigrationFailed(e.to_string()))
-        })
-        .await
-        .map_err(|e| OpenError::Pool(format!("run database preparation task failed: {e}")))??;
-
-        // Now commit to registry — past this point we have a usable per-run DB.
+        let (run_id, lease) = self.bind_reserved(reservation).await?;
+        self.prepare_opened_database(run_id, lease.clone(), true).await?;
         let summary = RunSummary {
-            id: run_id.clone(),
+            id: run_id,
             project_path,
             pipeline_template,
             status: RunStatus::Bootstrapping,
@@ -309,23 +293,32 @@ impl Storage {
             daemon_pid: Some(std::process::id() as i32),
             wake_at_ms: None,
         };
-        registry_exec::write(&self.registry_pool, move |tx| {
-            registry::insert_run_connection(tx, &summary)
+        let lease = registry_exec::write(&self.registry_pool, move |tx| {
+            super::host_settlement::admit(tx, run_id)?;
+            lease
+                .verify()
+                .map_err(super::host_settlement::storage_error)?;
+            registry::insert_run_connection(tx, &summary)?;
+            Ok(lease)
         })
         .await
-        .map_err(|e| OpenError::MigrationFailed(format!("registry insert failed: {e}")))?;
-
-        // Open writer. If this fails, the per-run DB exists but no writer is held —
-        // caller can retry open_run_writer or delete_run to clean up.
-        self.open_run_writer(run_id).await
+        .map_err(|error| OpenError::Authority(error.to_string()))?;
+        self.start_opened_writer(run_id, lease).await
     }
 
     /// Open a read-only handle to an existing run.
     /// This does not upgrade legacy schemas; opening its exclusive writer applies
     /// supported pending migrations before current materialized-view reads.
     pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
+        registry_exec::read(&self.registry_pool, move |connection| {
+            super::host_settlement::admit(connection, run_id)
+        })
+        .await
+        .map_err(|error| OpenError::Authority(error.to_string()))?;
         let events_path = self.events_db_path(&run_id);
         let reader_pool_size = self.config.reader_pool_size;
+        #[cfg(feature = "test-support")]
+        let (pool_lifetime, witness) = reader_pool_witness::new();
         #[cfg(windows)]
         let namespace = self.native_run_namespace(&run_id, false)?;
         // r2d2 `build` blocks until its initial connections open and apply
@@ -338,7 +331,15 @@ impl Storage {
             let manager = SqliteConnectionManager::file(&events_path, namespace);
             #[cfg(not(windows))]
             let manager = SqliteConnectionManager::file(&events_path);
-            let manager = manager.with_init(move |c| apply_pragmas(c, PER_RUN_PRAGMAS));
+            let manager = manager.with_flags(
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            );
+            let manager = manager.with_init(move |c| {
+                #[cfg(feature = "test-support")]
+                let _retained_manager_lifetime = &pool_lifetime;
+                apply_pragmas(c, super::pragmas::READ_ONLY_PRAGMAS)
+            });
             super::pool::sqlite_pool_builder()
                 .max_size(reader_pool_size)
                 .build(manager)
@@ -348,6 +349,12 @@ impl Storage {
         .await
         .map_err(|e| OpenError::Pool(format!("reader pool task failed: {e}")))??
         .ok_or_else(|| OpenError::RunNotFound(run_id.clone()))?;
+
+        #[cfg(feature = "test-support")]
+        self.reader_pool_witnesses
+            .lock()
+            .map_err(|error| OpenError::Pool(format!("reader witness lock: {error}")))?
+            .push((run_id, witness));
 
         Ok(RunReader {
             run_id: run_id.clone(),
@@ -362,26 +369,36 @@ impl Storage {
     /// Unknown migration IDs are refused before changing the database.
     /// Fails with `OpenError::WriterAlreadyHeld` if another writer holds the slot.
     pub async fn open_run_writer(self: &Arc<Self>, run_id: RunId) -> Result<RunWriter, OpenError> {
-        let token = self
-            .active_writers
-            .try_acquire(run_id.clone())
-            .await
-            .map_err(|_| OpenError::WriterOwnershipPoisoned)?
-            .ok_or_else(|| OpenError::WriterAlreadyHeld {
-                run_id: run_id.clone(),
-            })?;
+        let lease = self.acquire_opening(run_id).await?;
+        self.prepare_opened_database(run_id, lease.clone(), false).await?;
+        self.start_opened_writer(run_id, lease).await
+    }
 
-        #[cfg(windows)]
-        let namespace = self.native_run_namespace(&run_id, false)?;
-        let lock_path = self.lock_path(&run_id);
-        let file_lock = FileLock::try_acquire(&lock_path, run_id.clone())?;
+    async fn prepare_opened_database(
+        self: &Arc<Self>,
+        run_id: RunId,
+        lease: Arc<WriterLease>,
+        freshly_created: bool,
+    ) -> Result<(), OpenError> {
+        let storage = self.clone();
+        tokio::task::spawn_blocking(move || {
+            lease.verify()?;
+            storage.upgrade_existing_run(&storage.events_db_path(&run_id))?;
+            if freshly_created {
+                super::host_settlement::verify_empty_initialized(run_id, &storage.events_db_path(&run_id), &lease)?;
+            }
+            lease.verify()
+        })
+        .await
+        .map_err(|error| OpenError::Pool(format!("run preparation worker failed: {error}")))?
+    }
 
-        let events_path = self.events_db_path(&run_id);
-        if !events_path.exists() {
-            return Err(OpenError::RunNotFound(run_id));
-        }
-        self.upgrade_existing_run(&events_path)?;
-
+    async fn start_opened_writer(
+        self: &Arc<Self>,
+        run_id: RunId,
+        lease: Arc<WriterLease>,
+    ) -> Result<RunWriter, OpenError> {
+        lease.verify()?;
         let reader = self.open_run_reader(run_id.clone()).await?;
 
         let cfg = WriterConfig {
@@ -392,20 +409,15 @@ impl Storage {
             checkpoint_interval_secs: self.config.checkpoint_interval_seconds,
         };
 
-        let lease = Arc::new(WriterLease {
-            _token: token,
-            _file_lock: file_lock,
-            #[cfg(windows)]
-            namespace,
-        });
-        let (writer_tx, writer_join) =
-            spawn_writer(cfg, self.config.writer_channel_capacity, lease.clone());
+        let spawned = spawn_writer(cfg, self.config.writer_channel_capacity, lease.clone());
 
         Ok(RunWriter {
             reader,
-            writer_tx,
-            writer_join: Some(writer_join),
-            _lease: lease,
+            writer_tx: spawned.commands,
+            writer_join: Some(spawned.join),
+            priority_stop: Some(spawned.stop),
+            lifecycle: spawned.lifecycle,
+            lease,
             closed: false,
         })
     }
@@ -1192,3 +1204,7 @@ mod existing_run_upgrade_tests {
 
 #[cfg(all(test, windows))]
 mod windows_ownership_tests;
+
+#[cfg(test)]
+#[path = "storage/stage_a_tests.rs"]
+mod stage_a_tests;

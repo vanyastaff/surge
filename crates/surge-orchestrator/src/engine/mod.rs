@@ -51,6 +51,8 @@ pub mod replay;
 pub mod replay_view;
 pub mod routing;
 pub mod run_task;
+mod run_forwarder;
+mod run_execution;
 pub mod sandbox_factory;
 pub mod snapshot;
 pub mod stage;
@@ -78,3 +80,7 @@ pub use replay_view::{
 };
 
 mod work_items;
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support;

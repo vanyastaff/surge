@@ -855,7 +855,7 @@ async fn quota_dispatch_in_home(
         .await
         .is_err()
     {
-        let diagnostic = storage.work_items().for_run(attempt.run).unwrap();
+        let diagnostic = wake_failure_state(&storage, attempt.run, home).await;
         let journal = storage.inspect_run(attempt.run).await.unwrap();
         let failures = match journal.database {
             surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
@@ -954,7 +954,7 @@ async fn quota_dispatch_in_home(
         }
     })
     .await;
-    let diagnostic = storage.inspect_run(attempt.run).await.unwrap();
+    let diagnostic = wake_failure_state(&storage, attempt.run, home).await;
     if check_predispatch {
         assert!(
             completed.is_ok(),
@@ -1303,6 +1303,7 @@ async fn quota_dispatch_in_home(
                 wait_for_terminal_journal(&storage, next.run),
             )
             .await;
+            let wake_state = wake_failure_state(&storage, next.run, home).await;
             let after_control = storage.work_items().execution_control(next.run).unwrap();
             let after_journal = storage.inspect_run(next.run).await.unwrap();
             if let surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } =
@@ -1318,6 +1319,15 @@ async fn quota_dispatch_in_home(
 
                 assert_eq!(events.iter().filter(|row|matches!(&row.payload.payload,surge_core::EventPayload::StageEntered {node,..} if node.as_str()=="warmup")).count(),1,"wake cannot repeat prior authenticated stage");
             }
+            let last_event = match &after_journal.database {
+                surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
+                    events.last().map(|row| {
+                        serde_json::to_value(&row.payload.payload)
+                            .map(|value| (row.seq, value.get("type").cloned()))
+                    })
+                },
+                _ => None,
+            };
             let diagnostics = match after_journal.database {
                 surge_persistence::runs::inspection::RunDatabaseInspection::Present { events } => {
                     events
@@ -1335,7 +1345,9 @@ async fn quota_dispatch_in_home(
             };
             assert!(
                 awakened.is_ok(),
-                "planned parked task must wake and complete: before={before_control:?}, after={after_control:?}, diagnostics={diagnostics:?}"
+                "planned parked task must wake and complete: before={before_control:?}, after={after_control:?}, before_attempt_state={:?}, before_attempt_diagnostic={:?}, diagnostics={diagnostics:?}, last_event={last_event:?}, state={wake_state}",
+                parked.state,
+                parked.diagnostic
             );
             let current = storage.work_items().for_run(next.run).unwrap().unwrap();
             assert_eq!(current.run, parked.run, "wake must preserve task attempt");
@@ -1480,7 +1492,7 @@ async fn quota_dispatch_in_home(
     assert_eq!(
         bridge.quota_errors.load(Ordering::SeqCst),
         1,
-        "actual A transport must classify typed quota exhaustion; A={a:?}, B={b:?}, journal={diagnostic:?}"
+        "actual A transport must classify typed quota exhaustion; {diagnostic}"
     );
     assert_eq!(
         a.iter()
@@ -1794,31 +1806,27 @@ async fn exhausted_candidates_park_and_scheduler_wakes_the_same_task_in_home(hom
     };
 
     tokio::time::timeout(Duration::from_secs(12), async {
-    loop {
-        let current = storage.work_items().for_run(attempt.run).unwrap().unwrap();
-        let still_active = engine
-            .snapshot_active_runs()
-            .await
-            .iter()
-            .any(|run| run.run_id == attempt.run);
-        if current.state == WorkItemAttemptState::Suspended
-            && !still_active
-        {
-            break;
+        loop {
+            let current = storage.work_items().for_run(attempt.run).unwrap().unwrap();
+            let still_active = engine
+                .snapshot_active_runs()
+                .await
+                .iter()
+                .any(|run| run.run_id == attempt.run);
+            if current.state == WorkItemAttemptState::Suspended && !still_active {
+                break;
+            }
+            assert_ne!(
+                current.state,
+                WorkItemAttemptState::Attention,
+                "exhausted quota recovery must not become manual attention; {}",
+                wake_failure_state(&storage, attempt.run, home.path()).await
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_ne!(
-            current.state,
-            WorkItemAttemptState::Attention,
-            "exhausted quota recovery must not become manual attention; diagnostic={:?}, control={:?}, journal={:?}",
-            current.diagnostic,
-            storage.work_items().execution_control(attempt.run).unwrap(),
-            storage.inspect_run(attempt.run).await.unwrap().database
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-})
-.await
-.expect("both real ACP providers should exhaust and park the task");
+    })
+    .await
+    .expect("both real ACP providers should exhaust and park the task");
     let parked_cycles = storage
         .work_items()
         .due_recovery_wakes_for_run(attempt.run, i64::MAX, 10)
@@ -3610,4 +3618,51 @@ async fn configured_start_pre_fingerprint_worker_keeps_other_daemon_controls_res
         2
     );
     drop(storage);
+}
+
+/// Keep refusal evidence bounded and avoid printing the frozen provider configuration.
+async fn wake_failure_state(storage: &Arc<Storage>, run: surge_core::RunId, home: &Path) -> String {
+    let store = storage.work_items();
+    let attempt = store
+        .for_run(run)
+        .map(|row| row.map(|row| (row.state, row.diagnostic)));
+    let registry = storage
+        .get_run(&run)
+        .await
+        .map(|row| row.map(|row| row.status));
+    let control = store.execution_control(run);
+    let capacity = store
+        .execution_control(run)
+        .and_then(|control| {
+            control
+                .map(|control| store.capacity_control_association(run, control.generation))
+                .transpose()
+        })
+        .map(Option::flatten);
+    let cycle = capacity
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .map(|association| {
+            store.recovery_cycle(
+                run,
+                association.invocation(),
+                association.cycle_generation(),
+            )
+        });
+    let providers = ["quota-a", "quota-b"].map(|name| {
+        let rows = wire(home, name);
+        (
+            name,
+            rows.iter()
+                .filter(|row| row["operation"] == "new_session")
+                .count(),
+            rows.iter()
+                .filter(|row| row["operation"] == "prompt")
+                .count(),
+        )
+    });
+    format!(
+        "attempt={attempt:?}, registry={registry:?}, control={control:?}, capacity={capacity:?}, cycle={cycle:?}, providers(new_session,prompt)={providers:?}"
+    )
 }

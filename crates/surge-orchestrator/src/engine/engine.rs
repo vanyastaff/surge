@@ -22,6 +22,12 @@ use surge_core::run_event::{EventPayload, VersionedEventPayload};
 /// Central orchestration engine. Drives one or more concurrent runs, each
 /// executing a frozen [`Graph`] through ACP sessions and persistence writes.
 pub struct Engine {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) next_feed_probe: std::sync::Mutex<Option<super::test_support::FeedProbeRequest>>,
+    #[cfg(test)]
+    completion_poll_gate: std::sync::Mutex<Option<CompletionPollGate>>,
+    #[cfg(test)]
+    completion_retirement_gate: std::sync::Mutex<Option<CompletionPollGate>>,
     bridge: Arc<dyn BridgeFacade>,
     storage: Arc<surge_persistence::runs::Storage>,
     tool_dispatcher: Arc<dyn ToolDispatcher>,
@@ -183,44 +189,88 @@ impl Engine {
             notify_deliverer,
             mcp_registry,
             config: Arc::new(config),
+            #[cfg(test)]
+            completion_poll_gate: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            completion_retirement_gate: std::sync::Mutex::new(None),
+            #[cfg(any(test, feature = "test-support"))]
+            next_feed_probe: std::sync::Mutex::new(None),
             runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             event_tap,
         }
     }
 
-    /// Forward every event appended to `writer` onto the engine's broadcast
-    /// tap until the underlying subscription terminates (run closed or
-    /// subscriber stream errored).
-    ///
-    /// The forwarder uses `RunWriter::subscribe_events` — the same SQL-backed
-    /// polling stream consumed by the run handle's `events_stream` — so the
-    /// tap reflects the persisted log, not transient in-memory state. The
-    /// task self-terminates when the stream ends; there is no explicit
-    /// cancellation path because dropping the underlying storage handle
-    /// closes the subscription.
-    fn spawn_event_forwarder(&self, run_id: RunId, writer: &surge_persistence::runs::RunWriter) {
-        let stream = writer.subscribe_events();
-        let tap_sender = self.event_tap.clone();
-        tokio::spawn(async move {
-            use futures::StreamExt;
-            let mut stream = std::pin::pin!(stream);
-            while let Some(item) = stream.next().await {
-                match item {
-                    Ok(event) => {
-                        let _ = tap_sender.send(RunEventTap { run_id, event });
-                    },
-                    Err(err) => {
-                        tracing::debug!(
-                            target: "engine::tap",
-                            %run_id,
-                            error = ?err,
-                            "run event forwarder ended",
-                        );
-                        break;
-                    },
+    async fn settle_terminal_resume(
+        &self,
+        writer: surge_persistence::runs::RunWriter,
+        outcome: super::handle::RunOutcome,
+    ) -> Result<RunHandle, EngineError> {
+        let run_id = *writer.run_id();
+        let feed = writer.event_feed();
+        #[cfg(any(test, feature = "test-support"))]
+        let feed = match self.configure_feed_for_test(feed) {
+            Ok(feed) => feed,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
+        let settled =
+            super::run_execution::settle_terminal(writer, self.event_tap.clone(), outcome, feed)
+                .await;
+        Ok(terminal_resume_handle(run_id, settled))
+    }
+
+    fn spawn_run_execution(
+        &self,
+        params: super::run_task::RunTaskParams,
+        feed: surge_persistence::runs::RunEventFeed,
+    ) -> tokio::task::JoinHandle<super::handle::RunOutcome> {
+        let run_id = params.run_id;
+        let registration = Arc::downgrade(&params.gate_resolutions);
+        let project_path = params.worktree_path.clone();
+        let runs = self.runs.clone();
+        let storage = self.storage.clone();
+        let execution =
+            super::run_execution::RunExecution::new(params, self.event_tap.clone(), feed);
+        #[cfg(test)]
+        let retirement_gate = self.completion_retirement_gate.lock().unwrap().take();
+        Self::spawn_completion(
+            async move {
+                let outcome = execution.execute().await;
+                #[cfg(test)]
+                if let Some(gate) = retirement_gate {
+                    let _ = gate.entered.send(());
+                    let _ = gate.release.await;
                 }
-            }
-        });
+                {
+                    let mut active_runs = runs.write().await;
+                    if active_runs.get(&run_id).is_some_and(|active| {
+                        registration.ptr_eq(&Arc::downgrade(&active.gate_resolutions))
+                    }) {
+                        active_runs.remove(&run_id);
+                    }
+                }
+                record_terminal_status(&storage, run_id, &outcome).await;
+                // Best-effort registry mirror follows actual writer/forwarder settlement.
+                mirror_task_ledger(&storage, run_id, &project_path).await;
+                outcome
+            },
+            #[cfg(test)]
+            self.completion_poll_gate.lock().unwrap().take(),
+        )
+    }
+
+    fn spawn_completion(
+        future: impl std::future::Future<Output = super::handle::RunOutcome> + Send + 'static,
+        #[cfg(test)] gate: Option<CompletionPollGate>,
+    ) -> tokio::task::JoinHandle<super::handle::RunOutcome> {
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            return tokio::spawn(async move {
+                let _ = gate.entered.send(());
+                let _ = gate.release.await;
+                future.await
+            });
+        }
+        tokio::spawn(future)
     }
 
     /// Subscribe to the engine's run-event broadcast tap.
@@ -398,13 +448,16 @@ impl Engine {
         run_config: EngineRunConfig,
         claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
     ) -> Result<RunHandle, EngineError> {
-        use crate::engine::run_task::{RunTaskParams, execute};
+        use crate::engine::run_task::RunTaskParams;
         use tokio::sync::broadcast;
         let (writer, artifact_store, run_config) = self
             .prepare_run_start(run_id, &graph, &worktree_path, run_config, claim)
             .await?;
 
-        let effect_fence = self.owned_flow_effect_fence(&run_config, claim)?;
+        let effect_fence = match self.owned_flow_effect_fence(&run_config, claim) {
+            Ok(fence) => fence,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
         let run_bridge = super::owned_effects::bridge(self.bridge.clone(), effect_fence.clone());
         let per_run_mcp_registry = self.resolve_run_mcp_registry(
             &run_config,
@@ -414,13 +467,16 @@ impl Engine {
         );
         let mcp_servers_clone = effective_run_mcp_servers(per_run_mcp_registry.as_deref());
 
+        let feed = writer.event_feed();
+        #[cfg(any(test, feature = "test-support"))]
+        let feed = match self.configure_feed_for_test(feed) {
+            Ok(feed) => feed,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
+
         let (event_tx, event_rx) = broadcast::channel(256);
         let registration = self.register_active_run(run_id).await;
 
-        // Captured before `worktree_path` moves into params — used by the
-        // post-completion task-ledger mirror. Matches the RunStarted event's
-        // `project_path` (which is the worktree path today).
-        let project_path_for_ledger = worktree_path.clone();
         let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
         let run_agent_registry = self.agent_registry_for(&run_config);
         let params = RunTaskParams {
@@ -462,19 +518,7 @@ impl Engine {
             capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(false),
         };
 
-        let runs_for_cleanup = self.runs.clone();
-        // Post-completion ledger mirror: after the run task finishes, mirror
-        // its folded task-ledger into the cross-run registry index so
-        // `surge ready` / `surge ledger` see it without opening the run DB.
-        // Best-effort — a mirror failure never affects the run outcome.
-        let storage_for_ledger = self.storage.clone();
-        let join = tokio::spawn(async move {
-            let outcome = execute(params).await;
-            runs_for_cleanup.write().await.remove(&run_id);
-            record_terminal_status(&storage_for_ledger, run_id, &outcome).await;
-            mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
-            outcome
-        });
+        let join = self.spawn_run_execution(params, feed);
 
         Ok(RunHandle {
             run_id,
@@ -629,34 +673,42 @@ impl Engine {
         }
 
         let writer = self.start_run_writer(run_id, worktree_path, claim).await?;
-        self.spawn_event_forwarder(run_id, &writer);
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
-        let mut events = self
-            .build_startup_events(&artifact_store, run_id, graph, worktree_path, &run_config)
-            .await?;
-        if let Some(context) = task_context {
-            if let Some(claim) = claim {
+        let prepared: Result<(), EngineError> = async {
+            let mut events = self
+                .build_startup_events(&artifact_store, run_id, graph, worktree_path, &run_config)
+                .await?;
+            if let Some(context) = task_context {
+                if let Some(claim) = claim {
+                    self.storage
+                        .work_items()
+                        .validate_claim(claim)
+                        .map_err(|error| EngineError::Storage(error.to_string()))?;
+                }
+                append_task_binding(&artifact_store, run_id, context, &mut events).await?;
+            }
+            writer
+                .append_events(events)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+            if let Some(inputs) = &run_config.owned_flow_inputs {
+                let claim = claim.ok_or_else(|| {
+                    EngineError::Storage("owned Flow startup owner missing".into())
+                })?;
+                super::work_items::validate_resume(&self.storage, claim).await?;
                 self.storage
                     .work_items()
-                    .validate_claim(claim)
+                    .acknowledge_owned_flow_startup(claim, inputs.manifest())
                     .map_err(|error| EngineError::Storage(error.to_string()))?;
             }
-            append_task_binding(&artifact_store, run_id, context, &mut events).await?;
+
+            Ok(())
         }
-        writer
-            .append_events(events)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
-        if let Some(inputs) = &run_config.owned_flow_inputs {
-            let claim = claim
-                .ok_or_else(|| EngineError::Storage("owned Flow startup owner missing".into()))?;
-            super::work_items::validate_resume(&self.storage, claim).await?;
-            self.storage
-                .work_items()
-                .acknowledge_owned_flow_startup(claim, inputs.manifest())
-                .map_err(|error| EngineError::Storage(error.to_string()))?;
+        .await;
+        if let Err(error) = prepared {
+            return Err(super::run_execution::close_after_error(writer, error).await);
         }
 
         Ok((writer, artifact_store, run_config))
@@ -1073,7 +1125,6 @@ impl Engine {
             .open_run_writer(run_id)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
-        self.spawn_event_forwarder(run_id, &writer);
 
         // Task 12 M4: `RunWokeFromPark` is declared (`run_event.rs`) and
         // folded (`run_state.rs` clears `RunState::Pipeline.parked`, which
@@ -1101,13 +1152,19 @@ impl Engine {
             );
         }
 
-        let reader = self
-            .storage
-            .open_run_reader(run_id)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-        let replayed = replay(&reader).await?;
+        let replayed: Result<_, EngineError> = async {
+            let reader = self
+                .storage
+                .open_run_reader(run_id)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+            replay(&reader).await
+        }
+        .await;
+        let replayed = match replayed {
+            Ok(replayed) => replayed,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
 
         Ok((writer, replayed, was_parked))
     }
@@ -1229,7 +1286,7 @@ impl Engine {
         worktree_path: PathBuf,
         claim: Option<&surge_persistence::work_items::WorkItemLaunchClaim>,
     ) -> Result<RunHandle, EngineError> {
-        use crate::engine::run_task::{RunTaskParams, execute};
+        use crate::engine::run_task::RunTaskParams;
         use tokio::sync::broadcast;
         let capacity_continue = claim.is_some() && self.capacity_continue_reserved(run_id)?;
         let (writer, mut replayed, was_parked) = self.prepare_run_resume(run_id, claim).await?;
@@ -1237,8 +1294,7 @@ impl Engine {
         // If the run already reached a terminal state, return a handle that
         // resolves immediately without re-executing any stages.
         if let Some(terminal_outcome) = replayed.already_terminal {
-            drop(writer);
-            return Ok(terminal_resume_handle(run_id, terminal_outcome));
+            return self.settle_terminal_resume(writer, terminal_outcome).await;
         }
 
         // A committed unanswered gate survives an explicit Suspend/Continue
@@ -1254,16 +1310,21 @@ impl Engine {
         }
 
         let (event_tx, event_rx) = broadcast::channel(256);
-        let registration = self.register_active_run(run_id).await;
 
         // Reconstruct EngineRunConfig from the persisted RunConfig so that
         // mcp_servers and the frozen budget survive a daemon restart + resume.
         // Falls back to defaults (empty mcp list, unlimited budget) for runs that
         // predate those fields.
-        let resume_run_config = self.restored_run_config(claim, &replayed)?;
+        let resume_run_config = match self.restored_run_config(claim, &replayed) {
+            Ok(config) => config,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
 
         // Build a per-run McpRegistry exactly like start_run does.
-        let effect_fence = self.owned_flow_effect_fence(&resume_run_config, claim)?;
+        let effect_fence = match self.owned_flow_effect_fence(&resume_run_config, claim) {
+            Ok(fence) => fence,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
         let run_bridge = super::owned_effects::bridge(self.bridge.clone(), effect_fence.clone());
         let per_run_mcp_registry = self.resolve_run_mcp_registry(
             &resume_run_config,
@@ -1275,11 +1336,16 @@ impl Engine {
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
-        // Captured before `worktree_path` moves into params (post-completion
-        // task-ledger mirror; matches RunStarted's project_path).
-        let project_path_for_ledger = worktree_path.clone();
         let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
         let run_agent_registry = self.agent_registry_for(&resume_run_config);
+        let feed = writer.event_feed();
+        #[cfg(any(test, feature = "test-support"))]
+        let feed = match self.configure_feed_for_test(feed) {
+            Ok(feed) => feed,
+            Err(error) => return Err(super::run_execution::close_after_error(writer, error).await),
+        };
+
+        let registration = self.register_active_run(run_id).await;
         let params = RunTaskParams {
             work_item_claim: claim.cloned(),
             pending_suspension: None,
@@ -1320,15 +1386,7 @@ impl Engine {
             ),
         };
 
-        let runs_for_cleanup = self.runs.clone();
-        let storage_for_ledger = self.storage.clone();
-        let join = tokio::spawn(async move {
-            let outcome = execute(params).await;
-            runs_for_cleanup.write().await.remove(&run_id);
-            record_terminal_status(&storage_for_ledger, run_id, &outcome).await;
-            mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
-            outcome
-        });
+        let join = self.spawn_run_execution(params, feed);
 
         Ok(RunHandle {
             run_id,
@@ -1676,9 +1734,16 @@ impl Engine {
 
 fn terminal_resume_handle(run_id: RunId, outcome: crate::engine::RunOutcome) -> RunHandle {
     let (event_tx, events) = tokio::sync::broadcast::channel(1);
-    let _ = event_tx.send(crate::engine::handle::EngineRunEvent::Terminal {
-        outcome: outcome.clone(),
-    });
+    let event = if matches!(outcome, crate::engine::RunOutcome::SettlementFailed { .. }) {
+        crate::engine::handle::EngineRunEvent::StreamError {
+            message: "replayed run settlement could not be confirmed".into(),
+        }
+    } else {
+        crate::engine::handle::EngineRunEvent::Terminal {
+            outcome: outcome.clone(),
+        }
+    };
+    let _ = event_tx.send(event);
     RunHandle {
         run_id,
         events,
@@ -2034,7 +2099,10 @@ async fn record_terminal_status(
         RunOutcome::Completed { .. } => RunStatus::Completed,
         RunOutcome::Failed { .. } => RunStatus::Failed,
         RunOutcome::Aborted { .. } => RunStatus::Aborted,
-        _ => return,
+        RunOutcome::SettlementFailed { .. }
+        | RunOutcome::RecoveryRequired { .. }
+        | RunOutcome::Suspended { .. }
+        | RunOutcome::Parked { .. } => return,
     };
     let ended_at_ms = chrono::Utc::now().timestamp_millis();
     if let Err(error) = storage
@@ -2211,3 +2279,13 @@ mod memory_claim_snapshot_artifact_tests {
         );
     }
 }
+
+#[cfg(test)]
+struct CompletionPollGate {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+#[path = "engine/settlement_tests.rs"]
+mod settlement_tests;

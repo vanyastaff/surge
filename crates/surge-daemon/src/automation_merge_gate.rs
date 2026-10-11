@@ -61,6 +61,7 @@ pub mod labels {
     pub const MERGED: &str = "surge:merged";
 }
 
+
 /// Spawn the merge gate. The returned handle can be aborted on
 /// shutdown; the gate also exits cleanly when the broadcast channel
 /// closes.
@@ -138,6 +139,12 @@ async fn run(
                     publish_run_report,
                 )
                 .await;
+            },
+            Ok(GlobalDaemonEvent::RunFinished {
+                run_id,
+                outcome: RunOutcome::SettlementFailed { failures, .. },
+            }) => {
+                warn!(%run_id, ?failures, "merge completion withheld: run settlement unconfirmed");
             },
             Ok(_) => {},
         }
@@ -1118,3 +1125,7 @@ mod tests {
         dir.close().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "automation_merge_gate/history_bypass_tests.rs"]
+mod history_bypass_tests;

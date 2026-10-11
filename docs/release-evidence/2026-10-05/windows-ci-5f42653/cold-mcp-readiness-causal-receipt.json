@@ -1,0 +1,107 @@
+{
+  "status": "READ_ONLY_CAUSAL_DIAGNOSIS_KNOWN_MECHANISM_RECONFIRMED_NO_FIX",
+  "candidate": "5f426537b0adb7a18b6c1bbacf1125331b158055",
+  "raw_log": "windows-test.log.gz",
+  "raw_log_sha256": "55e56956932cfe22b50ffef2108531572891c005bfee3fe854798490e5a980ec",
+  "gzip_sha256": "6b2ffc4ff7efce5fa468a8f74319329d8bf6d5e36568c3810d8921516c356769",
+  "line_number_basis": "one-based physical lines in original decompressed GitHub job log; no ANSI/timestamp normalization",
+  "cases": [
+    {
+      "binary": "surge-daemon::owned_flow_mcp_recovery",
+      "test": "host_default_empty_survives_real_cold_wake_and_changed_global_defaults",
+      "phase": "legacy",
+      "failure_line": 3733,
+      "catalog_observation_refusal_line": 3752,
+      "child_wait_file_panic_line": 3754,
+      "child_exit": 101
+    },
+    {
+      "binary": "surge-daemon::owned_flow_mcp_recovery",
+      "test": "explicit_empty_survives_real_cold_wake_and_changed_global_defaults",
+      "phase": "legacy",
+      "failure_line": 3804,
+      "catalog_observation_refusal_line": 3823,
+      "child_wait_file_panic_line": 3825,
+      "child_exit": 101
+    },
+    {
+      "binary": "surge-daemon::owned_flow_mcp_recovery",
+      "test": "legacy_engine_catalog_enforces_actual_configured_deadline",
+      "phase": "legacy-deadline-positive",
+      "failure_line": 3875,
+      "catalog_observation_refusal_line": 3894,
+      "child_wait_file_panic_line": 3896,
+      "child_exit": 101
+    },
+    {
+      "binary": "surge-daemon::owned_flow_mcp_recovery",
+      "test": "legacy_global_policy_references_survive_actual_start_and_resume",
+      "phase": "legacy-resume-start",
+      "failure_line": 3944,
+      "catalog_observation_refusal_line": 3963,
+      "child_wait_file_panic_line": 3964,
+      "child_exit": 101
+    },
+    {
+      "binary": "surge-daemon::owned_flow_mcp_recovery",
+      "test": "optional_whitelists_and_server_override_survive_actual_start_and_resume",
+      "phase": "legacy-policy-tools-none-start",
+      "failure_line": 6574,
+      "catalog_observation_refusal_line": 6593,
+      "child_wait_file_panic_line": 6594,
+      "child_exit": 101
+    }
+  ],
+  "root_cause": "Windows has no production process/container observation backend. Actual MCP child creation succeeds, but McpWriterObserver::child_started calls observe_container, whose Windows observe branch unconditionally refuses. MCP settles the child before initialize and returns mcp_child_observation_failed. The fixture still waits for its readiness file and panics after 30 seconds.",
+  "evidence_strength": {
+    "proven": [
+      "All five native excerpts contain the same fixed mcp_child_observation_failed diagnostic before the wait_file Elapsed panic",
+      "connection.rs emits this fixed diagnostic only after actual transport spawn succeeded and child_started failed; settlement is awaited before returning and handshake is not entered",
+      "Actual engine global catalog is wrapped with McpWriterObserver even for the initial legacy positive-control phase",
+      "Windows observe(pid) unconditionally returns platform process identity probe unavailable, before ExecutionWriterEstablished could be appended",
+      "These are failures in the prerequisite legacy positive-control/start phase, not evidence about the later cold-wake assertions"
+    ],
+    "inferred": [
+      "The absent file is legacy.jsonl, the first legacy wait_file. Its exact pathname is not printed in native panic. Program order plus the pre-handshake refusal prevents passing tools/list before a later stage-catalog wait could run",
+      "Stopping the spawned interpreter before its first recorder write explains absence; exact OS scheduling of that first Python instruction is not captured"
+    ],
+    "not_claimed": [
+      "No new native reproduction or fix",
+      "No proof that MCP stderr-capture refusal caused the failure; it is a separate nonfatal warning",
+      "No claim all OS32 cleanup failures share this cause",
+      "No native Job/guardian authority or release acceptance established"
+    ]
+  },
+  "source_boundaries_at_candidate": [
+    "engine/engine.rs:695-727 selects global configs and wraps them with actual McpWriterObserver",
+    "engine/writer_coverage.rs:47-74 child_started requires observe_container(GroupOnly) before established event",
+    "surge-acp/process_evidence.rs:16-45 Windows observe returns unavailable; observe_container propagates",
+    "surge-mcp/child_settlement/mod.rs:80-116 actual standard child spawn, pipe registration and retained transfer return transport",
+    "surge-mcp/connection.rs:414-432 child_started refusal -> awaited transport.settle(false) -> fixed error before handshake",
+    "engine/stage/agent.rs:1014-1040 records McpSelectedCatalogUnavailable and continues without selected tools",
+    "owned_flow_mcp_recovery.rs:633-643 waits recorder, then tools/list, then stage catalog, before legacy.ready publication",
+    "owned_flow_mcp_recovery.rs:393-400 wait_file has 30-second generic Elapsed panic; phase:861-864 reports owned child exit before readiness",
+    "support/cold_host.rs:77-83 observes/reaps actual exited host and includes stderr excerpt"
+  ],
+  "committed_source_sha256": {
+    "crates/surge-acp/src/process_evidence.rs": "11a5ee76c5148c1e9462bc80779f7785b9a66458d26425139d7d9a67e28791ab",
+    "crates/surge-orchestrator/src/engine/writer_coverage.rs": "1f323eebd80b8899511f6ac25ae63e038b1e804feb006258cf191e947e35a78f",
+    "crates/surge-orchestrator/src/engine/engine.rs": "3bd36b0a88a87d6bda5ad738954ea4315ef6f8d5e49cb30cc24e65e824e682c6",
+    "crates/surge-orchestrator/src/engine/stage/agent.rs": "396afc62145e0d7938cc6a3139455b71b95795772d5d8940ac6c5c11bfc72a40",
+    "crates/surge-mcp/src/connection.rs": "1a496b2eabc9981b45b982ce381c281dd8d5bb1106dd64b2fb45a367b8432ef9",
+    "crates/surge-mcp/src/child_settlement/mod.rs": "cc548554c9d576e8155f985bf0caa7b8fd3128163dc27e9d828d0adf0e456751",
+    "crates/surge-daemon/tests/owned_flow_mcp_recovery.rs": "9b6f3da8c3ce824a77cb6d7845ff035a0de651ac848dc5b7bde38481d0811b4e",
+    "crates/surge-daemon/tests/support/cold_host.rs": "93d1eb43b26ace37f84de6a07ae67d0f6dfb3627acf8d433e482f329344f42a5"
+  },
+  "existing_plan": {
+    "path": "docs/plans/2026-10-07-004-feat-windows-process-ownership-plan.md",
+    "sha256": "1e6b7ce40a49173fe437c6540be00c4d9ddac26eb7d14c843c776d506f702f0d",
+    "known_mechanism": "lines18-26 already describe this causal chain from source14884ff; this receipt confirms persistence at5f42653, not a new design finding",
+    "G2b": "G2a plan129-140 defers historical/order/current-lease/settlement-consumption authority; plan004345-356 and449-626 contain durable-contract closure. Accepted refinement recorded622-626 does not grant native authority.",
+    "G3": "plan004358-366: private capability prerequisite; actual retained native handles, helper bootstrap, exact PID/creation, one resume, Job zero membership, guardian-loss Unknown",
+    "G4": "plan004368-380: actual MCP standard transport/observer and ACP adapters plus durable producer/recovery closure; only full stage can retire corresponding unsupported guards",
+    "missing_boundary": "Real MCP spawned child establishment backed by the original native guardian/Job capability, not a Windows PID coerced into legacy Unix process-group identity"
+  },
+  "next_regression_proposal": "Native Windows actual owned MCP catalog test using the production McpWriterObserver and a literal controlled child, directly awaiting catalog admission rather than only waiting a file. Require actual establishment before initialize/tools-list and exact owned settlement on cleanup. Current source must RED promptly with mcp_child_observation_failed after cleanup; supported G3/G4 implementation must prove the native capability and real catalog. Propagate actual McpSelectedCatalogUnavailable/refusal into the readiness oracle with phase and safe fixed reason so this known refusal is not misreported as a 30-second cold-start delay. No fabricated container, relaxed expectation, timeout increase or observer bypass.",
+  "actions": "Read-only source/log investigation only; this receipt is the sole file added. No Rust edits, builds, tests, retries, new review/replan or diagnostic implementation."
+}

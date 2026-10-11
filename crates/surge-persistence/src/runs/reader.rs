@@ -335,3 +335,397 @@ impl RunReader {
         crate::runs::subscribe::subscribe(self.pool.clone(), self.artifacts_dir.clone())
     }
 }
+
+/// Opaque finite-feed observation owned by the execution's event forwarder.
+///
+/// Holds the original writer exclusion through final drain. This capability
+/// cannot write, close the actor, reveal SQL handles, or switch to another run.
+/// Reader fields precede exclusion fields so resource release keeps that order.
+pub struct RunEventFeed {
+    reader: RunReader,
+    lease: Arc<super::writer_slot::WriterLease>,
+    lifecycle: tokio::sync::watch::Receiver<super::writer::WriterLifecycle>,
+    #[cfg(any(test, feature = "test-support"))]
+    read_gate: Option<SharedReadGate>,
+    #[cfg(any(test, feature = "test-support"))]
+    post_read_gate: Option<SharedReadGate>,
+    #[cfg(any(test, feature = "test-support"))]
+    checkout_gate: Option<SharedReadGate>,
+}
+
+/// Complete owner for a synchronous feed SQL worker.
+///
+/// Move this value into the actual blocking closure and join that closure before
+/// starting another batch. Its reader and original writer exclusion remain owned
+/// even when the asynchronous task awaiting the worker is cancelled.
+#[cfg_attr(any(test, feature = "test-support"), derive(Clone))]
+pub struct RunEventReadLease {
+    reader: RunReader,
+    lease: Arc<super::writer_slot::WriterLease>,
+    #[cfg(any(test, feature = "test-support"))]
+    read_gate: Option<SharedReadGate>,
+    #[cfg(any(test, feature = "test-support"))]
+    post_read_gate: Option<SharedReadGate>,
+    #[cfg(any(test, feature = "test-support"))]
+    checkout_gate: Option<SharedReadGate>,
+}
+
+impl RunEventFeed {
+    pub(crate) fn from_writer(writer: &super::run_writer::RunWriter) -> Self {
+        Self {
+            reader: writer.reader.clone(),
+            lease: writer.lease.clone(),
+            lifecycle: writer.lifecycle.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            read_gate: None,
+            #[cfg(any(test, feature = "test-support"))]
+            post_read_gate: None,
+            #[cfg(any(test, feature = "test-support"))]
+            checkout_gate: None,
+        }
+    }
+    /// Exact run to which this feed and every derived SQL worker belong.
+    #[must_use]
+    pub fn run_id(&self) -> &RunId {
+        self.reader.run_id()
+    }
+
+    /// Latest actual actor observation; Running after channel loss is not a seal.
+    #[must_use]
+    pub fn current_lifecycle(&self) -> super::writer::WriterLifecycle {
+        *self.lifecycle.borrow()
+    }
+
+    /// Wait for a new actor observation; distinguish owner loss from terminal state.
+    pub async fn changed(
+        &mut self,
+    ) -> Result<super::writer::WriterLifecycle, super::error::FeedLifecycleError> {
+        if self.lifecycle.changed().await.is_err() {
+            let current = self.current_lifecycle();
+            return match current {
+                super::writer::WriterLifecycle::Running => {
+                    Err(super::error::FeedLifecycleError::WriterLost)
+                },
+                _ => Ok(current),
+            };
+        }
+        Ok(self.current_lifecycle())
+    }
+
+    /// Derive the complete owner to move into one real synchronous SQL worker.
+    #[must_use]
+    pub fn read_lease(&self) -> RunEventReadLease {
+        RunEventReadLease {
+            reader: self.reader.clone(),
+            lease: self.lease.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            read_gate: self.read_gate.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            post_read_gate: self.post_read_gate.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            checkout_gate: self.checkout_gate.clone(),
+        }
+    }
+}
+impl RunEventReadLease {
+    /// Read at most 256 events with `after < seq <= through`, in sequence order.
+    ///
+    /// This is synchronous; call it inside the retained blocking job, whose actual
+    /// join must complete before a subsequent batch or a settlement claim.
+    pub fn read_batch(
+        &self,
+        after: EventSeq,
+        through: EventSeq,
+    ) -> Result<Vec<ReadEvent>, StorageError> {
+        self.lease
+            .verify()
+            .map_err(super::host_settlement::storage_error)?;
+        #[cfg(any(test, feature = "test-support"))]
+        let connection = if let Some(gate) = &self.checkout_gate {
+            wait_read_gate(gate)?;
+            self.reader.pool.get_timeout(std::time::Duration::ZERO)
+        } else {
+            self.reader.pool.get()
+        }
+        .map_err(|error| StorageError::Pool(error.to_string()))?;
+        #[cfg(not(any(test, feature = "test-support")))]
+        let connection = self
+            .reader
+            .pool
+            .get()
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(gate) = &self.read_gate {
+            wait_read_gate(gate)?;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            let result = super::subscribe::read_rows(&connection, after, through);
+            // The SQL statement has completed and dropped; preserve its actual
+            // empty result while this worker still owns its connection and lease.
+            if result.as_ref().is_ok_and(Vec::is_empty)
+                && let Some(gate) = &self.post_read_gate
+            {
+                wait_read_gate(gate)?;
+            }
+            result
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        super::subscribe::read_rows(&connection, after, through)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+type SharedReadGate = Arc<std::sync::Mutex<Option<ReadGateChannels>>>;
+#[cfg(any(test, feature = "test-support"))]
+struct ReadGateChannels {
+    entered: tokio::sync::oneshot::Sender<()>,
+    released: std::sync::mpsc::Receiver<()>,
+}
+
+/// One-shot test controller for an actual feed worker holding its real connection.
+/// Dropping the controller releases the worker even when an assertion unwinds.
+#[cfg(any(test, feature = "test-support"))]
+pub struct FeedReadGate {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    release: Option<std::sync::mpsc::Sender<()>>,
+}
+#[cfg(any(test, feature = "test-support"))]
+impl FeedReadGate {
+    /// Await the selected actual SQL boundary once; no synthetic result is supplied.
+    pub async fn entered(&mut self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        (&mut self.entered).await
+    }
+    /// Release the actual blocking worker; does not claim that it has joined.
+    pub fn release(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for FeedReadGate {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+impl RunEventFeed {
+    fn has_test_gate(&self) -> bool {
+        self.checkout_gate.is_some() || self.read_gate.is_some() || self.post_read_gate.is_some()
+    }
+
+    /// Gate the first successful empty SQL result before its worker returns it.
+    ///
+    /// Separate from the pre-query gate: the real query and statement teardown
+    /// have already finished, while the original connection and lease remain held.
+    /// Install before deriving the worker lease to exercise.
+    pub fn install_post_read_gate_for_test(&mut self) -> Result<FeedReadGate, StorageError> {
+        if self.has_test_gate() {
+            return Err(StorageError::OperationRejected(
+                "feed post-read gate already installed".into(),
+            ));
+        }
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        self.post_read_gate = Some(Arc::new(std::sync::Mutex::new(Some(ReadGateChannels {
+            entered,
+            released,
+        }))));
+        Ok(FeedReadGate {
+            entered: entry,
+            release: Some(release),
+        })
+    }
+
+    /// Install one isolated test gate before deriving the worker lease to exercise.
+    pub fn install_read_gate_for_test(&mut self) -> Result<FeedReadGate, StorageError> {
+        if self.has_test_gate() {
+            return Err(StorageError::OperationRejected(
+                "feed read gate already installed".into(),
+            ));
+        }
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        self.read_gate = Some(Arc::new(std::sync::Mutex::new(Some(ReadGateChannels {
+            entered,
+            released,
+        }))));
+        Ok(FeedReadGate {
+            entered: entry,
+            release: Some(release),
+        })
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+fn wait_read_gate(gate: &SharedReadGate) -> Result<(), StorageError> {
+    let gate = gate
+        .lock()
+        .map_err(|_| StorageError::Pool("feed test gate poisoned".into()))?
+        .take();
+    if let Some(gate) = gate {
+        let _ = gate.entered.send(());
+        gate.released
+            .recv()
+            .map_err(|_| StorageError::Pool("feed test gate release lost".into()))?;
+    }
+    Ok(())
+}
+
+/// Isolated test owner of the selected feed's actual reader pool and lifecycle.
+///
+/// This deliberately retains the complete read lease. Drop it and any slot guard
+/// before making an exclusion-release or fixture-cleanup assertion.
+#[cfg(any(test, feature = "test-support"))]
+pub struct FeedPoolProbe {
+    owner: RunEventReadLease,
+    lifecycle: tokio::sync::watch::Receiver<super::writer::WriterLifecycle>,
+}
+
+/// Actual checked-out pool slots followed by their independent complete owner.
+/// No SQL connection or mutation capability is exposed through this test guard.
+#[cfg(any(test, feature = "test-support"))]
+pub struct FeedPoolSlots {
+    connections: Vec<r2d2::PooledConnection<SqliteConnectionManager>>,
+    capacity: usize,
+    _owner: RunEventReadLease,
+}
+#[cfg(any(test, feature = "test-support"))]
+impl FeedPoolSlots {
+    /// Number of actual retained pooled connections.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.connections.len()
+    }
+    /// Capacity independently read from the selected real pool.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+impl RunEventFeed {
+    /// Gate the first actual worker before checkout and expose bounded same-pool controls.
+    ///
+    /// Only this opt-in fixture selects real zero-timeout checkout in derived
+    /// workers. Ordinary builds and unconfigured feeds retain the normal get path.
+    pub fn install_pool_probe_for_test(
+        &mut self,
+    ) -> Result<(FeedReadGate, FeedPoolProbe), StorageError> {
+        if self.has_test_gate() {
+            return Err(StorageError::OperationRejected(
+                "feed gate already installed".into(),
+            ));
+        }
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        self.checkout_gate = Some(Arc::new(std::sync::Mutex::new(Some(ReadGateChannels {
+            entered,
+            released,
+        }))));
+        let gate = FeedReadGate {
+            entered: entry,
+            release: Some(release),
+        };
+        let probe = FeedPoolProbe {
+            owner: self.read_lease(),
+            lifecycle: self.lifecycle.clone(),
+        };
+        Ok((gate, probe))
+    }
+}
+#[cfg(any(test, feature = "test-support"))]
+impl FeedPoolProbe {
+    /// Await the actual actor's successful seal; failure or lost Running never succeeds.
+    pub async fn wait_sealed(&mut self) -> Result<EventSeq, StorageError> {
+        loop {
+            let lifecycle = *self.lifecycle.borrow();
+            match lifecycle {
+                super::writer::WriterLifecycle::Sealed(prefix) => return Ok(prefix),
+                super::writer::WriterLifecycle::Failed(_) => {
+                    return Err(StorageError::WriterTaskDied);
+                },
+                super::writer::WriterLifecycle::Running => {},
+            }
+            if self.lifecycle.changed().await.is_err() {
+                return match *self.lifecycle.borrow() {
+                    super::writer::WriterLifecycle::Sealed(prefix) => Ok(prefix),
+                    _ => Err(StorageError::WriterTaskDied),
+                };
+            }
+        }
+    }
+
+    /// Blocking positive control: real zero-timeout checkout, SELECT 1, and return to pool.
+    pub fn check_available_zero_timeout(&self) -> Result<(), StorageError> {
+        let connection = self
+            .owner
+            .reader
+            .pool
+            .get_timeout(std::time::Duration::ZERO)
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
+        if value != 1 {
+            return Err(StorageError::OperationRejected(
+                "pool availability query contradicted literal".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Blocking bounded control: retain every real slot, then prove actual checkout exhaustion.
+    /// Fixture pools above sixteen connections are rejected instead of unbounded acquisition.
+    pub fn exhaust_all_slots(&self) -> Result<FeedPoolSlots, StorageError> {
+        let maximum = self.owner.reader.pool.max_size();
+        if !(1..=16).contains(&maximum) {
+            return Err(StorageError::OperationRejected(
+                "fixture pool capacity outside 1..=16".into(),
+            ));
+        }
+        let capacity = usize::try_from(maximum).map_err(|_| {
+            StorageError::OperationRejected("fixture pool capacity overflow".into())
+        })?;
+        let mut connections = Vec::with_capacity(capacity);
+        for _ in 0..capacity {
+            connections.push(
+                self.owner
+                    .reader
+                    .pool
+                    .get_timeout(std::time::Duration::ZERO)
+                    .map_err(|error| StorageError::Pool(error.to_string()))?,
+            );
+        }
+        let guard = FeedPoolSlots {
+            connections,
+            capacity,
+            _owner: self.owner.clone(),
+        };
+        self.verify_exhausted_zero_timeout()?;
+        Ok(guard)
+    }
+
+    /// Blocking negative control: no idle slots and real zero-timeout checkout must fail.
+    pub fn verify_exhausted_zero_timeout(&self) -> Result<(), StorageError> {
+        let state = self.owner.reader.pool.state();
+        if state.idle_connections != 0 || state.connections != self.owner.reader.pool.max_size() {
+            return Err(StorageError::OperationRejected(
+                "pool is not fully occupied".into(),
+            ));
+        }
+        match self
+            .owner
+            .reader
+            .pool
+            .get_timeout(std::time::Duration::ZERO)
+        {
+            Err(_) => Ok(()),
+            Ok(_) => Err(StorageError::OperationRejected(
+                "exhausted pool unexpectedly allowed checkout".into(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "reader/feed_probe_tests.rs"]
+mod feed_probe_tests;

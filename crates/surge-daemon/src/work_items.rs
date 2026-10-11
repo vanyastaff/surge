@@ -18,7 +18,10 @@ use surge_orchestrator::engine::{
     EngineRunConfig,
     ipc::{ErrorCode, GlobalDaemonEvent},
 };
-use surge_persistence::work_items::{WorkItemAdmission, WorkItemError};
+use surge_persistence::work_items::{
+    ReconciliationProjection as LaunchProjection, ReconciliationSettlement, WorkItemAdmission,
+    WorkItemError, WorkItemLaunchClaim, WorkItemStore,
+};
 
 /// Apply one typed task operation through the real durable host.
 pub(crate) async fn execute(
@@ -384,17 +387,134 @@ async fn execute_control(
     }
     Ok(WorkItemResult::Control(Box::new(latest)))
 }
+struct ReconciliationAuthority {
+    attempt: WorkItemAttempt,
+    control: Option<surge_core::execution_recovery::WorkItemExecutionControl>,
+}
+
+#[derive(Clone, Copy)]
+enum LaunchPurpose<'a> {
+    Explicit,
+    Reconciliation(&'a ReconciliationAuthority),
+}
+
+fn terminal_projection(state: WorkItemAttemptState) -> Result<LaunchProjection, WorkItemError> {
+    match state {
+        WorkItemAttemptState::Completed => Ok(LaunchProjection::Completed),
+        WorkItemAttemptState::Failed => Ok(LaunchProjection::Failed),
+        WorkItemAttemptState::Aborted => Ok(LaunchProjection::Aborted),
+        _ => Err(WorkItemError::Invalid("nonterminal task projection".into())),
+    }
+}
+
+fn record_launch_projection(
+    store: &WorkItemStore,
+    claim: &WorkItemLaunchClaim,
+    attempt: &WorkItemAttempt,
+    purpose: LaunchPurpose<'_>,
+    projection: LaunchProjection,
+) -> Result<ReconciliationSettlement, WorkItemError> {
+    match purpose {
+        LaunchPurpose::Explicit => {
+            store.settle(
+                attempt.run,
+                attempt.binding.generation,
+                projection.into(),
+                None,
+            )?;
+            Ok(ReconciliationSettlement::Settled)
+        },
+        LaunchPurpose::Reconciliation(authority) => store.settle_reconciliation_projection(
+            claim,
+            &authority.attempt,
+            authority.control.as_ref(),
+            projection,
+        ),
+    }
+}
+
+enum LaunchPreparation {
+    Finished,
+    Dispatch { resume: bool },
+}
+
+fn current_attempt_result(
+    store: &WorkItemStore,
+    run: RunId,
+) -> Result<WorkItemResult, WorkItemError> {
+    Ok(WorkItemResult::Attempt(Box::new(
+        store.for_run(run)?.ok_or(WorkItemError::NotFound)?,
+    )))
+}
+
 async fn launch_attempt(
     attempt: &WorkItemAttempt,
     tracking: &TrackingContext,
     admission: &Arc<AdmissionController>,
     broadcasts: &Arc<BroadcastRegistry>,
 ) -> Result<WorkItemResult, WorkItemError> {
+    let (_, storage) = tracking
+        .task_sources()
+        .ok_or_else(|| WorkItemError::Invalid("task host unavailable".into()))?;
+    let claim = storage.work_items().claim(attempt.run)?;
+    launch_claimed_attempt(
+        attempt,
+        claim,
+        LaunchPurpose::Explicit,
+        tracking,
+        admission,
+        broadcasts,
+    )
+    .await
+}
+
+async fn launch_claimed_attempt(
+    attempt: &WorkItemAttempt,
+    claim: WorkItemLaunchClaim,
+    purpose: LaunchPurpose<'_>,
+    tracking: &TrackingContext,
+    admission: &Arc<AdmissionController>,
+    broadcasts: &Arc<BroadcastRegistry>,
+) -> Result<WorkItemResult, WorkItemError> {
+    let (_, storage) = tracking
+        .task_sources()
+        .ok_or_else(|| WorkItemError::Invalid("task host unavailable".into()))?;
+    let store = storage.work_items();
+    match prepare_launch(attempt, &claim, purpose, tracking).await {
+        Ok(LaunchPreparation::Finished) => current_attempt_result(&store, attempt.run),
+        Ok(LaunchPreparation::Dispatch { resume }) => {
+            dispatch_attempt(
+                attempt, claim, resume, purpose, tracking, admission, broadcasts,
+            )
+            .await
+        },
+        Err(WorkItemError::Busy) => Err(WorkItemError::Busy),
+        Err(error) => {
+            if let LaunchPurpose::Reconciliation(authority) = purpose
+                && store.settle_reconciliation_error(
+                    &claim,
+                    &authority.attempt,
+                    authority.control.as_ref(),
+                    &error.to_string(),
+                )? == ReconciliationSettlement::Superseded
+            {
+                return current_attempt_result(&store, attempt.run);
+            }
+            Err(error)
+        },
+    }
+}
+
+async fn prepare_launch(
+    attempt: &WorkItemAttempt,
+    claim: &WorkItemLaunchClaim,
+    purpose: LaunchPurpose<'_>,
+    tracking: &TrackingContext,
+) -> Result<LaunchPreparation, WorkItemError> {
     let (engine, storage) = tracking
         .task_sources()
         .ok_or_else(|| WorkItemError::Invalid("task host unavailable".into()))?;
     let store = storage.work_items();
-    let claim = store.claim(attempt.run)?;
     let item = store.show(attempt.item)?.item;
     let expected_control = store.execution_control(attempt.run)?;
     let continue_reserved = expected_control.as_ref().is_some_and(|control| {
@@ -403,11 +523,12 @@ async fn launch_attempt(
     let inspected = match storage.inspect_folded_run(attempt.run).await {
         Ok(history) => history,
         Err(error) => {
-            if let Some(control) = expected_control.filter(|control| {
-                control.state
-                    == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
-            }) {
-                store.mark_control_recovery_required(&claim, &control, &error.to_string())?;
+            if matches!(purpose, LaunchPurpose::Explicit)
+                && let Some(control) = expected_control.filter(|control| {
+                    control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
+                })
+            {
+                store.mark_control_recovery_required(claim, &control, &error.to_string())?;
             }
             return Err(WorkItemError::Invalid(error.to_string()));
         },
@@ -416,34 +537,35 @@ async fn launch_attempt(
         None => (false, None),
         Some(history) if history.event_count == 0 => (false, None),
         Some(history) => {
-            if let Err(error) = engine.validate_work_item_startup(&claim).await {
-                store.settle(
-                    attempt.run,
-                    attempt.binding.generation,
-                    WorkItemAttemptState::Attention,
-                    Some(error.to_string()),
-                )?;
+            if let Err(error) = engine.validate_work_item_startup(claim).await {
+                if matches!(purpose, LaunchPurpose::Explicit) {
+                    store.settle(
+                        attempt.run,
+                        attempt.binding.generation,
+                        WorkItemAttemptState::Attention,
+                        Some(error.to_string()),
+                    )?;
+                }
                 return Err(WorkItemError::Conflict(error.to_string()));
             }
             if store.has_pending_owned_flow(attempt.run)? {
                 let manifest = store
                     .owned_flow_manifest(attempt.run)?
                     .ok_or(WorkItemError::PrivateInputsCorrupt)?;
-                store.acknowledge_owned_flow_startup(&claim, &manifest)?;
+                store.acknowledge_owned_flow_startup(claim, &manifest)?;
             }
             let folded = &history.state;
             if !continue_reserved
                 && matches!(folded.attention(),surge_core::run_state::Attention::Waiting{until,..} if until>chrono::Utc::now())
             {
-                store.settle(
-                    attempt.run,
-                    attempt.binding.generation,
-                    WorkItemAttemptState::Launched,
-                    None,
+                record_launch_projection(
+                    &store,
+                    claim,
+                    attempt,
+                    purpose,
+                    LaunchProjection::Launched,
                 )?;
-                return Ok(WorkItemResult::Attempt(Box::new(
-                    store.for_run(attempt.run)?.ok_or(WorkItemError::NotFound)?,
-                )));
+                return Ok(LaunchPreparation::Finished);
             }
             (true, terminal(&history, &attempt.binding)?)
         },
@@ -459,13 +581,14 @@ async fn launch_attempt(
         .await
         .map_err(|e| WorkItemError::Invalid(e.to_string()))?
         .map_err(|e| WorkItemError::Invalid(e.to_string()))?;
-    store.mark_workspace_prepared(&claim)?;
+    store.mark_workspace_prepared(claim)?;
     if let Some(state) = terminal_state {
-        store.settle(attempt.run, attempt.binding.generation, state, None)?;
-        store.sync_usage(attempt.run)?;
-        return Ok(WorkItemResult::Attempt(Box::new(
-            store.for_run(attempt.run)?.ok_or(WorkItemError::NotFound)?,
-        )));
+        if record_launch_projection(&store, claim, attempt, purpose, terminal_projection(state)?)?
+            == ReconciliationSettlement::Settled
+        {
+            store.sync_usage(attempt.run)?;
+        }
+        return Ok(LaunchPreparation::Finished);
     }
     if engine
         .snapshot_active_runs()
@@ -473,17 +596,10 @@ async fn launch_attempt(
         .iter()
         .any(|run| run.run_id == attempt.run)
     {
-        store.settle(
-            attempt.run,
-            attempt.binding.generation,
-            WorkItemAttemptState::Launched,
-            None,
-        )?;
-        return Ok(WorkItemResult::Attempt(Box::new(
-            store.for_run(attempt.run)?.ok_or(WorkItemError::NotFound)?,
-        )));
+        record_launch_projection(&store, claim, attempt, purpose, LaunchProjection::Launched)?;
+        return Ok(LaunchPreparation::Finished);
     }
-    dispatch_attempt(attempt, claim, resume, tracking, admission, broadcasts).await
+    Ok(LaunchPreparation::Dispatch { resume })
 }
 
 /// Resume a due parked run through its durable task claim when one owns it.
@@ -611,6 +727,7 @@ async fn dispatch_attempt(
     attempt: &WorkItemAttempt,
     claim: surge_persistence::work_items::WorkItemLaunchClaim,
     resume: bool,
+    purpose: LaunchPurpose<'_>,
     tracking: &TrackingContext,
     admission: &Arc<AdmissionController>,
     broadcasts: &Arc<BroadcastRegistry>,
@@ -626,39 +743,40 @@ async fn dispatch_attempt(
     let control_events = engine.subscribe_tap();
     match tracking.task_run(&claim, resume).await {
         Ok(run) => {
-            broadcasts.publish_global(GlobalDaemonEvent::RunAccepted {
-                run_id: attempt.run,
-            });
-            let completion = spawn_tracked_run(
-                attempt.run,
-                run,
-                publisher,
-                admission.clone(),
-                broadcasts.clone(),
+            let _supervision = handoff_accepted_dispatch(
+                attempt,
+                AcceptedDispatch {
+                    run,
+                    claim,
+                    engine,
+                    storage,
+                    publisher,
+                    control_events,
+                },
+                purpose,
+                admission,
+                broadcasts,
             );
-            if let Err(error) = store.settle(
-                attempt.run,
-                attempt.binding.generation,
-                WorkItemAttemptState::Launched,
-                None,
-            ) {
-                tracing::error!(run_id=%attempt.run,%error,"started task requires registry reconciliation");
-            }
-            let run_id = attempt.run;
-            let binding = attempt.binding.clone();
-            tokio::spawn(supervise_completion(
-                completion,
-                control_events,
-                engine,
-                storage,
-                run_id,
-                binding,
-                claim,
-            ));
         },
         Err(error) => {
             broadcasts.deregister(attempt.run).await;
             admission.notify_completed(attempt.run).await;
+            if let LaunchPurpose::Reconciliation(authority) = purpose {
+                let settlement = store.settle_reconciliation_error(
+                    &claim,
+                    &authority.attempt,
+                    authority.control.as_ref(),
+                    &error.to_string(),
+                )?;
+                return match settlement {
+                    ReconciliationSettlement::Superseded => {
+                        current_attempt_result(&store, attempt.run)
+                    },
+                    ReconciliationSettlement::Settled => {
+                        Err(WorkItemError::Conflict(error.to_string()))
+                    },
+                };
+            }
             // Engine errors can follow a committed startup. Inspect before releasing ownership.
             let state = match storage.inspect_folded_run(attempt.run).await {
                 Ok(inspected) => match inspected.database {
@@ -682,6 +800,53 @@ async fn dispatch_attempt(
     )))
 }
 
+struct AcceptedDispatch {
+    run: crate::tracked_run::TrackedRun,
+    claim: WorkItemLaunchClaim,
+    engine: Arc<surge_orchestrator::engine::Engine>,
+    storage: Arc<surge_persistence::runs::Storage>,
+    publisher: tokio::sync::broadcast::Sender<surge_orchestrator::engine::handle::EngineRunEvent>,
+    control_events: tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
+}
+
+fn handoff_accepted_dispatch(
+    attempt: &WorkItemAttempt,
+    accepted: AcceptedDispatch,
+    purpose: LaunchPurpose<'_>,
+    admission: &Arc<AdmissionController>,
+    broadcasts: &Arc<BroadcastRegistry>,
+) -> tokio::task::JoinHandle<()> {
+    broadcasts.publish_global(GlobalDaemonEvent::RunAccepted {
+        run_id: attempt.run,
+    });
+    let completion = spawn_tracked_run(
+        attempt.run,
+        accepted.run,
+        accepted.publisher,
+        admission.clone(),
+        broadcasts.clone(),
+    );
+    // Projection failure must never detach the accepted run from its owner.
+    if let Err(error) = record_launch_projection(
+        &accepted.storage.work_items(),
+        &accepted.claim,
+        attempt,
+        purpose,
+        LaunchProjection::Launched,
+    ) {
+        tracing::error!(run_id=%attempt.run,%error,"started task requires registry reconciliation");
+    }
+    tokio::spawn(supervise_completion(
+        completion,
+        accepted.control_events,
+        accepted.engine,
+        accepted.storage,
+        attempt.run,
+        attempt.binding.clone(),
+        accepted.claim,
+    ))
+}
+
 pub(crate) async fn launch_owned_flow(
     claim: surge_persistence::work_items::WorkItemLaunchClaim,
     tracking: &TrackingContext,
@@ -694,7 +859,16 @@ pub(crate) async fn launch_owned_flow(
     let store = storage.work_items();
     store.validate_owned_flow_pending(&claim)?;
     let attempt = store.validate_claim(&claim)?;
-    dispatch_attempt(&attempt, claim, false, tracking, admission, broadcasts).await?;
+    dispatch_attempt(
+        &attempt,
+        claim,
+        false,
+        LaunchPurpose::Explicit,
+        tracking,
+        admission,
+        broadcasts,
+    )
+    .await?;
     Ok(())
 }
 
@@ -857,51 +1031,129 @@ pub(crate) async fn reconcile_page(
     .await
     .map_err(|error| WorkItemError::Invalid(format!("task reconciliation page task: {error}")))??;
     for attempt in page.entries {
-        if !matches!(
-            attempt.state,
-            WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
-        ) {
-            continue;
-        }
-        if storage
-            .get_run(&attempt.run)
-            .await
-            .map_err(|error| WorkItemError::Invalid(error.to_string()))?
-            .is_some_and(|run| run.status == surge_core::RunStatus::Parked)
-        {
-            // The run wake scheduler owns parked attempts. Replaying them from
-            // this broad reconciliation page would bypass wake_at and race a
-            // generic resume without the persistent task claim.
-            continue;
-        }
-        // Never turn a reservation without a startup commit into an implicit new dispatch.
-        let inspected = storage.inspect_folded_run(attempt.run).await;
-        let present = matches!(&inspected,Ok(inspected) if matches!(&inspected.database,Some(history) if history.event_count>0));
-        if !present && !store.has_pending_owned_flow(attempt.run)? {
-            if let Err(error) = inspected {
-                store.settle(
-                    attempt.run,
-                    attempt.binding.generation,
-                    WorkItemAttemptState::Attention,
-                    Some(error.to_string()),
-                )?;
-            }
-            continue;
-        }
-        if let Err(error) = launch_attempt(&attempt, tracking, admission, broadcasts).await
-            && !matches!(error, WorkItemError::Busy)
-        {
-            store.settle(
-                attempt.run,
-                attempt.binding.generation,
-                WorkItemAttemptState::Attention,
-                Some(error.to_string()),
-            )?;
-            tracing::warn!(run_id=%attempt.run,%error,"task recovery needs attention");
-        }
+        reconcile_candidate(attempt, tracking, admission, broadcasts).await?;
     }
     Ok(page.next_cursor)
 }
+
+async fn reconcile_candidate(
+    captured: WorkItemAttempt,
+    tracking: &TrackingContext,
+    admission: &Arc<AdmissionController>,
+    broadcasts: &Arc<BroadcastRegistry>,
+) -> Result<(), WorkItemError> {
+    if !matches!(
+        captured.state,
+        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+    ) {
+        return Ok(());
+    }
+    let Some((_, storage)) = tracking.task_sources() else {
+        return Ok(());
+    };
+    let store = storage.work_items();
+    // Read-only early filtering handles candidates that became terminal and no longer
+    // have an active assignment. This is not authority: validate again under the claim.
+    let current = store
+        .for_run(captured.run)?
+        .ok_or(WorkItemError::NotFound)?;
+    if !matches!(
+        current.state,
+        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+    ) {
+        return Ok(());
+    }
+    let claim = match store.claim(captured.run) {
+        Ok(claim) => claim,
+        Err(WorkItemError::Busy) => return Ok(()),
+        Err(error) => {
+            if store.for_run(captured.run)?.is_some_and(|current| {
+                !matches!(
+                    current.state,
+                    WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+                )
+            }) {
+                return Ok(());
+            }
+            return Err(error);
+        },
+    };
+    let authority = ReconciliationAuthority {
+        attempt: store.validate_claim(&claim)?,
+        control: store.execution_control(captured.run)?,
+    };
+    if !reconciliation_eligible(&authority) {
+        return Ok(());
+    }
+    match reconciliation_startup_present(&storage, &authority.attempt).await {
+        Ok(false) => return Ok(()),
+        Err(error) => {
+            store.settle_reconciliation_error(
+                &claim,
+                &authority.attempt,
+                authority.control.as_ref(),
+                &error.to_string(),
+            )?;
+            return Ok(());
+        },
+        Ok(true) => (),
+    }
+    if let Err(error) = launch_claimed_attempt(
+        &authority.attempt,
+        claim,
+        LaunchPurpose::Reconciliation(&authority),
+        tracking,
+        admission,
+        broadcasts,
+    )
+    .await
+        && !matches!(error, WorkItemError::Busy)
+    {
+        // The owned launch path already conditionally settled any current refusal.
+        tracing::warn!(run_id=%captured.run,%error,"task recovery needs attention");
+    }
+    Ok(())
+}
+
+fn reconciliation_eligible(authority: &ReconciliationAuthority) -> bool {
+    use surge_core::execution_recovery::ExecutionControlState;
+    matches!(
+        authority.attempt.state,
+        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+    ) && authority.control.as_ref().is_none_or(|control| {
+        matches!(
+            control.state,
+            ExecutionControlState::Executing | ExecutionControlState::SuspendRequested
+        )
+    })
+}
+
+async fn reconciliation_startup_present(
+    storage: &Arc<surge_persistence::runs::Storage>,
+    attempt: &WorkItemAttempt,
+) -> Result<bool, WorkItemError> {
+    if storage
+        .get_run(&attempt.run)
+        .await
+        .map_err(|error| WorkItemError::Invalid(error.to_string()))?
+        .is_some_and(|run| run.status == surge_core::RunStatus::Parked)
+    {
+        // The wake scheduler owns parked attempts and their due-time authorization.
+        return Ok(false);
+    }
+    let inspected = storage
+        .inspect_folded_run(attempt.run)
+        .await
+        .map_err(|error| WorkItemError::Invalid(error.to_string()))?;
+    // Empty journals still require explicit Start, except accepted pending owned Flows.
+    Ok(inspected
+        .database
+        .is_some_and(|history| history.event_count > 0)
+        || storage.work_items().has_pending_owned_flow(attempt.run)?)
+}
+
+#[cfg(test)]
+mod reconciliation_tests;
 
 #[cfg(all(test, unix, debug_assertions))]
 mod preparation_tests {

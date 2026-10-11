@@ -141,6 +141,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "0031_task_ledger_human_overrides",
         include_str!("migrations/registry/0031_task_ledger_human_overrides.sql"),
     ),
+    (
+        "registry-0032-host-settlement",
+        include_str!("migrations/registry/0032_host_settlement.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

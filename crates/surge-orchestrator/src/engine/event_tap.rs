@@ -4,9 +4,8 @@
 //! [`RunEventTap`] message carrying the originating [`RunId`]. The
 //! [`Engine`](super::engine::Engine) owns a single
 //! [`broadcast::Sender`](tokio::sync::broadcast::Sender) and fans incoming
-//! events out from each active run's SQL-backed `subscribe_events()` stream
-//! via a per-run forwarder task spawned in
-//! [`Engine::start_run`](super::engine::Engine::start_run).
+//! events out through a run-owned, bounded SQL reader. Confirmed run completion
+//! joins the writer seal and the forwarder through the exact sealed event prefix.
 //!
 //! Buffer size is fixed at [`TAP_BUFFER_SIZE`]. Subscribers that fall behind
 //! receive [`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)

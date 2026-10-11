@@ -40,6 +40,16 @@ pub enum EngineError {
     #[error("storage error: {0}")]
     Storage(String),
 
+    /// The original operation failed and its writer also failed to close.
+    #[error("{operation}; writer settlement also failed: {close}")]
+    OperationAndWriterClose {
+        /// Original operation error, without losing its concrete variant.
+        #[source]
+        operation: Box<EngineError>,
+        /// Additional actual writer close/join error.
+        close: Box<surge_persistence::runs::CloseError>,
+    },
+
     /// An ACP bridge operation failed.
     #[error("bridge error: {0}")]
     Bridge(String),

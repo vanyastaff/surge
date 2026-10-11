@@ -91,6 +91,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-persistence/src/runs/verification.rs` | Transactional normalized verification context and stored-proof inspection. |
 | `crates/surge-persistence/src/state_home.rs` | Retained Windows runtime-home, directory, append and control capabilities; native security and routing implementations live in `state_home/windows/`. |
 | `crates/surge-persistence/src/runs/connection.rs` | Checked Windows SQLite ownership through actual connection close, including independently retained pool-manager fences. |
+| `crates/surge-persistence/src/runs/host_settlement/` | Run opening authority, retained namespace identities and opaque creation reservations; durable settlement integration is in progress. |
 | `crates/surge-core/src/work_item.rs` | Persistent work-item identities, immutable accepted requirements, attempts and typed controls. |
 | `crates/surge-core/src/work_item/origin.rs` | Accepted requirement/Flow origins, exact graph and raw prompt contracts, and domain-separated hashes. |
 | `crates/surge-core/src/work_item/flow_inputs.rs` | Public frozen MCP manifests and opaque private-object references; structural validation does not grant runtime authority. |

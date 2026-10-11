@@ -9153,6 +9153,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "assert_cmd",
+ "async-trait",
  "chrono",
  "clap",
  "dirs 5.0.1",

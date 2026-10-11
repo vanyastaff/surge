@@ -43,6 +43,7 @@ pub fn spawn(
     tokio::spawn(run(rx, source_map, conn, storage))
 }
 
+
 async fn run(
     mut rx: broadcast::Receiver<GlobalDaemonEvent>,
     source_map: Arc<HashMap<String, Arc<dyn TaskSource>>>,
@@ -192,6 +193,7 @@ pub(crate) fn terminal_kind(outcome: &RunOutcome) -> Option<TerminalCommentKind>
         RunOutcome::Completed { .. } => Some(TerminalCommentKind::Completed),
         RunOutcome::Failed { .. } => Some(TerminalCommentKind::Failed),
         RunOutcome::Aborted { .. } => Some(TerminalCommentKind::Aborted),
+        RunOutcome::SettlementFailed { .. } => None,
         _ => None,
     }
 }
@@ -296,6 +298,11 @@ pub(crate) fn format_completion(
     outcome: &RunOutcome,
 ) -> (String, Option<TicketState>, &'static str) {
     match outcome {
+        RunOutcome::SettlementFailed { failures, .. } => (
+            format!("Run completion is unconfirmed: resource settlement failed ({failures:?})."),
+            None,
+            "run_settlement_unconfirmed",
+        ),
         RunOutcome::Completed { terminal } => (
             format!("✅ Surge run completed (terminal node: `{terminal}`)."),
             Some(TicketState::Completed),
@@ -343,6 +350,23 @@ pub(crate) fn format_completion(
 mod tests {
     use super::*;
     use surge_core::keys::NodeKey;
+
+    #[test]
+    fn settlement_failure_never_projects_original_success() {
+        let outcome = RunOutcome::SettlementFailed {
+            original: Box::new(RunOutcome::Completed {
+                terminal: NodeKey::try_new("end").unwrap(),
+            }),
+            failures: vec![
+                surge_orchestrator::engine::handle::RunSettlementFailure::PrefixMismatch,
+            ],
+        };
+        assert!(terminal_kind(&outcome).is_none());
+        let (body, state, purpose) = format_completion(&outcome);
+        assert!(state.is_none());
+        assert!(body.contains("unconfirmed"));
+        assert_eq!(purpose, "run_settlement_unconfirmed");
+    }
 
     #[test]
     fn format_completion_completed_phrasing() {
@@ -407,3 +431,7 @@ mod tests {
         assert_eq!(purpose, "run_parked");
     }
 }
+
+#[cfg(test)]
+#[path = "intake_completion/history_bypass_tests.rs"]
+mod history_bypass_tests;

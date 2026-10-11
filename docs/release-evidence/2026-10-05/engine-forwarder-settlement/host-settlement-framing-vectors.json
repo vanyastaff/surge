@@ -1,0 +1,958 @@
+{
+  "fixture_version": 1,
+  "contract": "JournalPrefixDigestV1 and terminal row SAME framing",
+  "accepted_plan_sha256": "9b509500aa927a3368c0ebfe2d931c71fca035ea6c08f34ce5a365d0e789ac54",
+  "scope": "Independent byte-level oracle; identities are fixed synthetic values laid out exactly as SDK/fstat fields, not native observations. No production encoder or Rust execution used.",
+  "supported_schema_versions_at_authoring": {
+    "min": 1,
+    "max": 21,
+    "registered": "all integers1..21",
+    "same_blob_stored_v1_v2": "Both source-supported: IdentityV1/IdentityV2 deserialize VersionedEventPayload and return wrapper.payload; inner wrapper schema stays1 in every vector. No new wrapper/column equality policy introduced."
+  },
+  "domain_ascii_without_nul": "surge.host-settlement.journal-prefix.v1",
+  "identity_order": [
+    "home",
+    "run_directory",
+    "journal_lock",
+    "journal_db"
+  ],
+  "digest_text": "Bare lowercase SHA-256 hex; terminal digest hashes row bytes only, without prefix header/domain.",
+  "vectors": [
+    {
+      "id": "unix_prefix1_stored_v1",
+      "purpose": "Literal framing and row-decoding oracle only; not a complete valid folded run or settlement authority.",
+      "input": {
+        "run_id_display": "run-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "platform_tag": 1,
+        "identities": [
+          {
+            "role": "home",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "1230066625199609624"
+          },
+          {
+            "role": "run_directory",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "2387509390608836392"
+          },
+          {
+            "role": "journal_lock",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "3544952156018063160"
+          },
+          {
+            "role": "journal_db",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "4702394921427289928"
+          }
+        ],
+        "sealed_prefix": 1,
+        "rows": [
+          {
+            "sequence": 1,
+            "timestamp": -2,
+            "stored_schema_version": 1,
+            "kind": "RunCompleted",
+            "raw_payload_utf8": "{\"schema_version\":1,\"payload\":{\"type\":\"run_completed\",\"terminal_node\":\"end\"}}",
+            "raw_payload_hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+          }
+        ]
+      },
+      "semantic_expectation": {
+        "stored_version_supported": true,
+        "migrate_payload_source_expected": "RunCompleted { terminal_node: NodeKey(\"end\") }",
+        "raw_kind_matches_discriminant": true,
+        "full_history_confirmation": "not asserted; framing fixture is not a full run history"
+      },
+      "header_blocks": [
+        {
+          "field": "domain_and_nul",
+          "hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e763100"
+        },
+        {
+          "field": "run_id_utf8_length_u32le",
+          "hex": "1e000000"
+        },
+        {
+          "field": "run_id_utf8",
+          "hex": "72756e2d303141525a334e44454b54535634525246465136394735464156"
+        },
+        {
+          "field": "platform_tag",
+          "hex": "01"
+        },
+        {
+          "field": "home.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "home.ino_u64le",
+          "hex": "1817161514131211"
+        },
+        {
+          "field": "run_directory.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "run_directory.ino_u64le",
+          "hex": "2827262524232221"
+        },
+        {
+          "field": "journal_lock.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_lock.ino_u64le",
+          "hex": "3837363534333231"
+        },
+        {
+          "field": "journal_db.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_db.ino_u64le",
+          "hex": "4847464544434241"
+        },
+        {
+          "field": "sealed_prefix_u64le",
+          "hex": "0100000000000000"
+        }
+      ],
+      "row_blocks": [
+        {
+          "field": "sequence_u64le",
+          "hex": "0100000000000000"
+        },
+        {
+          "field": "timestamp_i64le",
+          "hex": "feffffffffffffff"
+        },
+        {
+          "field": "stored_schema_version_u32le",
+          "hex": "01000000"
+        },
+        {
+          "field": "kind_utf8_length_u32le",
+          "hex": "0c000000"
+        },
+        {
+          "field": "kind_utf8",
+          "hex": "52756e436f6d706c65746564"
+        },
+        {
+          "field": "raw_payload_length_u64le",
+          "hex": "4d00000000000000"
+        },
+        {
+          "field": "raw_payload_bytes",
+          "hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+        }
+      ],
+      "header_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b5453563452524646513639473546415601080706050403020118171615141312110807060504030201282726252423222108070605040302013837363534333231080706050403020148474645444342410100000000000000",
+      "row_hex": "0100000000000000feffffffffffffff010000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "prefix_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156010807060504030201181716151413121108070605040302012827262524232221080706050403020138373635343332310807060504030201484746454443424101000000000000000100000000000000feffffffffffffff010000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "header_byte_length": 147,
+      "row_byte_length": 121,
+      "prefix_byte_length": 268,
+      "prefix_sha256": "269ecf9cdc9f41bfb06dbc400b8a3fbe7d770de7c55a97c0cb36061e08a0ee01",
+      "terminal_row_sha256": "49b42610b4b82b773a78802949cc3007d0da58065db08496123e10c1fc2769b0"
+    },
+    {
+      "id": "unix_prefix1_stored_v2",
+      "purpose": "Literal framing and row-decoding oracle only; not a complete valid folded run or settlement authority.",
+      "input": {
+        "run_id_display": "run-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "platform_tag": 1,
+        "identities": [
+          {
+            "role": "home",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "1230066625199609624"
+          },
+          {
+            "role": "run_directory",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "2387509390608836392"
+          },
+          {
+            "role": "journal_lock",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "3544952156018063160"
+          },
+          {
+            "role": "journal_db",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "4702394921427289928"
+          }
+        ],
+        "sealed_prefix": 1,
+        "rows": [
+          {
+            "sequence": 1,
+            "timestamp": -2,
+            "stored_schema_version": 2,
+            "kind": "RunCompleted",
+            "raw_payload_utf8": "{\"schema_version\":1,\"payload\":{\"type\":\"run_completed\",\"terminal_node\":\"end\"}}",
+            "raw_payload_hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+          }
+        ]
+      },
+      "semantic_expectation": {
+        "stored_version_supported": true,
+        "migrate_payload_source_expected": "RunCompleted { terminal_node: NodeKey(\"end\") }",
+        "raw_kind_matches_discriminant": true,
+        "full_history_confirmation": "not asserted; framing fixture is not a full run history"
+      },
+      "header_blocks": [
+        {
+          "field": "domain_and_nul",
+          "hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e763100"
+        },
+        {
+          "field": "run_id_utf8_length_u32le",
+          "hex": "1e000000"
+        },
+        {
+          "field": "run_id_utf8",
+          "hex": "72756e2d303141525a334e44454b54535634525246465136394735464156"
+        },
+        {
+          "field": "platform_tag",
+          "hex": "01"
+        },
+        {
+          "field": "home.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "home.ino_u64le",
+          "hex": "1817161514131211"
+        },
+        {
+          "field": "run_directory.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "run_directory.ino_u64le",
+          "hex": "2827262524232221"
+        },
+        {
+          "field": "journal_lock.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_lock.ino_u64le",
+          "hex": "3837363534333231"
+        },
+        {
+          "field": "journal_db.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_db.ino_u64le",
+          "hex": "4847464544434241"
+        },
+        {
+          "field": "sealed_prefix_u64le",
+          "hex": "0100000000000000"
+        }
+      ],
+      "row_blocks": [
+        {
+          "field": "sequence_u64le",
+          "hex": "0100000000000000"
+        },
+        {
+          "field": "timestamp_i64le",
+          "hex": "feffffffffffffff"
+        },
+        {
+          "field": "stored_schema_version_u32le",
+          "hex": "02000000"
+        },
+        {
+          "field": "kind_utf8_length_u32le",
+          "hex": "0c000000"
+        },
+        {
+          "field": "kind_utf8",
+          "hex": "52756e436f6d706c65746564"
+        },
+        {
+          "field": "raw_payload_length_u64le",
+          "hex": "4d00000000000000"
+        },
+        {
+          "field": "raw_payload_bytes",
+          "hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+        }
+      ],
+      "header_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b5453563452524646513639473546415601080706050403020118171615141312110807060504030201282726252423222108070605040302013837363534333231080706050403020148474645444342410100000000000000",
+      "row_hex": "0100000000000000feffffffffffffff020000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "prefix_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156010807060504030201181716151413121108070605040302012827262524232221080706050403020138373635343332310807060504030201484746454443424101000000000000000100000000000000feffffffffffffff020000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "header_byte_length": 147,
+      "row_byte_length": 121,
+      "prefix_byte_length": 268,
+      "prefix_sha256": "edc4796dfe1acb396ba72d6dc965357ec5cb8b5ba404686430e381b1ebc5128c",
+      "terminal_row_sha256": "f025b30f811d1a5314d2a59c66b7e10ddfae5bbb38ef78c7aa51f56281cce270"
+    },
+    {
+      "id": "unix_prefix0_empty",
+      "purpose": "Empty table framing only; no terminal outcome or confirmation implied.",
+      "input": {
+        "run_id_display": "run-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "platform_tag": 1,
+        "identities": [
+          {
+            "role": "home",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "1230066625199609624"
+          },
+          {
+            "role": "run_directory",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "2387509390608836392"
+          },
+          {
+            "role": "journal_lock",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "3544952156018063160"
+          },
+          {
+            "role": "journal_db",
+            "dev_decimal": "72623859790382856",
+            "ino_decimal": "4702394921427289928"
+          }
+        ],
+        "sealed_prefix": 0,
+        "rows": []
+      },
+      "header_blocks": [
+        {
+          "field": "domain_and_nul",
+          "hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e763100"
+        },
+        {
+          "field": "run_id_utf8_length_u32le",
+          "hex": "1e000000"
+        },
+        {
+          "field": "run_id_utf8",
+          "hex": "72756e2d303141525a334e44454b54535634525246465136394735464156"
+        },
+        {
+          "field": "platform_tag",
+          "hex": "01"
+        },
+        {
+          "field": "home.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "home.ino_u64le",
+          "hex": "1817161514131211"
+        },
+        {
+          "field": "run_directory.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "run_directory.ino_u64le",
+          "hex": "2827262524232221"
+        },
+        {
+          "field": "journal_lock.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_lock.ino_u64le",
+          "hex": "3837363534333231"
+        },
+        {
+          "field": "journal_db.dev_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_db.ino_u64le",
+          "hex": "4847464544434241"
+        },
+        {
+          "field": "sealed_prefix_u64le",
+          "hex": "0000000000000000"
+        }
+      ],
+      "header_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b5453563452524646513639473546415601080706050403020118171615141312110807060504030201282726252423222108070605040302013837363534333231080706050403020148474645444342410000000000000000",
+      "prefix_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b5453563452524646513639473546415601080706050403020118171615141312110807060504030201282726252423222108070605040302013837363534333231080706050403020148474645444342410000000000000000",
+      "header_byte_length": 147,
+      "prefix_byte_length": 147,
+      "prefix_sha256": "ee20a80822f167c10958d54b4bcf836ee533c959fccc4bb50f70a384d6de2865",
+      "terminal_row_sha256": null
+    },
+    {
+      "id": "windows_prefix1_stored_v1",
+      "purpose": "Literal framing and row-decoding oracle only; not a complete valid folded run or settlement authority.",
+      "input": {
+        "run_id_display": "run-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "platform_tag": 2,
+        "identities": [
+          {
+            "role": "home",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "000102030405060708090a0b0c0d0e0f"
+          },
+          {
+            "role": "run_directory",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "101112131415161718191a1b1c1d1e1f"
+          },
+          {
+            "role": "journal_lock",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "202122232425262728292a2b2c2d2e2f"
+          },
+          {
+            "role": "journal_db",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "303132333435363738393a3b3c3d3e3f"
+          }
+        ],
+        "sealed_prefix": 1,
+        "rows": [
+          {
+            "sequence": 1,
+            "timestamp": -2,
+            "stored_schema_version": 1,
+            "kind": "RunCompleted",
+            "raw_payload_utf8": "{\"schema_version\":1,\"payload\":{\"type\":\"run_completed\",\"terminal_node\":\"end\"}}",
+            "raw_payload_hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+          }
+        ]
+      },
+      "semantic_expectation": {
+        "stored_version_supported": true,
+        "migrate_payload_source_expected": "RunCompleted { terminal_node: NodeKey(\"end\") }",
+        "raw_kind_matches_discriminant": true,
+        "full_history_confirmation": "not asserted; framing fixture is not a full run history"
+      },
+      "header_blocks": [
+        {
+          "field": "domain_and_nul",
+          "hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e763100"
+        },
+        {
+          "field": "run_id_utf8_length_u32le",
+          "hex": "1e000000"
+        },
+        {
+          "field": "run_id_utf8",
+          "hex": "72756e2d303141525a334e44454b54535634525246465136394735464156"
+        },
+        {
+          "field": "platform_tag",
+          "hex": "02"
+        },
+        {
+          "field": "home.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "home.file_id_exact_sdk_bytes",
+          "hex": "000102030405060708090a0b0c0d0e0f"
+        },
+        {
+          "field": "run_directory.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "run_directory.file_id_exact_sdk_bytes",
+          "hex": "101112131415161718191a1b1c1d1e1f"
+        },
+        {
+          "field": "journal_lock.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_lock.file_id_exact_sdk_bytes",
+          "hex": "202122232425262728292a2b2c2d2e2f"
+        },
+        {
+          "field": "journal_db.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_db.file_id_exact_sdk_bytes",
+          "hex": "303132333435363738393a3b3c3d3e3f"
+        },
+        {
+          "field": "sealed_prefix_u64le",
+          "hex": "0100000000000000"
+        }
+      ],
+      "row_blocks": [
+        {
+          "field": "sequence_u64le",
+          "hex": "0100000000000000"
+        },
+        {
+          "field": "timestamp_i64le",
+          "hex": "feffffffffffffff"
+        },
+        {
+          "field": "stored_schema_version_u32le",
+          "hex": "01000000"
+        },
+        {
+          "field": "kind_utf8_length_u32le",
+          "hex": "0c000000"
+        },
+        {
+          "field": "kind_utf8",
+          "hex": "52756e436f6d706c65746564"
+        },
+        {
+          "field": "raw_payload_length_u64le",
+          "hex": "4d00000000000000"
+        },
+        {
+          "field": "raw_payload_bytes",
+          "hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+        }
+      ],
+      "header_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156020807060504030201000102030405060708090a0b0c0d0e0f0807060504030201101112131415161718191a1b1c1d1e1f0807060504030201202122232425262728292a2b2c2d2e2f0807060504030201303132333435363738393a3b3c3d3e3f0100000000000000",
+      "row_hex": "0100000000000000feffffffffffffff010000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "prefix_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156020807060504030201000102030405060708090a0b0c0d0e0f0807060504030201101112131415161718191a1b1c1d1e1f0807060504030201202122232425262728292a2b2c2d2e2f0807060504030201303132333435363738393a3b3c3d3e3f01000000000000000100000000000000feffffffffffffff010000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "header_byte_length": 179,
+      "row_byte_length": 121,
+      "prefix_byte_length": 300,
+      "prefix_sha256": "f1bbbd036082925e9c4faefcb98192484ab46e97a2694f0fc7a67b64fcace444",
+      "terminal_row_sha256": "49b42610b4b82b773a78802949cc3007d0da58065db08496123e10c1fc2769b0"
+    },
+    {
+      "id": "windows_prefix1_stored_v2",
+      "purpose": "Literal framing and row-decoding oracle only; not a complete valid folded run or settlement authority.",
+      "input": {
+        "run_id_display": "run-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "platform_tag": 2,
+        "identities": [
+          {
+            "role": "home",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "000102030405060708090a0b0c0d0e0f"
+          },
+          {
+            "role": "run_directory",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "101112131415161718191a1b1c1d1e1f"
+          },
+          {
+            "role": "journal_lock",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "202122232425262728292a2b2c2d2e2f"
+          },
+          {
+            "role": "journal_db",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "303132333435363738393a3b3c3d3e3f"
+          }
+        ],
+        "sealed_prefix": 1,
+        "rows": [
+          {
+            "sequence": 1,
+            "timestamp": -2,
+            "stored_schema_version": 2,
+            "kind": "RunCompleted",
+            "raw_payload_utf8": "{\"schema_version\":1,\"payload\":{\"type\":\"run_completed\",\"terminal_node\":\"end\"}}",
+            "raw_payload_hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+          }
+        ]
+      },
+      "semantic_expectation": {
+        "stored_version_supported": true,
+        "migrate_payload_source_expected": "RunCompleted { terminal_node: NodeKey(\"end\") }",
+        "raw_kind_matches_discriminant": true,
+        "full_history_confirmation": "not asserted; framing fixture is not a full run history"
+      },
+      "header_blocks": [
+        {
+          "field": "domain_and_nul",
+          "hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e763100"
+        },
+        {
+          "field": "run_id_utf8_length_u32le",
+          "hex": "1e000000"
+        },
+        {
+          "field": "run_id_utf8",
+          "hex": "72756e2d303141525a334e44454b54535634525246465136394735464156"
+        },
+        {
+          "field": "platform_tag",
+          "hex": "02"
+        },
+        {
+          "field": "home.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "home.file_id_exact_sdk_bytes",
+          "hex": "000102030405060708090a0b0c0d0e0f"
+        },
+        {
+          "field": "run_directory.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "run_directory.file_id_exact_sdk_bytes",
+          "hex": "101112131415161718191a1b1c1d1e1f"
+        },
+        {
+          "field": "journal_lock.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_lock.file_id_exact_sdk_bytes",
+          "hex": "202122232425262728292a2b2c2d2e2f"
+        },
+        {
+          "field": "journal_db.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_db.file_id_exact_sdk_bytes",
+          "hex": "303132333435363738393a3b3c3d3e3f"
+        },
+        {
+          "field": "sealed_prefix_u64le",
+          "hex": "0100000000000000"
+        }
+      ],
+      "row_blocks": [
+        {
+          "field": "sequence_u64le",
+          "hex": "0100000000000000"
+        },
+        {
+          "field": "timestamp_i64le",
+          "hex": "feffffffffffffff"
+        },
+        {
+          "field": "stored_schema_version_u32le",
+          "hex": "02000000"
+        },
+        {
+          "field": "kind_utf8_length_u32le",
+          "hex": "0c000000"
+        },
+        {
+          "field": "kind_utf8",
+          "hex": "52756e436f6d706c65746564"
+        },
+        {
+          "field": "raw_payload_length_u64le",
+          "hex": "4d00000000000000"
+        },
+        {
+          "field": "raw_payload_bytes",
+          "hex": "7b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d"
+        }
+      ],
+      "header_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156020807060504030201000102030405060708090a0b0c0d0e0f0807060504030201101112131415161718191a1b1c1d1e1f0807060504030201202122232425262728292a2b2c2d2e2f0807060504030201303132333435363738393a3b3c3d3e3f0100000000000000",
+      "row_hex": "0100000000000000feffffffffffffff020000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "prefix_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156020807060504030201000102030405060708090a0b0c0d0e0f0807060504030201101112131415161718191a1b1c1d1e1f0807060504030201202122232425262728292a2b2c2d2e2f0807060504030201303132333435363738393a3b3c3d3e3f01000000000000000100000000000000feffffffffffffff020000000c00000052756e436f6d706c657465644d000000000000007b22736368656d615f76657273696f6e223a312c227061796c6f6164223a7b2274797065223a2272756e5f636f6d706c65746564222c227465726d696e616c5f6e6f6465223a22656e64227d7d",
+      "header_byte_length": 179,
+      "row_byte_length": 121,
+      "prefix_byte_length": 300,
+      "prefix_sha256": "8586b1249a1d38645525a6c6998432095e151fbc73601906e9786a9d927cd9f4",
+      "terminal_row_sha256": "f025b30f811d1a5314d2a59c66b7e10ddfae5bbb38ef78c7aa51f56281cce270"
+    },
+    {
+      "id": "windows_prefix0_empty",
+      "purpose": "Empty table framing only; no terminal outcome or confirmation implied.",
+      "input": {
+        "run_id_display": "run-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "platform_tag": 2,
+        "identities": [
+          {
+            "role": "home",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "000102030405060708090a0b0c0d0e0f"
+          },
+          {
+            "role": "run_directory",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "101112131415161718191a1b1c1d1e1f"
+          },
+          {
+            "role": "journal_lock",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "202122232425262728292a2b2c2d2e2f"
+          },
+          {
+            "role": "journal_db",
+            "volume_serial_number_decimal": "72623859790382856",
+            "file_id_identifier_hex": "303132333435363738393a3b3c3d3e3f"
+          }
+        ],
+        "sealed_prefix": 0,
+        "rows": []
+      },
+      "header_blocks": [
+        {
+          "field": "domain_and_nul",
+          "hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e763100"
+        },
+        {
+          "field": "run_id_utf8_length_u32le",
+          "hex": "1e000000"
+        },
+        {
+          "field": "run_id_utf8",
+          "hex": "72756e2d303141525a334e44454b54535634525246465136394735464156"
+        },
+        {
+          "field": "platform_tag",
+          "hex": "02"
+        },
+        {
+          "field": "home.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "home.file_id_exact_sdk_bytes",
+          "hex": "000102030405060708090a0b0c0d0e0f"
+        },
+        {
+          "field": "run_directory.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "run_directory.file_id_exact_sdk_bytes",
+          "hex": "101112131415161718191a1b1c1d1e1f"
+        },
+        {
+          "field": "journal_lock.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_lock.file_id_exact_sdk_bytes",
+          "hex": "202122232425262728292a2b2c2d2e2f"
+        },
+        {
+          "field": "journal_db.volume_serial_number_u64le",
+          "hex": "0807060504030201"
+        },
+        {
+          "field": "journal_db.file_id_exact_sdk_bytes",
+          "hex": "303132333435363738393a3b3c3d3e3f"
+        },
+        {
+          "field": "sealed_prefix_u64le",
+          "hex": "0000000000000000"
+        }
+      ],
+      "header_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156020807060504030201000102030405060708090a0b0c0d0e0f0807060504030201101112131415161718191a1b1c1d1e1f0807060504030201202122232425262728292a2b2c2d2e2f0807060504030201303132333435363738393a3b3c3d3e3f0000000000000000",
+      "prefix_hex": "73757267652e686f73742d736574746c656d656e742e6a6f75726e616c2d7072656669782e7631001e00000072756e2d303141525a334e44454b54535634525246465136394735464156020807060504030201000102030405060708090a0b0c0d0e0f0807060504030201101112131415161718191a1b1c1d1e1f0807060504030201202122232425262728292a2b2c2d2e2f0807060504030201303132333435363738393a3b3c3d3e3f0000000000000000",
+      "header_byte_length": 179,
+      "prefix_byte_length": 179,
+      "prefix_sha256": "bb5bf9296e4576c5814f1c6722bac6f6ae45553c1fb69a6ed75c607e6eb29032",
+      "terminal_row_sha256": null
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "stored_version_negative",
+      "input_delta_or_setup": {
+        "stored_schema_version_sql_i64": -1
+      },
+      "expected": "Reject checked u32 conversion before encoding; never wrap to ffffffff."
+    },
+    {
+      "id": "stored_version_overflow",
+      "input_delta_or_setup": {
+        "stored_schema_version_sql_i64": 4294967296
+      },
+      "expected": "Reject checked u32 conversion before encoding; never truncate to zero."
+    },
+    {
+      "id": "stored_version_zero",
+      "input_delta_or_setup": {
+        "stored_schema_version_sql_i64": 0
+      },
+      "expected": "Reject SchemaTooOld; minimum1."
+    },
+    {
+      "id": "stored_version_future",
+      "input_delta_or_setup": {
+        "stored_schema_version_sql_i64": 22
+      },
+      "expected": "Reject SchemaTooNew with current maximum21 even though JSON payload parses."
+    },
+    {
+      "id": "stored_version_u32_max",
+      "input_delta_or_setup": {
+        "stored_schema_version_sql_i64": 4294967295
+      },
+      "expected": "u32 conversion succeeds but supported-range check rejects; no usable digest/receipt."
+    },
+    {
+      "id": "missing_migration",
+      "input_delta_or_setup": {
+        "setup": "Test-specific registry lacking an otherwise in-range version, if a registry injection seam exists."
+      },
+      "expected": "Migration lookup failure must propagate. No missing numeric version exists in current default1..21 chain; this is a conditional invariant, not a fabricated live input."
+    },
+    {
+      "id": "kind_mismatch",
+      "input_delta_or_setup": {
+        "kind": "RunFailed"
+      },
+      "expected": "Reject because decoded discriminant is RunCompleted; never hash and authorize mismatched metadata."
+    },
+    {
+      "id": "kind_wire_tag_instead_of_discriminant",
+      "input_delta_or_setup": {
+        "kind": "run_completed"
+      },
+      "expected": "Reject: raw SQL kind is Rust discriminant RunCompleted, not snake_case JSON type."
+    },
+    {
+      "id": "kind_unknown",
+      "input_delta_or_setup": {
+        "kind": "UnknownKind"
+      },
+      "expected": "Reject unknown/mismatching kind."
+    },
+    {
+      "id": "kind_invalid_utf8",
+      "input_delta_or_setup": {
+        "kind_sql_bytes_hex": "ff"
+      },
+      "expected": "Reject invalid kind UTF-8, no lossy replacement."
+    },
+    {
+      "id": "payload_malformed",
+      "input_delta_or_setup": {
+        "raw_payload_hex": "7b"
+      },
+      "expected": "migrate_payload must fail; no fallback parser."
+    },
+    {
+      "id": "sequence_negative",
+      "input_delta_or_setup": {
+        "sequence_sql_i64": -1
+      },
+      "expected": "Reject positive i64 sequence domain; do not cast into u64."
+    },
+    {
+      "id": "sequence_zero",
+      "input_delta_or_setup": {
+        "sequence_sql_i64": 0
+      },
+      "expected": "Reject; journal starts at1."
+    },
+    {
+      "id": "sequence_above_i64_max",
+      "input_delta_or_setup": {
+        "sequence_input_decimal": "9223372036854775808"
+      },
+      "expected": "Reject before binding/encoding as journal seq; outside positive SQLite i64 domain."
+    },
+    {
+      "id": "sequence_gap",
+      "input_delta_or_setup": {
+        "sealed_prefix": 2,
+        "ordered_sequences": [
+          1,
+          3
+        ],
+        "snapshot_max": 3,
+        "snapshot_count": 2
+      },
+      "expected": "Reject exact contiguous1..prefix and MAX agreement."
+    },
+    {
+      "id": "sequence_duplicate",
+      "input_delta_or_setup": {
+        "sealed_prefix": 2,
+        "ordered_sequences": [
+          1,
+          1
+        ]
+      },
+      "expected": "Reject duplicate contiguous counter; conceptual decoder fixture (SQL PK normally prevents)."
+    },
+    {
+      "id": "suffix_above_sealed",
+      "input_delta_or_setup": {
+        "sealed_prefix": 1,
+        "ordered_sequences": [
+          1,
+          2
+        ],
+        "snapshot_max": 2,
+        "snapshot_count": 2
+      },
+      "expected": "Reject suffix in same read transaction; do not query/hash only seq<=sealed."
+    },
+    {
+      "id": "zero_prefix_nonempty",
+      "input_delta_or_setup": {
+        "sealed_prefix": 0,
+        "ordered_sequences": [
+          1
+        ],
+        "snapshot_max": 1,
+        "snapshot_count": 1
+      },
+      "expected": "Reject: zero prefix requires empty table in same snapshot."
+    },
+    {
+      "id": "snapshot_count_mismatch",
+      "input_delta_or_setup": {
+        "sealed_prefix": 1,
+        "snapshot_max": 1,
+        "snapshot_count": 0
+      },
+      "expected": "Reject inconsistent snapshot evidence; no before/after queries outside row transaction."
+    },
+    {
+      "id": "noncanonical_bare_run_id",
+      "input_delta_or_setup": {
+        "run_id_display": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+      },
+      "expected": "FromStr may accept but parse/render equality fails; never normalize silently into digest."
+    },
+    {
+      "id": "noncanonical_lowercase_run_id",
+      "input_delta_or_setup": {
+        "run_id_display": "run-01arz3ndektsv4rrffq69g5fav"
+      },
+      "expected": "Reject parse/render mismatch."
+    },
+    {
+      "id": "platform_unknown",
+      "input_delta_or_setup": {
+        "platform_tag": 3
+      },
+      "expected": "Reject unknown identity format."
+    },
+    {
+      "id": "identity_order_swapped",
+      "input_delta_or_setup": {
+        "swap_roles": [
+          "journal_lock",
+          "journal_db"
+        ]
+      },
+      "expected": "Distinct fixed bytes must produce a different prefix digest; a receipt for original held identity order cannot validate the swapped identities."
+    },
+    {
+      "id": "timestamp_overflow",
+      "input_delta_or_setup": {
+        "timestamp_input_decimal": "9223372036854775808"
+      },
+      "expected": "Reject outside i64; timestamp -2 in positive vectors is a valid signed framing value, not a negative-sequence error."
+    }
+  ]
+}

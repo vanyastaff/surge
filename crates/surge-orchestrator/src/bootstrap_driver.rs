@@ -140,6 +140,11 @@ pub async fn run_bootstrap_in_worktree(
         .await?;
 
     match handle.await_completion().await? {
+        RunOutcome::SettlementFailed { failures, .. } => {
+            return Err(BootstrapError::RunFailed(format!(
+                "run settlement failed: {failures:?}"
+            )));
+        },
         RunOutcome::Completed { .. } => {},
         RunOutcome::Failed { error } => return Err(BootstrapError::RunFailed(error)),
         RunOutcome::Aborted { reason } => return Err(BootstrapError::RunAborted(reason)),

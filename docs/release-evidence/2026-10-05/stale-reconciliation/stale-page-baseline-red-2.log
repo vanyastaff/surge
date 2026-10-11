@@ -1,0 +1,23 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.94s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-68c76af9f173803a)
+
+running 1 test
+
+thread 'work_items::reconciliation_tests::stale_reconciliation_page_preserves_confirmed_suspension' (80729) panicked at crates/surge-daemon/src/work_items/reconciliation_tests.rs:234:5:
+assertion `left == right` failed: stale candidate changed confirmed suspension; attempt diagnostic=Some("task conflict: storage error: suspended task requires its durable Continue reservation"); control before=Some(WorkItemExecutionControl { item: WorkItemId(Ulid(2165703866151543637175111158789472470)), run: RunId(Ulid(2165703866159115383356166690319524925)), attempt_generation: 1, generation: 1, operation: WorkItemOperationId(Ulid(2165703866186512916847088837513466531)), state: Suspended, fence: Some(SuspensionFence { control_generation: 1, snapshot_seq: 5, pending_stage: Interrupted { node: NodeKey("impl_1"), invocation: StageInvocationId(Ulid(2165703866191074580878476842887113085)) }, cleanup_confirmed: true, reason: Manual }), allow_new_session: false, diagnostic: None }); control after=Some(WorkItemExecutionControl { item: WorkItemId(Ulid(2165703866151543637175111158789472470)), run: RunId(Ulid(2165703866159115383356166690319524925)), attempt_generation: 1, generation: 1, operation: WorkItemOperationId(Ulid(2165703866186512916847088837513466531)), state: Attention, fence: Some(SuspensionFence { control_generation: 1, snapshot_seq: 5, pending_stage: Interrupted { node: NodeKey("impl_1"), invocation: StageInvocationId(Ulid(2165703866191074580878476842887113085)) }, cleanup_confirmed: true, reason: Manual }), allow_new_session: false, diagnostic: None })
+  left: Attention
+ right: Suspended
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test work_items::reconciliation_tests::stale_reconciliation_page_preserves_confirmed_suspension ... FAILED
+
+failures:
+
+failures:
+    work_items::reconciliation_tests::stale_reconciliation_page_preserves_confirmed_suspension
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 133 filtered out; finished in 0.15s
+
+error: test failed, to rerun pass `-p surge-daemon --lib`

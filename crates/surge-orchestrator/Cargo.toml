@@ -37,6 +37,7 @@ dirs = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
+surge-persistence = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
@@ -55,4 +56,5 @@ name = "stage_transition"
 harness = false
 
 [features]
+test-support = ["surge-persistence/test-support"]
 _bootstrap_llm_test = []

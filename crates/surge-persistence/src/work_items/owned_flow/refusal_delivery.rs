@@ -1,6 +1,6 @@
 //! Existing-only journal publication under the same actual normal-writer lease.
 use super::{launch, refusal_owner::DeliveryResources};
-use crate::runs::{EventSeq, file_lock::FileLock, writer, writer_slot::WriterLease};
+use crate::runs::{EventSeq, writer, writer_slot::WriterLease};
 use crate::work_items::{Result, WorkItemError, start_preparation::secure_lock::PreparationLock};
 #[cfg(not(windows))]
 use rusqlite::Connection;
@@ -13,7 +13,7 @@ use surge_core::{
 
 pub(super) struct JournalOwner {
     connection: Option<crate::runs::connection::ManagedConnection>,
-    _lease: Arc<WriterLease>,
+    lease: Arc<WriterLease>,
 }
 fn unavailable() -> WorkItemError {
     WorkItemError::IndependentAcceptedDataInvalid
@@ -41,36 +41,19 @@ fn read_receipt(
     Ok(Some(receipt))
 }
 fn acquire(resources: &DeliveryResources, run: RunId) -> Result<JournalOwner> {
-    let token = resources
-        .writers
-        .try_acquire_sync(run)
-        .map_err(|_| unavailable())?
-        .ok_or(WorkItemError::Busy)?;
-    #[cfg(windows)]
-    let namespace = crate::state_home::SqliteNamespaceOwner::existing(
-        &resources
-            .home
-            .join("runs")
-            .join(run.to_string())
-            .join("events.sqlite"),
-    )?;
-    let path = resources
-        .home
-        .join("runs")
-        .join(run.to_string())
-        .join("events.sqlite.lock");
-    let file_lock = FileLock::try_acquire_existing(&path, run).map_err(|error| match error {
+    let lease = crate::runs::host_settlement::open_existing_sync(
+        &resources.home,
+        &resources.pool,
+        &resources.writers,
+        run,
+    )
+    .map_err(|error| match error {
         crate::runs::OpenError::WriterAlreadyHeld { .. } => WorkItemError::Busy,
         crate::runs::OpenError::Io(error) => WorkItemError::Io(error),
         _ => unavailable(),
     })?;
     Ok(JournalOwner {
-        _lease: Arc::new(WriterLease {
-            _token: token,
-            _file_lock: file_lock,
-            #[cfg(windows)]
-            namespace,
-        }),
+        lease,
         connection: None,
     })
 }
@@ -115,6 +98,7 @@ pub(super) fn deliver(
     let Some(owner) = owner else {
         return Err(unavailable());
     };
+    owner.lease.verify().map_err(|_| unavailable())?;
     if owner.connection.is_none() {
         let path = resources
             .home
@@ -129,7 +113,7 @@ pub(super) fn deliver(
         let conn = crate::runs::connection::RetainedConnection::open_owned(
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE,
-            owner._lease.namespace.clone(),
+            owner.lease.namespace.clone(),
         )?;
         #[cfg(not(windows))]
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;

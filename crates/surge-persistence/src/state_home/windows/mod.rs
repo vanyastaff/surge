@@ -89,7 +89,90 @@ pub(crate) struct SqliteNamespaceOwner {
     name: OsString,
     artifacts: Option<Namespace>,
 }
+
+/// Existing-only root for registry-gated run namespace preparation.
+pub(crate) struct RunRoot {
+    home: Namespace,
+    runs: Namespace,
+}
+impl RunRoot {
+    pub(crate) fn existing(path: &Path) -> NativeResult<Arc<Self>> {
+        let home = Namespace::existing_parent(path)?;
+        let runs = home.existing_child(OsStr::new("runs"), true)?;
+        Ok(Arc::new(Self { home, runs }))
+    }
+    pub(crate) fn verify(&self) -> NativeResult<()> {
+        self.home.verify()?;
+        self.runs.verify()
+    }
+    pub(crate) fn run(
+        self: &Arc<Self>,
+        run: surge_core::RunId,
+        create: bool,
+    ) -> NativeResult<RunRoute> {
+        self.verify()?;
+        let component = run.to_string();
+        let namespace = if create {
+            self.runs.child_exclusive(OsStr::new(&component), true)?
+        } else {
+            self.runs.existing_child(OsStr::new(&component), true)?
+        };
+        let artifacts = if create {
+            namespace.child_exclusive(OsStr::new("artifacts"), true)?
+        } else {
+            namespace.existing_child(OsStr::new("artifacts"), true)?
+        };
+        if create {
+            drop(namespace.exclusive_database(OsStr::new("events.sqlite.lock"))?);
+        }
+        Ok(RunRoute {
+            root: self.clone(),
+            namespace,
+            artifacts,
+        })
+    }
+}
+pub(crate) struct RunRoute {
+    root: Arc<RunRoot>,
+    namespace: Namespace,
+    artifacts: Namespace,
+}
+impl RunRoute {
+    pub(crate) fn verify(&self) -> NativeResult<()> {
+        self.root.verify()?;
+        self.namespace.verify()?;
+        self.artifacts.verify()
+    }
+    pub(crate) fn identities(&self) -> NativeResult<(Vec<u8>, Vec<u8>)> {
+        self.verify()?;
+        Ok((
+            self.root.home.object_identity()?,
+            self.namespace.object_identity()?,
+        ))
+    }
+    pub(crate) fn database(&self, create: bool) -> NativeResult<Arc<SqliteNamespaceOwner>> {
+        self.verify()?;
+        let name = OsString::from("events.sqlite");
+        self.namespace.verify_sidefiles(&name)?;
+        let file = if create {
+            self.namespace.exclusive_database(&name)?
+        } else {
+            self.namespace.database(&name, false)?
+        };
+        Ok(Arc::new(SqliteNamespaceOwner {
+            home: None,
+            namespace: self.namespace.retained_clone()?,
+            artifacts: Some(self.artifacts.retained_clone()?),
+            name,
+            file,
+        }))
+    }
+}
 impl SqliteNamespaceOwner {
+    pub(crate) fn identity(&self) -> NativeResult<Vec<u8>> {
+        self.verify()?;
+        namespace::file_identity(&self.file, false)
+    }
     pub(crate) fn verify(&self) -> NativeResult<()> {
         if let Some(home) = &self.home {
             home.verify()?;

@@ -1054,6 +1054,9 @@ impl SurgeApp {
             G::RunFinished { run_id, outcome } => {
                 let short = run_id.short();
                 match outcome {
+                    RunOutcome::SettlementFailed { .. } => {
+                        Some(SurgeNotification::run_unconfirmed(&short))
+                    },
                     RunOutcome::Completed { .. } => Some(SurgeNotification::run_completed(&short)),
                     RunOutcome::Failed { error } => {
                         Some(SurgeNotification::run_failed(&short, error))

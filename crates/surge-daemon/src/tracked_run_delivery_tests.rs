@@ -284,3 +284,46 @@ async fn periodic_reconciliation_delivers_durable_rows_without_tap_activity() {
     }
     root.close().unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_tracking_rejects_settlement_before_history_confirmation() {
+    let root = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let storage = Storage::open(root.path()).await.unwrap();
+    let engine = engine(&storage, root.path());
+    let id = RunId::new();
+    // There is deliberately no run DB: inspecting it would mask the typed
+    // completion failure with a history error instead of preserving both facts.
+    let tap = engine.subscribe_tap();
+    let (events, receiver) = broadcast::channel(1);
+    drop(events);
+    let run = TrackedRun {
+        handle: RunHandle {
+            run_id: id,
+            events: receiver,
+            completion: tokio::spawn(async {
+                RunOutcome::SettlementFailed {
+                    original: Box::new(success()),
+                    failures: vec![RunSettlementFailure::ForwarderSequence],
+                }
+            }),
+        },
+        prepared: Prepared::Durable {
+            engine,
+            storage: storage.clone(),
+            tap,
+            last_seq: 0,
+            reconcile_period: std::time::Duration::from_secs(10),
+        },
+    };
+    let (publisher, mut receiver) = broadcast::channel(1);
+    let result = drive(id, run, &publisher).await;
+    let no_event = receiver.try_recv().is_err();
+    drop(publisher);
+    drop(storage);
+    root.close().unwrap();
+    assert!(no_event);
+    assert!(
+        matches!(result, Err(TrackingError::Settlement { failures, .. })
+        if failures == vec![RunSettlementFailure::ForwarderSequence])
+    );
+}

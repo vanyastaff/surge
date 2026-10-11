@@ -1,6 +1,10 @@
 //! Registry-owned persistent tasks. Transactions never span provisioning or engine awaits.
 mod control;
+pub use control::{ReconciliationProjection, ReconciliationSettlement};
 mod owned_flow;
+#[cfg(test)]
+#[path = "work_items/reconciliation_tests.rs"]
+mod reconciliation_tests;
 mod start_preparation;
 pub use owned_flow::{
     AuthenticatedOwnedFlowInputs, OwnedFlowAcceptance, OwnedFlowCapturedSource,

@@ -20,7 +20,7 @@ use surge_core::keys::{NodeKey, ProfileKey};
 use surge_core::node::NodeConfig;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_persistence::runs::seq::EventSeq;
-use surge_persistence::runs::{CloseError, RunWriter, Storage};
+use surge_persistence::runs::{CloseError, RunCreationReservation, RunWriter, Storage};
 
 use crate::engine::error::EngineError;
 
@@ -141,7 +141,7 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
     // copied into the child with an impossible event order. The child reuses
     // the parent's project path so the fork stays in the same project (a fresh
     // worktree is provisioned by the caller).
-    let (mut project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
+    let (project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
         Some(EventPayload::RunStarted {
             project_path,
             pipeline_template,
@@ -184,38 +184,28 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
     let operation = async {
-        // Reserve a fresh destination before copying bytes. In particular, never
-        // update an existing child's artifact index if its ID was supplied again.
-        #[cfg(windows)]
-        let home = surge_persistence::RuntimeHomeOwner::prepare(storage.home())
-            .map_err(|error| EngineError::Storage(error.to_string()))?;
-        #[cfg(windows)]
-        let _child_directory = home.reserve_run_directory(req.new_run).map_err(|error| {
-            EngineError::ForkInvalid(format!("cannot reserve child directory: {error}"))
-        })?;
-        #[cfg(not(windows))]
-        tokio::fs::create_dir(storage.home().join("runs").join(req.new_run.to_string()))
-            .await
-            .map_err(|error| {
-                EngineError::ForkInvalid(format!("cannot reserve child directory: {error}"))
-            })?;
-        inherit_artifacts(storage, &req, &mut copied, &project_path).await?;
-        if let Some((checkpoint, destination)) = checkpoint {
-            project_path =
-                restore_child_workspace(req.new_run, checkpoint, destination, &mut copied).await?;
-        }
+        let prepared = prepare_child_files(
+            storage,
+            &req,
+            copied,
+            project_path,
+            checkpoint,
+            #[cfg(test)]
+            None,
+        )
+        .await?;
 
         // Create the child run and write the (possibly edited) prefix payloads.
         // Folding the child reproduces the parent's state at `at_seq` (modulo edits).
         let child_writer = storage
-            .create_run(
-                req.new_run,
-                &project_path,
+            .create_reserved_run(
+                prepared.reservation,
+                &prepared.project_path,
                 pipeline_template.map(|t| t.to_string()),
             )
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
-        write_child_history(child_writer, copied, inherited_snapshot).await?;
+        write_child_history(child_writer, prepared.copied, inherited_snapshot).await?;
 
         // Record lineage on the parent last (append-only; valid even after a
         // terminal event, since the triggers block UPDATE/DELETE, not INSERT).
@@ -293,18 +283,76 @@ fn settle_fork_result<T>(
     }
 }
 
-async fn restore_child_workspace(
+struct PreparedForkFiles {
+    reservation: RunCreationReservation,
+    copied: Vec<VersionedEventPayload>,
+    project_path: std::path::PathBuf,
+}
+
+type ForkCheckpoint = Option<(
+    surge_git::checkpoint::WorkspaceCheckpoint,
+    std::path::PathBuf,
+)>;
+
+#[cfg(test)]
+struct ForkCopyGate {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+async fn prepare_child_files(
+    storage: &Arc<Storage>,
+    request: &ForkRequest,
+    mut copied: Vec<VersionedEventPayload>,
+    mut project_path: std::path::PathBuf,
+    checkpoint: ForkCheckpoint,
+    #[cfg(test)] gate: Option<ForkCopyGate>,
+) -> Result<PreparedForkFiles, EngineError> {
+    let reservation = storage
+        .reserve_new_run(request.new_run)
+        .await
+        .map_err(|error| {
+            EngineError::ForkInvalid(format!("cannot reserve child directory: {error}"))
+        })?;
+    let artifacts = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+    let request = request.clone();
+    // The actual blocking job owns the complete original reservation. Aborting
+    // its awaiting future cannot release exclusion while filesystem work runs.
+    tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.recv();
+        }
+        inherit_artifacts(
+            &artifacts,
+            &reservation,
+            &request,
+            &mut copied,
+            &project_path,
+        )?;
+        if let Some((checkpoint, destination)) = checkpoint {
+            project_path =
+                restore_child_workspace(request.new_run, checkpoint, destination, &mut copied)?;
+        }
+        Ok(PreparedForkFiles {
+            reservation,
+            copied,
+            project_path,
+        })
+    })
+    .await
+    .map_err(|error| EngineError::ForkInvalid(format!("child file worker: {error}")))?
+}
+
+fn restore_child_workspace(
     child: RunId,
     checkpoint: surge_git::checkpoint::WorkspaceCheckpoint,
     destination: std::path::PathBuf,
     copied: &mut [VersionedEventPayload],
 ) -> Result<std::path::PathBuf, EngineError> {
-    let restored = tokio::task::spawn_blocking(move || {
-        surge_git::checkpoint::restore(&checkpoint, child, destination)
-    })
-    .await
-    .map_err(|error| EngineError::ForkInvalid(format!("restore worker: {error}")))?
-    .map_err(|error| EngineError::ForkInvalid(format!("restore checkpoint: {error}")))?;
+    let restored = surge_git::checkpoint::restore(&checkpoint, child, destination)
+        .map_err(|error| EngineError::ForkInvalid(format!("restore checkpoint: {error}")))?;
     if let Some(VersionedEventPayload {
         payload: EventPayload::RunStarted { project_path, .. },
         ..
@@ -352,13 +400,13 @@ fn requested_checkpoint(
     Ok(Some((checkpoint, destination.clone())))
 }
 
-async fn inherit_artifacts(
-    storage: &Storage,
+fn inherit_artifacts(
+    artifacts: &surge_persistence::artifacts::ArtifactStore,
+    reservation: &RunCreationReservation,
     request: &ForkRequest,
     events: &mut [VersionedEventPayload],
     parent_worktree: &std::path::Path,
 ) -> Result<(), EngineError> {
-    let artifacts = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
     for event in events {
         let EventPayload::ArtifactProduced {
             node,
@@ -377,16 +425,11 @@ async fn inherit_artifacts(
             produced_by: node.clone(),
             produced_at_seq: 0,
         };
-        let bytes = artifacts
-            .open_ref(request.parent, &reference, parent_worktree)
-            .await
+        let owned = artifacts
+            .inherit_reserved(reservation, request.parent, &reference, parent_worktree)
             .map_err(|error| {
                 EngineError::ForkInvalid(format!("cannot inherit artifact {name}: {error}"))
             })?;
-        let owned = artifacts
-            .put(request.new_run, name, &bytes)
-            .await
-            .map_err(|error| EngineError::Storage(error.to_string()))?;
         *path = owned.path;
     }
     Ok(())
@@ -514,6 +557,86 @@ mod tests {
     use surge_core::sandbox::SandboxMode;
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::reader::ReadEvent;
+
+    #[test]
+    fn cancelled_fork_copy_worker_retains_original_reservation() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (child, hash, cancelled, busy) = runtime.block_on(cancel_blocked_copy(home.path()));
+        // The released, real blocking worker must finish before fixture cleanup.
+        // No caller future or fixture-owned reservation remains to mask its ownership.
+        drop(runtime);
+        let child_root = home.path().join("runs").join(child.to_string());
+        let bytes = std::fs::read(child_root.join("artifacts").join(hash.to_hex()));
+        let database_absent = !child_root.join("events.sqlite").exists();
+        let cleanup = home.close();
+        assert!(cancelled, "the actual awaiting task must be cancelled");
+        assert!(
+            busy,
+            "the actual blocked worker must retain original exclusion"
+        );
+        assert_eq!(bytes.unwrap(), b"reserved child bytes");
+        assert!(database_absent, "cancelled handoff must not initialize SQL");
+        cleanup.unwrap();
+    }
+
+    async fn cancel_blocked_copy(home: &std::path::Path) -> (RunId, ContentHash, bool, bool) {
+        let (storage, parent) = seed_agent_parent(home).await;
+        let competitor = Storage::open(home).await.unwrap();
+        let artifacts = surge_persistence::artifacts::ArtifactStore::new(home.join("runs"));
+        let reference = artifacts
+            .put(parent, "spec", b"reserved child bytes")
+            .await
+            .unwrap();
+        let hash = reference.hash;
+        let copied = vec![VersionedEventPayload::new(EventPayload::ArtifactProduced {
+            node: NodeKey::try_from("impl_1").unwrap(),
+            artifact: hash,
+            path: reference.path,
+            name: "spec".into(),
+            source_path: None,
+        })];
+        let child = RunId::new();
+        let request = ForkRequest::new(parent, child, 2);
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let working_storage = storage.clone();
+        let project_path = home.to_path_buf();
+        let awaiting = tokio::spawn(async move {
+            prepare_child_files(
+                &working_storage,
+                &request,
+                copied,
+                project_path,
+                None,
+                Some(ForkCopyGate {
+                    entered,
+                    release: released,
+                }),
+            )
+            .await
+        });
+        entry.await.unwrap();
+        awaiting.abort();
+        let cancelled = matches!(awaiting.await, Err(error) if error.is_cancelled());
+        let busy = match competitor.open_run_writer(child).await {
+            Err(surge_persistence::runs::OpenError::WriterAlreadyHeld { .. }) => true,
+            Ok(writer) => {
+                writer.close().await.unwrap();
+                false
+            },
+            Err(_) => false,
+        };
+        // Sending or dropping this channel releases the real worker unconditionally.
+        let _ = release.send(());
+        drop(competitor);
+        drop(storage);
+        (child, hash, cancelled, busy)
+    }
 
     fn minimal_graph() -> Graph {
         let end = NodeKey::try_from("end").unwrap();
@@ -953,6 +1076,26 @@ mod tests {
         fork(&storage, ForkRequest::new(parent, child, 3))
             .await
             .unwrap();
+        // Independent persisted inventory: reservation and SQL handoff must share
+        // one opening, with the initially absent database now bound to that row.
+        let registry = rusqlite::Connection::open_with_flags(
+            dir.path().join("db/registry.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let openings: (i64, i64, i64) = registry
+            .query_row(
+                "SELECT COUNT(*), COUNT(database_identity), COUNT(DISTINCT epoch) FROM run_host_openings WHERE run_id = ?",
+                [child.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        drop(registry);
+        assert_eq!(
+            openings,
+            (1, 1, 1),
+            "fork must consume its original opening exactly once"
+        );
         let reader = storage.open_run_reader(child).await.unwrap();
         let events = reader.read_events(EventSeq(3)..EventSeq(4)).await.unwrap();
         assert!(matches!(&events[0].payload.payload,

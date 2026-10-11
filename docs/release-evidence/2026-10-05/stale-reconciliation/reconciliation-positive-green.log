@@ -1,0 +1,30 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 51.41s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-68c76af9f173803a)
+
+running 15 tests
+test work_items::reconciliation_tests::mock_bridge::tests::last_prompt_reflects_last_send_message ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::records_reply_to_tool ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::records_open_session ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::pumps_scripted_event ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::admission_rejects_changed_descriptor_closes_and_never_prompts ... ok
+test work_items::reconciliation_tests::stale_reconciliation_page_preserves_attention_and_reason ... ok
+test work_items::reconciliation_tests::accepted_dispatch::accepted_dispatch_keeps_supervisor_after_superseded_launched_projection ... ok
+test work_items::reconciliation_tests::accepted_dispatch::accepted_dispatch_keeps_supervisor_after_launched_projection_storage_error ... ok
+test work_items::reconciliation_tests::positive_projection::launched_projection_preserves_suspend_requested_after_reserved_observation ... ok
+test work_items::reconciliation_tests::current_reconciliation_reports_authentic_startup_refusal ... ok
+test work_items::reconciliation_tests::positive_projection::completed_projection_preserves_suspend_requested_after_terminal_inspection ... ok
+test work_items::reconciliation_tests::positive_projection::launched_projection_preserves_confirmed_suspension_after_launched_observation ... ok
+test work_items::reconciliation_tests::planned_capacity::stale_reconciliation_page_preserves_planned_capacity_and_exact_wake ... ok
+test work_items::reconciliation_tests::stale_reconciliation_page_preserves_confirmed_suspension ... ok
+test work_items::reconciliation_tests::suspension_after_eligibility_survives_inner_dispatch_refusal ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.90s
+

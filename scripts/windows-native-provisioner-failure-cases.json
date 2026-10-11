@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "status": "PROPOSED_UNWIRED_SOURCE_ONLY",
+  "cases": [
+    {
+      "id": "bootstrap-created",
+      "phase": "mutation:bootstrap",
+      "occurrence": 1,
+      "expected_prefix": {
+        "mutations": [
+          {
+            "ordinal": 1,
+            "kind": "directory",
+            "role": "bootstrap",
+            "parent": "CommonApplicationData",
+            "component": "surge-provisioner-code-{run_nonce}"
+          }
+        ],
+        "resources": [],
+        "children": [],
+        "target_mutation_ordinal": 1,
+        "target_outcome": "Created",
+        "target_validated": false
+      }
+    },
+    {
+      "id": "source-copied",
+      "phase": "mutation:helper-source",
+      "occurrence": 1,
+      "expected_prefix": {
+        "mutations": [
+          {
+            "ordinal": 1,
+            "kind": "directory",
+            "role": "bootstrap",
+            "parent": "CommonApplicationData",
+            "component": "surge-provisioner-code-{run_nonce}"
+          },
+          {
+            "ordinal": 2,
+            "kind": "file",
+            "role": "helper-source",
+            "parent": 1,
+            "component": "windows-native-provisioner.cs"
+          }
+        ],
+        "resources": [],
+        "children": [],
+        "target_mutation_ordinal": 2,
+        "target_outcome": "Created",
+        "target_validated": false
+      }
+    },
+    {
+      "id": "assembly-emitted",
+      "phase": "mutation:helper-assembly",
+      "occurrence": 1,
+      "expected_prefix": {
+        "mutations": [
+          {
+            "ordinal": 1,
+            "kind": "directory",
+            "role": "bootstrap",
+            "parent": "CommonApplicationData",
+            "component": "surge-provisioner-code-{run_nonce}"
+          },
+          {
+            "ordinal": 2,
+            "kind": "file",
+            "role": "helper-source",
+            "parent": 1,
+            "component": "windows-native-provisioner.cs"
+          },
+          {
+            "ordinal": 3,
+            "kind": "file",
+            "role": "dependency-classification",
+            "parent": 1,
+            "component": "windows-native-dependencies.json"
+          },
+          {
+            "ordinal": 4,
+            "kind": "file",
+            "role": "helper-assembly",
+            "parent": 1,
+            "component": "Surge.NativeFixtures.dll"
+          }
+        ],
+        "resources": [
+          {
+            "ordinal": 1,
+            "kind": "stream",
+            "role": "helper-source-pin"
+          },
+          {
+            "ordinal": 2,
+            "kind": "stream",
+            "role": "dependency-classification-pin"
+          }
+        ],
+        "children": [],
+        "target_mutation_ordinal": 4,
+        "target_outcome": "Created",
+        "target_validated": false
+      }
+    },
+    {
+      "id": "standard-account",
+      "phase": "mutation:account-sid",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "foreign-account",
+      "phase": "mutation:account-sid",
+      "occurrence": 2,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "profile-observed",
+      "phase": "mutation:profile",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "launch-root",
+      "phase": "mutation:launch-root",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "admin-data",
+      "phase": "mutation:admin-data",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "standard-data",
+      "phase": "mutation:standard-data",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "ordinary-tree",
+      "phase": "mutation:ordinary-tree",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "candidate-created",
+      "phase": "mutation:candidate-file",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "admin-token",
+      "phase": "acquire:admin-owner-token",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "restore-token",
+      "phase": "acquire:restore-token",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "suspended-process",
+      "phase": "acquire:process",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "child-handle-1",
+      "phase": "acquire:child-handle",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "child-handle-2",
+      "phase": "acquire:child-handle",
+      "occurrence": 2,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "child-handle-3",
+      "phase": "acquire:child-handle",
+      "occurrence": 3,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "child-handle-4",
+      "phase": "acquire:child-handle",
+      "occurrence": 4,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "child-handle-5",
+      "phase": "acquire:child-handle",
+      "occurrence": 5,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "bootstrap-written",
+      "phase": "barrier:bootstrap-written",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "ready-before-proceed",
+      "phase": "barrier:ready-before-proceed",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "ready-binding",
+      "phase": "fault:ready-binding",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "complete-binding",
+      "phase": "fault:complete-binding",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "cancel-failure",
+      "phase": "cleanup:cancel",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "cleanup-first",
+      "phase": "cleanup:resource",
+      "occurrence": 1,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "cleanup-middle",
+      "phase": "cleanup:resource",
+      "occurrence": 2,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    },
+    {
+      "id": "cleanup-last",
+      "phase": "cleanup:resource",
+      "occurrence": 3,
+      "prefix_status": "NOT_FROZEN_NOT_EXECUTABLE"
+    }
+  ],
+  "separate_observer_case": "unsettled-native-observation",
+  "prefix_contract_status": "BOOTSTRAP_SUBSET_TEST_SOURCE_ONLY_UNEXECUTED"
+}

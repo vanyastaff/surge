@@ -175,6 +175,10 @@ impl OwnedSqliteConnectionManager {
             init: None,
         }
     }
+    pub(crate) fn with_flags(mut self, flags: OpenFlags) -> Self {
+        self.inner = self.inner.with_flags(flags);
+        self
+    }
     pub(crate) fn with_init(
         mut self,
         init: impl Fn(&mut Connection) -> rusqlite::Result<()> + Send + Sync + 'static,

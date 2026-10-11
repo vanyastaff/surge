@@ -51,6 +51,7 @@ pub(crate) mod connection;
 pub mod error;
 pub mod escalations;
 pub(crate) mod file_lock;
+pub(crate) mod host_settlement;
 pub mod inbox_queue;
 pub mod inspection;
 mod inspection_route;
@@ -77,13 +78,19 @@ pub(crate) mod writer_slot;
 
 pub use clock::{Clock, MockClock, SystemClock};
 pub use config::StorageConfig;
-pub use error::{CloseError, OpenError, StorageError, WriterError};
+pub use error::{
+    CloseError, FeedLifecycleError, OpenError, SealReceiptError, StorageError, WriterError,
+    WriterFailure,
+};
 pub use escalations::{
     EscalationRecord, SkippedRun, fold_escalations, is_loop_guard_cause,
     list_loop_guard_stopped_runs, read_escalations,
 };
+pub use host_settlement::RunCreationReservation;
 pub use query::{RunStatusSnapshot, aggregate_status, current_status};
-pub use reader::{ReadEvent, RunReader};
+#[cfg(any(test, feature = "test-support"))]
+pub use reader::{FeedPoolProbe, FeedPoolSlots, FeedReadGate};
+pub use reader::{ReadEvent, RunEventFeed, RunEventReadLease, RunReader};
 pub use registry::{RunFilter, RunSummary};
 pub use run_writer::RunWriter;
 pub use seq::EventSeq;
@@ -92,4 +99,4 @@ pub use subscribe::SUBSCRIBE_BATCH_MAX;
 pub use types::{
     ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution, TaskLedgerRow,
 };
-pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig};
+pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig, WriterLifecycle};

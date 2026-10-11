@@ -110,7 +110,10 @@ async fn actor_exclusion_after_caller_loss(cancel_close: bool, full_queue: bool)
     clock.release();
     let first_seq = first.await.unwrap().unwrap();
     for append in queued {
-        append.await.unwrap();
+        assert!(matches!(
+            append.await,
+            Err(surge_persistence::runs::StorageError::WriterTaskDied)
+        ));
     }
     drop(recorder);
     // On the baseline, the new writer already acquired BOTH exclusions while
@@ -140,6 +143,11 @@ async fn actor_exclusion_after_caller_loss(cancel_close: bool, full_queue: bool)
     .await
     .unwrap();
     assert!(reopened.read_event(first_seq).await.unwrap().is_some());
+    assert_eq!(
+        reopened.current_seq().await.unwrap(),
+        first_seq,
+        "priority stop must reject all queued append commands"
+    );
     reopened.close().await.unwrap();
     assert!(
         blocked,

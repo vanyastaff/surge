@@ -1,0 +1,11 @@
+Command: CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-daemon --lib work_items::reconciliation_tests::stale_reconciliation_page_preserves_confirmed_suspension -- --exact --nocapture
+Toolchain: rustc 1.98.1 (48a229cea 2026-09-01)
+HEAD observed during build: dd8d2b07e0e2c2582d17f966968015753f0896a7
+Source SHA256:
+4b6cce872206ae1602b6a189f566fe30a4ae60dca422305f6899ca10d11329b4 crates/surge-daemon/src/work_items.rs
+5bdb25bcceb16585f97f8913647e7a4a7f072700b84dd4e4d7d6fa655458e152 crates/surge-daemon/src/work_items/reconciliation_tests.rs
+
+Runtime RED rerun: same command, test runtime corrected to multi_thread with worker_threads=2.
+a7f85d0b91fccbe7328a11df0bcefd26c37c944b32217e4eb651fb8aeb2d2a59 crates/surge-daemon/src/work_items/reconciliation_tests.rs
+Exit: 101. 0 passed / 1 failed at preservation assertion, 0.15s.
+Actual observed reason: task conflict: storage error: suspended task requires its durable Continue reservation

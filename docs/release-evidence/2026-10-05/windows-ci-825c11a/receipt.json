@@ -1,0 +1,35 @@
+{
+  "revision": "825c11a4d0f5ec38e6ee484c5131716df50c1eec",
+  "run": 37726100778,
+  "job": 113144503226,
+  "conclusion": "FAILURE",
+  "nextest": {
+    "run": 3705,
+    "passed": 3516,
+    "failed": 189,
+    "skipped": 48
+  },
+  "standard_user_ntfs": {
+    "configured": 14,
+    "passed_receipts": 14,
+    "receipts": [
+      "non-elevated=true filesystem=NTFS file=PASS directory=PASS readonly-error=PASS",
+      "stage1 new-home protected-user-only=PASS",
+      "stage1 derived-pool ownership-and-settlement=PASS",
+      "stage1 unsafe-home unchanged-refusal=PASS",
+      "stage1 control creation-fact/exclusive-read/removal=PASS",
+      "stage1 exclusive directory-only reservation and retained artifacts=PASS",
+      "stage1 checked SQLite manager/connection lifetime and WAL close=PASS",
+      "stage1 checked SQLite initializer failure settlement=PASS",
+      "stage1 actual SQLITE_BUSY returns ownership and fatal Drop settles process=PASS",
+      "stage1 actual null/unprotected/widened/inherited ACL unchanged refusal=PASS",
+      "stage1 unsafe WAL and hardlinked database unchanged refusal=PASS",
+      "stage1 native pathname alias and ADS unchanged refusal=PASS",
+      "stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS",
+      "stage1 non-elevated control readable payload exclusive writer and legacy lock compatibility=PASS"
+    ]
+  },
+  "raw_sha256": "8186ac88eeaf6e6c8ca9f777fd2deb9d95eaf9de571a0d1903fa54a18e51b682",
+  "archive_sha256": "606a970fbd4f3086d73f8befc8d6bd20a4f33be0d0395d4e85d885c164bf3ed9",
+  "scope": "Committed source only; uncommitted repairs excluded. Matching previous counts do not prove identical failure identities or causes."
+}

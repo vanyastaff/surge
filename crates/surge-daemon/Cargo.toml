@@ -61,6 +61,6 @@ git2.workspace = true
 agent-client-protocol.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
-surge-orchestrator.workspace = true
+surge-orchestrator = { workspace = true, features = ["test-support"] }
 surge-acp.workspace = true
 surge-persistence.workspace = true

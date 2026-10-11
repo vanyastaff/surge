@@ -166,7 +166,12 @@ pub(crate) struct RunTaskParams {
     pub capacity_precheck_bypass_once: std::sync::atomic::AtomicBool,
 }
 
-pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
+pub(crate) struct ExecutionFinished {
+    pub outcome: RunOutcome,
+    pub seal: Result<surge_persistence::runs::EventSeq, surge_persistence::runs::CloseError>,
+}
+
+pub(crate) async fn execute(mut params: RunTaskParams) -> ExecutionFinished {
     // Capture the per-run MCP registry so it is torn down on *every*
     // terminal path (completed / failed / aborted), not just the
     // happy one — rmcp's Drop is async best-effort and can orphan
@@ -233,10 +238,8 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
             }
         }
     }
-    if let Err(error) = params.writer.close().await {
-        tracing::error!(%error, "run event writer did not close cleanly");
-    }
-    outcome
+    let seal = params.writer.seal_for_read_drain().await;
+    ExecutionFinished { outcome, seal }
 }
 
 async fn execute_inner(params: &mut RunTaskParams) -> RunOutcome {
@@ -1156,9 +1159,6 @@ async fn abort_run_for_budget(
         "run budget exceeded; aborting run"
     );
     let outcome = RunOutcome::Aborted { reason };
-    let _ = params.event_tx.send(EngineRunEvent::Terminal {
-        outcome: outcome.clone(),
-    });
     Ok(Some(outcome))
 }
 
@@ -1324,11 +1324,7 @@ async fn abort_run(params: &RunTaskParams) -> RunOutcome {
         )
         .await;
     }
-    let outcome = RunOutcome::Aborted { reason };
-    let _ = params.event_tx.send(EngineRunEvent::Terminal {
-        outcome: outcome.clone(),
-    });
-    outcome
+    RunOutcome::Aborted { reason }
 }
 
 /// Pure check for the [`checkpoint_exit_if_requested`] fault-injection seam:
@@ -2824,9 +2820,6 @@ async fn resolve_stage_result(
         },
         Ok(StageOutcome::Terminal(terminal)) => {
             let outcome = terminal_run_outcome(terminal);
-            let _ = params.event_tx.send(EngineRunEvent::Terminal {
-                outcome: outcome.clone(),
-            });
             Ok(StageResolution::Terminal(outcome))
         },
         Err(StageError::Cancelled) => Err(abort_run(params).await),
@@ -3926,11 +3919,6 @@ async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
             error: error.clone(),
         }))
         .await;
-    let _ = params.event_tx.send(EngineRunEvent::Terminal {
-        outcome: RunOutcome::Failed {
-            error: error.clone(),
-        },
-    });
     RunOutcome::Failed { error }
 }
 
@@ -4004,11 +3992,7 @@ async fn parked(
         );
     }
 
-    let outcome = RunOutcome::Parked { wake_at };
-    let _ = params.event_tx.send(EngineRunEvent::Terminal {
-        outcome: outcome.clone(),
-    });
-    outcome
+    RunOutcome::Parked { wake_at }
 }
 
 #[cfg(test)]

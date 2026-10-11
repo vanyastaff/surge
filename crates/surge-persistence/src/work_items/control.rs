@@ -4,6 +4,54 @@ use surge_core::execution_recovery::{
     ExecutionControlState as State, SuspensionFence, WorkItemExecutionControl as Control,
 };
 
+/// Whether an observed generic-recovery result still belongs to current authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconciliationSettlement {
+    /// The unchanged eligible authority received the requested result.
+    Settled,
+    /// Authority changed or requires explicit action; no record was written.
+    Superseded,
+}
+
+/// Closed set of positive projections admitted by generic reconciliation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconciliationProjection {
+    /// The current journal or retained engine owner establishes a launched attempt.
+    Launched,
+    /// The inspected journal establishes successful completion.
+    Completed,
+    /// The inspected journal establishes failure.
+    Failed,
+    /// The inspected journal establishes an aborted run.
+    Aborted,
+}
+
+impl From<ReconciliationProjection> for WorkItemAttemptState {
+    fn from(projection: ReconciliationProjection) -> Self {
+        match projection {
+            ReconciliationProjection::Launched => Self::Launched,
+            ReconciliationProjection::Completed => Self::Completed,
+            ReconciliationProjection::Failed => Self::Failed,
+            ReconciliationProjection::Aborted => Self::Aborted,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReconciliationUpdate<'a> {
+    Error(&'a str),
+    Projection(ReconciliationProjection),
+}
+
+impl ReconciliationUpdate<'_> {
+    fn state(self) -> WorkItemAttemptState {
+        match self {
+            Self::Error(_) => WorkItemAttemptState::Attention,
+            Self::Projection(projection) => projection.into(),
+        }
+    }
+}
+
 pub(super) fn read_control(
     conn: &Connection,
     run: RunId,
@@ -37,6 +85,116 @@ pub(super) fn write_control(conn: &Connection, control: &Control) -> Result<()> 
     Ok(())
 }
 impl WorkItemStore {
+    /// Conditionally settle a generic reconciliation failure under its original retained claim.
+    ///
+    /// The entire attempt projection and optional control must still match, including absence,
+    /// operation, state, fence and diagnostic. A stale token/binding is an error; a newer state
+    /// under the same claim is a benign no-write result, including terminal assignment release.
+    pub fn settle_reconciliation_error(
+        &self,
+        claim: &WorkItemLaunchClaim,
+        observed: &WorkItemAttempt,
+        observed_control: Option<&Control>,
+        diagnostic: &str,
+    ) -> Result<ReconciliationSettlement> {
+        self.settle_reconciliation_update(
+            claim,
+            observed,
+            observed_control,
+            ReconciliationUpdate::Error(diagnostic),
+        )
+    }
+
+    /// Apply an inspected positive result only to the exact still-current generic authority.
+    /// Terminal projections atomically release the assignment and advance the item version.
+    pub fn settle_reconciliation_projection(
+        &self,
+        claim: &WorkItemLaunchClaim,
+        observed: &WorkItemAttempt,
+        observed_control: Option<&Control>,
+        projection: ReconciliationProjection,
+    ) -> Result<ReconciliationSettlement> {
+        self.settle_reconciliation_update(
+            claim,
+            observed,
+            observed_control,
+            ReconciliationUpdate::Projection(projection),
+        )
+    }
+
+    fn settle_reconciliation_update(
+        &self,
+        claim: &WorkItemLaunchClaim,
+        observed: &WorkItemAttempt,
+        observed_control: Option<&Control>,
+        update: ReconciliationUpdate<'_>,
+    ) -> Result<ReconciliationSettlement> {
+        claim.verify_lock()?;
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = attempt(&tx, claim.run())?;
+        self.validate_reconciliation_owner(&tx, claim, &current, observed)?;
+        let control = read_control(&tx, claim.run(), None)?;
+        for value in control.as_ref().into_iter().chain(observed_control) {
+            if value.run != claim.run()
+                || value.item != claim.binding().item
+                || value.attempt_generation != claim.binding().generation
+            {
+                return Err(WorkItemError::Conflict(
+                    "reconciliation control binding changed".into(),
+                ));
+            }
+        }
+        claim.verify_lock()?;
+        if serde_json::to_value(&current)? != serde_json::to_value(observed)?
+            || control.as_ref() != observed_control
+            || !matches!(
+                current.state,
+                WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+            )
+            || control.as_ref().is_some_and(|value| {
+                !matches!(value.state, State::Executing | State::SuspendRequested)
+            })
+        {
+            return Ok(ReconciliationSettlement::Superseded);
+        }
+        self.validate_claim_in(&tx, claim)?;
+        write_reconciliation_result(&tx, claim, current, control, update)?;
+        claim.verify_lock()?;
+        tx.commit()?;
+        Ok(ReconciliationSettlement::Settled)
+    }
+
+    fn validate_reconciliation_owner(
+        &self,
+        conn: &Connection,
+        claim: &WorkItemLaunchClaim,
+        current: &WorkItemAttempt,
+        observed: &WorkItemAttempt,
+    ) -> Result<()> {
+        let token: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM work_item_attempts WHERE run=? AND generation=? AND claim_token=?)",
+            params![claim.run().to_string(), claim.binding().generation, claim.token],
+            |row| row.get(0),
+        )?;
+        if !token
+            || current.run != claim.run()
+            || observed.run != claim.run()
+            || current.item != claim.binding().item
+            || observed.item != claim.binding().item
+            || current.binding != *claim.binding()
+            || observed.binding != *claim.binding()
+        {
+            return Err(WorkItemError::Conflict(
+                "stale reconciliation claim or binding".into(),
+            ));
+        }
+        if matches!(claim.lock, LaunchLock::OwnedFlow { .. }) {
+            self.validate_owned_flow_association(conn, claim)?;
+        }
+        Ok(())
+    }
+
     /// Latest exact generation control; no database guard survives this return.
     pub fn execution_control(&self, run: RunId) -> Result<Option<Control>> {
         read_control(&*self.pool.get()?, run, None)
@@ -264,4 +422,54 @@ impl WorkItemStore {
         tx.commit()?;
         Ok(control)
     }
+}
+
+fn write_reconciliation_result(
+    tx: &Transaction<'_>,
+    claim: &WorkItemLaunchClaim,
+    mut current: WorkItemAttempt,
+    control: Option<Control>,
+    update: ReconciliationUpdate<'_>,
+) -> Result<()> {
+    current.state = update.state();
+    current.diagnostic = match update {
+        ReconciliationUpdate::Error(diagnostic) => Some(diagnostic.to_owned()),
+        ReconciliationUpdate::Projection(_) => None,
+    };
+    let state = serde_json::to_string(&current.state)?;
+    let changed = tx.execute(
+        "UPDATE work_item_attempts SET state=?,payload=? WHERE run=? AND generation=? AND claim_token=?",
+        params![state.trim_matches('"'), serde_json::to_string(&current)?, claim.run().to_string(), claim.binding().generation, claim.token],
+    )?;
+    if changed != 1 {
+        return Err(WorkItemError::Conflict(
+            "reconciliation owner changed".into(),
+        ));
+    }
+    if let Some(mut control) = control {
+        match update {
+            ReconciliationUpdate::Error(diagnostic) => {
+                control.state = State::Attention;
+                control.diagnostic = Some(diagnostic.to_owned());
+                write_control(tx, &control)?;
+            },
+            ReconciliationUpdate::Projection(ReconciliationProjection::Launched) => {},
+            ReconciliationUpdate::Projection(_) => {
+                control.state = State::Terminal;
+                write_control(tx, &control)?;
+            },
+        }
+    }
+    if !current.state.is_active() {
+        let released = tx.execute(
+            "UPDATE work_items SET active_run=NULL,version=version+1 WHERE id=? AND active_run=? AND generation=? AND archived_at_ms IS NULL",
+            params![current.item.to_string(), claim.run().to_string(), claim.binding().generation],
+        )?;
+        if released != 1 {
+            return Err(WorkItemError::Conflict(
+                "reconciliation assignment changed".into(),
+            ));
+        }
+    }
+    Ok(())
 }

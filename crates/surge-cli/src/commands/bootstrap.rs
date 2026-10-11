@@ -147,6 +147,11 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
     .await?;
     match outcome {
         RunOutcome::Completed { .. } => {},
+        RunOutcome::SettlementFailed { failures, .. } => {
+            return Err(anyhow!(
+                "bootstrap resource settlement failed; completion is unconfirmed: {failures:?}"
+            ));
+        },
         RunOutcome::Failed { error } => return Err(anyhow!("bootstrap run failed: {error}")),
         RunOutcome::Aborted { reason } => return Err(anyhow!("bootstrap run aborted: {reason}")),
         RunOutcome::Parked { wake_at } => {

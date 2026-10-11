@@ -523,6 +523,32 @@ impl Namespace {
 }
 
 impl Namespace {
+    pub(super) fn object_identity(&self) -> NativeResult<Vec<u8>> {
+        self.verify()?;
+        let file = self
+            .files
+            .last()
+            .ok_or_else(|| refusal("missing identity object"))?;
+        file_identity(file, true)
+    }
+    pub(super) fn exclusive_database(&self, name: &OsStr) -> NativeResult<File> {
+        self.verify()?;
+        let parent = self
+            .files
+            .last()
+            .ok_or_else(|| refusal("missing database parent"))?;
+        let creation = self.owner.creation(false)?;
+        let file = relative(parent, name, false, Some(&creation), true)?;
+        self.owner
+            .validate_directory(&file, DirectoryPolicy::Protected { inheritable: false })?;
+        flush_complete(&file)?;
+        flush_complete(parent)?;
+        let fence = relative(parent, name, false, None, false)?;
+        if inspect(&file, false)? != inspect(&fence, false)? {
+            return Err(refusal("exclusive database identity changed"));
+        }
+        Ok(fence)
+    }
     pub(super) fn existing_child(&self, name: &OsStr, inheritable: bool) -> NativeResult<Self> {
         let mut child = self.retained_clone()?;
         child.push(name, DirectoryPolicy::Protected { inheritable }, false)?;
@@ -869,10 +895,14 @@ impl NativeControlFile {
 
 /// Cooperative journal lock: no delete sharing, retained parent identity and OS lock.
 pub(crate) struct NativeJournalLock {
-    _file: File,
-    _namespace: Namespace,
+    file: File,
+    namespace: Namespace,
 }
 impl NativeJournalLock {
+    pub(crate) fn identity(&self, name: &OsStr) -> NativeResult<Vec<u8>> {
+        self.namespace.verify_database(name, &self.file)?;
+        file_identity(&self.file, false)
+    }
     pub(crate) fn acquire(path: &Path, create: bool) -> NativeResult<Self> {
         let parent = path
             .parent()
@@ -902,11 +932,17 @@ impl NativeJournalLock {
             Err(std::fs::TryLockError::WouldBlock) => return Err(NativeError::Busy),
             Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
-        Ok(Self {
-            _file: file,
-            _namespace: namespace,
-        })
+        Ok(Self { file, namespace })
     }
+}
+
+pub(super) fn file_identity(file: &File, directory: bool) -> NativeResult<Vec<u8>> {
+    let observed = inspect(file, directory)?;
+    Ok([
+        observed.volume.to_le_bytes().as_slice(),
+        observed.id.as_slice(),
+    ]
+    .concat())
 }
 
 #[cfg(test)]

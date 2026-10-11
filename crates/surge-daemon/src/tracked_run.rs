@@ -6,7 +6,7 @@ use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
 use surge_orchestrator::engine::{
     Engine, EngineError, EngineRunConfig, RunEventTap, RunOutcome,
     facade::EngineFacade,
-    handle::{EngineRunEvent, RunHandle},
+    handle::{EngineRunEvent, RunHandle, RunSettlementFailure},
 };
 use surge_persistence::runs::{ReadEvent, Storage, inspection::RunDatabaseInspection};
 use tokio::{sync::broadcast, task::JoinHandle};
@@ -139,6 +139,23 @@ pub struct TrackedRun {
 /// Unconfirmed observation, distinct from a durable run outcome.
 #[derive(Debug, thiserror::Error)]
 pub enum TrackingError {
+    /// An observation failed and the joined completion independently failed.
+    #[error("{observation}; completion also unconfirmed: {completion}")]
+    ObservationAndCompletion {
+        /// First observation failure remains the error source.
+        #[source]
+        observation: Box<TrackingError>,
+        /// Actual joined failure, preserving settlement or cancellation evidence.
+        completion: Box<TrackingError>,
+    },
+    /// Execution returned, but its event/SQL settlement could not be confirmed.
+    #[error("run resource settlement could not be confirmed: {failures:?}")]
+    Settlement {
+        /// Execution result retained for diagnostics, never terminal authority.
+        original: Box<RunOutcome>,
+        /// Finite sanitized settlement failure categories.
+        failures: Vec<RunSettlementFailure>,
+    },
     /// Run task could not produce an authoritative outcome.
     #[error("run completion could not be confirmed: {0}")]
     Join(String),
@@ -209,7 +226,7 @@ async fn drive(
             loop {
                 let observation = tokio::select! {
                     joined = &mut handle.completion => {
-                        let outcome = joined.map_err(|e| TrackingError::Join(e.to_string()))?;
+                        let outcome = require_settled(joined.map_err(|e| TrackingError::Join(e.to_string()))?)?;
                         let final_events = final_flush(&storage, id, &mut last_seq, publisher).await?;
                         if !confirms(&final_events, &outcome) { return Err(TrackingError::OutcomeMismatch); }
                         return Ok(outcome);
@@ -231,8 +248,7 @@ async fn drive(
                     let _ = engine
                         .stop_run(id, "persisted event tracking failed".into())
                         .await;
-                    let _ = handle.completion.await;
-                    return Err(error);
+                    return Err(join_after_observation(handle.completion, error).await);
                 }
             }
         },
@@ -267,9 +283,36 @@ async fn drive_synthetic(
                 return handle
                     .completion
                     .await
-                    .map_err(|e| TrackingError::Join(e.to_string()));
+                    .map_err(|e| TrackingError::Join(e.to_string()))
+                    .and_then(require_settled);
             },
         }
+    }
+}
+
+async fn join_after_observation(
+    completion: JoinHandle<RunOutcome>,
+    observation: TrackingError,
+) -> TrackingError {
+    let joined = completion
+        .await
+        .map_err(|error| TrackingError::Join(error.to_string()))
+        .and_then(require_settled);
+    match joined {
+        Ok(_) => observation,
+        Err(completion) => TrackingError::ObservationAndCompletion {
+            observation: Box::new(observation),
+            completion: Box::new(completion),
+        },
+    }
+}
+
+fn require_settled(outcome: RunOutcome) -> Result<RunOutcome, TrackingError> {
+    match outcome {
+        RunOutcome::SettlementFailed { original, failures } => {
+            Err(TrackingError::Settlement { original, failures })
+        },
+        outcome => Ok(outcome),
     }
 }
 
@@ -336,6 +379,9 @@ async fn final_flush(
 }
 
 pub(crate) fn confirms(events: &[ReadEvent], outcome: &RunOutcome) -> bool {
+    if matches!(outcome, RunOutcome::SettlementFailed { .. }) {
+        return false;
+    }
     let mut definitive = None;
     let mut parked = None;
     let mut suspended = None;
@@ -415,6 +461,111 @@ mod tests {
             kind: String::new(),
             payload: VersionedEventPayload::new(payload),
         }
+    }
+
+    fn unsettled_originals() -> Vec<RunOutcome> {
+        use surge_core::execution_recovery::{
+            PendingStagePhase, SuspensionFence, SuspensionReason,
+        };
+        vec![
+            RunOutcome::Completed {
+                terminal: NodeKey::try_new("end").unwrap(),
+            },
+            RunOutcome::Failed {
+                error: "execution failure".into(),
+            },
+            RunOutcome::Suspended {
+                fence: Box::new(SuspensionFence {
+                    control_generation: 1,
+                    snapshot_seq: 1,
+                    pending_stage: PendingStagePhase::BetweenStages,
+                    cleanup_confirmed: true,
+                    reason: SuspensionReason::Manual,
+                }),
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn settlement_failure_preserves_original_and_never_publishes_terminal() {
+        for original in unsettled_originals() {
+            let id = RunId::new();
+            let admission = Arc::new(AdmissionController::new(1, 1));
+            assert!(admission.try_admit_no_queue(id).await);
+            let registry = Arc::new(BroadcastRegistry::new());
+            let mut global = registry.subscribe_global();
+            let publisher = registry.register(id).await;
+            let mut receiver = publisher.subscribe();
+            let (events, events_rx) = broadcast::channel(1);
+            drop(events);
+            let expected = original.clone();
+            let run = TrackedRun {
+                handle: RunHandle {
+                    run_id: id,
+                    events: events_rx,
+                    completion: tokio::spawn(async move {
+                        RunOutcome::SettlementFailed {
+                            original: Box::new(original),
+                            failures: vec![RunSettlementFailure::ForwarderRead],
+                        }
+                    }),
+                },
+                prepared: Prepared::Synthetic,
+            };
+            let result = spawn_tracked_run(id, run, publisher, admission.clone(), registry)
+                .await
+                .unwrap();
+            let Err(TrackingError::Settlement { original, failures }) = result else {
+                panic!("expected typed settlement refusal");
+            };
+            assert_eq!(*original, expected);
+            assert_eq!(failures, vec![RunSettlementFailure::ForwarderRead]);
+            assert!(matches!(
+                receiver.recv().await.unwrap(),
+                EngineRunEvent::StreamError { .. }
+            ));
+            assert!(matches!(
+                receiver.recv().await,
+                Err(broadcast::error::RecvError::Closed)
+            ));
+            assert!(global.try_recv().is_err());
+            assert_eq!(admission.snapshot().await.active, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn observation_error_retains_independent_settlement_and_join_failures() {
+        let settlement = tokio::spawn(async {
+            RunOutcome::SettlementFailed {
+                original: Box::new(RunOutcome::Failed {
+                    error: "execution".into(),
+                }),
+                failures: vec![RunSettlementFailure::WriterSeal],
+            }
+        });
+        let error =
+            join_after_observation(settlement, TrackingError::Events("read gap".into())).await;
+        let TrackingError::ObservationAndCompletion {
+            observation,
+            completion,
+        } = error
+        else {
+            panic!("both failures must be retained");
+        };
+        assert!(
+            matches!(*observation, TrackingError::Events(ref message) if message == "read gap")
+        );
+        assert!(
+            matches!(*completion, TrackingError::Settlement { ref failures, .. } if failures == &[RunSettlementFailure::WriterSeal])
+        );
+        let interrupted = tokio::spawn(std::future::pending());
+        interrupted.abort();
+        let error =
+            join_after_observation(interrupted, TrackingError::Events("read gap".into())).await;
+        assert!(
+            matches!(error, TrackingError::ObservationAndCompletion { completion, .. }
+            if matches!(*completion, TrackingError::Join(_)))
+        );
     }
 
     #[test]

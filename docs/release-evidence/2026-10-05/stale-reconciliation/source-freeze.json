@@ -1,0 +1,17 @@
+{
+  "head": "5f426537b0adb7a18b6c1bbacf1125331b158055",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "files": {
+    "crates/surge-daemon/src/work_items.rs": "155cc39d55a84187fb4aaac1d712a60571f718e5e2660def9000a52df960a5b6",
+    "crates/surge-daemon/src/work_items/reconciliation_tests.rs": "11a2a6a2b39e7cbb2e6f3d354e8a5195e1f911982e86a5a7bfa1f3260b85cec8",
+    "crates/surge-daemon/src/work_items/reconciliation_tests/planned_capacity.rs": "89a9bd9d97aaeedca888fcfde6e6d4957b2b677082ad75fbe3ec65635483f1d6",
+    "crates/surge-daemon/tests/quota_recovery_route_test.rs": "9437a04ba76e8b68210fea1578b6c1c11ca71245eeb028adbdbb77aabbc5283e",
+    "crates/surge-persistence/src/work_items.rs": "9f72cac2c7372909a2d541926b75bd75be7ba5e46edccb4ff2a200e16f711cd5",
+    "crates/surge-persistence/src/work_items/control.rs": "3003706bf697b5a4db67ccbb8f155aac1a862555d8445060e06c393398d42c4b",
+    "crates/surge-persistence/src/work_items/reconciliation_tests.rs": "9da732886ec6cdc95ce84bb2944cb08207cfd500f222ee88164115060918ce16"
+  },
+  "helpers": {
+    "target/debug/mock_acp_agent": "080af18aa885d7016a0c101a22b57481dbcfb986e25e13aca05aa4929db694c7",
+    "target/debug/surge": "4bd45affd5937708dcd19156111bec8c4766f1eed527d5f364a62375a4956181"
+  }
+}

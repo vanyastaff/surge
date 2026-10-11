@@ -4,6 +4,7 @@ mod windows;
 
 pub(crate) use windows::NativeJournalLock;
 pub(crate) use windows::native::NativeError;
+pub(crate) use windows::{RunRoot, RunRoute};
 pub(crate) use windows::{SqliteNamespaceOwner, StateHomeOwner};
 
 impl From<windows::native::NativeError> for crate::runs::error::OpenError {
@@ -448,3 +449,7 @@ mod creation_security_tests;
 #[cfg(test)]
 #[path = "state_home/control_lock_tests.rs"]
 mod control_lock_tests;
+
+#[cfg(test)]
+#[path = "state_home/privileged_fixture_tests.rs"]
+mod privileged_fixture_tests;
