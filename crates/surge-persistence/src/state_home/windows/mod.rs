@@ -17,7 +17,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use windows::Win32::Foundation::STATUS_OBJECT_NAME_COLLISION;
+use windows::Win32::Foundation::{STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_NOT_FOUND};
 
 /// The original state-home namespace, held throughout every derived capability.
 pub(crate) struct StateHomeOwner {
@@ -133,7 +133,13 @@ impl RunRoot {
                 Err(error) => return Err(error),
             }
         } else {
-            namespace.existing_child(OsStr::new("artifacts"), true)?
+            match namespace.existing_child(OsStr::new("artifacts"), true) {
+                Ok(artifacts) => artifacts,
+                Err(NativeError::Open(STATUS_OBJECT_NAME_NOT_FOUND)) => {
+                    namespace.child(OsStr::new("artifacts"), true)?
+                },
+                Err(error) => return Err(error),
+            }
         };
         if create {
             drop(namespace.exclusive_database(OsStr::new("events.sqlite.lock"))?);

@@ -1070,6 +1070,11 @@ mod existing_run_upgrade_tests {
             database.flush().unwrap();
         }
 
+        let lock_path = storage.run_dir(run_id).join("events.sqlite.lock");
+        drop(crate::runs::file_lock::FileLock::try_acquire(
+            &lock_path, *run_id,
+        ));
+
         let mut conn = rusqlite::Connection::open(storage.events_db_path(run_id)).unwrap();
         apply(&mut conn, &PER_RUN_MIGRATIONS[..6], &MockClock::new(100)).unwrap();
         let payload = VersionedEventPayload::new(EventPayload::RunAborted {

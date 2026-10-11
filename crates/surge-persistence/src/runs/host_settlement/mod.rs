@@ -170,10 +170,13 @@ fn existing_parts(
 ) -> Result<(Arc<WriterToken>, FileLock, Arc<RunRoute>, Database), OpenError> {
     let token = token(writers, run)?;
     let root = RunRoot::existing(home)?;
+    let run_path = home.join("runs").join(run.to_string());
+    let database_path = run_path.join("events.sqlite");
+    if !database_path.exists() {
+        return Err(OpenError::RunNotFound(run));
+    }
     #[cfg(unix)]
     let route = {
-        let run_path = home.join("runs").join(run.to_string());
-        let database_path = run_path.join("events.sqlite");
         Arc::new(match root.run(run, false) {
             Err(OpenError::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound

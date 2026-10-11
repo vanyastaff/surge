@@ -167,7 +167,16 @@ impl RunRoot {
                 Err(error) => return Err(io(error)),
             }
         }
-        let artifacts = open(&directory, OsStr::new("artifacts"), true, false)?;
+        let artifacts = match open(&directory, OsStr::new("artifacts"), true, false) {
+            Ok(artifacts) => artifacts,
+            Err(OpenError::Io(error))
+                if !create && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                mkdirat(Some(directory.as_raw_fd()), "artifacts", Mode::S_IRWXU).map_err(io)?;
+                open(&directory, OsStr::new("artifacts"), true, false)?
+            },
+            Err(error) => return Err(error),
+        };
         let result = RunRoute {
             root: self.clone(),
             component,
