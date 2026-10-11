@@ -25,6 +25,13 @@ pub struct TaskLedgerRow {
     pub last_authority_node: Option<String>,
     /// Seq of the last event that touched this task.
     pub updated_seq: EventSeq,
+    /// A human accepted the task after its retry ladder was exhausted; never
+    /// implies `verified`.
+    #[serde(default)]
+    pub accepted_by_human: bool,
+    /// A human revised the task's requirement.
+    #[serde(default)]
+    pub requirement_revised: bool,
 }
 
 /// One row of the `stage_executions` materialized view.

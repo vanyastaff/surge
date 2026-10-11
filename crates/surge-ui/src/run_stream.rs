@@ -494,6 +494,19 @@ impl RunStreamState {
                     self.log.pop_front();
                 }
             },
+            EngineRunEvent::Terminal {
+                outcome:
+                    surge_orchestrator::engine::handle::RunOutcome::SettlementFailed {
+                        failures, ..
+                    },
+            } => {
+                self.apply_at(
+                    &EngineRunEvent::StreamError {
+                        message: format!("resource settlement failed: {failures:?}"),
+                    },
+                    now,
+                );
+            },
             EngineRunEvent::Terminal { outcome } => {
                 // Suspension and quota parking close an observation stream,
                 // but keep the durable run and its pending operator decision.
@@ -1002,7 +1015,7 @@ mod tests {
             SessionRestoreCapabilities,
         };
         use surge_core::run_event::{SessionDisposition, VersionedEventPayload};
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -1083,6 +1096,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(events.len(), 253);
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
         let mut stream = RunStreamState::default();
         for _ in 0..2 {
             stream.begin_display_history(run, None);
@@ -1183,6 +1199,29 @@ mod tests {
         ));
         stream.finish_display_history(1);
         stream
+    }
+
+    #[test]
+    fn settlement_failure_preserves_pending_decision_and_reports_unconfirmed() {
+        let mut stream = RunStreamState {
+            live: true,
+            ..RunStreamState::default()
+        };
+        stream.apply(&persisted(17, human_input("review", Some("call-1"))));
+        stream.apply(&EngineRunEvent::Terminal {
+            outcome: surge_orchestrator::engine::handle::RunOutcome::SettlementFailed {
+                original: Box::new(surge_orchestrator::engine::handle::RunOutcome::Completed {
+                    terminal: "end".try_into().unwrap(),
+                }),
+                failures: vec![
+                    surge_orchestrator::engine::handle::RunSettlementFailure::ForwarderRead,
+                ],
+            },
+        });
+        assert!(!stream.live);
+        assert_eq!(stream.pending.len(), 1);
+        assert_eq!(stream.pending[0].node, "review");
+        assert!(stream.log.back().unwrap().text.contains("unconfirmed"));
     }
 
     #[test]

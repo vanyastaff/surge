@@ -6,6 +6,7 @@ use surge_core::{
     sandbox::SandboxMode,
 };
 
+// The benchmark filename preserves its existing invocation; event bytes are JSON.
 fn event_serde_roundtrip(c: &mut Criterion) {
     let payload = EventPayload::RunStarted {
         pipeline_template: None,

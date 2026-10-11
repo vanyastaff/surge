@@ -19,8 +19,8 @@ use surge_core::id::RunId;
 use surge_core::keys::{NodeKey, ProfileKey};
 use surge_core::node::NodeConfig;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
-use surge_persistence::runs::Storage;
 use surge_persistence::runs::seq::EventSeq;
+use surge_persistence::runs::{CloseError, RunCreationReservation, RunWriter, Storage};
 
 use crate::engine::error::EngineError;
 
@@ -113,6 +113,16 @@ pub struct ForkOutcome {
 /// pre-fork edit targets an unknown or non-Agent node, or persistence fails.
 pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcome, EngineError> {
     reject_task_fork(storage, &req)?;
+    if storage
+        .home()
+        .join("runs")
+        .join(req.new_run.to_string())
+        .exists()
+    {
+        return Err(EngineError::ForkInvalid(
+            "destination run already exists".into(),
+        ));
+    }
     let reader = storage
         .open_run_reader(req.parent)
         .await
@@ -141,7 +151,7 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
     // copied into the child with an impossible event order. The child reuses
     // the parent's project path so the fork stays in the same project (a fresh
     // worktree is provisioned by the caller).
-    let (mut project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
+    let (project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
         Some(EventPayload::RunStarted {
             project_path,
             pipeline_template,
@@ -183,86 +193,176 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-    // Reserve a fresh destination before copying bytes. In particular, never
-    // update an existing child's artifact index if its ID was supplied again.
-    tokio::fs::create_dir(storage.home().join("runs").join(req.new_run.to_string()))
+    let operation = async {
+        let prepared = prepare_child_files(
+            storage,
+            &req,
+            copied,
+            project_path,
+            checkpoint,
+            #[cfg(test)]
+            None,
+        )
+        .await?;
+
+        // Create the child run and write the (possibly edited) prefix payloads.
+        // Folding the child reproduces the parent's state at `at_seq` (modulo edits).
+        let child_writer = storage
+            .create_reserved_run(
+                prepared.reservation,
+                &prepared.project_path,
+                pipeline_template.map(|t| t.to_string()),
+            )
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        write_child_history(child_writer, prepared.copied, inherited_snapshot).await?;
+
+        // Record lineage on the parent last (append-only; valid even after a
+        // terminal event, since the triggers block UPDATE/DELETE, not INSERT).
+        parent_writer
+            .append_events(vec![VersionedEventPayload::new(
+                EventPayload::ForkCreated {
+                    new_run: req.new_run,
+                    fork_at_seq: req.at_seq,
+                },
+            )])
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        Ok(ForkOutcome {
+            new_run: req.new_run,
+            // The bounds check guarantees the prefix holds exactly `at_seq`
+            // contiguous events (the log has no gaps from seq 1).
+            copied_events: req.at_seq,
+        })
+    }
+    .await;
+    let close = parent_writer.close().await;
+    settle_fork_result(req.parent, operation, close)
+}
+
+async fn write_child_history(
+    child_writer: RunWriter,
+    copied: Vec<VersionedEventPayload>,
+    inherited_snapshot: Option<(EventSeq, Vec<u8>)>,
+) -> Result<(), EngineError> {
+    let run = *child_writer.run_id();
+    let operation = async {
+        child_writer
+            .append_events(copied)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        // Inherit the parent's latest snapshot at-or-before the fork point so the
+        // child resumes at the fork position rather than `graph.start`. Without
+        // this, `replay` would fall back to `graph.start` for a snapshot-less log.
+        if let Some((snap_seq, blob)) = inherited_snapshot {
+            child_writer
+                .write_graph_snapshot(snap_seq, blob)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+    .await;
+    let close = child_writer.close().await;
+    settle_fork_result(run, operation, close)
+}
+
+fn settle_fork_result<T>(
+    run: RunId,
+    operation: Result<T, EngineError>,
+    close: Result<(), CloseError>,
+) -> Result<T, EngineError> {
+    if close.is_err() {
+        tracing::warn!(run_id = %run, "fork writer settlement failed");
+    }
+    match (operation, close) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(operation), Ok(())) => Err(operation),
+        (Ok(_), Err(close)) => Err(EngineError::ForkWriterClose {
+            run,
+            close: Box::new(close),
+        }),
+        (Err(operation), Err(close)) => Err(EngineError::ForkOperationAndClose {
+            run,
+            operation: Box::new(operation),
+            close: Box::new(close),
+        }),
+    }
+}
+
+struct PreparedForkFiles {
+    reservation: RunCreationReservation,
+    copied: Vec<VersionedEventPayload>,
+    project_path: std::path::PathBuf,
+}
+
+type ForkCheckpoint = Option<(
+    surge_git::checkpoint::WorkspaceCheckpoint,
+    std::path::PathBuf,
+)>;
+
+#[cfg(test)]
+struct ForkCopyGate {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+async fn prepare_child_files(
+    storage: &Arc<Storage>,
+    request: &ForkRequest,
+    mut copied: Vec<VersionedEventPayload>,
+    mut project_path: std::path::PathBuf,
+    checkpoint: ForkCheckpoint,
+    #[cfg(test)] gate: Option<ForkCopyGate>,
+) -> Result<PreparedForkFiles, EngineError> {
+    let reservation = storage
+        .reserve_new_run(request.new_run)
         .await
         .map_err(|error| {
             EngineError::ForkInvalid(format!("cannot reserve child directory: {error}"))
         })?;
-    inherit_artifacts(storage, &req, &mut copied, &project_path).await?;
-    if let Some((checkpoint, destination)) = checkpoint {
-        project_path =
-            restore_child_workspace(req.new_run, checkpoint, destination, &mut copied).await?;
-    }
-
-    // Create the child run and write the (possibly edited) prefix payloads.
-    // Folding the child reproduces the parent's state at `at_seq` (modulo edits).
-    let child_writer = storage
-        .create_run(
-            req.new_run,
+    let artifacts = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+    let request = request.clone();
+    // The actual blocking job owns the complete original reservation. Aborting
+    // its awaiting future cannot release exclusion while filesystem work runs.
+    tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.recv();
+        }
+        inherit_artifacts(
+            &artifacts,
+            &reservation,
+            &request,
+            &mut copied,
             &project_path,
-            pipeline_template.map(|t| t.to_string()),
-        )
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-    child_writer
-        .append_events(copied)
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-    // Inherit the parent's latest snapshot at-or-before the fork point so the
-    // child resumes at the fork position rather than `graph.start`. Without
-    // this, `replay` would fall back to `graph.start` for a snapshot-less log.
-    if let Some((snap_seq, blob)) = inherited_snapshot {
-        child_writer
-            .write_graph_snapshot(snap_seq, blob)
-            .await
-            .map_err(|e| EngineError::Storage(e.to_string()))?;
-    }
-
-    child_writer
-        .close()
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-    // Record lineage on the parent last (append-only; valid even after a
-    // terminal event, since the triggers block UPDATE/DELETE, not INSERT).
-    parent_writer
-        .append_events(vec![VersionedEventPayload::new(
-            EventPayload::ForkCreated {
-                new_run: req.new_run,
-                fork_at_seq: req.at_seq,
-            },
-        )])
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-    parent_writer
-        .close()
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
-    Ok(ForkOutcome {
-        new_run: req.new_run,
-        // The bounds check guarantees the prefix holds exactly `at_seq`
-        // contiguous events (the log has no gaps from seq 1).
-        copied_events: req.at_seq,
+        )?;
+        if let Some((checkpoint, destination)) = checkpoint {
+            project_path =
+                restore_child_workspace(request.new_run, &checkpoint, destination, &mut copied)?;
+        }
+        Ok(PreparedForkFiles {
+            reservation,
+            copied,
+            project_path,
+        })
     })
+    .await
+    .map_err(|error| EngineError::ForkInvalid(format!("child file worker: {error}")))?
 }
 
-async fn restore_child_workspace(
+fn restore_child_workspace(
     child: RunId,
-    checkpoint: surge_git::checkpoint::WorkspaceCheckpoint,
+    checkpoint: &surge_git::checkpoint::WorkspaceCheckpoint,
     destination: std::path::PathBuf,
     copied: &mut [VersionedEventPayload],
 ) -> Result<std::path::PathBuf, EngineError> {
-    let restored = tokio::task::spawn_blocking(move || {
-        surge_git::checkpoint::restore(&checkpoint, child, destination)
-    })
-    .await
-    .map_err(|error| EngineError::ForkInvalid(format!("restore worker: {error}")))?
-    .map_err(|error| EngineError::ForkInvalid(format!("restore checkpoint: {error}")))?;
+    let restored = surge_git::checkpoint::restore(checkpoint, child, destination)
+        .map_err(|error| EngineError::ForkInvalid(format!("restore checkpoint: {error}")))?;
     if let Some(VersionedEventPayload {
         payload: EventPayload::RunStarted { project_path, .. },
         ..
@@ -310,13 +410,13 @@ fn requested_checkpoint(
     Ok(Some((checkpoint, destination.clone())))
 }
 
-async fn inherit_artifacts(
-    storage: &Storage,
+fn inherit_artifacts(
+    artifacts: &surge_persistence::artifacts::ArtifactStore,
+    reservation: &RunCreationReservation,
     request: &ForkRequest,
     events: &mut [VersionedEventPayload],
     parent_worktree: &std::path::Path,
 ) -> Result<(), EngineError> {
-    let artifacts = surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
     for event in events {
         let EventPayload::ArtifactProduced {
             node,
@@ -335,16 +435,11 @@ async fn inherit_artifacts(
             produced_by: node.clone(),
             produced_at_seq: 0,
         };
-        let bytes = artifacts
-            .open_ref(request.parent, &reference, parent_worktree)
-            .await
+        let owned = artifacts
+            .inherit_reserved(reservation, request.parent, &reference, parent_worktree)
             .map_err(|error| {
                 EngineError::ForkInvalid(format!("cannot inherit artifact {name}: {error}"))
             })?;
-        let owned = artifacts
-            .put(request.new_run, name, &bytes)
-            .await
-            .map_err(|error| EngineError::Storage(error.to_string()))?;
         *path = owned.path;
     }
     Ok(())
@@ -473,6 +568,86 @@ mod tests {
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::reader::ReadEvent;
 
+    #[test]
+    fn cancelled_fork_copy_worker_retains_original_reservation() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (child, hash, cancelled, busy) = runtime.block_on(cancel_blocked_copy(home.path()));
+        // The released, real blocking worker must finish before fixture cleanup.
+        // No caller future or fixture-owned reservation remains to mask its ownership.
+        drop(runtime);
+        let child_root = home.path().join("runs").join(child.to_string());
+        let bytes = std::fs::read(child_root.join("artifacts").join(hash.to_hex()));
+        let database_absent = !child_root.join("events.sqlite").exists();
+        let cleanup = home.close();
+        assert!(cancelled, "the actual awaiting task must be cancelled");
+        assert!(
+            busy,
+            "the actual blocked worker must retain original exclusion"
+        );
+        assert_eq!(bytes.unwrap(), b"reserved child bytes");
+        assert!(database_absent, "cancelled handoff must not initialize SQL");
+        cleanup.unwrap();
+    }
+
+    async fn cancel_blocked_copy(home: &std::path::Path) -> (RunId, ContentHash, bool, bool) {
+        let (storage, parent) = seed_agent_parent(home).await;
+        let competitor = Storage::open(home).await.unwrap();
+        let artifacts = surge_persistence::artifacts::ArtifactStore::new(home.join("runs"));
+        let reference = artifacts
+            .put(parent, "spec", b"reserved child bytes")
+            .await
+            .unwrap();
+        let hash = reference.hash;
+        let copied = vec![VersionedEventPayload::new(EventPayload::ArtifactProduced {
+            node: NodeKey::try_from("impl_1").unwrap(),
+            artifact: hash,
+            path: reference.path,
+            name: "spec".into(),
+            source_path: None,
+        })];
+        let child = RunId::new();
+        let request = ForkRequest::new(parent, child, 2);
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let working_storage = storage.clone();
+        let project_path = home.to_path_buf();
+        let awaiting = tokio::spawn(async move {
+            prepare_child_files(
+                &working_storage,
+                &request,
+                copied,
+                project_path,
+                None,
+                Some(ForkCopyGate {
+                    entered,
+                    release: released,
+                }),
+            )
+            .await
+        });
+        entry.await.unwrap();
+        awaiting.abort();
+        let cancelled = matches!(awaiting.await, Err(error) if error.is_cancelled());
+        let busy = match competitor.open_run_writer(child).await {
+            Err(surge_persistence::runs::OpenError::WriterAlreadyHeld { .. }) => true,
+            Ok(writer) => {
+                writer.close().await.unwrap();
+                false
+            },
+            Err(_) => false,
+        };
+        // Sending or dropping this channel releases the real worker unconditionally.
+        let _ = release.send(());
+        drop(competitor);
+        drop(storage);
+        (child, hash, cancelled, busy)
+    }
+
     fn minimal_graph() -> Graph {
         let end = NodeKey::try_from("end").unwrap();
         let mut nodes = BTreeMap::new();
@@ -537,7 +712,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_copies_prefix_and_records_lineage() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let parent = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -583,7 +758,7 @@ mod tests {
             .await
             .unwrap();
         // Release the writer slot so `fork` can append `ForkCreated`.
-        drop(writer);
+        writer.close().await.unwrap();
 
         let child = RunId::new();
         let out = fork(&storage, ForkRequest::new(parent, child, 3))
@@ -591,6 +766,15 @@ mod tests {
             .expect("fork should succeed");
         assert_eq!(out.copied_events, 3);
         assert_eq!(out.new_run, child);
+        for run in [parent, child] {
+            storage
+                .open_run_writer(run)
+                .await
+                .unwrap()
+                .close()
+                .await
+                .unwrap();
+        }
 
         // Child must hold exactly the 3-event prefix.
         let cevents = read_all(&storage, child).await;
@@ -618,6 +802,8 @@ mod tests {
             Some((child, 3)),
             "parent must record ForkCreated for the child at seq 3"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -626,7 +812,7 @@ mod tests {
         use crate::engine::snapshot::EngineSnapshot;
         use surge_core::run_state::Cursor;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let parent = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -674,7 +860,7 @@ mod tests {
             .write_graph_snapshot(snap_seq, serde_json::to_vec(&snapshot).unwrap())
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
 
         let child = RunId::new();
         fork(&storage, ForkRequest::new(parent, child, 3))
@@ -690,11 +876,14 @@ mod tests {
             NodeKey::try_from("mid_node").unwrap(),
             "forked child must resume at the snapshot cursor, not graph.start"
         );
+        drop(creader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_rejects_out_of_bounds_seq() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let parent = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -726,7 +915,7 @@ mod tests {
             ])
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
 
         let zero = fork(&storage, ForkRequest::new(parent, RunId::new(), 0)).await;
         assert!(
@@ -738,11 +927,13 @@ mod tests {
             matches!(past, Err(EngineError::ForkInvalid(_))),
             "seq past the last event must be rejected, got {past:?}"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_rejects_prefix_not_starting_with_run_started() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let parent = RunId::new();
         let worktree = dir.path().to_path_buf();
@@ -765,13 +956,15 @@ mod tests {
             ])
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
 
         let res = fork(&storage, ForkRequest::new(parent, RunId::new(), 2)).await;
         assert!(
             matches!(res, Err(EngineError::ForkInvalid(_))),
             "fork must reject a prefix that does not begin with RunStarted, got {res:?}"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 
     /// A graph with one Agent node `impl_1` (profile `implementer@1.0`) and a
@@ -861,13 +1054,13 @@ mod tests {
             ])
             .await
             .unwrap();
-        drop(writer);
+        writer.close().await.unwrap();
         (storage, parent)
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork_owns_artifact_bytes_after_parent_copy_is_removed() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let (storage, parent) = seed_agent_parent(dir.path()).await;
         let artifacts =
             surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
@@ -893,6 +1086,26 @@ mod tests {
         fork(&storage, ForkRequest::new(parent, child, 3))
             .await
             .unwrap();
+        // Independent persisted inventory: reservation and SQL handoff must share
+        // one opening, with the initially absent database now bound to that row.
+        let registry = rusqlite::Connection::open_with_flags(
+            dir.path().join("db/registry.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let openings: (i64, i64, i64) = registry
+            .query_row(
+                "SELECT COUNT(*), COUNT(database_identity), COUNT(DISTINCT epoch) FROM run_host_openings WHERE run_id = ?",
+                [child.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        drop(registry);
+        assert_eq!(
+            openings,
+            (1, 1, 1),
+            "fork must consume its original opening exactly once"
+        );
         let reader = storage.open_run_reader(child).await.unwrap();
         let events = reader.read_events(EventSeq(3)..EventSeq(4)).await.unwrap();
         assert!(matches!(&events[0].payload.payload,
@@ -903,11 +1116,14 @@ mod tests {
             artifacts.open(child, artifact.hash).await.unwrap(),
             b"original specification"
         );
+        drop(reader);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn isolated_fork_without_checkpoint_leaves_no_child() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let (storage, parent) = seed_agent_parent(dir.path()).await;
         let child = RunId::new();
         let destination = dir.path().join("child");
@@ -920,66 +1136,264 @@ mod tests {
             if message.contains("stage-boundary checkpoint")));
         assert!(!destination.exists());
         assert!(!storage.home().join("runs").join(child.to_string()).exists());
+        drop(storage);
+        dir.close().unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn fork_reused_destination_preserves_existing_artifacts() {
-        let dir = tempfile::tempdir().unwrap();
-        let (storage, parent) = seed_agent_parent(dir.path()).await;
-        let child = RunId::new();
-        let artifacts =
-            surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
-        let existing = artifacts.put(child, "spec", b"child-owned").await.unwrap();
-        let index_path = storage
-            .home()
-            .join("runs")
-            .join(child.to_string())
-            .join("artifacts/index.json");
-        let original_index = std::fs::read(&index_path).unwrap();
+        tokio::spawn(async {
+            let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            let (storage, parent) = seed_agent_parent(dir.path()).await;
+            let child = RunId::new();
+            let artifacts =
+                surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+            let existing = artifacts.put(child, "spec", b"child-owned").await.unwrap();
+            let index_path = storage
+                .home()
+                .join("runs")
+                .join(child.to_string())
+                .join("artifacts/index.json");
+            let original_index = std::fs::read(&index_path).unwrap();
 
-        let result = fork(&storage, ForkRequest::new(parent, child, 2)).await;
+            let result = fork(&storage, ForkRequest::new(parent, child, 2)).await;
+            // A returned fork error must already have released its actual parent writer.
+            let reopened = storage.open_run_writer(parent).await.unwrap();
+            reopened.close().await.unwrap();
 
-        assert!(matches!(result, Err(EngineError::ForkInvalid(_))));
-        assert_eq!(std::fs::read(index_path).unwrap(), original_index);
-        assert_eq!(
-            artifacts.open(child, existing.hash).await.unwrap(),
-            b"child-owned"
-        );
-        let reader = storage.open_run_reader(parent).await.unwrap();
-        assert_eq!(reader.current_seq().await.unwrap().as_u64(), 2);
+            assert!(matches!(result, Err(EngineError::ForkInvalid(_))));
+            assert_eq!(std::fs::read(index_path).unwrap(), original_index);
+            assert_eq!(
+                artifacts.open(child, existing.hash).await.unwrap(),
+                b"child-owned"
+            );
+            let reader = storage.open_run_reader(parent).await.unwrap();
+            assert_eq!(reader.current_seq().await.unwrap().as_u64(), 2);
+            drop(reader);
+            drop(storage);
+            dir.close().unwrap();
+        })
+        .await
+        .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn fork_rejects_corrupt_inherited_artifact_without_lineage() {
-        let dir = tempfile::tempdir().unwrap();
-        let (storage, parent) = seed_agent_parent(dir.path()).await;
-        let artifacts =
-            surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
-        let artifact = artifacts.put(parent, "spec", b"original").await.unwrap();
-        let writer = storage.open_run_writer(parent).await.unwrap();
-        writer
-            .append_events(vec![VersionedEventPayload::new(
-                EventPayload::ArtifactProduced {
-                    node: NodeKey::try_from("impl_1").unwrap(),
-                    artifact: artifact.hash,
-                    path: artifact.path.clone(),
-                    name: "spec".into(),
-                    source_path: None,
-                },
-            )])
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-        std::fs::write(&artifact.path, b"corrupted").unwrap();
-        let child = RunId::new();
+        tokio::spawn(async {
+            let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            let (storage, parent) = seed_agent_parent(dir.path()).await;
+            let artifacts =
+                surge_persistence::artifacts::ArtifactStore::new(storage.home().join("runs"));
+            let artifact = artifacts.put(parent, "spec", b"original").await.unwrap();
+            let writer = storage.open_run_writer(parent).await.unwrap();
+            writer
+                .append_events(vec![VersionedEventPayload::new(
+                    EventPayload::ArtifactProduced {
+                        node: NodeKey::try_from("impl_1").unwrap(),
+                        artifact: artifact.hash,
+                        path: artifact.path.clone(),
+                        name: "spec".into(),
+                        source_path: None,
+                    },
+                )])
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+            std::fs::write(&artifact.path, b"corrupted").unwrap();
+            let child = RunId::new();
 
-        let result = fork(&storage, ForkRequest::new(parent, child, 3)).await;
+            let result = fork(&storage, ForkRequest::new(parent, child, 3)).await;
+            // A returned fork error must already have released its actual parent writer.
+            let reopened = storage.open_run_writer(parent).await.unwrap();
+            reopened.close().await.unwrap();
 
-        assert!(matches!(result, Err(EngineError::ForkInvalid(message))
+            assert!(matches!(result, Err(EngineError::ForkInvalid(message))
             if message.contains("content hash mismatch")));
-        assert!(artifacts.open(child, artifact.hash).await.is_err());
-        let reader = storage.open_run_reader(parent).await.unwrap();
-        assert_eq!(reader.current_seq().await.unwrap().as_u64(), 3);
+            assert!(artifacts.open(child, artifact.hash).await.is_err());
+            let reader = storage.open_run_reader(parent).await.unwrap();
+            assert_eq!(reader.current_seq().await.unwrap().as_u64(), 3);
+            drop(reader);
+            drop(storage);
+            dir.close().unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn child_append_error_returns_with_writer_released() {
+        tokio::spawn(async {
+            let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            let (storage, child) = seed_agent_parent(home.path()).await;
+            let connection = rusqlite::Connection::open(
+                home.path().join("runs").join(child.to_string()).join("events.sqlite"),
+            ).unwrap();
+            connection.execute_batch(
+                "CREATE TRIGGER reject_fork_prefix BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'fixture child prefix refused'); END;",
+            ).unwrap();
+            let writer = storage.open_run_writer(child).await.unwrap();
+            let result = write_child_history(writer, vec![VersionedEventPayload::new(
+                EventPayload::ForkCreated { new_run: RunId::new(), fork_at_seq: 2 },
+            )], None).await;
+            assert!(matches!(result, Err(EngineError::Storage(ref message)) if message.contains("fixture child prefix refused")));
+            let reopened = storage.open_run_writer(child).await.unwrap();
+            reopened.close().await.unwrap();
+            let reader = storage.open_run_reader(child).await.unwrap();
+            assert_eq!(reader.current_seq().await.unwrap(), EventSeq(2));
+            drop(reader);
+            drop(connection);
+            drop(storage);
+            home.close().unwrap();
+        }).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn child_snapshot_error_returns_with_writer_released() {
+        tokio::spawn(async {
+            let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            let (storage, child) = seed_agent_parent(home.path()).await;
+            let connection = rusqlite::Connection::open(
+                home.path().join("runs").join(child.to_string()).join("events.sqlite"),
+            ).unwrap();
+            connection.execute_batch(
+                "CREATE TRIGGER reject_fork_snapshot BEFORE INSERT ON graph_snapshots BEGIN SELECT RAISE(ABORT, 'fixture child snapshot refused'); END;",
+            ).unwrap();
+            let writer = storage.open_run_writer(child).await.unwrap();
+            let result = write_child_history(writer, vec![VersionedEventPayload::new(
+                EventPayload::ForkCreated { new_run: RunId::new(), fork_at_seq: 2 },
+            )], Some((EventSeq(3), b"fixture snapshot".to_vec()))).await;
+            assert!(matches!(result, Err(EngineError::Storage(ref message)) if message.contains("fixture child snapshot refused")));
+            let reopened = storage.open_run_writer(child).await.unwrap();
+            reopened.close().await.unwrap();
+            let reader = storage.open_run_reader(child).await.unwrap();
+            assert_eq!(reader.current_seq().await.unwrap(), EventSeq(3));
+            assert!(reader.latest_snapshot_at_or_before(EventSeq(3)).await.unwrap().is_none());
+            drop(reader);
+            drop(connection);
+            drop(storage);
+            home.close().unwrap();
+        }).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn parent_lineage_error_returns_with_both_writers_released() {
+        tokio::spawn(async {
+            let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            let (storage, parent) = seed_agent_parent(home.path()).await;
+            let connection = rusqlite::Connection::open(
+                home.path().join("runs").join(parent.to_string()).join("events.sqlite"),
+            ).unwrap();
+            connection.execute_batch(
+                "CREATE TRIGGER reject_fork_lineage BEFORE INSERT ON events WHEN NEW.kind = 'ForkCreated' BEGIN SELECT RAISE(ABORT, 'fixture parent lineage refused'); END;",
+            ).unwrap();
+            let child = RunId::new();
+            let result = fork(&storage, ForkRequest::new(parent, child, 2)).await;
+            assert!(matches!(result, Err(EngineError::Storage(ref message)) if message.contains("fixture parent lineage refused")));
+            let reopened = storage.open_run_writer(parent).await.unwrap();
+            reopened.close().await.unwrap();
+            let reopened = storage.open_run_writer(child).await.unwrap();
+            reopened.close().await.unwrap();
+            let parent_reader = storage.open_run_reader(parent).await.unwrap();
+            let child_reader = storage.open_run_reader(child).await.unwrap();
+            assert_eq!(parent_reader.current_seq().await.unwrap(), EventSeq(2));
+            assert_eq!(child_reader.current_seq().await.unwrap(), EventSeq(2));
+            let parent_events = parent_reader.read_events(EventSeq(1)..EventSeq(3)).await.unwrap();
+            let child_events = child_reader.read_events(EventSeq(1)..EventSeq(3)).await.unwrap();
+            assert_eq!(parent_events.iter().map(|event| &event.payload).collect::<Vec<_>>(), child_events.iter().map(|event| &event.payload).collect::<Vec<_>>());
+            drop(parent_reader);
+            drop(child_reader);
+            drop(connection);
+            drop(storage);
+            home.close().unwrap();
+        }).await.unwrap();
+    }
+
+    #[test]
+    fn settlement_preserves_values_and_original_operation_errors() {
+        let run = RunId::new();
+        assert_eq!(settle_fork_result(run, Ok(42), Ok(())).unwrap(), 42);
+        let error = settle_fork_result::<()>(
+            run,
+            Err(EngineError::ForkInvalid("original refusal".into())),
+            Ok(()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, EngineError::ForkInvalid(message) if message == "original refusal")
+        );
+    }
+
+    #[test]
+    fn settlement_preserves_typed_close_error_and_both_nested_failures() {
+        // Synthetic close results test composition only; runtime ownership is tested above.
+        use std::error::Error;
+        let parent = RunId::new();
+        let child = RunId::new();
+        let close_only = settle_fork_result::<()>(
+            child,
+            Ok(()),
+            Err(CloseError::JoinFailed("child close".into())),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&close_only, EngineError::ForkWriterClose { run, close } if *run == child && matches!(close.as_ref(), CloseError::JoinFailed(message) if message == "child close"))
+        );
+        assert_eq!(
+            close_only.source().unwrap().to_string(),
+            "writer task join failed: child close"
+        );
+        let child_error = settle_fork_result::<()>(
+            child,
+            Err(EngineError::Storage("child append".into())),
+            Err(CloseError::JoinFailed("child close".into())),
+        )
+        .unwrap_err();
+        let combined = settle_fork_result::<()>(
+            parent,
+            Err(child_error),
+            Err(CloseError::JoinFailed("parent close".into())),
+        )
+        .unwrap_err();
+        let EngineError::ForkOperationAndClose {
+            run,
+            operation,
+            close,
+        } = &combined
+        else {
+            panic!("both parent failures must survive");
+        };
+        assert_eq!(*run, parent);
+        assert!(
+            matches!(close.as_ref(), CloseError::JoinFailed(message) if message == "parent close")
+        );
+        let EngineError::ForkOperationAndClose {
+            run,
+            operation,
+            close,
+        } = operation.as_ref()
+        else {
+            panic!("both child failures must survive");
+        };
+        assert_eq!(*run, child);
+        assert!(
+            matches!(operation.as_ref(), EngineError::Storage(message) if message == "child append")
+        );
+        assert!(
+            matches!(close.as_ref(), CloseError::JoinFailed(message) if message == "child close")
+        );
+        assert!(
+            combined
+                .source()
+                .unwrap()
+                .source()
+                .unwrap()
+                .to_string()
+                .contains("child append")
+        );
+        let diagnostic = combined.to_string();
+        for message in ["child append", "child close", "parent close"] {
+            assert!(diagnostic.contains(message));
+        }
     }
 
     async fn child_graph(storage: &Arc<Storage>, child: RunId) -> Graph {
@@ -1000,7 +1414,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_prompt_append_edits_child_graph() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let (storage, parent) = seed_agent_parent(dir.path()).await;
         let child = RunId::new();
 
@@ -1028,11 +1442,13 @@ mod tests {
             Some("retry: prefer X"),
             "child graph must carry the appended prompt"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_profile_override_edits_child_graph() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let (storage, parent) = seed_agent_parent(dir.path()).await;
         let child = RunId::new();
         let new_profile = ProfileKey::try_from("reviewer@1.0").unwrap();
@@ -1057,11 +1473,13 @@ mod tests {
             cfg.profile, new_profile,
             "child graph must carry the swapped profile"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_edit_unknown_node_rejected() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let (storage, parent) = seed_agent_parent(dir.path()).await;
 
         let mut edits = ForkEdits::default();
@@ -1077,11 +1495,13 @@ mod tests {
             matches!(res, Err(EngineError::ForkInvalid(_))),
             "an edit targeting an unknown node must be rejected, got {res:?}"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fork_edit_non_agent_node_rejected() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let (storage, parent) = seed_agent_parent(dir.path()).await;
 
         let mut edits = ForkEdits::default();
@@ -1097,5 +1517,7 @@ mod tests {
             matches!(res, Err(EngineError::ForkInvalid(_))),
             "an edit targeting a non-Agent node must be rejected, got {res:?}"
         );
+        drop(storage);
+        dir.close().unwrap();
     }
 }

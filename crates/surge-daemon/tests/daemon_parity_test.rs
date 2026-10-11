@@ -11,6 +11,10 @@
 //! outcome after every agent prompt, which keeps agent-bearing flows comparable
 //! across local and daemon paths.
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -260,11 +264,13 @@ async fn run_through_facade<F: EngineFacade>(
 async fn parity_terminal_minimal_agent_and_spike_local_vs_daemon() {
     // --- Local path ---
     let local_dir = TempDir::new().unwrap();
-    let local_engine = build_local_engine(local_dir.path()).await;
+    let local_home = FixtureHome::new().unwrap();
+    let local_engine = build_local_engine(local_home.path()).await;
     let local_facade = LocalEngineFacade::new(local_engine);
     // --- Daemon path ---
     let daemon_dir = TempDir::new().unwrap();
-    let daemon_engine = build_local_engine(daemon_dir.path()).await;
+    let daemon_home = FixtureHome::new().unwrap();
+    let daemon_engine = build_local_engine(daemon_home.path()).await;
     let daemon_facade_for_server: Arc<dyn EngineFacade> =
         Arc::new(LocalEngineFacade::new(daemon_engine));
     let socket = unique_socket_path(&daemon_dir, "parity");
@@ -307,5 +313,14 @@ async fn parity_terminal_minimal_agent_and_spike_local_vs_daemon() {
     }
 
     shutdown.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
+    tokio::time::timeout(Duration::from_secs(2), server_handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(daemon_facade);
+    drop(daemon_facade_for_server);
+    drop(local_facade);
+    daemon_home.close().unwrap();
+    local_home.close().unwrap();
 }

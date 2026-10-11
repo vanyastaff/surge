@@ -53,4 +53,5 @@ async fn list_runs_marks_dead_pid_as_crashed() {
         .expect("get_run")
         .expect("Some");
     assert_eq!(single.status, RunStatus::Crashed);
+    t.close().expect("close runtime home");
 }

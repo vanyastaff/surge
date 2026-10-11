@@ -1,0 +1,27 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.21s
+────────────
+ Nextest run ID 3799d38d-d531-428c-9763-3603fb5de26c with nextest profile: default
+    Starting 17 tests across 1 binary (427 tests skipped)
+        PASS [   0.243s] ( 1/17) surge-orchestrator engine::fork::tests::fork_edit_non_agent_node_rejected
+        PASS [   0.243s] ( 2/17) surge-orchestrator engine::fork::tests::fork_edit_unknown_node_rejected
+        PASS [   0.267s] ( 3/17) surge-orchestrator engine::fork::tests::child_append_error_returns_with_writer_released
+        PASS [   0.300s] ( 4/17) surge-orchestrator engine::fork::tests::child_snapshot_error_returns_with_writer_released
+        PASS [   0.357s] ( 5/17) surge-orchestrator engine::fork::tests::fork_inherits_snapshot_so_child_resumes_at_fork_position
+        PASS [   0.370s] ( 6/17) surge-orchestrator engine::fork::tests::fork_profile_override_edits_child_graph
+        PASS [   0.398s] ( 7/17) surge-orchestrator engine::fork::tests::fork_owns_artifact_bytes_after_parent_copy_is_removed
+        PASS [   0.414s] ( 8/17) surge-orchestrator engine::fork::tests::fork_copies_prefix_and_records_lineage
+        PASS [   0.032s] ( 9/17) surge-orchestrator engine::fork::tests::settlement_preserves_typed_close_error_and_both_nested_failures
+        PASS [   0.031s] (10/17) surge-orchestrator engine::fork::tests::settlement_preserves_values_and_original_operation_errors
+        PASS [   0.308s] (11/17) surge-orchestrator engine::fork::tests::fork_rejects_out_of_bounds_seq
+        PASS [   0.300s] (12/17) surge-orchestrator engine::fork::tests::fork_rejects_prefix_not_starting_with_run_started
+        PASS [   0.233s] (13/17) surge-orchestrator engine::fork::tests::isolated_fork_without_checkpoint_leaves_no_child
+        PASS [   0.381s] (14/17) surge-orchestrator engine::fork::tests::fork_prompt_append_edits_child_graph
+        PASS [   0.388s] (15/17) surge-orchestrator engine::fork::tests::fork_rejects_corrupt_inherited_artifact_without_lineage
+        PASS [   0.310s] (16/17) surge-orchestrator engine::fork::tests::fork_reused_destination_preserves_existing_artifacts
+        PASS [   0.305s] (17/17) surge-orchestrator engine::fork::tests::parent_lineage_error_returns_with_both_writers_released
+────────────
+     Summary [   0.705s] 17 tests run: 17 passed, 427 skipped

@@ -1,6 +1,10 @@
 //! Opt-in real daemon/ACP/MCP journey. Never runs a provider in ordinary CI.
 //! Build surge + mock_acp_agent first, then run the ignored controlled test.
 //! SURGE_LIVE_CODEX=1 enables exactly one bounded live invocation.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -48,7 +52,11 @@ fn watchdog(live: bool) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(journey(PathBuf::from(root), live));
+            .block_on(journey(
+                PathBuf::from(root),
+                PathBuf::from(std::env::var_os("SURGE_HOME").unwrap()),
+                live,
+            ));
         assert!(
             result.is_ok(),
             "smoke failed: {}",
@@ -58,8 +66,9 @@ fn watchdog(live: bool) {
     }
     let root = tempfile::Builder::new()
         .prefix("surge-live-")
-        .tempdir_in("/tmp")
+        .tempdir()
         .unwrap();
+    let home = FixtureHome::new().unwrap();
     let test = if live {
         "live_codex_daemon_mcp_smoke"
     } else {
@@ -69,7 +78,7 @@ fn watchdog(live: bool) {
     command
         .args(["--ignored", "--exact", test, "--nocapture"])
         .env("SURGE_SMOKE_CHILD", root.path())
-        .env("SURGE_HOME", root.path().join("home"));
+        .env("SURGE_HOME", home.path());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -104,6 +113,7 @@ fn watchdog(live: bool) {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    home.close().unwrap();
 }
 
 fn git(path: &Path, args: &[&str]) {
@@ -116,7 +126,11 @@ fn git(path: &Path, args: &[&str]) {
     assert!(output.status.success(), "temporary Git preparation failed");
 }
 
-fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<ProfileRegistry>) {
+fn prepare(
+    root: &Path,
+    home: &Path,
+    live: bool,
+) -> (PathBuf, surge_core::SurgeConfig, Arc<ProfileRegistry>) {
     let repo = root.join("repository");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(repo.join("sentinel.txt"), SENTINEL).unwrap();
@@ -152,7 +166,10 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     let binary = if live {
         PathBuf::from(CODEX)
     } else {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mock_acp_agent")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/debug/mock_acp_agent{}",
+            std::env::consts::EXE_SUFFIX
+        ))
     };
     assert!(binary.is_file(), "required local ACP binary is absent");
     let mut config = surge_core::SurgeConfig::default();
@@ -161,7 +178,7 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     })).unwrap();
     config.agents.insert("live-smoke".into(), agent);
     std::fs::write(repo.join("surge.toml"), toml::to_string(&config).unwrap()).unwrap();
-    let profiles = root.join("home/profiles");
+    let profiles = home.join("profiles");
     std::fs::create_dir_all(&profiles).unwrap();
     let mut profile: surge_core::profile::Profile = toml::from_str(include_str!(
         "../../surge-core/bundled/profiles/mock-1.0.toml"
@@ -180,7 +197,7 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     let registry = Arc::new(ProfileRegistry::new(
         DiskProfileSet::scan(&profiles).unwrap(),
     ));
-    seed_catalog_baseline(&worktree, &registry);
+    seed_catalog_baseline(&worktree, &registry, &config);
     git(&repo, &["add", "surge.toml"]);
     git(
         &repo,
@@ -197,13 +214,26 @@ fn prepare(root: &Path, live: bool) -> (PathBuf, surge_core::SurgeConfig, Arc<Pr
     (worktree, config, registry)
 }
 
-fn seed_catalog_baseline(worktree: &Path, registry: &ProfileRegistry) {
+fn seed_catalog_baseline(
+    worktree: &Path,
+    registry: &ProfileRegistry,
+    config: &surge_core::SurgeConfig,
+) {
+    let agents = surge_acp::Registry::for_run(config);
+    let mut unavailable = std::collections::BTreeMap::new();
+    for runtime in surge_orchestrator::profile_loader::catalog_runtimes(registry) {
+        if let Some(entry) = agents.find_normalized(&runtime)
+            && let Err(error) = surge_acp::agent_env::resolve(&entry.id, &entry.env)
+        {
+            unavailable.insert(runtime, format!("not configured: {error}"));
+        }
+    }
     // Engine always seeds this catalog; commit its exact deterministic contents
     // before the provider starts so the checkout oracle allows no new files.
     std::fs::create_dir(worktree.join(".surge")).unwrap();
     std::fs::write(
         worktree.join(".surge/profile_catalog.md"),
-        surge_orchestrator::profile_loader::render_profile_catalog(registry),
+        surge_orchestrator::profile_loader::render_profile_catalog_with(registry, &unavailable),
     )
     .unwrap();
     git(worktree, &["add", ".surge/profile_catalog.md"]);
@@ -234,6 +264,9 @@ fn graph() -> Graph {
         unreachable!()
     };
     agent.profile = "live-smoke@1.0".parse().unwrap();
+    // The transport smoke is fully specified by its system prompt, without
+    // the example workflow's required initial-prompt artifact.
+    agent.bindings.clear();
     agent.approvals_override = Some(
         serde_json::from_value(serde_json::json!({
             "policy":"on-request", "elevation":true,
@@ -260,16 +293,14 @@ async fn connect(socket: PathBuf) -> Result<DaemonEngineFacade, String> {
     .map_err(|_| "daemon connection timeout".into())
 }
 
-async fn journey(root: PathBuf, live: bool) -> Result<(), String> {
+async fn journey(root: PathBuf, home: PathBuf, live: bool) -> Result<(), String> {
     let nonce = RunId::new().to_string();
-    let (worktree, config, profiles) = prepare(&root, live);
+    let (worktree, config, profiles) = prepare(&root, &home, live);
     let pins = [
         CheckoutPin::capture(root.join("repository")),
         CheckoutPin::capture(worktree.clone()),
     ];
-    let storage = Storage::open(root.join("home"))
-        .await
-        .map_err(|_| "storage open")?;
+    let storage = Storage::open(&home).await.map_err(|_| "storage open")?;
     let bridge = Arc::new(AcpBridge::with_defaults().map_err(|_| "bridge open")?);
     let engine = Arc::new(Engine::new_full(
         bridge.clone(),
@@ -305,6 +336,20 @@ async fn journey(root: PathBuf, live: bool) -> Result<(), String> {
     shutdown.cancel();
     let server_result = tokio::time::timeout(Duration::from_secs(10), server).await;
     drop(engine);
+    // Tasks spawned by the server and run tracking release their engine (and
+    // through it the bridge) after shutdown is observed, not synchronously.
+    let released = tokio::time::timeout(Duration::from_secs(10), async {
+        while Arc::strong_count(&bridge) > 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    if released.is_err() {
+        eprintln!(
+            "bridge still has {} owners 10s after shutdown",
+            Arc::strong_count(&bridge)
+        );
+    }
     let bridge_result = match Arc::try_unwrap(bridge) {
         Ok(bridge) => bridge
             .shutdown()

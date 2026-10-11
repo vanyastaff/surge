@@ -1,0 +1,51 @@
+{
+  "status": "two exact focused tests PASS; no baseline RED or full Stage-A acceptance claimed",
+  "review_counter": "1/3 unchanged",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "commands": [
+    "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --lib engine::fork::tests::cancelled_fork_copy_worker_retains_original_reservation -- --exact --nocapture",
+    "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --lib engine::fork::tests::fork_owns_artifact_bytes_after_parent_copy_is_removed -- --exact --nocapture"
+  ],
+  "results": [
+    {
+      "session": 81882,
+      "passed": 1,
+      "failed": 0,
+      "compile_seconds": 44.06,
+      "test_seconds": 0.14
+    },
+    {
+      "direct_exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "compile_seconds": 0.87,
+      "test_seconds": 0.12
+    }
+  ],
+  "logs": [
+    {
+      "raw_log": "target/ci-repair-evidence/stage-a-fork-copy-cancellation.log",
+      "archive": "stage-a-fork-copy-cancellation.log.gz",
+      "raw_sha256": "5aea1b9cbac3a896aa53986bb4dd43e20826d6778fb762a3c09e2d3c04496c5e",
+      "exit_code": 0
+    },
+    {
+      "raw_log": "target/ci-repair-evidence/stage-a-fork-same-opening.log",
+      "archive": "stage-a-fork-same-opening.log.gz",
+      "raw_sha256": "4915f33448b8db682ed773b44f86f4a919fb5892925b1df0350c54a75a8216b6",
+      "exit_code": 0
+    }
+  ],
+  "sources": {
+    "crates/surge-orchestrator/src/engine/fork.rs": "b6a2cf103d2db8ab992235563094dcac8363738eddefaa19196f15ab64bc3908",
+    "crates/surge-persistence/src/artifacts.rs": "ca3d838e723b55900e7737b08890eedef79b7d5fbf98187b4018f6d6a778f1d5",
+    "crates/surge-persistence/src/runs/storage.rs": "40b3b418c07353253f7ffa782f58bd49f626db46623d066eef0d9a83b7e4e709",
+    "crates/surge-persistence/src/runs/host_settlement/mod.rs": "129992be1e6e369e0664f54edfd9e3dd521b3117e7669a7c94e0a979167402b7"
+  },
+  "limits": [
+    "Actual source warning: persistence ActiveWriters::try_acquire dead_code; strict gate pending.",
+    "Cancellation worker gate pauses immediately before copy, not inside OS syscall.",
+    "Same opening assertion observes persisted one-row/epoch and DB binding after actual successful fork.",
+    "Native Windows acceptance and complete Stage A matrix remain open."
+  ]
+}

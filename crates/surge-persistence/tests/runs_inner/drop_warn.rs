@@ -78,14 +78,34 @@ async fn drop_without_close_emits_tracing_warning() {
     // traces, then capture and assert.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let captured = buf.lock().expect("lock");
-    let log = String::from_utf8_lossy(&captured);
-    assert!(
-        log.contains("dropped without close"),
-        "expected drop warning in captured tracing output. Got: {log}"
-    );
-    assert!(
-        log.contains("WARN"),
-        "expected WARN level in tracing output. Got: {log}"
-    );
+    {
+        let captured = buf.lock().expect("lock");
+        let log = String::from_utf8_lossy(&captured);
+        assert!(
+            log.contains("dropped without close"),
+            "expected drop warning in captured tracing output. Got: {log}"
+        );
+        assert!(
+            log.contains("WARN"),
+            "expected WARN level in tracing output. Got: {log}"
+        );
+    }
+
+    // Reacquiring the real writer slot observes completion of the intentionally
+    // dropped actor. A fixed delay above is only for log capture, not cleanup.
+    let writer = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match t.storage.open_run_writer(t.run_id).await {
+                Ok(writer) => break writer,
+                Err(surge_persistence::runs::OpenError::WriterAlreadyHeld { .. }) => {
+                    tokio::task::yield_now().await;
+                },
+                Err(error) => panic!("reopen dropped writer: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("dropped writer settles within timeout");
+    writer.close().await.expect("close recovered writer");
+    t.close().expect("close runtime home");
 }

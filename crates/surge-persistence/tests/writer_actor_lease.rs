@@ -1,4 +1,13 @@
 //! A journal actor retains real write exclusion after its caller disappears.
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+
 use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -50,7 +59,7 @@ fn payload(index: u32) -> VersionedEventPayload {
 }
 
 async fn actor_exclusion_after_caller_loss(cancel_close: bool, full_queue: bool) {
-    let home = tempfile::tempdir().unwrap();
+    let home = runtime_home_fixture::FixtureHome::new().unwrap();
     std::fs::write(
         home.path().join("config.toml"),
         "[storage]\nwriter_channel_capacity=2\n",
@@ -101,7 +110,10 @@ async fn actor_exclusion_after_caller_loss(cancel_close: bool, full_queue: bool)
     clock.release();
     let first_seq = first.await.unwrap().unwrap();
     for append in queued {
-        append.await.unwrap();
+        assert!(matches!(
+            append.await,
+            Err(surge_persistence::runs::StorageError::WriterTaskDied)
+        ));
     }
     drop(recorder);
     // On the baseline, the new writer already acquired BOTH exclusions while
@@ -131,11 +143,18 @@ async fn actor_exclusion_after_caller_loss(cancel_close: bool, full_queue: bool)
     .await
     .unwrap();
     assert!(reopened.read_event(first_seq).await.unwrap().is_some());
+    assert_eq!(
+        reopened.current_seq().await.unwrap(),
+        first_seq,
+        "priority stop must reject all queued append commands"
+    );
     reopened.close().await.unwrap();
     assert!(
         blocked,
         "caller loss released journal exclusion before actual actor exit"
     );
+    drop(storage);
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

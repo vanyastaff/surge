@@ -1788,6 +1788,12 @@ fn load_project_config_for_current_repo() -> Result<(SurgeConfig, PathBuf)> {
     Ok((config, project_root))
 }
 
+#[cfg(windows)]
+fn surge_home_dir() -> Result<PathBuf> {
+    super::common::surge_home_dir()
+}
+
+#[cfg(not(windows))]
 fn surge_home_dir() -> Result<PathBuf> {
     // Honour the SURGE_HOME env var first so tests can isolate per-tempdir.
     // `dirs::home_dir()` on Windows uses `SHGetKnownFolderPath` which ignores

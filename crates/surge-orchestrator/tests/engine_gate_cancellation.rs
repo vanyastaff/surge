@@ -1,5 +1,7 @@
 //! Cancellation must not fabricate an operator decision or timeout.
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,7 +74,7 @@ on_max_exceeded = "escalate"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_pending_gate_is_durably_aborted_without_a_decision() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = FixtureHome::new().unwrap();
     let storage = Storage::open(temp.path()).await.unwrap();
     let engine = Engine::new(
         Arc::new(fixtures::mock_bridge::MockBridge::new()),
@@ -151,11 +153,14 @@ async fn stop_pending_gate_is_durably_aborted_without_a_decision() {
             "invented {forbidden}: {kinds:?}"
         );
     }
+    drop(engine);
+    drop(storage);
+    temp.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_racing_a_real_decision_preserves_a_complete_event_sequence() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = FixtureHome::new().unwrap();
     let storage = Storage::open(temp.path()).await.unwrap();
     let engine = Engine::new(
         Arc::new(fixtures::mock_bridge::MockBridge::new()),
@@ -260,4 +265,7 @@ async fn stop_racing_a_real_decision_preserves_a_complete_event_sequence() {
             "invented {forbidden}: {kinds:?}"
         );
     }
+    drop(engine);
+    drop(storage);
+    temp.close().unwrap();
 }

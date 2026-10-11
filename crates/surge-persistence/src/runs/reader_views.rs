@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use crate::SqliteConnectionManager;
 use r2d2::PooledConnection;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Row, params};
 use serde::de::DeserializeOwned;
 use surge_core::{ContentHash, NodeKey, RoadmapPatchId, RoadmapStatus};
@@ -159,7 +159,8 @@ pub fn task_ledger(
     conn: &PooledConnection<SqliteConnectionManager>,
 ) -> Result<Vec<TaskLedgerRow>, StorageError> {
     let mut stmt = conn.prepare(
-        "SELECT task_id, status, verified, discovered_from, last_authority_node, updated_seq
+        "SELECT task_id, status, verified, discovered_from, last_authority_node, updated_seq,
+                accepted_by_human, requirement_revised
          FROM task_ledger ORDER BY updated_seq, task_id",
     )?;
     let iter = stmt.query_map([], |row| {
@@ -178,6 +179,8 @@ pub fn task_ledger(
             discovered_from: row.get(3)?,
             last_authority_node: row.get(4)?,
             updated_seq: EventSeq(row.get::<_, i64>(5)? as u64),
+            accepted_by_human: row.get::<_, i64>(6)? != 0,
+            requirement_revised: row.get::<_, i64>(7)? != 0,
         })
     })?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)

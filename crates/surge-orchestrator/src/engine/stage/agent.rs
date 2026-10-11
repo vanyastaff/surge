@@ -267,6 +267,206 @@ fn record_task_quota_rate_limit(
     )
 }
 
+/// Largest `verification-report` read back for re-entry feedback.
+const FEEDBACK_REPORT_MAX_BYTES: usize = 256 * 1024;
+/// Per-field cap so one long note cannot crowd out the stage prompt.
+const FEEDBACK_FIELD_MAX_CHARS: usize = 2_000;
+/// Checks listed in re-entry feedback; the rest are counted.
+const FEEDBACK_MAX_CHECKS: usize = 20;
+
+/// Why the previous attempt of this node was sent back, when it was re-entered
+/// through a backtrack edge: the sending node's outcome and summary, and the
+/// `verification-report` it sealed for that outcome, if any.
+async fn previous_attempt_feedback(p: &AgentStageParams<'_>) -> Option<String> {
+    let entry = p.run_memory.backtrack_feedback.get(p.node)?;
+    let records = p.run_memory.outcomes.get(&entry.from);
+    let mut sent = records
+        .into_iter()
+        .flatten()
+        .filter(|record| record.seq < entry.edge_seq);
+    let outcome = sent.next_back();
+    let earlier = sent.next_back().map_or(0, |record| record.seq);
+    let report_ref = p
+        .run_memory
+        .artifacts_by_node
+        .get(&entry.from)
+        .into_iter()
+        .flatten()
+        .rfind(|artifact| {
+            artifact.name == "verification-report"
+                && artifact.produced_at_seq > earlier
+                && artifact.produced_at_seq < entry.edge_seq
+        });
+    let report = match report_ref {
+        None => None,
+        Some(artifact) => match p
+            .artifact_store
+            .open_bounded(p.run_id, artifact.hash, FEEDBACK_REPORT_MAX_BYTES)
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+                toml::from_str::<surge_core::roadmap::VerificationReportArtifact>(&text)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(report) => Some(report),
+            Err(error) => {
+                tracing::warn!(
+                    target: "engine::feedback",
+                    node = %p.node,
+                    from = %entry.from,
+                    %error,
+                    "verification report unavailable for re-entry feedback"
+                );
+                None
+            },
+        },
+    };
+    let rendered = render_previous_attempt_feedback(&entry.from, outcome, report.as_ref());
+    if rendered.is_some() {
+        tracing::info!(
+            target: "engine::feedback",
+            node = %p.node,
+            from = %entry.from,
+            with_report = report.is_some(),
+            "binding previous-attempt feedback into the re-entered stage prompt"
+        );
+    }
+    rendered
+}
+
+/// Requirement revisions a human made (v1 task 1.2) that apply to this stage:
+/// those for its task, and run-wide ones. Newest last, so the latest wins.
+fn prepend_requirement_revisions(
+    prompt: String,
+    revisions: &[surge_core::run_state::RequirementRevision],
+    task: Option<&surge_core::roadmap::RoadmapTaskId>,
+) -> String {
+    use std::fmt::Write as _;
+    let applicable: Vec<_> = revisions
+        .iter()
+        .filter(|revision| revision.task.is_none() || revision.task.as_ref() == task)
+        .collect();
+    if applicable.is_empty() {
+        return prompt;
+    }
+    let mut text = String::from(
+        "## Requirement revised by the operator\n\
+         The operator changed the requirement for this work. Where it conflicts \
+         with the task or earlier criteria, the latest revision wins:\n",
+    );
+    for revision in applicable {
+        let _ = writeln!(text, "- {}", clip(&revision.text));
+    }
+    text.push('\n');
+    text.push_str(&prompt);
+    text
+}
+
+fn clip(text: &str) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(FEEDBACK_FIELD_MAX_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
+}
+
+fn render_previous_attempt_feedback(
+    from: &NodeKey,
+    outcome: Option<&surge_core::run_state::OutcomeRecord>,
+    report: Option<&surge_core::roadmap::VerificationReportArtifact>,
+) -> Option<String> {
+    use std::fmt::Write as _;
+    use surge_core::roadmap::VerificationCheckResult;
+
+    let summary = outcome
+        .map(|record| clip(&record.summary))
+        .unwrap_or_default();
+    if summary.is_empty() && report.is_none() {
+        return None;
+    }
+    let mut text = String::from(
+        "## Feedback from the previous attempt
+",
+    );
+    match outcome {
+        Some(record) => {
+            let _ = writeln!(
+                text,
+                "Stage `{from}` sent this work back with outcome `{}`. Address it before \
+                 reporting again.",
+                record.outcome
+            );
+        },
+        None => {
+            let _ = writeln!(text, "Stage `{from}` sent this work back.");
+        },
+    }
+    if !summary.is_empty() {
+        let _ = writeln!(text, "\nSummary: {summary}");
+    }
+    if let Some(report) = report {
+        let report_summary = clip(&report.summary);
+        if !report_summary.is_empty() && report_summary != summary {
+            let _ = writeln!(text, "\nVerifier summary: {report_summary}");
+        }
+        let open: Vec<_> = report
+            .checks
+            .iter()
+            .filter(|check| check.result != VerificationCheckResult::Passed)
+            .collect();
+        if !open.is_empty() {
+            text.push_str("\nChecks that did not pass:\n");
+            for check in open.iter().take(FEEDBACK_MAX_CHECKS) {
+                let result = match check.result {
+                    VerificationCheckResult::Failed => "failed",
+                    VerificationCheckResult::Skipped => "skipped",
+                    VerificationCheckResult::Cancelled => "cancelled",
+                    VerificationCheckResult::Passed => "passed",
+                };
+                let _ = write!(text, "- `{}` — {result}", clip(&check.command));
+                if let Some(note) = check.note.as_deref().map(clip).filter(|n| !n.is_empty()) {
+                    let _ = write!(text, ": {note}");
+                }
+                text.push('\n');
+            }
+            if open.len() > FEEDBACK_MAX_CHECKS {
+                let _ = writeln!(text, "- …and {} more", open.len() - FEEDBACK_MAX_CHECKS);
+            }
+        }
+    }
+    text.push('\n');
+    Some(text)
+}
+
+/// Tell the agent which MCP calls a previous session left without a result
+/// (ADR-0021 decision 4). Their outcome is unknown and Surge never replays them.
+fn prepend_interrupted_mcp_calls(
+    prompt: String,
+    calls: &[surge_core::run_state::UnresolvedMcpCall],
+) -> String {
+    if calls.is_empty() {
+        return prompt;
+    }
+    let mut notice = String::from(
+        "## Interrupted tool calls\n\
+         A previous session ended while these MCP tool calls were running. Their \
+         outcome is unknown: check the current state before retrying, and do not \
+         repeat an action that may already have happened.\n",
+    );
+    for call in calls {
+        use std::fmt::Write as _;
+        let _ = writeln!(
+            notice,
+            "- `{}` on MCP server `{}` (event {})",
+            call.tool, call.server, call.seq
+        );
+    }
+    notice.push('\n');
+    notice.push_str(&prompt);
+    notice
+}
+
 fn append_completion_contract(mut prompt: String, outcomes: &[OutcomeKey]) -> String {
     prompt.push_str(
         "\n\n## Stage completion protocol\n\
@@ -457,6 +657,8 @@ async fn append_loop_escalations(
         let cause = match &esc.trip {
             LoopGuardTrip::RepeatedToolCall { .. } => EscalationCause::LoopGuardRepeatedToolCall,
             LoopGuardTrip::NodeDeadlineExceeded { .. } => EscalationCause::LoopGuardNodeDeadline,
+            LoopGuardTrip::NoProgress { .. } => EscalationCause::LoopGuardNoProgress,
+            LoopGuardTrip::ToolCallCapExceeded { .. } => EscalationCause::LoopGuardToolCallCap,
         };
         writer
             .append_event(VersionedEventPayload::new(
@@ -788,16 +990,56 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             .filter(|server| !mcp_denied_servers.contains(server.name.as_str()))
             .map(|server| server.name.clone())
             .collect();
-        let all_mcp_tools = match reg.list_tools_for_servers(&permitted_servers).await {
-            Ok(tools) => tools,
-            Err(error) => {
-                tracing::warn!(
-                    err = %error,
-                    "MCP selected catalog failed; proceeding with engine tools only"
-                );
-                Vec::new()
+        // Per-server outcomes: one failing server must not hide the other
+        // selected servers' tools, and its failure must reach the operator.
+        let mut all_mcp_tools = Vec::new();
+        let mut unavailable: Vec<(String, String)> = Vec::new();
+        match reg.list_tools_per_server(&permitted_servers).await {
+            Ok(catalogs) => {
+                for catalog in catalogs {
+                    match catalog.tools {
+                        Ok(tools) => all_mcp_tools.extend(tools),
+                        Err(error) => unavailable.push((catalog.server, error.to_string())),
+                    }
+                }
             },
-        };
+            Err(error) => {
+                let error = error.to_string();
+                unavailable.extend(
+                    permitted_servers
+                        .iter()
+                        .map(|server| (server.clone(), error.clone())),
+                );
+            },
+        }
+        // The stage still runs (its engine tools and any healthy servers
+        // remain useful), but a server the node explicitly selected going
+        // missing is an operator-visible degradation, not a log line:
+        // record it as a replay-safe `EscalationRequested`. `McpError`
+        // displays carry only fixed reason codes and durations, never
+        // child output.
+        for (server, error) in unavailable {
+            tracing::warn!(
+                node = %p.node,
+                server = %server,
+                err = %error,
+                "MCP selected catalog failed; stage proceeds without this server's tools"
+            );
+            p.writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: format!(
+                            "stage '{}' selected MCP server '{server}', but its tool catalog \
+                             is unavailable ({error}); the stage proceeds without its tools",
+                            p.node
+                        ),
+                        cause: EscalationCause::McpSelectedCatalogUnavailable,
+                    },
+                ))
+                .await
+                .map_err(|e| StageError::Storage(e.to_string()))?;
+        }
 
         let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
             .into_iter()
@@ -1281,6 +1523,15 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         }
     }
 
+    let prompt_text = match previous_attempt_feedback(&p).await {
+        Some(feedback) => feedback + &prompt_text,
+        None => prompt_text,
+    };
+    let prompt_text = prepend_requirement_revisions(
+        prompt_text,
+        &p.run_memory.requirement_revisions,
+        p.active_task_id.as_ref(),
+    );
     // Prepend any queued operator steer messages to this turn's prompt (B2).
     // Non-destructive: steering lands here, at the stage boundary, because ACP
     // v1 offers no mid-turn injection channel.
@@ -1298,6 +1549,16 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         steered.push_str(&prompt_text);
         steered
     };
+    let interrupted = &p.run_memory.unresolved_mcp_calls;
+    if !interrupted.is_empty() {
+        tracing::info!(
+            target: "mcp::recovery",
+            node = %p.node,
+            calls = interrupted.len(),
+            "notifying agent of interrupted MCP calls with unknown outcome"
+        );
+    }
+    let prompt_text = prepend_interrupted_mcp_calls(prompt_text, interrupted);
     let prompt_msg = MessageContent::Text(prompt_text);
     let mut prompt_finished = tokio_util::sync::CancellationToken::new();
     let prompt_signal = prompt_finished.clone();
@@ -1324,10 +1585,17 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
     // configured limit) is caught right away rather than a full period late.
     let mut deadline_poll = tokio::time::interval(std::time::Duration::from_secs(1));
     deadline_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A loop-protection trip observed while dispatching a tool call; the
+    // attempt ends at the top of the next iteration, after that call's result
+    // is durable and delivered (v1 task 1.3).
+    let mut guard_trip: Option<LoopGuardTrip> = None;
 
     // Drive the event loop until OutcomeReported (success) or SessionEnded
     // (failure / abnormal termination).
     let outcome = loop {
+        if let Some(trip) = guard_trip.take() {
+            return Err(StageError::LoopGuardTripped(trip));
+        }
         if prompt_success && candidates.is_empty()
             && !p.bridge.legacy_stage_event_adapter()
             && let Some(feedback) = retry_feedback.take()
@@ -1383,19 +1651,10 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             _ = deadline_poll.tick() => {
                 session_dispatcher.poll_wall_clock_deadline();
                 let trips = append_loop_escalations(p.writer, &session_dispatcher).await?;
-                // A repeated-tool-call trip only blocks the next dispatch —
-                // the turn itself may still be mid-stream and recovers once
-                // the agent stops repeating. A wall-clock trip has no such
-                // recovery: the node is already past its budget and a turn
-                // burning tokens with no tool calls at all would otherwise
-                // run to its own end (`.autopilot/competitive-waves/spec.md`
-                // §15 / ticket 17: "raising EscalationRequested rather than
-                // burning budget" — a mark that lets the burn continue is
-                // not that). So this trip ends the stage; the other does not.
-                if let Some(trip) = trips
-                    .into_iter()
-                    .find(|t| matches!(t, LoopGuardTrip::NodeDeadlineExceeded { .. }))
-                {
+                // Every loop-protection trip ends the attempt (v1 task 1.3):
+                // the engine routes it as a failed attempt into the stage's
+                // retry ladder, or fails the run when the stage has none.
+                if let Some(trip) = trips.into_iter().next() {
                     return Err(StageError::LoopGuardTripped(trip));
                 }
                 continue;
@@ -1508,6 +1767,8 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         if event_session_id(&event) != Some(session_id) {
             continue;
         }
+        // Any event from this session is progress for loop protection.
+        session_dispatcher.note_activity();
 
         if matches!(event, BridgeEvent::OutcomeReported { .. }) && !prompt_success {
             if candidates.len() >= 64 {
@@ -1941,9 +2202,9 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // log. Engine-built-in tools resolve to `None`.
                 let mcp_server = session_dispatcher.resolved_origin(&tool);
 
-                let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
-
-                // Persist ToolCalled + ToolResultReceived.
+                // ToolCalled is durable before dispatch so a crash mid-call leaves
+                // an unresolved call in the log; the resumed stage is told its
+                // outcome is unknown (ADR-0021 decision 4).
                 let args_redacted_hash = ContentHash::compute(args_redacted_json.as_bytes());
                 p.writer
                     .append_event(VersionedEventPayload::new(EventPayload::ToolCalled {
@@ -1954,6 +2215,8 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
 
                 // Surface MCP restart-exhaustion as a replay-safe
                 // `EscalationRequested` (fold pass-through). Emitted
@@ -1989,12 +2252,16 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 // EscalationRequested ... rather than burning budget").
                 // Emitted before the fallible `ToolResultReceived` append
                 // for the same reason: a storage failure must not silently
-                // drop the escalation. The drained trips are discarded here
-                // (unlike the timer-poll call site): a repeated-tool-call
-                // trip already stopped this exact dispatch by refusing to
-                // route the call (see `check_loop_guard` above); it does not
-                // need to also end the stage.
-                append_loop_escalations(p.writer, &session_dispatcher).await?;
+                // drop the escalation. The trip already refused this exact
+                // dispatch (see `check_loop_guard`); the attempt ends once
+                // this call's result is recorded and delivered (v1 task 1.3).
+                if let Some(trip) = append_loop_escalations(p.writer, &session_dispatcher)
+                    .await?
+                    .into_iter()
+                    .next()
+                {
+                    guard_trip = Some(trip);
+                }
 
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
                 let result_hash = match &engine_result {
@@ -3776,6 +4043,125 @@ mod effort_floor_tests {
 mod tests {
     use super::*;
     use surge_core::profile::VerificationCfg;
+
+    #[test]
+    fn interrupted_mcp_calls_are_named_before_the_prompt_and_absent_otherwise() {
+        assert_eq!(
+            prepend_interrupted_mcp_calls("Do it.".into(), &[]),
+            "Do it."
+        );
+        let calls = [surge_core::run_state::UnresolvedMcpCall {
+            session: surge_core::id::SessionId::new(),
+            tool: "add_comment".into(),
+            server: "github".into(),
+            seq: 42,
+        }];
+        let prompt = prepend_interrupted_mcp_calls("Do it.".into(), &calls);
+        assert!(prompt.starts_with("## Interrupted tool calls"));
+        assert!(prompt.contains("`add_comment` on MCP server `github` (event 42)"));
+        assert!(prompt.contains("outcome is unknown"));
+        assert!(prompt.ends_with("Do it."));
+    }
+
+    #[test]
+    fn previous_attempt_feedback_names_outcome_summary_and_open_checks() {
+        use surge_core::roadmap::{
+            VerificationCheck, VerificationCheckResult, VerificationReportArtifact,
+            VerificationReportOutcome,
+        };
+        let from = NodeKey::try_from("verify_1").unwrap();
+        let record = surge_core::run_state::OutcomeRecord {
+            outcome: OutcomeKey::try_from("failed").unwrap(),
+            summary: "Login form accepts empty passwords.".into(),
+            seq: 7,
+        };
+        assert_eq!(render_previous_attempt_feedback(&from, None, None), None);
+        let empty = surge_core::run_state::OutcomeRecord {
+            summary: "  ".into(),
+            ..record.clone()
+        };
+        assert_eq!(
+            render_previous_attempt_feedback(&from, Some(&empty), None),
+            None
+        );
+
+        let check = |command: &str, result, note: Option<&str>| VerificationCheck {
+            command: command.into(),
+            result,
+            covers: Vec::new(),
+            note: note.map(Into::into),
+        };
+        let mut checks = vec![
+            check("cargo nextest run", VerificationCheckResult::Passed, None),
+            check(
+                "cargo nextest run login",
+                VerificationCheckResult::Failed,
+                Some("empty_password_is_rejected panicked"),
+            ),
+        ];
+        checks.extend((0..FEEDBACK_MAX_CHECKS).map(|n| {
+            check(
+                &format!("probe {n}"),
+                VerificationCheckResult::Skipped,
+                None,
+            )
+        }));
+        let report = VerificationReportArtifact {
+            task_id: "T1".into(),
+            outcome: VerificationReportOutcome::Failed,
+            summary: "One acceptance criterion is unmet.".into(),
+            checks,
+            ..VerificationReportArtifact::default()
+        };
+        let text = render_previous_attempt_feedback(&from, Some(&record), Some(&report)).unwrap();
+        assert!(text.starts_with("## Feedback from the previous attempt\n"));
+        assert!(text.contains("Stage `verify_1` sent this work back with outcome `failed`"));
+        assert!(text.contains("Summary: Login form accepts empty passwords."));
+        assert!(text.contains("Verifier summary: One acceptance criterion is unmet."));
+        assert!(
+            text.contains(
+                "- `cargo nextest run login` — failed: empty_password_is_rejected panicked"
+            )
+        );
+        assert!(!text.contains("`cargo nextest run` —"));
+        assert!(text.contains("- …and 1 more"));
+
+        let long = "x".repeat(FEEDBACK_FIELD_MAX_CHARS + 50);
+        let clipped = surge_core::run_state::OutcomeRecord {
+            summary: long,
+            ..record
+        };
+        let text = render_previous_attempt_feedback(&from, Some(&clipped), None).unwrap();
+        assert!(text.contains(&format!("{}…", "x".repeat(FEEDBACK_FIELD_MAX_CHARS))));
+        assert!(!text.contains(&"x".repeat(FEEDBACK_FIELD_MAX_CHARS + 1)));
+    }
+
+    #[test]
+    fn requirement_revisions_apply_to_their_task_and_run_wide() {
+        use surge_core::run_state::RequirementRevision;
+        let revision = |task: Option<&str>, text: &str, seq| RequirementRevision {
+            node: NodeKey::try_from("verify").unwrap(),
+            task: task.map(surge_core::roadmap::RoadmapTaskId::from),
+            text: text.into(),
+            seq,
+        };
+        let revisions = [
+            revision(Some("login"), "Allow empty passwords in dev", 3),
+            revision(Some("logout"), "Keep sessions on logout", 4),
+            revision(None, "Use UTC everywhere", 5),
+        ];
+        let login = surge_core::roadmap::RoadmapTaskId::from("login");
+        let prompt = prepend_requirement_revisions("Do it.".into(), &revisions, Some(&login));
+        assert!(prompt.starts_with("## Requirement revised by the operator"));
+        assert!(prompt.contains("- Allow empty passwords in dev"));
+        assert!(prompt.contains("- Use UTC everywhere"));
+        assert!(!prompt.contains("Keep sessions on logout"));
+        assert!(prompt.ends_with("Do it."));
+        assert_eq!(
+            prepend_requirement_revisions("Do it.".into(), &revisions[..2], None),
+            "Do it."
+        );
+    }
 
     #[test]
     fn completion_contract_requires_tool_submission_with_actual_outcomes() {

@@ -87,7 +87,7 @@ impl Drop for BootstrapAdmissionGuard<'_> {
     fn drop(&mut self) {
         if let Some(run) = self.provisional.take() {
             self.inner.active.remove(&run);
-            self.notify.notify_waiters();
+            self.notify.notify_one();
         }
     }
 }
@@ -155,12 +155,12 @@ impl AdmissionController {
         }
     }
 
-    /// Mark a run as finished. Frees its slot and wakes any waiter
-    /// blocked on [`AdmissionController::wait_changed`].
+    /// Mark a run as finished. Frees its slot and wakes the queue drain.
+    /// A retained permit covers completions before the drain starts waiting.
     pub async fn notify_completed(&self, run_id: RunId) {
         let mut inner = self.inner.lock().await;
         inner.active.remove(&run_id);
-        self.notify.notify_waiters();
+        self.notify.notify_one();
     }
 
     /// If a slot is free and a run is queued, dequeue + admit it.
@@ -221,8 +221,10 @@ impl AdmissionController {
         }
     }
 
-    /// Block until something changes (a slot frees, a queue empties).
-    /// Useful for the server loop's "drain queue" task.
+    /// Wait for a capacity change, including one that preceded this wait.
+    ///
+    /// The server owns one queue-drain consumer, which drains all available
+    /// slots per wake. Notifications coalesce into one retained permit.
     pub async fn wait_changed(&self) {
         self.notify.notified().await;
     }
@@ -283,6 +285,55 @@ mod tests {
         a.notify_completed(r1).await;
         let popped = a.pop_queued().await;
         assert_eq!(popped, Some(r2));
+    }
+
+    #[tokio::test]
+    async fn completion_before_wait_retains_queue_wake() {
+        let admission = AdmissionController::new(1, 4);
+        let active = RunId::new();
+        let queued = RunId::new();
+        assert_eq!(
+            admission.try_admit(active).await,
+            AdmissionDecision::Admitted
+        );
+        assert_eq!(
+            admission.try_admit(queued).await,
+            AdmissionDecision::Queued { position: 0 }
+        );
+        assert_eq!(admission.pop_queued().await, None);
+
+        // Completion happens after the drain finds no capacity, before its next wait.
+        admission.notify_completed(active).await;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            admission.wait_changed(),
+        )
+        .await
+        .expect("completion must wake a drain that subscribes afterward");
+        assert_eq!(admission.pop_queued().await, Some(queued));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_rollback_before_wait_retains_queue_wake() {
+        let admission = AdmissionController::new(1, 4);
+        let provisional = RunId::new();
+        let queued = RunId::new();
+        {
+            let mut guard = admission.bootstrap_acceptance().await;
+            let _ = guard.reserve(provisional, &HashSet::new(), &[]);
+            // Queue under the held admission lock, as an existing durable waiter.
+            guard.inner.queue.push_back(queued);
+            assert!(guard.inner.active.contains(&provisional));
+        }
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            admission.wait_changed(),
+        )
+        .await
+        .expect("rollback must wake a drain that subscribes afterward");
+        assert_eq!(admission.pop_queued().await, Some(queued));
+        assert_eq!(admission.snapshot().await.active, 1);
     }
 
     #[tokio::test]

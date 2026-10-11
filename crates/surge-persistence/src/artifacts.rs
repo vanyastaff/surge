@@ -50,6 +50,9 @@ pub enum ArtifactStoreError {
     /// The fallback path would escape the configured fallback roots.
     #[error("invalid artifact fallback path: {0}")]
     InvalidFallbackPath(PathBuf),
+    /// The original run-creation reservation or its retained route is invalid.
+    #[error("artifact reservation refused: {0}")]
+    Reservation(#[from] crate::runs::OpenError),
 }
 
 /// Content-addressed store rooted at the global runs directory.
@@ -73,14 +76,14 @@ impl ArtifactStore {
         &self.runs_root
     }
 
-    /// Resolve the default artifact root, mirroring `~/.surge/runs/`.
+    /// Resolve the default artifact root (`$SURGE_HOME/runs`, otherwise `~/.surge/runs`).
     ///
     /// # Errors
     /// Returns [`ArtifactStoreError::HomeMissing`] when the home directory
     /// cannot be determined.
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().ok_or(ArtifactStoreError::HomeMissing)?;
-        Ok(home.join(".surge").join("runs"))
+        let home = surge_core::home::surge_home_dir().ok_or(ArtifactStoreError::HomeMissing)?;
+        Ok(home.join("runs"))
     }
 
     /// Create a store rooted at [`Self::default_path`].
@@ -137,6 +140,103 @@ impl ArtifactStore {
             produced_by,
             produced_at_seq: 0,
         })
+    }
+
+    /// Copy a verified inherited artifact into an exclusively reserved new run.
+    ///
+    /// This synchronous operation creates no directories or journal. Callers must
+    /// move the reservation into the actual blocking worker, retaining it through
+    /// all filesystem effects even when the awaiting task is cancelled.
+    ///
+    /// # Errors
+    /// Refuses an invalid reservation, corrupt source/destination bytes, an invalid
+    /// legacy fallback path, or an I/O/index serialization failure.
+    pub fn inherit_reserved(
+        &self,
+        reservation: &crate::runs::RunCreationReservation,
+        parent: RunId,
+        reference: &ArtifactRef,
+        fallback_root: &Path,
+    ) -> Result<ArtifactRef> {
+        use std::io::Write as _;
+        let bytes = self.open_ref_blocking(parent, reference, fallback_root)?;
+        let directory = reservation.artifacts_path(&self.runs_root)?;
+        let target = directory.join(reference.hash.to_hex());
+        match std::fs::read(&target) {
+            Ok(existing) => verify_content(&existing, reference.hash)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = directory.join(format!(
+                    "{}.tmp-{}",
+                    reference.hash.to_hex(),
+                    ulid::Ulid::new()
+                ));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?;
+                file.write_all(&bytes)?;
+                drop(file);
+                reservation.artifacts_path(&self.runs_root)?;
+                std::fs::rename(temporary, &target)?;
+            },
+            Err(error) => return Err(error.into()),
+        }
+        verify_content(&std::fs::read(&target)?, reference.hash)?;
+        let index_path = directory.join(INDEX_FILE);
+        let mut index: BTreeMap<String, ContentHash> = match std::fs::read(&index_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(error) => return Err(error.into()),
+        };
+        index.insert(reference.name.clone(), reference.hash);
+        let encoded = serde_json::to_vec_pretty(&index)?;
+        reservation.artifacts_path(&self.runs_root)?;
+        std::fs::write(index_path, encoded)?;
+        Ok(ArtifactRef {
+            path: target,
+            ..reference.clone()
+        })
+    }
+
+    fn open_ref_blocking(
+        &self,
+        run: RunId,
+        reference: &ArtifactRef,
+        fallback_root: &Path,
+    ) -> Result<Vec<u8>> {
+        match std::fs::read(self.artifacts_dir(run).join(reference.hash.to_hex())) {
+            Ok(bytes) => {
+                verify_content(&bytes, reference.hash)?;
+                return Ok(bytes);
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+        let path = if reference.path.is_absolute() {
+            reference.path.clone()
+        } else {
+            if !safe_relative_fallback_path(&reference.path) {
+                return Err(ArtifactStoreError::InvalidFallbackPath(
+                    reference.path.clone(),
+                ));
+            }
+            fallback_root.join(&reference.path)
+        };
+        let canonical = std::fs::canonicalize(path)?;
+        let canonical_fallback = std::fs::canonicalize(fallback_root)?;
+        let canonical_runs = std::fs::canonicalize(&self.runs_root).ok();
+        if !canonical.starts_with(canonical_fallback)
+            && !canonical_runs
+                .as_ref()
+                .is_some_and(|runs| canonical.starts_with(runs))
+        {
+            return Err(ArtifactStoreError::InvalidFallbackPath(
+                reference.path.clone(),
+            ));
+        }
+        let bytes = std::fs::read(canonical)?;
+        verify_content(&bytes, reference.hash)?;
+        Ok(bytes)
     }
 
     /// Read an artifact by content hash.
@@ -282,9 +382,46 @@ fn safe_relative_fallback_path(path: &Path) -> bool {
     })
 }
 
+fn verify_content(bytes: &[u8], expected: ContentHash) -> Result<()> {
+    let actual = ContentHash::compute(bytes);
+    if actual != expected {
+        return Err(ArtifactStoreError::HashMismatch { expected, actual });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_path_respects_isolated_surge_home() {
+        const CHILD_MARKER: &str = "SURGE_ARTIFACTSTORE_PATH_TEST_CHILD";
+        if let Some(home) = std::env::var_os(CHILD_MARKER) {
+            let expected = PathBuf::from(home).join("runs");
+            assert_eq!(ArtifactStore::default_path().unwrap(), expected);
+            return;
+        }
+
+        // A subprocess owns its environment: no global mutation races with other tests.
+        let isolated_home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "artifacts::tests::default_path_respects_isolated_surge_home",
+                "--nocapture",
+            ])
+            .env("SURGE_HOME", isolated_home.path())
+            .env(CHILD_MARKER, isolated_home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated path test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
 
     fn test_store(root: &Path) -> ArtifactStore {
         ArtifactStore::new(root.join("runs"))

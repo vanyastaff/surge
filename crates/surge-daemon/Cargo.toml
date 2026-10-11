@@ -53,11 +53,14 @@ tokio-stream = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dev-dependencies]
 git2.workspace = true
 agent-client-protocol.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
-surge-orchestrator.workspace = true
+surge-orchestrator = { workspace = true, features = ["test-support"] }
 surge-acp.workspace = true
 surge-persistence.workspace = true

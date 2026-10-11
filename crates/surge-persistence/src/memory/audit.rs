@@ -997,35 +997,38 @@ mod tests {
         );
         store.add_claim(&fresh_claim).unwrap();
 
-        let storage_dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(storage_dir.path()).await.unwrap();
+        let storage_dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(storage_dir.path()).await.unwrap();
 
-        let claims = store.list_claims().unwrap();
-        let report = run_audit(&claims, &storage, irrelevant_project_root())
-            .await
-            .unwrap();
+            let claims = store.list_claims().unwrap();
+            let report = run_audit(&claims, &storage, irrelevant_project_root())
+                .await
+                .unwrap();
 
-        assert_eq!(report.stale.len(), 1, "only the drifted claim is stale");
-        assert_eq!(report.stale[0].claim_id, stale_claim.id());
-        assert!(
-            report
-                .stale
-                .iter()
-                .all(|finding| finding.claim_id != fresh_claim.id()),
-            "the fresh claim must not be flagged"
-        );
-        assert!(
-            report.run_correlated.is_empty(),
-            "no run exists yet to correlate against: {:?}",
-            report.run_correlated
-        );
+            assert_eq!(report.stale.len(), 1, "only the drifted claim is stale");
+            assert_eq!(report.stale[0].claim_id, stale_claim.id());
+            assert!(
+                report
+                    .stale
+                    .iter()
+                    .all(|finding| finding.claim_id != fresh_claim.id()),
+                "the fresh claim must not be flagged"
+            );
+            assert!(
+                report.run_correlated.is_empty(),
+                "no run exists yet to correlate against: {:?}",
+                report.run_correlated
+            );
 
-        // Auditing must never remove or alter anything: both claims are
-        // still present, byte-for-byte, afterward.
-        let after = store.list_claims().unwrap();
-        assert_eq!(after.len(), 2, "audit must not delete any claim");
-        assert!(after.contains(&stale_claim));
-        assert!(after.contains(&fresh_claim));
+            // Auditing must never remove or alter anything: both claims are
+            // still present, byte-for-byte, afterward.
+            let after = store.list_claims().unwrap();
+            assert_eq!(after.len(), 2, "audit must not delete any claim");
+            assert!(after.contains(&stale_claim));
+            assert!(after.contains(&fresh_claim));
+        }
+        storage_dir.close().unwrap();
     }
 
     /// The end-to-end proof for the second half of R21: a claim traced to
@@ -1040,71 +1043,74 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_audit_correlates_a_claim_with_a_loop_guard_stopped_run_even_when_the_registry_reads_crashed()
      {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        let run_id = RunId::new();
-        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-        let node = surge_core::keys::NodeKey::try_from("implement").unwrap();
-        writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::StageEntered { node, attempt: 1 }),
-                VersionedEventPayload::new(EventPayload::EscalationRequested {
-                    stage: None,
-                    reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
-                              budget; escalating"
-                        .into(),
-                    cause: EscalationCause::LoopGuardNodeDeadline,
-                }),
-            ])
+            let run_id = RunId::new();
+            let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+            let node = surge_core::keys::NodeKey::try_from("implement").unwrap();
+            writer
+                .append_events(vec![
+                    VersionedEventPayload::new(EventPayload::StageEntered { node, attempt: 1 }),
+                    VersionedEventPayload::new(EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
+                                  budget; escalating"
+                            .into(),
+                        cause: EscalationCause::LoopGuardNodeDeadline,
+                    }),
+                ])
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            writer.close().await.unwrap();
+
+            storage
+                .set_run_status(&run_id, RunStatus::Crashed, Some(1))
+                .await
+                .unwrap();
+
+            let claim = MemoryClaim::from_transcript(
+                "root cause was the node running past its budget",
+                format!("transcript:{run_id}#turn-3"),
+                ContentHash::compute(b"turn 3"),
+            );
+
+            let report = run_audit(
+                std::slice::from_ref(&claim),
+                &storage,
+                irrelevant_project_root(),
+            )
             .await
             .unwrap();
-        writer.flush().await.unwrap();
-        drop(writer);
 
-        storage
-            .set_run_status(&run_id, RunStatus::Crashed, Some(1))
-            .await
-            .unwrap();
-
-        let claim = MemoryClaim::from_transcript(
-            "root cause was the node running past its budget",
-            format!("transcript:{run_id}#turn-3"),
-            ContentHash::compute(b"turn 3"),
-        );
-
-        let report = run_audit(
-            std::slice::from_ref(&claim),
-            &storage,
-            irrelevant_project_root(),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            report.run_correlated.len(),
-            1,
-            "{:?}",
-            report.run_correlated
-        );
-        let finding = &report.run_correlated[0];
-        assert_eq!(finding.claim_id, claim.id());
-        assert_eq!(finding.run_id, run_id);
-        assert_eq!(
-            finding.run_status,
-            RunStatus::Crashed,
-            "the registry status is deliberately not Failed — the loop-guard cause alone \
-             must be what pulls this run into the correlation"
-        );
-        assert_eq!(
-            finding.loop_guard_cause,
-            Some(EscalationCause::LoopGuardNodeDeadline)
-        );
-        assert!(
-            report.caveats.is_empty(),
-            "the run is registered and its log is readable: {:?}",
-            report.caveats
-        );
+            assert_eq!(
+                report.run_correlated.len(),
+                1,
+                "{:?}",
+                report.run_correlated
+            );
+            let finding = &report.run_correlated[0];
+            assert_eq!(finding.claim_id, claim.id());
+            assert_eq!(finding.run_id, run_id);
+            assert_eq!(
+                finding.run_status,
+                RunStatus::Crashed,
+                "the registry status is deliberately not Failed — the loop-guard cause alone \
+                 must be what pulls this run into the correlation"
+            );
+            assert_eq!(
+                finding.loop_guard_cause,
+                Some(EscalationCause::LoopGuardNodeDeadline)
+            );
+            assert!(
+                report.caveats.is_empty(),
+                "the run is registered and its log is readable: {:?}",
+                report.caveats
+            );
+        }
+        dir.close().unwrap();
     }
 
     /// Blocker regression, both halves at once: `run_audit` must never
@@ -1123,87 +1129,90 @@ mod tests {
     async fn run_audit_never_mutates_the_registry_and_never_scans_a_run_no_claim_names() {
         use crate::runs::registry;
 
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        let claimed_run = RunId::new();
-        let writer = storage
-            .create_run(claimed_run, dir.path(), None)
+            let claimed_run = RunId::new();
+            let writer = storage
+                .create_run(claimed_run, dir.path(), None)
+                .await
+                .unwrap();
+            let node = surge_core::keys::NodeKey::try_from("implement").unwrap();
+            writer
+                .append_events(vec![
+                    VersionedEventPayload::new(EventPayload::StageEntered { node, attempt: 1 }),
+                    VersionedEventPayload::new(EventPayload::EscalationRequested {
+                        stage: None,
+                        reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
+                                  budget; escalating"
+                            .into(),
+                        cause: EscalationCause::LoopGuardNodeDeadline,
+                    }),
+                ])
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            writer.close().await.unwrap();
+
+            // A registry-only row: `Running` status, an impossibly-high (dead)
+            // daemon pid, no per-run directory, and no claim ever names it.
+            // `Storage::list_runs` would rewrite this to `Crashed` the instant
+            // it is listed; the raw registry read must not.
+            let orphaned_run = RunId::new();
+            registry::insert_run(
+                &storage.registry_pool,
+                &registry::RunSummary {
+                    id: orphaned_run,
+                    project_path: dir.path().to_path_buf(),
+                    pipeline_template: None,
+                    status: RunStatus::Running,
+                    started_at_ms: 1,
+                    ended_at_ms: None,
+                    daemon_pid: Some(i32::MAX),
+                    wake_at_ms: None,
+                },
+            )
+            .unwrap();
+
+            let claim = MemoryClaim::from_transcript(
+                "root cause was the node running past its budget",
+                format!("transcript:{claimed_run}#turn-1"),
+                ContentHash::compute(b"turn 1"),
+            );
+
+            let report = run_audit(
+                std::slice::from_ref(&claim),
+                &storage,
+                irrelevant_project_root(),
+            )
             .await
             .unwrap();
-        let node = surge_core::keys::NodeKey::try_from("implement").unwrap();
-        writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::StageEntered { node, attempt: 1 }),
-                VersionedEventPayload::new(EventPayload::EscalationRequested {
-                    stage: None,
-                    reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
-                              budget; escalating"
-                        .into(),
-                    cause: EscalationCause::LoopGuardNodeDeadline,
-                }),
-            ])
-            .await
-            .unwrap();
-        writer.flush().await.unwrap();
-        drop(writer);
 
-        // A registry-only row: `Running` status, an impossibly-high (dead)
-        // daemon pid, no per-run directory, and no claim ever names it.
-        // `Storage::list_runs` would rewrite this to `Crashed` the instant
-        // it is listed; the raw registry read must not.
-        let orphaned_run = RunId::new();
-        registry::insert_run(
-            &storage.registry_pool,
-            &registry::RunSummary {
-                id: orphaned_run,
-                project_path: dir.path().to_path_buf(),
-                pipeline_template: None,
-                status: RunStatus::Running,
-                started_at_ms: 1,
-                ended_at_ms: None,
-                daemon_pid: Some(i32::MAX),
-                wake_at_ms: None,
-            },
-        )
-        .unwrap();
+            assert_eq!(
+                report.run_correlated.len(),
+                1,
+                "{:?}",
+                report.run_correlated
+            );
+            assert_eq!(report.run_correlated[0].run_id, claimed_run);
+            assert!(
+                report.caveats.is_empty(),
+                "the orphaned run must never even be attempted, since no claim names it: {:?}",
+                report.caveats
+            );
 
-        let claim = MemoryClaim::from_transcript(
-            "root cause was the node running past its budget",
-            format!("transcript:{claimed_run}#turn-1"),
-            ContentHash::compute(b"turn 1"),
-        );
-
-        let report = run_audit(
-            std::slice::from_ref(&claim),
-            &storage,
-            irrelevant_project_root(),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            report.run_correlated.len(),
-            1,
-            "{:?}",
-            report.run_correlated
-        );
-        assert_eq!(report.run_correlated[0].run_id, claimed_run);
-        assert!(
-            report.caveats.is_empty(),
-            "the orphaned run must never even be attempted, since no claim names it: {:?}",
-            report.caveats
-        );
-
-        let orphaned_after = registry::get_run(&storage.registry_pool, &orphaned_run)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            orphaned_after.status,
-            RunStatus::Running,
-            "run_audit must never rewrite registry status, even for a dead-pid row"
-        );
-        assert_eq!(orphaned_after.ended_at_ms, None);
+            let orphaned_after = registry::get_run(&storage.registry_pool, &orphaned_run)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                orphaned_after.status,
+                RunStatus::Running,
+                "run_audit must never rewrite registry status, even for a dead-pid row"
+            );
+            assert_eq!(orphaned_after.ended_at_ms, None);
+        }
+        dir.close().unwrap();
     }
 
     /// Regression for the nondeterminism a reviewer measured: `caveats`'s
@@ -1216,39 +1225,42 @@ mod tests {
     /// document for the same input.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_audit_caveats_order_is_deterministic_across_repeated_calls() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        // Three claims naming three different runs, none present in the
-        // registry — three "run not in the registry" caveat entries whose
-        // relative order is exactly what a `HashSet` iteration would
-        // scramble.
-        let claims: Vec<MemoryClaim> = (0..3)
-            .map(|i| {
-                MemoryClaim::from_transcript(
-                    format!("claim {i}"),
-                    format!("transcript:{}#turn-1", RunId::new()),
-                    ContentHash::compute(format!("turn {i}").as_bytes()),
-                )
-            })
-            .collect();
+            // Three claims naming three different runs, none present in the
+            // registry — three "run not in the registry" caveat entries whose
+            // relative order is exactly what a `HashSet` iteration would
+            // scramble.
+            let claims: Vec<MemoryClaim> = (0..3)
+                .map(|i| {
+                    MemoryClaim::from_transcript(
+                        format!("claim {i}"),
+                        format!("transcript:{}#turn-1", RunId::new()),
+                        ContentHash::compute(format!("turn {i}").as_bytes()),
+                    )
+                })
+                .collect();
 
-        let first = run_audit(&claims, &storage, irrelevant_project_root())
-            .await
-            .unwrap()
-            .caveats;
-        assert_eq!(first.len(), 3, "{first:?}");
-
-        for attempt in 0..4 {
-            let repeat = run_audit(&claims, &storage, irrelevant_project_root())
+            let first = run_audit(&claims, &storage, irrelevant_project_root())
                 .await
                 .unwrap()
                 .caveats;
-            assert_eq!(
-                repeat, first,
-                "attempt {attempt}: the same input must produce the same `caveats` document \
-                 every time, not one that depends on HashSet iteration order"
-            );
+            assert_eq!(first.len(), 3, "{first:?}");
+
+            for attempt in 0..4 {
+                let repeat = run_audit(&claims, &storage, irrelevant_project_root())
+                    .await
+                    .unwrap()
+                    .caveats;
+                assert_eq!(
+                    repeat, first,
+                    "attempt {attempt}: the same input must produce the same `caveats` document \
+                     every time, not one that depends on HashSet iteration order"
+                );
+            }
         }
+        dir.close().unwrap();
     }
 }

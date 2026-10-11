@@ -1,5 +1,15 @@
 //! CLI smoke: `surge feature` exposes the roadmap amendment entrypoint.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
 use assert_cmd::Command;
 use predicates::str::contains;
 
@@ -33,30 +43,30 @@ fn feature_describe_help_lists_target_and_output_flags() {
 
 #[test]
 fn feature_list_empty_registry_json_works() {
-    let temp = tempfile::tempdir().unwrap();
-    let surge_home = temp.path().join("surge_home");
-    std::fs::create_dir_all(&surge_home).unwrap();
+    let home = FixtureHome::new().unwrap();
+    let surge_home = home.path();
 
     Command::cargo_bin("surge")
         .unwrap()
         .args(["feature", "list", "--all-projects", "--json"])
-        .env("SURGE_HOME", &surge_home)
+        .env("SURGE_HOME", surge_home)
         .assert()
         .success()
         .stdout(contains("[]"));
+    home.close().unwrap();
 }
 
 #[test]
 fn feature_show_missing_patch_reports_error() {
-    let temp = tempfile::tempdir().unwrap();
-    let surge_home = temp.path().join("surge_home");
-    std::fs::create_dir_all(&surge_home).unwrap();
+    let home = FixtureHome::new().unwrap();
+    let surge_home = home.path();
 
     Command::cargo_bin("surge")
         .unwrap()
         .args(["feature", "show", "rpatch-missing"])
-        .env("SURGE_HOME", &surge_home)
+        .env("SURGE_HOME", surge_home)
         .assert()
         .failure()
         .stderr(contains("roadmap patch not found"));
+    home.close().unwrap();
 }

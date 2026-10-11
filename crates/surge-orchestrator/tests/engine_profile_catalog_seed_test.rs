@@ -8,6 +8,8 @@
 //! event-log read after `await_completion`).
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -60,110 +62,116 @@ fn terminal_graph() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_run_seeds_profile_catalog_artifact_when_registry_wired() {
-    let storage_dir = tempfile::tempdir().unwrap();
-    let worktree = tempfile::tempdir().unwrap();
-    let storage = Storage::open(storage_dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(worktree.path().to_path_buf()))
-        as Arc<dyn ToolDispatcher>;
-    // Bundled profiles only (no disk overlay) — enough to exercise the
-    // catalog-rendering path without a `SURGE_HOME` fixture.
-    let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
-    let engine = Engine::new(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        EngineConfig {
-            profile_registry: Some(profile_registry),
-            ..EngineConfig::default()
-        },
-    );
+    let storage_dir = FixtureHome::new().unwrap();
+    {
+        let worktree = tempfile::tempdir().unwrap();
+        let storage = Storage::open(storage_dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(worktree.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        // Bundled profiles only (no disk overlay) — enough to exercise the
+        // catalog-rendering path without a `SURGE_HOME` fixture.
+        let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+        let engine = Engine::new(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            EngineConfig {
+                profile_registry: Some(profile_registry),
+                ..EngineConfig::default()
+            },
+        );
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            terminal_graph(),
-            worktree.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .unwrap();
-    let _ = handle.await_completion().await.unwrap();
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                terminal_graph(),
+                worktree.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        let _ = handle.await_completion().await.unwrap();
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
-    let mut memory = RunMemory::default();
-    let mut seeded_content: Option<String> = None;
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
+        let mut memory = RunMemory::default();
+        let mut seeded_content: Option<String> = None;
 
-    for event in &events {
-        let payload = event.payload.payload.clone();
-        if let EventPayload::ArtifactProduced {
-            node, path, name, ..
-        } = &payload
-            && name == "profile_catalog"
-        {
-            assert_eq!(node.as_ref(), "profile_catalog_seed");
-            seeded_content = Some(std::fs::read_to_string(worktree.path().join(path)).unwrap());
+        for event in &events {
+            let payload = event.payload.payload.clone();
+            if let EventPayload::ArtifactProduced {
+                node, path, name, ..
+            } = &payload
+                && name == "profile_catalog"
+            {
+                assert_eq!(node.as_ref(), "profile_catalog_seed");
+                seeded_content = Some(std::fs::read_to_string(worktree.path().join(path)).unwrap());
+            }
+            memory.apply_event(&RunEvent {
+                run_id,
+                seq: event.seq.as_u64(),
+                timestamp: chrono::Utc::now(),
+                payload,
+            });
         }
-        memory.apply_event(&RunEvent {
-            run_id,
-            seq: event.seq.as_u64(),
-            timestamp: chrono::Utc::now(),
-            payload,
-        });
+
+        let content = seeded_content.expect("profile_catalog ArtifactProduced event is missing");
+        // Proof the seeded artifact is the real rendered catalogue, not a stub:
+        // it names bundled profiles and resolves their canonical runtime.
+        assert!(
+            content.contains("`implementer@1.0`"),
+            "catalog should list implementer@1.0, got:\n{content}"
+        );
+        assert!(
+            content.contains("claude-acp"),
+            "catalog should show implementer@1.0's canonical runtime, got:\n{content}"
+        );
+
+        let artifact = memory.artifacts.get("profile_catalog").unwrap();
+        assert_eq!(artifact.produced_by.as_ref(), "profile_catalog_seed");
     }
-
-    let content = seeded_content.expect("profile_catalog ArtifactProduced event is missing");
-    // Proof the seeded artifact is the real rendered catalogue, not a stub:
-    // it names bundled profiles and resolves their canonical runtime.
-    assert!(
-        content.contains("`implementer@1.0`"),
-        "catalog should list implementer@1.0, got:\n{content}"
-    );
-    assert!(
-        content.contains("claude-acp"),
-        "catalog should show implementer@1.0's canonical runtime, got:\n{content}"
-    );
-
-    let artifact = memory.artifacts.get("profile_catalog").unwrap();
-    assert_eq!(artifact.produced_by.as_ref(), "profile_catalog_seed");
+    storage_dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_run_seeds_nothing_and_still_starts_without_profile_registry() {
-    let storage_dir = tempfile::tempdir().unwrap();
-    let worktree = tempfile::tempdir().unwrap();
-    let storage = Storage::open(storage_dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(worktree.path().to_path_buf()))
-        as Arc<dyn ToolDispatcher>;
-    // No `profile_registry` set — `EngineConfig::default()` leaves it `None`.
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let storage_dir = FixtureHome::new().unwrap();
+    {
+        let worktree = tempfile::tempdir().unwrap();
+        let storage = Storage::open(storage_dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(worktree.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        // No `profile_registry` set — `EngineConfig::default()` leaves it `None`.
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            terminal_graph(),
-            worktree.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .unwrap();
-    let _ = handle.await_completion().await.unwrap();
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                terminal_graph(),
+                worktree.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        let _ = handle.await_completion().await.unwrap();
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
 
-    let saw_catalog_seed = events.iter().any(|event| {
-        matches!(
-            &event.payload.payload,
-            EventPayload::ArtifactProduced { name, .. } if name == "profile_catalog"
-        )
-    });
-    assert!(
-        !saw_catalog_seed,
-        "no profile_registry was wired; start_run must not seed a profile_catalog artifact"
-    );
+        let saw_catalog_seed = events.iter().any(|event| {
+            matches!(
+                &event.payload.payload,
+                EventPayload::ArtifactProduced { name, .. } if name == "profile_catalog"
+            )
+        });
+        assert!(
+            !saw_catalog_seed,
+            "no profile_registry was wired; start_run must not seed a profile_catalog artifact"
+        );
+    }
+    storage_dir.close().unwrap();
 }

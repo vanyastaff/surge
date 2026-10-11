@@ -45,6 +45,10 @@ pub enum EmitEventKind {
     MergeProposed,
     /// L3 merge gate blocked (red checks / no review / merge conflict).
     MergeBlocked,
+    /// Durable reservation before publishing an irreversible merge request.
+    MergeAttempted,
+    /// Interrupted merge request with unknown external outcome; manual inspection required.
+    MergeUncertain,
     /// L3 merge gate completed a real merge. This is the terminal success
     /// dedup row that makes a re-fired completion a no-op (no double-merge).
     Merged,
@@ -63,6 +67,8 @@ impl EmitEventKind {
             Self::RunAborted => "run_aborted",
             Self::MergeProposed => "merge_proposed",
             Self::MergeBlocked => "merge_blocked",
+            Self::MergeAttempted => "merge_attempted",
+            Self::MergeUncertain => "merge_uncertain",
             Self::Merged => "merged",
         }
     }
@@ -79,6 +85,8 @@ impl EmitEventKind {
             "run_aborted" => Some(Self::RunAborted),
             "merge_proposed" => Some(Self::MergeProposed),
             "merge_blocked" => Some(Self::MergeBlocked),
+            "merge_attempted" => Some(Self::MergeAttempted),
+            "merge_uncertain" => Some(Self::MergeUncertain),
             "merged" => Some(Self::Merged),
             _ => None,
         }
@@ -354,6 +362,8 @@ mod tests {
             EmitEventKind::RunAborted,
             EmitEventKind::MergeProposed,
             EmitEventKind::MergeBlocked,
+            EmitEventKind::MergeAttempted,
+            EmitEventKind::MergeUncertain,
             EmitEventKind::Merged,
         ];
         for kind in cases {

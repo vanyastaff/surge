@@ -7,6 +7,11 @@
 //! [`CockpitWiring`] bundle and call [`spawn_cockpit`] — everything
 //! else (loops, supervisor, snooze rescheduler) is wired internally.
 
+#[path = "outgoing_admission.rs"]
+mod outgoing_admission;
+#[path = "reply_admission.rs"]
+mod reply_admission;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -555,7 +560,8 @@ impl Admission for PairingsAdmission {
             .storage
             .acquire_registry_conn()
             .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
-        Ok(surge_persistence::telegram::pairings::is_admitted(&conn, chat_id).unwrap_or(false))
+        surge_persistence::telegram::pairings::is_admitted(&conn, chat_id)
+            .map_err(|error| TelegramCockpitError::Persistence(error.to_string()))
     }
 }
 
@@ -775,7 +781,15 @@ impl UpdateRoutes for ProductionRoutes {
 
         match reply_res {
             Ok(reply) => {
-                self.send_reply(chat_id, &reply.text).await;
+                if cmd == "/pair" {
+                    if let Err(error) =
+                        reply_admission::send_pairing_reply(&self.bot, chat_id, &reply.text).await
+                    {
+                        warn!(%chat_id, %error, "pairing reply failed");
+                    }
+                } else {
+                    self.send_reply(chat_id, &reply.text).await;
+                }
             },
             Err(err) => {
                 warn!(
@@ -785,11 +799,16 @@ impl UpdateRoutes for ProductionRoutes {
                     error = %err,
                     "command handler failed; sending generic error reply"
                 );
-                self.send_reply(
-                    chat_id,
-                    &format!("❌ Internal error while handling `{cmd}`. Check daemon logs."),
-                )
-                .await;
+                let text = format!("❌ Internal error while handling `{cmd}`. Check daemon logs.");
+                if cmd == "/pair" {
+                    if let Err(error) =
+                        reply_admission::send_pairing_reply(&self.bot, chat_id, &text).await
+                    {
+                        warn!(%chat_id, %error, "pairing error reply failed");
+                    }
+                } else {
+                    self.send_reply(chat_id, &text).await;
+                }
             },
         }
     }
@@ -805,16 +824,13 @@ impl ProductionRoutes {
     /// is set (text rendering uses literal Markdown that we keep as-is;
     /// MarkdownV2 would require pervasive escaping of operator content).
     pub(super) async fn send_reply(&self, chat_id: i64, text: &str) {
-        use teloxide::prelude::Requester as _;
-        if let Err(err) = self
-            .bot
-            .send_message(teloxide::types::ChatId(chat_id), text)
-            .await
+        if let Err(err) =
+            reply_admission::send_reply(&self.bot, &self.admission, chat_id, text).await
         {
             warn!(
                 target: "telegram::cmd::reply",
                 %chat_id,
-                error = %TelegramCockpitError::from(err),
+                error = %err,
                 "bot.send_message reply failed",
             );
         }
@@ -884,7 +900,12 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
         storage: Arc::clone(&storage),
     };
     let bot_for_routes = bot.clone();
-    let bot_api = TeloxideTelegramApi { bot };
+    let bot_api = outgoing_admission::AdmittedTelegramApi {
+        api: TeloxideTelegramApi { bot },
+        admission: PairingsAdmission {
+            storage: Arc::clone(&storage),
+        },
+    };
     let snapshots = PersistenceSnapshots {
         storage: Arc::clone(&storage),
     };

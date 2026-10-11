@@ -1,0 +1,6 @@
+// Compile-only inclusion of unchanged actual modules. No fake validators.
+#![allow(dead_code)]
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/native.rs"]
+mod native;
+#[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/security.rs"]
+mod security;

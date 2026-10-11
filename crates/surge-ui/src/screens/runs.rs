@@ -2013,7 +2013,7 @@ mod recorded_session_tests {
     fn sessions_tab_reaches_oldest_stored_opening_beyond_log_limit() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let guard = runtime.enter();
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let run = surge_core::RunId::new();
         let oldest = surge_core::SessionId::new();
         let newest = surge_core::SessionId::new();
@@ -2060,13 +2060,16 @@ mod recorded_session_tests {
                 )
                 .await
                 .unwrap();
-            surge_persistence::runs::Storage::inspect_existing_run_events(
+            let events = surge_persistence::runs::Storage::inspect_existing_run_events(
                 home.path().join("runs"),
                 run,
             )
             .await
-            .unwrap()
+            .unwrap();
+            writer.close().await.unwrap();
+            events
         });
+        home.close().unwrap();
         assert_eq!(events.len(), 262);
         let mut stream = crate::run_stream::RunStreamState::default();
         stream.begin_display_history(run, None);
@@ -2187,7 +2190,7 @@ mod result_folder_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn result_folder_uses_persisted_custom_path() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let output = tempfile::tempdir().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
@@ -2210,6 +2213,9 @@ mod result_folder_tests {
                 .unwrap_err()
                 .contains("not recorded")
         );
+        drop(storage);
+        home.close().unwrap();
+        output.close().unwrap();
     }
 
     #[test]

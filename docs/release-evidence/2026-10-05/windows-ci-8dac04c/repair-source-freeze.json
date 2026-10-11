@@ -1,0 +1,24 @@
+{
+  "source": "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/security.rs",
+  "sha256": "274e106e9df39257624bef4254354936643474e811f44d9a9747d639d1eba1dd",
+  "scope": "exact TrustedInstaller ancestor owner and owner-conditioned outsider child creation only; mutation-ACE trust unchanged",
+  "checks": [
+    {
+      "command": "CARGO_INCREMENTAL=0 CLIPPY_CONF_DIR=/Users/vanyastafford/Develop/surge cargo +1.99.0 clippy --offline --manifest-path /tmp/surge-security-policy-actual-module/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings",
+      "exit": 0,
+      "log": "/tmp/surge-security-policy-cross-clippy.log",
+      "scope": "compile/lint actual native.rs and security.rs including cfg(test), no execution; standalone wrapper allows dead_code for unconsumed production items"
+    },
+    {
+      "command": "rustfmt +1.99.0 --edition 2024 --config skip_children=true --check crates/surge-persistence/src/state_home/windows/security.rs",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check -- crates/surge-persistence/src/state_home/windows/security.rs",
+      "exit": 0
+    }
+  ],
+  "native_execution": "pending native Windows CI",
+  "tests_added": 3,
+  "negative_before_fix": "Actual standard-user home-create refusal in /tmp/surge-windows-ci-8dac04c.log:57803-57808; added unit tests were not run before fix"
+}

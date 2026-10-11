@@ -1,0 +1,10 @@
+# Root source review: open correctness findings
+
+This is a source review, not final 5a/5b or native acceptance. Original engine review counter remains 1/3.
+
+1. The original actual manager-retention regression now passes (see initial-green-source-freeze.json and engine-forwarder-baseline-green-1.log). That narrow result does not establish the complete settlement matrix.
+2. A Running read can return an empty batch before a concurrent append/seal, then observe Sealed afterward. Treating that old empty snapshot as a gap below the new sealed prefix is incorrect. Required deterministic test pauses after actual empty SQL read and before return, appends/seals, then releases. Only a read performed against an already-observed sealed bound can prove a missing suffix. Actual deterministic RED is preserved in engine-forwarder-seal-race-red.log. Minimal before=Sealed correction then passed the same exact test (1/1, 0.06s) and the complete forwarder group (6/6, 0.36s); broader ownership/strict/native/history gates remain open.
+3. The corruption fixture deleting an event must explicitly drop the append-only delete trigger in the test database before deletion. Production append-only protection remains unchanged. Without this fixture setup it fails before testing the forwarder. The corrected corruption fixture passed in the six-case focused group.
+4. Durable plan a046d088 remains RESHAPE: exact row framing must include stored schema_version and decoded-kind agreement; explicit revalidation needs trusted operator origin distinct from automatic resume; one-snapshot verification must reject suffixes and require MAX/count/continuity including zero; delete_run must honor cross-Storage/process exclusion and retain cleanup-worker ownership. The independent reviewer confirmed these plan gaps. No schema implementation authorized yet.
+
+The durable proposal is being amended under the same independent review; additional mandatory closure includes fork pre-Storage creation/artifact-copy reservations and public reader pools that must not recreate deleted database files. No schema acceptance is implied by focused forwarder test results.

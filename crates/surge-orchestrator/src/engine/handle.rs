@@ -14,6 +14,14 @@ use tokio::task::JoinHandle;
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunOutcome {
+    /// Execution produced an outcome but local writer or event delivery settlement failed.
+    /// Consumers must not acknowledge the original as terminal or suspended.
+    SettlementFailed {
+        /// Original execution result, retained without converting it to success.
+        original: Box<RunOutcome>,
+        /// Independent sanitized failures from actual writer and forwarder settlement.
+        failures: Vec<RunSettlementFailure>,
+    },
     /// The run reached a `TerminalKind::Success` node.
     Completed {
         /// `NodeKey` of the terminal node that ended the run.
@@ -56,6 +64,32 @@ pub enum RunOutcome {
         /// When the run is expected to resume on its own.
         wake_at: DateTime<Utc>,
     },
+}
+
+/// A bounded local settlement failure; diagnostics contain no event payload or path.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, thiserror::Error,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSettlementFailure {
+    /// The writer could not confirm a sealed prefix and joined exit.
+    #[error("run writer seal could not be confirmed")]
+    WriterSeal,
+    /// A real event-reading SQL worker failed.
+    #[error("run event read failed")]
+    ForwarderRead,
+    /// The owned forwarder or its SQL worker did not return normally.
+    #[error("run event forwarder join failed")]
+    ForwarderJoin,
+    /// The writer stopped without a successful seal.
+    #[error("run writer ownership was interrupted")]
+    WriterInterrupted,
+    /// Events were missing, out of order, or exceeded the sealed prefix.
+    #[error("run event sequence did not match its sealed prefix")]
+    ForwarderSequence,
+    /// Writer receipt and fully forwarded prefix disagreed.
+    #[error("run writer and event forwarder sealed prefixes disagreed")]
+    PrefixMismatch,
 }
 
 /// Run observation: durable events, confirmed completion, or an explicit stream failure.

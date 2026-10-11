@@ -1,0 +1,539 @@
+   Compiling libc v0.2.183
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling smallvec v1.15.1
+   Compiling futures-core v0.3.34
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.117
+   Compiling jobserver v0.1.34
+   Compiling serde v1.0.228
+   Compiling scopeguard v1.2.0
+   Compiling syn v3.0.6
+   Compiling futures-io v0.3.34
+   Compiling log v0.4.29
+   Compiling cc v1.2.57
+   Compiling parking_lot_core v0.9.12
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.11.1
+   Compiling slab v0.4.12
+   Compiling futures-sink v0.3.34
+   Compiling num-traits v0.2.19
+   Compiling futures-channel v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling stable_deref_trait v1.2.1
+   Compiling futures-task v0.3.34
+   Compiling errno v0.3.14
+   Compiling socket2 v0.6.3
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling mio v1.1.1
+   Compiling serde_json v1.0.151
+   Compiling pkg-config v0.3.32
+   Compiling rustix v1.1.4
+   Compiling getrandom v0.4.2
+   Compiling rand_core v0.10.1
+   Compiling vcpkg v0.2.15
+   Compiling subtle v2.6.1
+   Compiling strsim v0.11.1
+   Compiling writeable v0.6.2
+   Compiling litemap v0.8.1
+   Compiling zerocopy v0.8.47
+   Compiling percent-encoding v2.3.2
+   Compiling ring v0.17.14
+   Compiling ident_case v1.0.1
+   Compiling zeroize v1.8.2
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling http v1.4.0
+   Compiling atomic-waker v1.1.2
+   Compiling base64 v0.22.1
+   Compiling synstructure v0.13.2
+   Compiling http-body v1.0.1
+   Compiling serde_derive_internals v0.29.1
+   Compiling rustls-pki-types v1.14.0
+   Compiling getrandom v0.2.17
+   Compiling untrusted v0.9.0
+   Compiling httparse v1.10.1
+   Compiling tempfile v3.27.0
+   Compiling core-foundation v0.10.0
+   Compiling security-framework-sys v2.17.0
+   Compiling tower-service v0.3.3
+   Compiling try-lock v0.2.5
+   Compiling parking v2.2.1
+   Compiling want v0.3.1
+   Compiling security-framework v3.7.0
+   Compiling form_urlencoded v1.2.2
+   Compiling heck v0.5.0
+   Compiling futures-macro v0.3.34
+   Compiling serde_derive v1.0.228
+   Compiling tokio-macros v2.6.1
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.1
+   Compiling tracing-attributes v0.1.31
+   Compiling tokio v1.50.0
+   Compiling futures-util v0.3.34
+   Compiling zerofrom v0.1.6
+   Compiling zerovec-derive v0.11.2
+   Compiling yoke v0.8.1
+   Compiling displaydoc v0.2.5
+   Compiling thiserror-impl v2.0.18
+   Compiling ref-cast-impl v1.0.25
+   Compiling tracing v0.1.44
+   Compiling ref-cast v1.0.25
+   Compiling zerotrie v0.2.3
+   Compiling zerovec v0.11.5
+   Compiling schemars_derive v1.2.1
+   Compiling pin-utils v0.1.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling tinystr v0.8.2
+   Compiling potential_utf v0.1.4
+   Compiling thiserror v2.0.18
+   Compiling icu_collections v2.1.1
+   Compiling icu_locale_core v2.1.1
+   Compiling utf8_iter v1.0.4
+   Compiling rustls v0.23.45
+   Compiling cfg_aliases v0.2.1
+   Compiling rustls-webpki v0.103.15
+   Compiling chrono v0.4.44
+   Compiling ipnet v2.12.0
+   Compiling icu_provider v2.1.1
+   Compiling futures-executor v0.3.34
+   Compiling getrandom v0.3.4
+   Compiling icu_normalizer v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling futures v0.3.34
+   Compiling native-tls v0.2.18
+   Compiling concurrent-queue v2.5.0
+   Compiling rand_core v0.9.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling webpki-roots v1.0.6
+   Compiling chacha20 v0.10.0
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling unicase v2.9.0
+   Compiling rand_chacha v0.9.0
+   Compiling schemars v1.2.1
+   Compiling mime_guess v2.0.5
+   Compiling rand v0.10.1
+   Compiling digest v0.10.7
+   Compiling toml_datetime v0.6.11
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling hyper v1.8.1
+   Compiling tokio-util v0.7.18
+   Compiling serde_spanned v0.6.9
+   Compiling rustls-native-certs v0.8.3
+   Compiling pin-project-internal v1.1.11
+   Compiling url v2.5.8
+   Compiling futures-lite v2.6.1
+   Compiling hyper-util v0.1.20
+   Compiling tower v0.5.3
+   Compiling http-body-util v0.1.3
+   Compiling darling_core v0.24.1
+   Compiling ahash v0.8.12
+   Compiling time-core v0.1.8
+   Compiling iri-string v0.7.11
+   Compiling num-conv v0.2.1
+   Compiling mime v0.3.17
+   Compiling powerfmt v0.2.0
+   Compiling ryu v1.0.23
+   Compiling unicode-xid v0.2.6
+   Compiling serde_urlencoded v0.7.1
+   Compiling deranged v0.5.8
+   Compiling toml_edit v0.22.27
+   Compiling time-macros v0.2.27
+   Compiling dirs-sys v0.4.1
+   Compiling pin-project v1.1.11
+   Compiling uuid v1.22.0
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.7
+   Compiling tokio-native-tls v0.3.1
+   Compiling rand v0.9.3
+   Compiling libz-sys v1.1.25
+   Compiling openssl-sys v0.9.112
+   Compiling tower-http v0.6.8
+   Compiling cpufeatures v0.2.17
+   Compiling object v0.39.1
+   Compiling objc2 v0.6.4
+   Compiling ulid v1.2.1
+   Compiling humantime-serde v1.1.1
+   Compiling sha2 v0.10.9
+   Compiling time v0.3.47
+   Compiling hyper-tls v0.6.0
+   Compiling dirs v5.0.1
+   Compiling toml v0.8.23
+   Compiling event-listener v5.4.1
+   Compiling nix v0.29.0
+   Compiling async-trait v0.1.89
+   Compiling libsqlite3-sys v0.30.1
+   Compiling semver v1.0.27
+   Compiling darling_macro v0.24.1
+   Compiling objc2-encode v4.1.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling darling_core v0.20.11
+   Compiling darling v0.24.1
+   Compiling serde_with_macros v3.24.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling hashbrown v0.14.5
+   Compiling reqwest v0.12.28
+   Compiling tokio-stream v0.1.18
+   Compiling num-integer v0.1.46
+   Compiling libssh2-sys v0.3.1
+   Compiling async-io v2.6.0
+   Compiling rustversion v1.0.22
+   Compiling unicode-segmentation v1.12.0
+   Compiling convert_case v0.10.0
+   Compiling num-bigint v0.4.6
+   Compiling serde_with v3.24.0
+   Compiling darling_macro v0.20.11
+   Compiling hashlink v0.9.1
+   Compiling nix v0.31.2
+   Compiling polling v3.11.0
+   Compiling scheduled-thread-pool v0.2.7
+   Compiling aho-corasick v1.1.4
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling anyhow v1.0.103
+   Compiling heck v0.4.1
+   Compiling fallible-iterator v0.3.0
+   Compiling either v1.15.0
+   Compiling snafu-derive v0.8.9
+   Compiling rusqlite v0.32.1
+   Compiling ar_archive_writer v0.5.3
+   Compiling r2d2 v0.8.10
+   Compiling regex-automata v0.4.14
+   Compiling psm v0.1.32
+   Compiling simple_asn1 v0.6.4
+   Compiling darling v0.20.11
+   Compiling derive_more-impl v2.1.1
+   Compiling block2 v0.6.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling strum_macros v0.28.0
+   Compiling async-stream-impl v0.3.6
+   Compiling pem v3.0.6
+   Compiling libgit2-sys v0.18.8+1.9.7
+   Compiling mac-notification-sys v0.6.12
+   Compiling erasable v1.3.0
+   Compiling surge-process v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-process)
+   Compiling jsonwebtoken v9.3.1
+   Compiling derive_more v2.1.1
+   Compiling objc2-foundation v0.3.2
+   Compiling async-stream v0.3.6
+   Compiling snafu v0.8.9
+   Compiling strum v0.28.0
+   Compiling arc-swap v1.9.0
+   Compiling derive_builder_core v0.20.2
+   Compiling r2d2_sqlite v0.25.0
+   Compiling async-signal v0.2.13
+   Compiling async-lock v3.4.2
+   Compiling async-channel v2.5.0
+   Compiling hyper-timeout v0.5.2
+   Compiling hmac v0.12.1
+   Compiling lineark-derive v3.0.1
+   Compiling piper v0.2.5
+   Compiling secrecy v0.10.3
+   Compiling serde_path_to_error v0.1.20
+   Compiling stacker v0.1.25
+   Compiling sysinfo v0.32.1
+   Compiling which v8.0.2
+   Compiling web-time v1.1.0
+   Compiling async-task v4.7.1
+   Compiling rmcp v1.6.0
+   Compiling fixedbitset v0.5.7
+   Compiling octocrab v0.42.1
+   Compiling blocking v1.6.2
+   Compiling futures-concurrency v7.7.1
+   Compiling lineark-sdk v3.0.1
+   Compiling process-wrap v9.1.0
+   Compiling derive_builder_macro v0.20.2
+   Compiling async-process v2.5.0
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling pest_generator v2.8.6
+   Compiling derive_more-impl v1.0.0
+   Compiling agent-client-protocol-derive v2.2.0
+   Compiling email-encoding v0.4.1
+   Compiling proc-macro-error-attr2 v2.0.0
+   Compiling include_dir_macros v0.7.4
+   Compiling nom v8.0.0
+   Compiling pastey v0.2.2
+   Compiling quoted_printable v0.5.2
+   Compiling utf8parse v0.2.2
+   Compiling email_address v0.2.9
+   Compiling shell-words v1.1.1
+   Compiling rustc-hash v2.1.1
+   Compiling httpdate v1.0.3
+   Compiling bytemuck v1.25.0
+   Compiling num-modular v0.6.1
+   Compiling num-order v1.2.0
+   Compiling rgb v0.8.53
+   Compiling anstyle-parse v1.0.0
+   Compiling lettre v0.11.22
+   Compiling agent-client-protocol v2.2.0
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling notify-rust v4.12.0
+   Compiling include_dir v0.7.4
+   Compiling proc-macro-error2 v2.0.1
+   Compiling derive_more v1.0.0
+   Compiling rc-box v1.3.0
+   Compiling pest_derive v2.8.6
+   Compiling derive_builder v0.20.2
+   Compiling regex v1.12.3
+   Compiling anstyle-query v1.1.5
+   Compiling take_mut v0.2.2
+   Compiling takecell v0.1.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling doctest-file v1.1.1
+   Compiling anstream v1.0.0
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling teloxide-core v0.11.2
+   Compiling interprocess v2.4.2
+   Compiling handlebars v6.4.0
+   Compiling aquamarine v0.6.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling dptree v0.3.0
+   Compiling teloxide-macros v0.9.0
+   Compiling lazy_static v1.5.0
+   Compiling clap_builder v4.6.0
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling clap_derive v4.6.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling nu-ansi-term v0.50.3
+   Compiling tracing-subscriber v0.3.23
+   Compiling clap v4.6.0
+   Compiling teloxide v0.14.0
+   Compiling git2 v0.21.0
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+error[E0599]: no method named `ok_or_else` found for enum `Result<T, E>` in the current scope
+  --> crates/surge-git/src/fingerprint.rs:65:14
+   |
+63 |           let name = entry
+   |  ____________________-
+64 | |             .name()
+65 | |             .ok_or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+   | |_____________-^^^^^^^^^^
+   |
+help: there is a method `or_else` with a similar name
+   |
+65 -             .ok_or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+65 +             .or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+   |
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/run_worktree.rs:337:47
+    |
+337 |                         && entry.message() == Some(message.as_str())
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<&str>, Error>`, found `Option<&str>`
+    |
+    = note: expected enum `Result<std::option::Option<&_>, git2::Error>`
+               found enum `std::option::Option<&_>`
+help: try wrapping the expression in `Ok`
+    |
+337 |                         && entry.message() == Ok(Some(message.as_str()))
+    |                                               +++                      +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/run_worktree.rs:429:25
+    |
+429 |     if linked.name() != Some(spec.run_id.short().as_str()) {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<&str>, Error>`, found `Option<&str>`
+    |
+    = note: expected enum `Result<std::option::Option<&_>, git2::Error>`
+               found enum `std::option::Option<&_>`
+help: try wrapping the expression in `Ok`
+    |
+429 |     if linked.name() != Ok(Some(spec.run_id.short().as_str())) {
+    |                         +++                                  +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/run_worktree.rs:447:34
+    |
+447 |     if head.symbolic_target() != Some(format!("refs/heads/{}", spec.branch()).as_str()) {
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<&str>, Error>`, found `Option<&str>`
+    |
+    = note: expected enum `Result<std::option::Option<&_>, git2::Error>`
+               found enum `std::option::Option<&_>`
+help: try wrapping the expression in `Ok`
+    |
+447 |     if head.symbolic_target() != Ok(Some(format!("refs/heads/{}", spec.branch()).as_str())) {
+    |                                  +++                                                      +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:182:29
+    |
+182 |             .filter_map(|s| s.path().map(PathBuf::from))
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<_>`, found `Result<PathBuf, Error>`
+    |
+    = note: expected enum `std::option::Option<_>`
+               found enum `Result<PathBuf, git2::Error>`
+help: try wrapping the expression in `Some`
+    |
+182 |             .filter_map(|s| Some(s.path().map(PathBuf::from)))
+    |                             +++++                           +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:209:24
+    |
+209 |             if name == spec_id {
+    |                        ^^^^^^^ expected `Option<&str>`, found `&str`
+    |
+    = note:   expected enum `std::option::Option<&str>`
+            found reference `&str`
+help: try wrapping the expression in `Some`
+    |
+209 |             if name == Some(spec_id) {
+    |                        +++++       +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:254:17
+    |
+254 |             let Some(name) = name else { continue };
+    |                 ^^^^^^^^^^   ---- this expression has type `Result<std::option::Option<&str>, git2::Error>`
+    |                 |
+    |                 expected `Result<Option<&str>, Error>`, found `Option<_>`
+    |
+    = note: expected enum `Result<std::option::Option<&str>, git2::Error>`
+               found enum `std::option::Option<_>`
+help: try wrapping the pattern in `Ok`
+    |
+254 |             let Ok(Some(name)) = name else { continue };
+    |                 +++          +
+
+error[E0599]: no method named `ok_or_else` found for enum `Result<T, E>` in the current scope
+   --> crates/surge-git/src/worktree.rs:461:18
+    |
+460 | /             head.name()
+461 | |                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    | |_________________-^^^^^^^^^^
+    |
+help: there is a method `or_else` with a similar name
+    |
+461 -                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+461 +                 .or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    |
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:605:24
+    |
+605 |             if name == short {
+    |                        ^^^^^ expected `Option<&str>`, found `String`
+    |
+    = note: expected enum `std::option::Option<&str>`
+             found struct `std::string::String`
+
+error[E0599]: no method named `ok_or_else` found for enum `Result<T, E>` in the current scope
+   --> crates/surge-git/src/worktree.rs:774:18
+    |
+773 | /             head.name()
+774 | |                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    | |_________________-^^^^^^^^^^
+    |
+help: there is a method `or_else` with a similar name
+    |
+774 -                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+774 +                 .or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    |
+
+error[E0308]: mismatched types
+    --> crates/surge-git/src/worktree.rs:863:47
+     |
+ 863 |             let wt = match repo.find_worktree(name) {
+     |                                 ------------- ^^^^ expected `&str`, found `Option<&str>`
+     |                                 |
+     |                                 arguments to this method are incorrect
+     |
+     = note: expected reference `&str`
+                     found enum `std::option::Option<&str>`
+note: method defined here
+    --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/git2-0.21.0/src/repo.rs:3370:12
+     |
+3370 |     pub fn find_worktree(&self, name: &str) -> Result<Worktree, Error> {
+     |            ^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `std::option::Option<&str>` value, panicking if the value is an `Option::None`
+     |
+ 863 |             let wt = match repo.find_worktree(name.expect("REASON")) {
+     |                                                   +++++++++++++++++
+
+error[E0599]: the method `to_string` exists for enum `std::option::Option<&str>`, but its trait bounds were not satisfied
+    --> crates/surge-git/src/worktree.rs:870:32
+     |
+ 870 |                     name: name.to_string(),
+     |                                ^^^^^^^^^ method cannot be called on `std::option::Option<&str>` due to unsatisfied trait bounds
+     |
+    ::: /Users/vanyastafford/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:598:1
+     |
+ 598 | pub enum Option<T> {
+     | ------------------ doesn't satisfy `std::option::Option<&str>: ToString` or `std::option::Option<&str>: std::fmt::Display`
+     |
+     = note: the following trait bounds were not satisfied:
+             `std::option::Option<&str>: std::fmt::Display`
+             which is required by `std::option::Option<&str>: ToString`
+note: the method `to_string` exists on the type `&str`
+    --> /Users/vanyastafford/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/string.rs:2907:5
+     |
+2907 |     fn to_string(&self) -> String;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `&str` value, panicking if the value is an `Option::None`
+     |
+ 870 |                     name: name.expect("REASON").to_string(),
+     |                               +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/task_workspace.rs:99:45
+    |
+ 99 |         let remote = repository.find_remote(name)?;
+    |                                 ----------- ^^^^ expected `&str`, found `Option<&str>`
+    |                                 |
+    |                                 arguments to this method are incorrect
+    |
+    = note: expected reference `&str`
+                    found enum `std::option::Option<&str>`
+note: method defined here
+   --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/git2-0.21.0/src/repo.rs:611:12
+    |
+611 |     pub fn find_remote(&self, name: &str) -> Result<Remote<'_>, Error> {
+    |            ^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `std::option::Option<&str>` value, panicking if the value is an `Option::None`
+    |
+ 99 |         let remote = repository.find_remote(name.expect("REASON"))?;
+    |                                                 +++++++++++++++++
+
+error[E0271]: expected `github_remote_identity` to return `Result<_, Error>`, but it returns `Option<String>`
+    --> crates/surge-git/src/task_workspace.rs:100:55
+     |
+ 100 |         if let Some(identity) = remote.url().and_then(github_remote_identity) {
+     |                                              -------- ^^^^^^^^^^^^^^^^^^^^^^ expected `Result<_, Error>`, found `Option<String>`
+     |                                              |
+     |                                              required by a bound introduced by this call
+     |
+     = note: expected enum `Result<_, git2::Error>`
+                found enum `std::option::Option<std::string::String>`
+note: required by a bound in `Result::<T, E>::and_then`
+    --> /Users/vanyastafford/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/result.rs:1488:33
+     |
+1486 |     pub const fn and_then<U, F>(self, op: F) -> Result<U, E>
+     |                  -------- required by a bound in this associated function
+1487 |     where
+1488 |         F: [const] FnOnce(T) -> Result<U, E> + [const] Destruct,
+     |                                 ^^^^^^^^^^^^ required by this bound in `Result::<T, E>::and_then`
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/task_workspace.rs:100:16
+    |
+100 |         if let Some(identity) = remote.url().and_then(github_remote_identity) {
+    |                ^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `Result<_, git2::Error>`
+    |                |
+    |                expected `Result<_, Error>`, found `Option<_>`
+    |
+    = note: expected enum `Result<_, git2::Error>`
+               found enum `std::option::Option<_>`
+help: try wrapping the pattern in `Ok`
+    |
+100 |         if let Ok(Some(identity)) = remote.url().and_then(github_remote_identity) {
+    |                +++              +
+
+Some errors have detailed explanations: E0271, E0308, E0599.
+For more information about an error, try `rustc --explain E0271`.
+error: could not compile `surge-git` (lib) due to 15 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -27,7 +27,7 @@ pub mod diagnostics;
 pub mod registry;
 /// Injected run-owned child writer observation.
 pub mod writer_observer;
-pub use registry::{McpContent, McpRegistry, McpToolEntry, McpToolResult};
+pub use registry::{McpContent, McpRegistry, McpServerCatalog, McpToolEntry, McpToolResult};
 
 /// Authenticated per-session stdio stage-tool transport.
 pub mod stage;

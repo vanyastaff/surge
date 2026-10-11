@@ -118,9 +118,9 @@ async fn handle_run_finished(
     let (body, _state, purpose) = format_completion(outcome);
     if let Some(kind) = terminal_kind(outcome) {
         let changed = {
-            let mut guard = conn.lock().await;
+            let guard = conn.lock().await;
             intake_outbox::enqueue_terminal(
-                &mut guard,
+                &guard,
                 &row.task_id,
                 run_id_str,
                 kind,
@@ -201,6 +201,18 @@ pub(crate) async fn durable_outcome(
     storage: &Arc<Storage>,
     run_id: surge_core::RunId,
 ) -> Option<RunOutcome> {
+    if matches!(
+        storage
+            .get_run(&run_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|run| run.status),
+        Some(surge_core::RunStatus::Crashed)
+    ) {
+        warn!(%run_id, "settlement is unconfirmed; refusing historical outcome");
+        return None;
+    }
     let inspection = match storage.inspect_run(run_id).await {
         Ok(inspection) => inspection,
         Err(error) => {
@@ -296,6 +308,11 @@ pub(crate) fn format_completion(
     outcome: &RunOutcome,
 ) -> (String, Option<TicketState>, &'static str) {
     match outcome {
+        RunOutcome::SettlementFailed { failures, .. } => (
+            format!("Run completion is unconfirmed: resource settlement failed ({failures:?})."),
+            None,
+            "run_settlement_unconfirmed",
+        ),
         RunOutcome::Completed { terminal } => (
             format!("✅ Surge run completed (terminal node: `{terminal}`)."),
             Some(TicketState::Completed),
@@ -343,6 +360,23 @@ pub(crate) fn format_completion(
 mod tests {
     use super::*;
     use surge_core::keys::NodeKey;
+
+    #[test]
+    fn settlement_failure_never_projects_original_success() {
+        let outcome = RunOutcome::SettlementFailed {
+            original: Box::new(RunOutcome::Completed {
+                terminal: NodeKey::try_new("end").unwrap(),
+            }),
+            failures: vec![
+                surge_orchestrator::engine::handle::RunSettlementFailure::PrefixMismatch,
+            ],
+        };
+        assert!(terminal_kind(&outcome).is_none());
+        let (body, state, purpose) = format_completion(&outcome);
+        assert!(state.is_none());
+        assert!(body.contains("unconfirmed"));
+        assert_eq!(purpose, "run_settlement_unconfirmed");
+    }
 
     #[test]
     fn format_completion_completed_phrasing() {
@@ -407,3 +441,7 @@ mod tests {
         assert_eq!(purpose, "run_parked");
     }
 }
+
+#[cfg(test)]
+#[path = "intake_completion/history_bypass_tests.rs"]
+mod history_bypass_tests;

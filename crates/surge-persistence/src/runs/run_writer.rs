@@ -10,13 +10,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use surge_core::{ContentHash, RunId};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader::{ReadEvent, RunReader};
 use crate::runs::seq::EventSeq;
 use crate::runs::types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
-use crate::runs::writer::WriterCommand;
+use crate::runs::writer::{WriterCommand, WriterLifecycle};
 use crate::runs::writer_slot::WriterLease;
 
 /// Exclusive write handle for a per-run database.
@@ -24,7 +24,7 @@ use crate::runs::writer_slot::WriterLease;
 /// One `RunWriter` per `RunId` per process; cross-process exclusion via
 /// `FileLock` prevents any other process from opening another writer.
 ///
-/// Drop is a best-effort fire-and-forget shutdown that emits `tracing::warn!`.
+/// Drop requests priority interruption independently of the bounded command queue.
 /// Prefer `RunWriter::close().await` for clean shutdown that joins the
 /// background writer task.
 pub struct RunWriter {
@@ -32,8 +32,10 @@ pub struct RunWriter {
     pub(crate) writer_tx: mpsc::Sender<WriterCommand>,
     pub(crate) writer_join:
         Option<tokio::task::JoinHandle<Result<(), crate::runs::error::WriterError>>>,
-    pub(crate) _lease: Arc<WriterLease>,
+    pub(crate) lease: Arc<WriterLease>,
     pub(crate) closed: bool,
+    pub(crate) priority_stop: Option<oneshot::Sender<()>>,
+    pub(crate) lifecycle: watch::Receiver<WriterLifecycle>,
 }
 
 /// Append-only event capability for a run-owned child dispatcher.
@@ -67,6 +69,12 @@ impl RunEventRecorder {
 }
 
 impl RunWriter {
+    /// Derive a finite event feed retaining this writer's exclusion through drain.
+    #[must_use]
+    pub fn event_feed(&self) -> super::reader::RunEventFeed {
+        super::reader::RunEventFeed::from_writer(self)
+    }
+
     /// Give a dispatcher append authority without writer-lifecycle authority.
     #[must_use]
     pub fn event_recorder(&self) -> RunEventRecorder {
@@ -162,7 +170,7 @@ impl RunWriter {
 use surge_core::VersionedEventPayload;
 use tokio::sync::oneshot;
 
-use crate::runs::error::{CloseError, WriterError};
+use crate::runs::error::{CloseError, SealReceiptError, WriterError};
 
 impl RunWriter {
     /// Append a single event. Returns the assigned `EventSeq`.
@@ -364,32 +372,61 @@ impl RunWriter {
             .map_err(map_writer_err)
     }
 
-    /// Explicit clean shutdown — sends Shutdown to the writer task, waits for
-    /// it to drain in-flight commands and exit. Releases file lock and in-
-    /// process token.
+    /// Signal priority interruption without waiting or enqueueing an ordinary command.
     ///
-    /// Prefer over `Drop` for clean shutdown — `Drop` is a fire-and-forget
-    /// fallback that warns via tracing.
-    pub async fn close(mut self) -> Result<(), CloseError> {
-        if self.closed {
-            return Ok(());
+    /// In-flight SQL retains its owner until it finishes. This signal is not a
+    /// successful settlement receipt; only an awaited close/seal establishes one.
+    pub fn request_stop(&mut self) {
+        if let Some(stop) = self.priority_stop.take() {
+            let _ = stop.send(());
         }
-        let (reply_tx, reply_rx) = oneshot::channel();
-        if self
+    }
+
+    /// Close the actual writer actor and return its immutable final journal prefix.
+    ///
+    /// Commands behind the seal fail. Receipt and actor errors are both collected;
+    /// no returned error skips the actor join. A previously created event feed keeps
+    /// writer exclusion until its bounded final reads finish.
+    pub async fn seal_for_read_drain(mut self) -> Result<EventSeq, CloseError> {
+        let (reply, received) = oneshot::channel();
+        let receipt = if self
             .writer_tx
-            .send(WriterCommand::Shutdown { reply: reply_tx })
+            .send(WriterCommand::SealForReadDrain { reply })
             .await
-            .is_ok()
+            .is_err()
         {
-            let _ = reply_rx.await;
-        }
+            Err(SealReceiptError::CommandChannelClosed)
+        } else {
+            received
+                .await
+                .map_err(|_| SealReceiptError::ReplyChannelClosed)
+        };
+        let actor = if let Some(join) = self.writer_join.take() {
+            match join.await {
+                Ok(result) => result.map_err(CloseError::Writer),
+                Err(error) => Err(CloseError::JoinFailed(error.to_string())),
+            }
+        } else {
+            Err(CloseError::JoinFailed("actor join already consumed".into()))
+        };
+        // Stay armed across both awaits: cancelling this future must still signal
+        // priority stop, including after an acknowledgment but before actor exit.
         self.closed = true;
-        if let Some(join) = self.writer_join.take() {
-            join.await
-                .map_err(|e| CloseError::JoinFailed(e.to_string()))?
-                .map_err(CloseError::Writer)?;
+        match (receipt, actor) {
+            (Ok(prefix), Ok(())) => Ok(prefix),
+            (Err(receipt), Ok(())) => Err(CloseError::Receipt(receipt)),
+            (Ok(_), Err(actor)) => Err(actor),
+            (Err(receipt), Err(actor)) => Err(CloseError::ReceiptAndActor {
+                receipt,
+                actor: Box::new(actor),
+            }),
         }
-        Ok(())
+    }
+
+    /// Serialize shutdown and join the actual actor. Existing feed owners keep
+    /// writer exclusion through their drain; this method never waits on uniqueness.
+    pub async fn close(self) -> Result<(), CloseError> {
+        self.seal_for_read_drain().await.map(|_| ())
     }
 
     fn ensure_open(&self) -> Result<(), StorageError> {
@@ -415,11 +452,7 @@ impl Drop for RunWriter {
         if self.closed {
             return;
         }
-        // Best-effort fire-and-forget shutdown. Drop is sync — we can't await join.
-        let (reply_tx, _reply_rx) = oneshot::channel();
-        let _ = self
-            .writer_tx
-            .try_send(WriterCommand::Shutdown { reply: reply_tx });
+        self.request_stop();
         tracing::warn!(
             run_id = %self.reader.run_id(),
             "RunWriter dropped without close() — pending writes may be lost. \
@@ -436,3 +469,7 @@ impl RunWriter {
         self.reader.subscribe_events()
     }
 }
+
+#[cfg(test)]
+#[path = "run_writer/settlement_tests.rs"]
+mod settlement_tests;

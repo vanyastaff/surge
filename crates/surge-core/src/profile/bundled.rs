@@ -55,10 +55,11 @@ const MIGRATION_IMPLEMENTER_TOML: &str =
 const PROJECT_CONTEXT_AUTHOR_TOML: &str =
     include_str!("../../bundled/profiles/project-context-author-1.0.toml");
 const FEATURE_PLANNER_TOML: &str = include_str!("../../bundled/profiles/feature-planner-1.0.toml");
+const TASK_SPLITTER_TOML: &str = include_str!("../../bundled/profiles/task-splitter-1.0.toml");
 
 /// Total number of bundled profiles. Centralized so tests can spot-check
 /// that nothing was added or dropped silently.
-pub const BUNDLED_COUNT: usize = 22;
+pub const BUNDLED_COUNT: usize = 23;
 
 /// Look-up table for compile-time bundled profiles.
 ///
@@ -106,6 +107,8 @@ impl BundledRegistry {
             // Project (Task 12).
             parse(PROJECT_CONTEXT_AUTHOR_TOML, "project-context-author"),
             parse(FEATURE_PLANNER_TOML, "feature-planner"),
+            // Escalation ladder (v1 task 1.1).
+            parse(TASK_SPLITTER_TOML, "task-splitter"),
             // Mock (Task 31).
             parse(MOCK_TOML, "mock"),
         ]

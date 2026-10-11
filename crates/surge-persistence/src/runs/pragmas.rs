@@ -13,6 +13,14 @@ pub const PER_RUN_PRAGMAS: &[&str] = &[
     "PRAGMA wal_autocheckpoint = 1000",
 ];
 
+/// Connection-local initialization for existing read-only journals; never changes journal mode.
+pub const READ_ONLY_PRAGMAS: &[&str] = &[
+    "PRAGMA query_only = ON",
+    "PRAGMA temp_store = MEMORY",
+    "PRAGMA cache_size = -32000",
+    "PRAGMA foreign_keys = ON",
+];
+
 /// PRAGMAs applied to the registry DB connection.
 pub const REGISTRY_PRAGMAS: &[&str] = &[
     "PRAGMA journal_mode = WAL",

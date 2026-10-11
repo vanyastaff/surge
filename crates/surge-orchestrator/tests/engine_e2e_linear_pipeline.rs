@@ -15,6 +15,8 @@
 //! every prompt, advancing the pipeline through plan → execute → qa → end.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -224,50 +226,54 @@ fn linear_pipeline_completes_end_to_end() {
         .expect("build multi_thread tokio runtime");
 
     rt.block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        // Keep a typed Arc<AcpBridge> so we can call shutdown() after the
-        // engine drops its clone. Dropping AcpBridge from within an async
-        // context blocks the tokio thread (Drop::join on the bridge OS
-        // thread); calling shutdown() explicitly avoids that.
-        let bridge_owned = Arc::new(AcpBridge::with_defaults().expect("AcpBridge::with_defaults"));
-        let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
+            // Keep a typed Arc<AcpBridge> so we can call shutdown() after the
+            // engine drops its clone. Dropping AcpBridge from within an async
+            // context blocks the tokio thread (Drop::join on the bridge OS
+            // thread); calling shutdown() explicitly avoids that.
+            let bridge_owned =
+                Arc::new(AcpBridge::with_defaults().expect("AcpBridge::with_defaults"));
+            let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
 
-        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
-            as Arc<dyn ToolDispatcher>;
+            let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+                as Arc<dyn ToolDispatcher>;
 
-        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+            let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-        let run_id = RunId::new();
-        let handle = engine
-            .start_run(
-                run_id,
-                build_linear_graph(),
-                dir.path().to_path_buf(),
-                EngineRunConfig::default(),
-            )
-            .await
-            .unwrap();
+            let run_id = RunId::new();
+            let handle = engine
+                .start_run(
+                    run_id,
+                    build_linear_graph(),
+                    dir.path().to_path_buf(),
+                    EngineRunConfig::default(),
+                )
+                .await
+                .unwrap();
 
-        // 60-second wall-clock timeout for the full 3-stage pipeline.
-        let outcome = tokio::time::timeout(Duration::from_secs(60), handle.await_completion())
-            .await
-            .expect("run timed out after 60s — mock did not emit report_stage_outcome")
-            .unwrap();
+            // 60-second wall-clock timeout for the full 3-stage pipeline.
+            let outcome = tokio::time::timeout(Duration::from_secs(60), handle.await_completion())
+                .await
+                .expect("run timed out after 60s — mock did not emit report_stage_outcome")
+                .unwrap();
 
-        match outcome {
-            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-            other => panic!("expected Completed, got {other:?}"),
+            match outcome {
+                RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+                other => panic!("expected Completed, got {other:?}"),
+            }
+
+            // Drop the engine so the bridge's refcount can reach 1 (only bridge_owned).
+            drop(engine);
+
+            // Explicitly shut down the bridge via the async path so the OS thread
+            // exits cleanly without blocking a tokio worker thread in Drop::join.
+            if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
+                let _ = bridge_for_shutdown.shutdown().await;
+            }
         }
-
-        // Drop the engine so the bridge's refcount can reach 1 (only bridge_owned).
-        drop(engine);
-
-        // Explicitly shut down the bridge via the async path so the OS thread
-        // exits cleanly without blocking a tokio worker thread in Drop::join.
-        if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
-            let _ = bridge_for_shutdown.shutdown().await;
-        }
+        dir.close().unwrap();
     });
 }

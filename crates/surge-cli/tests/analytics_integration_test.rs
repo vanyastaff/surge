@@ -9,20 +9,29 @@
 //! These tests use programmatically created test data to avoid requiring a real ACP agent.
 #![allow(clippy::identity_op)]
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
 use std::path::PathBuf;
 use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_persistence::budget::{BudgetTracker, BudgetWarningLevel};
 use surge_persistence::models::SessionUsage;
 use surge_persistence::pricing::{claude_sonnet_35_pricing, gpt4_turbo_pricing};
 use surge_persistence::store::Store;
-use tempfile::TempDir;
 
 /// Create a test database with sample session usage data.
 ///
 /// This simulates data that would be created by the UsageAggregator
 /// when processing TokensConsumed events from an agent.
-fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+fn create_test_db_with_data() -> (FixtureHome, PathBuf, Store) {
+    let temp_dir = FixtureHome::new().expect("Failed to create runtime home");
     let db_path = temp_dir.path().join("analytics-test.db");
 
     // Create store and initialize schema
@@ -155,7 +164,7 @@ fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
 #[test]
 fn test_analytics_summary_displays_costs() {
     // Create test database with data
-    let (_temp_dir, db_path, store) = create_test_db_with_data();
+    let (temp_dir, db_path, store) = create_test_db_with_data();
 
     // Get all sessions using time range (0 to very large timestamp to get all)
     // Use a timestamp far in the future (year 3000)
@@ -190,12 +199,14 @@ fn test_analytics_summary_displays_costs() {
     eprintln!("✓ Database path: {:?}", db_path);
 
     eprintln!("✓ Analytics summary integration test: Database layer verified");
+    drop(store);
+    temp_dir.close().unwrap();
 }
 
 #[test]
 fn test_analytics_export_json_contains_cost_data() {
     // Create test database with data
-    let (_temp_dir, _db_path, store) = create_test_db_with_data();
+    let (temp_dir, _db_path, store) = create_test_db_with_data();
 
     // Get all sessions using time range (0 to very large timestamp)
     let far_future = 32503680000000u64; // Jan 1, 3000 in milliseconds
@@ -243,12 +254,14 @@ fn test_analytics_export_json_contains_cost_data() {
     );
 
     eprintln!("✓ Analytics export JSON integration test passed");
+    drop(store);
+    temp_dir.close().unwrap();
 }
 
 #[test]
 fn test_budget_warnings_at_thresholds() {
     // Create test database with data
-    let (_temp_dir, _db_path, store) = create_test_db_with_data();
+    let (temp_dir, _db_path, store) = create_test_db_with_data();
 
     // Calculate total daily spending
     let now = std::time::SystemTime::now()
@@ -338,12 +351,14 @@ fn test_budget_warnings_at_thresholds() {
     );
 
     eprintln!("✓ Budget warning threshold integration test passed");
+    drop(store);
+    temp_dir.close().unwrap();
 }
 
 #[test]
 fn test_time_range_queries_for_summary() {
     // Create test database with data
-    let (_temp_dir, _db_path, store) = create_test_db_with_data();
+    let (temp_dir, _db_path, store) = create_test_db_with_data();
 
     // Get current timestamp
     let now = std::time::SystemTime::now()
@@ -399,6 +414,8 @@ fn test_time_range_queries_for_summary() {
     }
 
     eprintln!("✓ Time range query integration test passed");
+    drop(store);
+    temp_dir.close().unwrap();
 }
 
 #[test]
@@ -467,7 +484,7 @@ fn test_end_to_end_analytics_pipeline() {
     eprintln!("\n=== End-to-End Analytics Pipeline Test ===\n");
 
     // Step 1: Create test database with sample data
-    let (_temp_dir, db_path, store) = create_test_db_with_data();
+    let (temp_dir, db_path, store) = create_test_db_with_data();
     eprintln!("✓ Step 1: Test database created at {:?}", db_path);
 
     // Step 2: Verify session data is stored with costs
@@ -533,4 +550,6 @@ fn test_end_to_end_analytics_pipeline() {
     eprintln!("✓ Step 7: JSON export validated");
 
     eprintln!("\n✅ End-to-End Analytics Pipeline Test PASSED\n");
+    drop(store);
+    temp_dir.close().unwrap();
 }

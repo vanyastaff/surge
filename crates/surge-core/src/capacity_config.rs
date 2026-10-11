@@ -113,6 +113,13 @@ pub struct CapacityConfig {
     /// account of the same runtime; otherwise it parks as usual.
     #[serde(default)]
     pub rotation_profile: Option<String>,
+    /// Agents (registry ids, in order) a stage moves to when its own agent's
+    /// usage limit is exhausted (v1 task 1.4). The engine picks the first
+    /// configured, runnable agent whose capacity is not exhausted, preferring
+    /// one that differs from the stage's verifier/implementer partner; it
+    /// parks only when none fits. Empty (the default) keeps parking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_agents: Vec<String>,
 }
 
 impl Default for CapacityConfig {
@@ -122,6 +129,7 @@ impl Default for CapacityConfig {
             blind_park_limit: default_blind_park_limit(),
             jitter_max: default_jitter_max(),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         }
     }
 }
@@ -202,12 +210,10 @@ impl CapacityConfig {
 /// that cap is consumed by the caller that counts consecutive blind parks
 /// across the event log (`surge-daemon`'s wake scheduler, Task 12 M4) —
 /// `decide` itself is a single, stateless call and never enforces it (see
-/// that field's own doc). `rotation` is always
-/// [`crate::capacity::RotationPolicy::Disabled`]: Task 12 M3 does not wire
-/// a verified rotation candidate into this conversion (R41 is deferred to
-/// its own follow-up — see `docs/adr/0016-capacity-parking-and-wake.md`,
-/// A2), and there is no `surge.toml` field yet for a caller to have
-/// supplied one from.
+/// that field's own doc). `rotation_profile` becomes
+/// [`crate::capacity::RotationPolicy::Candidate`] (same-family account
+/// rotation for task-owned runs). `fallback_agents` is not part of the
+/// policy: the engine reads it from `EngineConfig::fallback_agents`.
 impl From<&CapacityConfig> for crate::capacity::CapacityPolicy {
     fn from(cfg: &CapacityConfig) -> Self {
         Self {
@@ -282,6 +288,7 @@ mod tests {
             blind_park_limit: 0,
             jitter_max: default_jitter_max(),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         assert!(cfg.validate().is_err());
     }
@@ -296,6 +303,7 @@ mod tests {
             blind_park_limit: 1,
             jitter_max: default_jitter_max(),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -335,6 +343,7 @@ mod tests {
             blind_park_limit: 1,
             jitter_max: default_jitter_max(),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         let err = cfg
             .validate()
@@ -353,6 +362,7 @@ mod tests {
                 blind_park_limit: 1,
                 jitter_max: default_jitter_max(),
                 rotation_profile: None,
+                fallback_agents: Vec::new(),
             };
             assert!(cfg.validate().is_ok(), "{secs}s should be a valid backoff");
         }
@@ -365,6 +375,7 @@ mod tests {
             blind_park_limit: 3,
             jitter_max: default_jitter_max(),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
@@ -385,6 +396,7 @@ mod tests {
             blind_park_limit: 9,
             jitter_max: default_jitter_max(),
             rotation_profile: Some("implementer@1.0".to_string()),
+            fallback_agents: Vec::new(),
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.blind_backoff, Some(Duration::from_secs(777)));
@@ -407,6 +419,7 @@ mod tests {
             blind_park_limit: 1,
             jitter_max: default_jitter_max(),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.blind_backoff, None);
@@ -454,6 +467,7 @@ mod tests {
             blind_park_limit: 3,
             jitter_max: Duration::from_secs(45),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
@@ -467,6 +481,7 @@ mod tests {
             blind_park_limit: 1,
             jitter_max: Duration::from_secs(17),
             rotation_profile: None,
+            fallback_agents: Vec::new(),
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.jitter_max, Duration::from_secs(17));

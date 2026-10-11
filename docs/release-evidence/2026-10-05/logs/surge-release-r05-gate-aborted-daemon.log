@@ -1,0 +1,2 @@
+2026-10-05T12:06:32.057746Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey("end") } location=Node { id: NodeKey("end") }
+2026-10-05T12:06:32.086700Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey("end") } location=Node { id: NodeKey("end") }

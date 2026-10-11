@@ -34,8 +34,10 @@ ulid = { workspace = true }
 handlebars = { workspace = true }
 semver = { workspace = true }
 dirs = { workspace = true }
+which = { workspace = true }
 
 [dev-dependencies]
+surge-persistence = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
@@ -43,8 +45,8 @@ tiny_http = { workspace = true }
 surge-notify = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
-which = "6"
 tracing-subscriber = { workspace = true }
+rusqlite = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"
@@ -54,4 +56,5 @@ name = "stage_transition"
 harness = false
 
 [features]
+test-support = ["surge-persistence/test-support"]
 _bootstrap_llm_test = []

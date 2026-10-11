@@ -1,0 +1,21 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.54s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/quota_recovery_route_test.rs (target/debug/deps/quota_recovery_route_test-b5ce158b4d094b4c)
+
+running 1 test
+
+thread 'planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap' (123336) panicked at crates/surge-daemon/tests/quota_recovery_route_test.rs:220:5:
+build real mock_acp_agent prerequisite
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap ... FAILED
+
+failures:
+
+failures:
+    planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p surge-daemon --test quota_recovery_route_test`

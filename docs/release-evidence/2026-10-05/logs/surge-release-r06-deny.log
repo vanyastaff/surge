@@ -1,0 +1,1585 @@
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libbz2-rs-sys-0.2.5/Cargo.toml:27:12
+   │
+27 │ license = "bzip2-1.0.6"
+   │            ━━━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ bzip2-1.0.6 - bzip2 and libbzip2 License v1.0.6:
+   ├   - No additional metadata available for license
+   ├ libbz2-rs-sys v0.2.5
+     └── bzip2 v0.6.1
+         └── compression-codecs v0.4.37
+             └── async-compression v0.4.41
+                 └── gpui-pre-http-client v0.3.7
+                     ├── gpui-pre v0.3.7
+                     │   ├── gpui-base v0.7.0
+                     │   │   ├── gpui-component v0.7.0
+                     │   │   │   └── gpui-kit v0.7.0
+                     │   │   │       └── (dev) surge-ui v0.1.0
+                     │   │   └── gpui-kit v0.7.0 (*)
+                     │   ├── gpui-component v0.7.0 (*)
+                     │   ├── gpui-kit v0.7.0 (*)
+                     │   ├── gpui-kit-assets v0.7.0
+                     │   │   ├── gpui-component v0.7.0 (*)
+                     │   │   └── gpui-kit v0.7.0 (*)
+                     │   ├── gpui-pre-apple v0.3.7
+                     │   │   └── gpui-pre-macos v0.3.7
+                     │   │       └── gpui-pre-platform v0.3.7
+                     │   │           └── gpui-kit v0.7.0 (*)
+                     │   ├── gpui-pre-linux v0.3.7
+                     │   │   └── gpui-pre-platform v0.3.7 (*)
+                     │   ├── gpui-pre-macos v0.3.7 (*)
+                     │   ├── gpui-pre-platform v0.3.7 (*)
+                     │   ├── gpui-pre-web v0.3.7
+                     │   │   ├── gpui-kit v0.7.0 (*)
+                     │   │   └── gpui-pre-platform v0.3.7 (*)
+                     │   ├── gpui-pre-wgpu v0.3.7
+                     │   │   ├── gpui-pre-linux v0.3.7 (*)
+                     │   │   ├── gpui-pre-platform v0.3.7 (*)
+                     │   │   └── gpui-pre-web v0.3.7 (*)
+                     │   ├── gpui-pre-windows v0.3.7
+                     │   │   └── gpui-pre-platform v0.3.7 (*)
+                     │   └── gpui-wry v0.7.0
+                     │       └── surge-ui v0.1.0 (*)
+                     ├── gpui-pre-linux v0.3.7 (*)
+                     └── gpui-pre-web v0.3.7 (*)
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ /Users/vanyastafford/Develop/surge/deny.toml:29:6
+   │
+29 │     "NCSA",
+   │      ━━━━ unmatched license allowance
+
+warning[wildcard]: found 2 wildcard dependencies for crate 'surge-acp'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-acp/Cargo.toml:15:14
+    │
+ 15 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:153:13
+    │
+153 │ surge-acp = { path = "crates/surge-acp" }
+    │             ───────────────────────────── workspace dependency
+    │
+    ├ surge-acp v0.1.0
+      ├── surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-orchestrator v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   ├── surge-telegram v0.1.0
+      │   │   └── surge-daemon v0.1.0 (*)
+      │   └── surge-ui v0.1.0 (*)
+      ├── (dev) surge-telegram v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:15:27
+   │
+15 │ surge-acp = { workspace = true }
+   │             ──────────────━━━━──
+   │                           │
+   │                           usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:13:28
+   │
+13 │ surge-core = { workspace = true }
+   │              ──────────────━━━━──
+   │                            │
+   │                            usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:35:30
+   │
+35 │ surge-daemon = { workspace = true }
+   │                ──────────────━━━━──
+   │                              │
+   │                              usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:16:27
+   │
+16 │ surge-git = { workspace = true }
+   │             ──────────────━━━━──
+   │                           │
+   │                           usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:20:30
+   │
+20 │ surge-intake = { workspace = true }
+   │                ──────────────━━━━──
+   │                              │
+   │                              usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:14:27
+   │
+14 │ surge-mcp = { workspace = true }
+   │             ──────────────━━━━──
+   │                           │
+   │                           usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:19:30
+   │
+19 │ surge-notify = { workspace = true }
+   │                ──────────────━━━━──
+   │                              │
+   │                              usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:17:36
+   │
+17 │ surge-orchestrator = { workspace = true }
+   │                      ──────────────━━━━──
+   │                                    │
+   │                                    usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:18:35
+   │
+18 │ surge-persistence = { workspace = true }
+   │                     ──────────────━━━━──
+   │                                   │
+   │                                   usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:12:31
+   │
+12 │ surge-process = { workspace = true }
+   │                 ──────────────━━━━──
+   │                               │
+   │                               usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+warning[wildcard]: found 10 wildcard dependencies for crate 'surge-cli'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:12:17
+   │
+12 │ surge-process = { workspace = true }
+   │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+13 │ surge-core = { workspace = true }
+   │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+14 │ surge-mcp = { workspace = true }
+   │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+15 │ surge-acp = { workspace = true }
+   │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+16 │ surge-git = { workspace = true }
+   │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+17 │ surge-orchestrator = { workspace = true }
+   │                      ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+18 │ surge-persistence = { workspace = true }
+   │                     ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+19 │ surge-notify = { workspace = true }
+   │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+20 │ surge-intake = { workspace = true }
+   │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   ·
+35 │ surge-daemon = { workspace = true }
+   │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   │
+   ├ surge-cli v0.1.0
+
+warning[wildcard]: found 19 wildcard dependencies for crate 'surge-daemon'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-daemon/Cargo.toml:17:17
+    │
+ 17 │ surge-process = { workspace = true }
+    │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    ·
+ 36 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+ 37 │ surge-git.workspace = true
+    │                       ━━━━ wildcard dependency
+ 38 │ surge-orchestrator.workspace = true
+    │                                ━━━━ wildcard dependency
+ 39 │ surge-mcp.workspace = true
+    │                       ━━━━ wildcard dependency
+ 40 │ surge-acp.workspace = true
+    │                       ━━━━ wildcard dependency
+ 41 │ surge-persistence.workspace = true
+    │                               ━━━━ wildcard dependency
+ 42 │ surge-notify.workspace = true
+    │                          ━━━━ wildcard dependency
+ 43 │ notify-rust = { workspace = true }
+ 44 │ surge-intake.workspace = true
+    │                          ━━━━ wildcard dependency
+ 45 │ surge-telegram = { path = "../surge-telegram" }
+    │                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:158:16
+    │
+158 │ surge-daemon = { path = "crates/surge-daemon" }
+    │                ────────────────────────────────
+    │                │
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │
+    ├ surge-daemon v0.1.0
+      ├── surge-cli v0.1.0
+      └── surge-ui v0.1.0
+
+warning[wildcard]: found 2 wildcard dependencies for crate 'surge-git'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-git/Cargo.toml:8:14
+    │
+  8 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:154:13
+    │
+154 │ surge-git = { path = "crates/surge-git" }
+    │             ───────────────────────────── workspace dependency
+    │
+    ├ surge-git v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      └── surge-orchestrator v0.1.0
+          ├── surge-cli v0.1.0 (*)
+          ├── (dev) surge-daemon v0.1.0 (*)
+          ├── surge-telegram v0.1.0
+          │   └── surge-daemon v0.1.0 (*)
+          └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-intake'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-intake/Cargo.toml:8:14
+    │
+  8 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+  9 │ surge-persistence = { workspace = true }
+    │                     ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:160:16
+    │
+160 │ surge-intake = { path = "crates/surge-intake" }
+    │                ────────────────────────────────
+    │                │
+    │                workspace dependency
+    │                workspace dependency
+    │
+    ├ surge-intake v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-notify v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── surge-daemon v0.1.0 (*)
+      │   ├── (dev) surge-orchestrator v0.1.0
+      │   │   ├── surge-cli v0.1.0 (*)
+      │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │   ├── surge-telegram v0.1.0
+      │   │   │   └── surge-daemon v0.1.0 (*)
+      │   │   └── surge-ui v0.1.0 (*)
+      │   └── surge-telegram v0.1.0 (*)
+      └── surge-orchestrator v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-mcp'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-mcp/Cargo.toml:10:17
+    │
+ 10 │ surge-process = { workspace = true }
+    │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    ·
+ 23 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:159:13
+    │
+159 │ surge-mcp = { path = "crates/surge-mcp" }
+    │             ─────────────────────────────
+    │             │
+    │             workspace dependency
+    │             workspace dependency
+    │
+    ├ surge-mcp v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-orchestrator v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   ├── surge-telegram v0.1.0
+      │   │   └── surge-daemon v0.1.0 (*)
+      │   └── surge-ui v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-notify'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-notify/Cargo.toml:16:24
+    │
+ 16 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+ 17 │ surge-intake = { workspace = true }
+    │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:157:16
+    │
+157 │ surge-notify = { path = "crates/surge-notify" }
+    │                ────────────────────────────────
+    │                │
+    │                workspace dependency
+    │                workspace dependency
+    │
+    ├ surge-notify v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── (dev) surge-orchestrator v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   ├── surge-telegram v0.1.0
+      │   │   └── surge-daemon v0.1.0 (*)
+      │   └── surge-ui v0.1.0 (*)
+      └── surge-telegram v0.1.0 (*)
+
+warning[wildcard]: found 14 wildcard dependencies for crate 'surge-orchestrator'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-orchestrator/Cargo.toml:12:14
+    │
+ 12 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 13 │ surge-acp = { workspace = true }
+    │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 14 │ surge-git = { workspace = true }
+    │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 15 │ surge-notify = { workspace = true }
+    │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 16 │ surge-persistence = { workspace = true }
+    │                     ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 17 │ surge-mcp = { workspace = true }
+    │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 18 │ surge-intake = { workspace = true }
+    │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:156:22
+    │
+156 │ surge-orchestrator = { path = "crates/surge-orchestrator" }
+    │                      ──────────────────────────────────────
+    │                      │
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │
+    ├ surge-orchestrator v0.1.0
+      ├── surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-telegram v0.1.0
+      │   └── surge-daemon v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-persistence'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-persistence/Cargo.toml:8:17
+    │
+  8 │ surge-process = { workspace = true }
+    │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+  9 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:155:21
+    │
+155 │ surge-persistence = { path = "crates/surge-persistence" }
+    │                     ─────────────────────────────────────
+    │                     │
+    │                     workspace dependency
+    │                     workspace dependency
+    │
+    ├ surge-persistence v0.1.0
+      ├── surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-intake v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── surge-daemon v0.1.0 (*)
+      │   ├── surge-notify v0.1.0
+      │   │   ├── surge-cli v0.1.0 (*)
+      │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   ├── (dev) surge-orchestrator v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │   │   ├── surge-telegram v0.1.0
+      │   │   │   │   └── surge-daemon v0.1.0 (*)
+      │   │   │   └── surge-ui v0.1.0 (*)
+      │   │   └── surge-telegram v0.1.0 (*)
+      │   └── surge-orchestrator v0.1.0 (*)
+      ├── surge-orchestrator v0.1.0 (*)
+      ├── surge-telegram v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 8 wildcard dependencies for crate 'surge-telegram'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-telegram/Cargo.toml:22:24
+    │
+ 22 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+ 23 │ surge-notify.workspace = true
+    │                          ━━━━ wildcard dependency
+ 24 │ surge-persistence.workspace = true
+    │                               ━━━━ wildcard dependency
+ 25 │ surge-orchestrator.workspace = true
+    │                                ━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:161:18
+    │
+161 │ surge-telegram = { path = "crates/surge-telegram" }
+    │                  ──────────────────────────────────
+    │                  │
+    │                  workspace dependency
+    │                  workspace dependency
+    │                  workspace dependency
+    │                  workspace dependency
+    │
+    ├ surge-telegram v0.1.0
+      └── surge-daemon v0.1.0
+          ├── surge-cli v0.1.0
+          └── surge-ui v0.1.0
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-ui/Cargo.toml:21:23
+   │
+21 │ surge-mcp.workspace = true
+   │                       ━━━━
+   │                       │
+   │                       usage of workspace dependency
+   │
+   ├ surge-ui v0.1.0
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-ui/Cargo.toml:11:31
+   │
+11 │ surge-process = { workspace = true }
+   │                 ──────────────━━━━──
+   │                               │
+   │                               usage of workspace dependency
+   │
+   ├ surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 7 wildcard dependencies for crate 'surge-ui'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-ui/Cargo.toml:11:17
+   │
+11 │ surge-process = { workspace = true }
+   │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   ·
+16 │ surge-core = { path = "../surge-core" }
+   │              ━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+17 │ surge-acp = { path = "../surge-acp" }
+   │             ━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+18 │ surge-orchestrator = { path = "../surge-orchestrator" }
+   │                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+19 │ surge-daemon = { path = "../surge-daemon" }
+   │                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+20 │ surge-persistence = { path = "../surge-persistence" }
+   │                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+21 │ surge-mcp.workspace = true
+   │                       ━━━━ wildcard dependency
+   │
+   ├ surge-ui v0.1.0
+
+error[unsound]: Unsoundness in `Error::downcast_mut()`
+   ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:25:1
+   │
+25 │ anyhow 1.0.102 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unsound advisory detected
+   │
+   ├ ID: RUSTSEC-2026-0190
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0190
+   ├ Affected versions of this crate violate borrow rules, resulting in undefined behavior, when the user adds context to an error via `Error::context` and then later calls `Error::downcast_mut` on the returned `Error`.
+
+     The flaw was corrected in commit `6e8c000` by revising how the mutable reference is constructed, avoiding inclusion of a shared reference in the resulting borrow chain.
+
+     ## Example
+
+     ```rust
+     use anyhow::Error;
+     use std::fmt;
+
+     #[derive(Debug)]
+     struct ErrorContext(&'static str);
+
+     impl fmt::Display for ErrorContext {
+         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+             fmt::Display::fmt(&self.0, f)
+         }
+     }
+
+     fn main() {
+         let mut error = Error::msg("inner error").context(ErrorContext("old context"));
+         let context: &mut ErrorContext = error.downcast_mut().unwrap();
+         context.0 = "new context";
+         println!("{:?}", error);
+     }
+     ```
+
+     ## Miri output
+
+     ```
+     error: Undefined Behavior: trying to retag from <1538> for Unique permission at alloc602[0x38], but that tag only grants SharedReadOnly permission for this location
+        --> src/ptr.rs:170:18
+         |
+     170 |         unsafe { &mut *self.ptr.as_ptr() }
+         |                  ^^^^^^^^^^^^^^^^^^^^^^^ this error occurs as part of retag at alloc602[0x38..0x48]
+         |
+         = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+         = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/stacked-borrows.md for further information
+     help: <1538> was created by a SharedReadOnly retag at offsets [0x38..0x48]
+        --> src/ptr.rs:89:18
+         |
+      89 |             ptr: NonNull::from(ptr),
+         |                  ^^^^^^^^^^^^^^^^^^
+         = note: stack backtrace:
+                 0: anyhow::ptr::Mut::<'_, ErrorContext>::deref_mut
+                     at src/ptr.rs:170:18: 170:41
+                 1: anyhow::error::<impl anyhow::Error>::downcast_mut::<ErrorContext>
+                     at src/error.rs:560:18: 560:46
+                 2: main
+                     at examples/downcast_mut.rs:15:38: 15:58
+     ```
+   ├ Announcement: https://github.com/dtolnay/anyhow/issues/451
+   ├ Solution: Upgrade to >=1.0.103 (try `cargo update -p anyhow`)
+   ├ anyhow v1.0.102
+     ├── agent-client-protocol-schema v1.9.1
+     │   └── agent-client-protocol v2.2.0
+     │       ├── surge-acp v0.1.0
+     │       │   ├── surge-cli v0.1.0
+     │       │   ├── (dev) surge-daemon v0.1.0
+     │       │   │   ├── surge-cli v0.1.0 (*)
+     │       │   │   └── surge-ui v0.1.0
+     │       │   ├── surge-orchestrator v0.1.0
+     │       │   │   ├── surge-cli v0.1.0 (*)
+     │       │   │   ├── (dev) surge-daemon v0.1.0 (*)
+     │       │   │   ├── surge-telegram v0.1.0
+     │       │   │   │   └── surge-daemon v0.1.0 (*)
+     │       │   │   └── surge-ui v0.1.0 (*)
+     │       │   ├── (dev) surge-telegram v0.1.0 (*)
+     │       │   └── surge-ui v0.1.0 (*)
+     │       ├── surge-cli v0.1.0 (*)
+     │       ├── (dev) surge-daemon v0.1.0 (*)
+     │       ├── surge-orchestrator v0.1.0 (*)
+     │       └── surge-ui v0.1.0 (*)
+     ├── gpui-base v0.7.0
+     │   ├── gpui-component v0.7.0
+     │   │   └── gpui-kit v0.7.0
+     │   │       └── (dev) surge-ui v0.1.0 (*)
+     │   └── gpui-kit v0.7.0 (*)
+     ├── gpui-component v0.7.0 (*)
+     ├── gpui-kit-assets v0.7.0
+     │   ├── gpui-component v0.7.0 (*)
+     │   └── gpui-kit v0.7.0 (*)
+     ├── gpui-pre v0.3.7
+     │   ├── gpui-base v0.7.0 (*)
+     │   ├── gpui-component v0.7.0 (*)
+     │   ├── gpui-kit v0.7.0 (*)
+     │   ├── gpui-kit-assets v0.7.0 (*)
+     │   ├── gpui-pre-apple v0.3.7
+     │   │   └── gpui-pre-macos v0.3.7
+     │   │       └── gpui-pre-platform v0.3.7
+     │   │           └── gpui-kit v0.7.0 (*)
+     │   ├── gpui-pre-linux v0.3.7
+     │   │   └── gpui-pre-platform v0.3.7 (*)
+     │   ├── gpui-pre-macos v0.3.7 (*)
+     │   ├── gpui-pre-platform v0.3.7 (*)
+     │   ├── gpui-pre-web v0.3.7
+     │   │   ├── gpui-kit v0.7.0 (*)
+     │   │   └── gpui-pre-platform v0.3.7 (*)
+     │   ├── gpui-pre-wgpu v0.3.7
+     │   │   ├── gpui-pre-linux v0.3.7 (*)
+     │   │   ├── gpui-pre-platform v0.3.7 (*)
+     │   │   └── gpui-pre-web v0.3.7 (*)
+     │   ├── gpui-pre-windows v0.3.7
+     │   │   └── gpui-pre-platform v0.3.7 (*)
+     │   └── gpui-wry v0.7.0
+     │       └── surge-ui v0.1.0 (*)
+     ├── gpui-pre-apple v0.3.7 (*)
+     ├── gpui-pre-http-client v0.3.7
+     │   ├── gpui-pre v0.3.7 (*)
+     │   ├── gpui-pre-linux v0.3.7 (*)
+     │   └── gpui-pre-web v0.3.7 (*)
+     ├── gpui-pre-linux v0.3.7 (*)
+     ├── gpui-pre-macos v0.3.7 (*)
+     ├── gpui-pre-platform v0.3.7 (*)
+     ├── gpui-pre-util v0.3.7
+     │   ├── gpui-pre v0.3.7 (*)
+     │   ├── gpui-pre-collections v0.3.7
+     │   │   ├── gpui-pre v0.3.7 (*)
+     │   │   ├── gpui-pre-linux v0.3.7 (*)
+     │   │   ├── gpui-pre-macos v0.3.7 (*)
+     │   │   ├── gpui-pre-perf v0.3.7
+     │   │   │   └── gpui-pre-util-macros v0.3.7
+     │   │   │       └── gpui-pre v0.3.7 (*)
+     │   │   ├── gpui-pre-wgpu v0.3.7 (*)
+     │   │   ├── gpui-pre-windows v0.3.7 (*)
+     │   │   └── gpui-pre-zlog v0.3.7
+     │   │       └── gpui-pre-ztracing v0.3.7
+     │   │           └── gpui-pre-sum-tree v0.3.7
+     │   │               ├── gpui-base v0.7.0 (*)
+     │   │               ├── gpui-component v0.7.0 (*)
+     │   │               └── gpui-pre v0.3.7 (*)
+     │   ├── gpui-pre-linux v0.3.7 (*)
+     │   ├── gpui-pre-macos v0.3.7 (*)
+     │   ├── gpui-pre-wgpu v0.3.7 (*)
+     │   └── gpui-pre-windows v0.3.7 (*)
+     ├── gpui-pre-web v0.3.7 (*)
+     ├── gpui-pre-wgpu v0.3.7 (*)
+     ├── gpui-pre-windows v0.3.7 (*)
+     ├── gpui-pre-zlog v0.3.7 (*)
+     ├── gpui-wry v0.7.0 (*)
+     ├── surge-cli v0.1.0 (*)
+     ├── (dev) surge-orchestrator v0.1.0 (*)
+     └── surge-ui v0.1.0 (*)
+
+error[unmaintained]: Bincode is unmaintained
+   ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:65:1
+   │
+65 │ bincode 1.3.3 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+   │
+   ├ ID: RUSTSEC-2025-0141
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0141
+   ├ Due to a doxxing and harassment incident, the bincode team has taken the decision to cease development permanently.
+
+     The team considers version 1.3.3 a complete version of bincode that is not in need of any updates.
+
+     ## Alternatives to consider
+
+     * [wincode](https://crates.io/crates/wincode)
+     * [postcard](https://crates.io/crates/postcard)
+     * [bitcode](https://crates.io/crates/bitcode)
+     * [rkyv](https://crates.io/crates/rkyv)
+   ├ Announcement: https://git.sr.ht/~stygianentity/bincode/tree/v3.0/item/README.md
+   ├ Solution: No safe upgrade is available!
+   ├ bincode v1.3.3
+     └── surge-core v0.1.0
+         ├── surge-acp v0.1.0
+         │   ├── surge-cli v0.1.0
+         │   ├── (dev) surge-daemon v0.1.0
+         │   │   ├── surge-cli v0.1.0 (*)
+         │   │   └── surge-ui v0.1.0
+         │   ├── surge-orchestrator v0.1.0
+         │   │   ├── surge-cli v0.1.0 (*)
+         │   │   ├── (dev) surge-daemon v0.1.0 (*)
+         │   │   ├── surge-telegram v0.1.0
+         │   │   │   └── surge-daemon v0.1.0 (*)
+         │   │   └── surge-ui v0.1.0 (*)
+         │   ├── (dev) surge-telegram v0.1.0 (*)
+         │   └── surge-ui v0.1.0 (*)
+         ├── surge-cli v0.1.0 (*)
+         ├── surge-daemon v0.1.0 (*)
+         ├── surge-git v0.1.0
+         │   ├── surge-cli v0.1.0 (*)
+         │   ├── surge-daemon v0.1.0 (*)
+         │   └── surge-orchestrator v0.1.0 (*)
+         ├── surge-intake v0.1.0
+         │   ├── surge-cli v0.1.0 (*)
+         │   ├── surge-daemon v0.1.0 (*)
+         │   ├── surge-notify v0.1.0
+         │   │   ├── surge-cli v0.1.0 (*)
+         │   │   ├── surge-daemon v0.1.0 (*)
+         │   │   ├── (dev) surge-orchestrator v0.1.0 (*)
+         │   │   └── surge-telegram v0.1.0 (*)
+         │   └── surge-orchestrator v0.1.0 (*)
+         ├── surge-mcp v0.1.0
+         │   ├── surge-cli v0.1.0 (*)
+         │   ├── surge-daemon v0.1.0 (*)
+         │   ├── surge-orchestrator v0.1.0 (*)
+         │   └── surge-ui v0.1.0 (*)
+         ├── surge-notify v0.1.0 (*)
+         ├── surge-orchestrator v0.1.0 (*)
+         ├── surge-persistence v0.1.0
+         │   ├── surge-cli v0.1.0 (*)
+         │   ├── (dev) surge-daemon v0.1.0 (*)
+         │   ├── surge-intake v0.1.0 (*)
+         │   ├── surge-orchestrator v0.1.0 (*)
+         │   ├── surge-telegram v0.1.0 (*)
+         │   └── surge-ui v0.1.0 (*)
+         ├── surge-telegram v0.1.0 (*)
+         └── surge-ui v0.1.0 (*)
+
+error[unsound]: Potential undefined behavior when calling Remote::list()
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:286:1
+    │
+286 │ git2 0.20.4 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unsound advisory detected
+    │
+    ├ ID: RUSTSEC-2026-0183
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0183
+    ├ When calling `Remote::list()` for a remote of a git repository, when that remote does not advertise any references, git2 passes a null pointer to the unsafe function `slice::from_raw_parts()`. Based on the safety section documentation of function, data must be non-null even for slices of length zero. Thus, the use of a null pointer leads to undefined behavior.
+    ├ Announcement: https://github.com/rust-lang/git2-rs/pull/1250
+    ├ Solution: Upgrade to >=0.21.0 (try `cargo update -p git2`)
+    ├ git2 v0.20.4
+      ├── (dev) surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-git v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── surge-daemon v0.1.0 (*)
+      │   └── surge-orchestrator v0.1.0
+      │       ├── surge-cli v0.1.0 (*)
+      │       ├── (dev) surge-daemon v0.1.0 (*)
+      │       ├── surge-telegram v0.1.0
+      │       │   └── surge-daemon v0.1.0 (*)
+      │       └── surge-ui v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+error[unsound]: Potential undefined behavior with Signature from a buffer-created BlameHunk
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:286:1
+    │
+286 │ git2 0.20.4 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unsound advisory detected
+    │
+    ├ ID: RUSTSEC-2026-0184
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0184
+    ├ When a `Blame` is created via `Blame::blame_buffer()`, and a `BlameHunk` is retrieved, the pointers to the original author, original committer, final author, and final committer may be null if unavailable. The corresponding `BlameHunk` methods then create `Signature`s based on null pointers; attempting to access the data of the `Signature`s leads to dereferencing null pointers.
+    ├ Announcement: https://github.com/rust-lang/git2-rs/pull/1254
+    ├ Solution: Upgrade to >=0.21.0 (try `cargo update -p git2`)
+    ├ git2 v0.20.4
+      ├── (dev) surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-git v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── surge-daemon v0.1.0 (*)
+      │   └── surge-orchestrator v0.1.0
+      │       ├── surge-cli v0.1.0 (*)
+      │       ├── (dev) surge-daemon v0.1.0 (*)
+      │       ├── surge-telegram v0.1.0
+      │       │   └── surge-daemon v0.1.0 (*)
+      │       └── surge-ui v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+error[vulnerability]: h2 unbounded empty DATA frames
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:333:1
+    │
+333 │ h2 0.3.27 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0258
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0258
+    ├ The h2 crate, used internally by hyper, had a flaw that would accept and queue empty DATA frames without limit.
+      If streams were not actively drained, this could lead to unbounded memory usage, or a panic if the length overflows.
+
+      Low severity.
+
+      Patched in v0.4.16.
+    ├ Announcement: https://github.com/hyperium/hyper/security/advisories/GHSA-q83h-524g-xf6h
+    ├ Solution: Upgrade to >=0.4.16 (try `cargo update -p h2`)
+    ├ h2 v0.3.27
+      ├── hyper v0.14.32
+      │   ├── hyper-tls v0.5.0
+      │   │   └── reqwest v0.11.27
+      │   │       └── teloxide-core v0.10.1
+      │   │           └── teloxide v0.13.0
+      │   │               ├── surge-daemon v0.1.0
+      │   │               │   ├── surge-cli v0.1.0
+      │   │               │   └── surge-ui v0.1.0
+      │   │               └── surge-telegram v0.1.0
+      │   │                   └── surge-daemon v0.1.0 (*)
+      │   └── reqwest v0.11.27 (*)
+      └── reqwest v0.11.27 (*)
+
+error[vulnerability]: h2 unbounded empty DATA frames
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:334:1
+    │
+334 │ h2 0.4.13 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0258
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0258
+    ├ The h2 crate, used internally by hyper, had a flaw that would accept and queue empty DATA frames without limit.
+      If streams were not actively drained, this could lead to unbounded memory usage, or a panic if the length overflows.
+
+      Low severity.
+
+      Patched in v0.4.16.
+    ├ Announcement: https://github.com/hyperium/hyper/security/advisories/GHSA-q83h-524g-xf6h
+    ├ Solution: Upgrade to >=0.4.16 (try `cargo update -p h2`)
+    ├ h2 v0.4.13
+      ├── gpui-pre-reqwest v0.12.15
+      │   └── gpui-kit-assets v0.7.0
+      │       ├── gpui-component v0.7.0
+      │       │   └── gpui-kit v0.7.0
+      │       │       └── (dev) surge-ui v0.1.0
+      │       └── gpui-kit v0.7.0 (*)
+      └── hyper v1.8.1
+          ├── gpui-pre-reqwest v0.12.15 (*)
+          ├── hyper-rustls v0.27.7
+          │   ├── gpui-pre-reqwest v0.12.15 (*)
+          │   ├── octocrab v0.42.1
+          │   │   └── surge-intake v0.1.0
+          │   │       ├── surge-cli v0.1.0
+          │   │       ├── surge-daemon v0.1.0
+          │   │       │   ├── surge-cli v0.1.0 (*)
+          │   │       │   └── surge-ui v0.1.0 (*)
+          │   │       ├── surge-notify v0.1.0
+          │   │       │   ├── surge-cli v0.1.0 (*)
+          │   │       │   ├── surge-daemon v0.1.0 (*)
+          │   │       │   ├── (dev) surge-orchestrator v0.1.0
+          │   │       │   │   ├── surge-cli v0.1.0 (*)
+          │   │       │   │   ├── (dev) surge-daemon v0.1.0 (*)
+          │   │       │   │   ├── surge-telegram v0.1.0
+          │   │       │   │   │   └── surge-daemon v0.1.0 (*)
+          │   │       │   │   └── surge-ui v0.1.0 (*)
+          │   │       │   └── surge-telegram v0.1.0 (*)
+          │   │       └── surge-orchestrator v0.1.0 (*)
+          │   └── reqwest v0.12.28
+          │       ├── lineark-sdk v3.0.1
+          │       │   └── surge-intake v0.1.0 (*)
+          │       ├── surge-acp v0.1.0
+          │       │   ├── surge-cli v0.1.0 (*)
+          │       │   ├── (dev) surge-daemon v0.1.0 (*)
+          │       │   ├── surge-orchestrator v0.1.0 (*)
+          │       │   ├── (dev) surge-telegram v0.1.0 (*)
+          │       │   └── surge-ui v0.1.0 (*)
+          │       ├── surge-daemon v0.1.0 (*)
+          │       └── surge-notify v0.1.0 (*)
+          ├── hyper-timeout v0.5.2
+          │   └── octocrab v0.42.1 (*)
+          ├── hyper-util v0.1.20
+          │   ├── gpui-pre-reqwest v0.12.15 (*)
+          │   ├── hyper-rustls v0.27.7 (*)
+          │   ├── hyper-timeout v0.5.2 (*)
+          │   ├── octocrab v0.42.1 (*)
+          │   ├── reqwest v0.12.28 (*)
+          │   └── wiremock v0.6.5
+          │       ├── (dev) surge-intake v0.1.0 (*)
+          │       └── (dev) surge-telegram v0.1.0 (*)
+          ├── octocrab v0.42.1 (*)
+          ├── reqwest v0.12.28 (*)
+          └── wiremock v0.6.5 (*)
+
+error[vulnerability]: Quadratic run time when checking a start tag for duplicate attribute names
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:636:1
+    │
+636 │ quick-xml 0.37.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0194
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0194
+    ├ `BytesStart::attributes()` returns an `Attributes` iterator which, by default
+      (`with_checks(true)`), rejects a start tag that repeats an attribute name. For
+      each attribute yielded, the iterator compared the new name against every name
+      seen so far in the same tag using a linear scan, so a start tag with `N`
+      distinct attribute names cost `O(N²)` byte comparisons. There was no bound on
+      `N` other than the size of the buffered start tag.
+
+      ## Impact
+
+      Any code that parses untrusted XML and iterates a start tag's attributes with
+      the default duplicate check enabled can be made to spend CPU time quadratic in
+      the number of attributes on a single tag. Because the check is pure computation
+      with no `.await`/I/O, an I/O-based timeout on the consumer (for example a read
+      or request timeout) cannot interrupt it while it runs.
+
+      Measured cost of a single start tag, release build:
+
+      | Attributes on one tag | Time |
+      |---|---|
+      | 80,000  | ~6 s   |
+      | 800,000 | ~10 min |
+
+      The cost grows with the square of the attribute count, so a start tag of a few
+      tens of megabytes can stall a parsing thread for hours. No memory is exhausted
+      and the parser does not crash; the effect is CPU exhaustion on the thread doing
+      the parsing: a single crafted start tag can pin a CPU core for minutes to hours,
+      denying service to that worker. A deployment that places a wall-clock bound on
+      parsing, or confines it to a non-critical thread, may consider the availability
+      impact lower.
+
+      ## Affected code paths
+
+      * `BytesStart::attributes()` / `Attributes` iterated with checks enabled (the
+        default), and `BytesStart::try_get_attribute`.
+      * `NsReader`, which resolves namespaces by iterating a tag's attributes and so
+        reaches the same check internally.
+
+      Consumers that iterate attributes with `.attributes().with_checks(false)` and do
+      not use `NsReader` are not affected.
+
+      This was reported as reachable by a remote, unauthenticated attacker in a
+      real-world RPKI relying party (NLnet Labs Routinator) via a crafted RRDP
+      `snapshot.xml`.
+
+      ## Remediation
+
+      Upgrade to `quick-xml >= 0.41.0`, where the duplicate check keeps the linear
+      scan for start tags with a small number of attributes and switches to an `O(1)`
+      hash pre-filter above a threshold, making the whole tag `O(N)`. The reported
+      `AttrError::Duplicated` positions are unchanged.
+
+      If upgrading is not possible and duplicate-name detection is not required,
+      disable it with `.attributes().with_checks(false)` (this does not help
+      `NsReader` consumers, which have no equivalent opt-out before 0.41.0).
+    ├ Announcement: https://github.com/tafia/quick-xml/issues/969
+    ├ Solution: Upgrade to >=0.41.0 (try `cargo update -p quick-xml`)
+    ├ quick-xml v0.37.5
+      └── tauri-winrt-notification v0.7.2
+          └── notify-rust v4.12.0
+              ├── gpui-pre-linux v0.3.7
+              │   └── gpui-pre-platform v0.3.7
+              │       └── gpui-kit v0.7.0
+              │           └── (dev) surge-ui v0.1.0
+              ├── surge-daemon v0.1.0
+              │   ├── surge-cli v0.1.0
+              │   └── surge-ui v0.1.0 (*)
+              ├── surge-notify v0.1.0
+              │   ├── surge-cli v0.1.0 (*)
+              │   ├── surge-daemon v0.1.0 (*)
+              │   ├── (dev) surge-orchestrator v0.1.0
+              │   │   ├── surge-cli v0.1.0 (*)
+              │   │   ├── (dev) surge-daemon v0.1.0 (*)
+              │   │   ├── surge-telegram v0.1.0
+              │   │   │   └── surge-daemon v0.1.0 (*)
+              │   │   └── surge-ui v0.1.0 (*)
+              │   └── surge-telegram v0.1.0 (*)
+              └── surge-ui v0.1.0 (*)
+
+error[vulnerability]: Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:636:1
+    │
+636 │ quick-xml 0.37.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0195
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0195
+    ├ `NsReader` resolves namespaces by calling `NamespaceResolver::push` for every
+      `Start`/`Empty` event *before* the event is returned to the caller. `push`
+      iterated all `xmlns` / `xmlns:*` attributes on the start tag and, for each one,
+      appended the prefix bytes to an internal buffer and pushed a `NamespaceBinding`
+      (32 bytes on 64-bit) to an internal `Vec`, with no upper bound on the number of
+      declarations.
+
+      ## Impact
+
+      A start tag with `N` namespace declarations drove roughly `3×` the tag's byte
+      size in `NamespaceResolver` heap, allocated *inside* `quick-xml` before the
+      `NsReader` consumer ever received the event and could inspect or reject it. A
+      consumer that bounds its *input* size therefore still cannot bound this
+      allocation: an `M`-byte start tag yields on the order of `3 × M` bytes of
+      resolver heap the caller never sees.
+
+      On untrusted XML this lets a remote, unauthenticated attacker force large heap
+      allocations with a single start tag. With several `NsReader`s running
+      concurrently on independent inputs (a common server pattern), the allocations
+      stack and can exhaust process memory, causing the operating system to kill the
+      process (OOM). This was confirmed against a real-world RPKI relying party (NLnet
+      Labs Routinator), where concurrent RRDP validation workers parsing a crafted
+      `snapshot.xml` exceeded the memory limit and the process was OOM-killed.
+
+      ## Affected code paths
+
+      Consumers using `NsReader` (which always calls `NamespaceResolver::push` before
+      yielding `Start`/`Empty`), or calling `NamespaceResolver::push` directly. A plain
+      `Reader` that does not perform namespace resolution is not affected.
+
+      ## Remediation
+
+      Upgrade to `quick-xml >= 0.41.0`. `NamespaceResolver::push` now rejects a start
+      tag that declares more than `DEFAULT_MAX_DECLARATIONS_PER_ELEMENT` (256)
+      namespace bindings, returning the new `NamespaceError::TooManyDeclarations`
+      instead of allocating without limit. The limit is configurable via
+      `NamespaceResolver::set_max_declarations_per_element` (use `usize::MAX` to
+      restore the previous unbounded behavior), and `NsReader::resolver_mut()` is
+      provided to reach it.
+
+      There is no clean workaround for `NsReader` consumers before 0.41.0, as the
+      allocation happens inside the reader with no configuration knob to cap it.
+    ├ Announcement: https://github.com/tafia/quick-xml/issues/970
+    ├ Solution: Upgrade to >=0.41.0 (try `cargo update -p quick-xml`)
+    ├ quick-xml v0.37.5
+      └── tauri-winrt-notification v0.7.2
+          └── notify-rust v4.12.0
+              ├── gpui-pre-linux v0.3.7
+              │   └── gpui-pre-platform v0.3.7
+              │       └── gpui-kit v0.7.0
+              │           └── (dev) surge-ui v0.1.0
+              ├── surge-daemon v0.1.0
+              │   ├── surge-cli v0.1.0
+              │   └── surge-ui v0.1.0 (*)
+              ├── surge-notify v0.1.0
+              │   ├── surge-cli v0.1.0 (*)
+              │   ├── surge-daemon v0.1.0 (*)
+              │   ├── (dev) surge-orchestrator v0.1.0
+              │   │   ├── surge-cli v0.1.0 (*)
+              │   │   ├── (dev) surge-daemon v0.1.0 (*)
+              │   │   ├── surge-telegram v0.1.0
+              │   │   │   └── surge-daemon v0.1.0 (*)
+              │   │   └── surge-ui v0.1.0 (*)
+              │   └── surge-telegram v0.1.0 (*)
+              └── surge-ui v0.1.0 (*)
+
+error[vulnerability]: Quadratic run time when checking a start tag for duplicate attribute names
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:637:1
+    │
+637 │ quick-xml 0.39.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0194
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0194
+    ├ `BytesStart::attributes()` returns an `Attributes` iterator which, by default
+      (`with_checks(true)`), rejects a start tag that repeats an attribute name. For
+      each attribute yielded, the iterator compared the new name against every name
+      seen so far in the same tag using a linear scan, so a start tag with `N`
+      distinct attribute names cost `O(N²)` byte comparisons. There was no bound on
+      `N` other than the size of the buffered start tag.
+
+      ## Impact
+
+      Any code that parses untrusted XML and iterates a start tag's attributes with
+      the default duplicate check enabled can be made to spend CPU time quadratic in
+      the number of attributes on a single tag. Because the check is pure computation
+      with no `.await`/I/O, an I/O-based timeout on the consumer (for example a read
+      or request timeout) cannot interrupt it while it runs.
+
+      Measured cost of a single start tag, release build:
+
+      | Attributes on one tag | Time |
+      |---|---|
+      | 80,000  | ~6 s   |
+      | 800,000 | ~10 min |
+
+      The cost grows with the square of the attribute count, so a start tag of a few
+      tens of megabytes can stall a parsing thread for hours. No memory is exhausted
+      and the parser does not crash; the effect is CPU exhaustion on the thread doing
+      the parsing: a single crafted start tag can pin a CPU core for minutes to hours,
+      denying service to that worker. A deployment that places a wall-clock bound on
+      parsing, or confines it to a non-critical thread, may consider the availability
+      impact lower.
+
+      ## Affected code paths
+
+      * `BytesStart::attributes()` / `Attributes` iterated with checks enabled (the
+        default), and `BytesStart::try_get_attribute`.
+      * `NsReader`, which resolves namespaces by iterating a tag's attributes and so
+        reaches the same check internally.
+
+      Consumers that iterate attributes with `.attributes().with_checks(false)` and do
+      not use `NsReader` are not affected.
+
+      This was reported as reachable by a remote, unauthenticated attacker in a
+      real-world RPKI relying party (NLnet Labs Routinator) via a crafted RRDP
+      `snapshot.xml`.
+
+      ## Remediation
+
+      Upgrade to `quick-xml >= 0.41.0`, where the duplicate check keeps the linear
+      scan for start tags with a small number of attributes and switches to an `O(1)`
+      hash pre-filter above a threshold, making the whole tag `O(N)`. The reported
+      `AttrError::Duplicated` positions are unchanged.
+
+      If upgrading is not possible and duplicate-name detection is not required,
+      disable it with `.attributes().with_checks(false)` (this does not help
+      `NsReader` consumers, which have no equivalent opt-out before 0.41.0).
+    ├ Announcement: https://github.com/tafia/quick-xml/issues/969
+    ├ Solution: Upgrade to >=0.41.0 (try `cargo update -p quick-xml`)
+    ├ quick-xml v0.39.2
+      └── wayland-scanner v0.31.9
+          ├── wayland-client v0.31.13
+          │   ├── ashpd v0.13.13
+          │   │   ├── gpui-base v0.7.0
+          │   │   │   ├── gpui-component v0.7.0
+          │   │   │   │   └── gpui-kit v0.7.0
+          │   │   │   │       └── (dev) surge-ui v0.1.0
+          │   │   │   └── gpui-kit v0.7.0 (*)
+          │   │   ├── gpui-pre-linux v0.3.7
+          │   │   │   └── gpui-pre-platform v0.3.7
+          │   │   │       └── gpui-kit v0.7.0 (*)
+          │   │   └── oo7 v0.6.0
+          │   │       └── gpui-pre-linux v0.3.7 (*)
+          │   ├── calloop-wayland-source v0.4.1
+          │   │   └── gpui-pre-linux v0.3.7 (*)
+          │   ├── gpui-pre-linux v0.3.7 (*)
+          │   ├── wayland-cursor v0.31.13
+          │   │   └── gpui-pre-linux v0.3.7 (*)
+          │   ├── wayland-protocols v0.32.11
+          │   │   ├── ashpd v0.13.13 (*)
+          │   │   ├── gpui-pre-linux v0.3.7 (*)
+          │   │   ├── wayland-protocols-plasma v0.3.11
+          │   │   │   └── gpui-pre-linux v0.3.7 (*)
+          │   │   └── wayland-protocols-wlr v0.3.11
+          │   │       └── gpui-pre-linux v0.3.7 (*)
+          │   ├── wayland-protocols-plasma v0.3.11 (*)
+          │   └── wayland-protocols-wlr v0.3.11 (*)
+          ├── wayland-protocols v0.32.11 (*)
+          ├── wayland-protocols-plasma v0.3.11 (*)
+          └── wayland-protocols-wlr v0.3.11 (*)
+
+error[vulnerability]: Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:637:1
+    │
+637 │ quick-xml 0.39.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0195
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0195
+    ├ `NsReader` resolves namespaces by calling `NamespaceResolver::push` for every
+      `Start`/`Empty` event *before* the event is returned to the caller. `push`
+      iterated all `xmlns` / `xmlns:*` attributes on the start tag and, for each one,
+      appended the prefix bytes to an internal buffer and pushed a `NamespaceBinding`
+      (32 bytes on 64-bit) to an internal `Vec`, with no upper bound on the number of
+      declarations.
+
+      ## Impact
+
+      A start tag with `N` namespace declarations drove roughly `3×` the tag's byte
+      size in `NamespaceResolver` heap, allocated *inside* `quick-xml` before the
+      `NsReader` consumer ever received the event and could inspect or reject it. A
+      consumer that bounds its *input* size therefore still cannot bound this
+      allocation: an `M`-byte start tag yields on the order of `3 × M` bytes of
+      resolver heap the caller never sees.
+
+      On untrusted XML this lets a remote, unauthenticated attacker force large heap
+      allocations with a single start tag. With several `NsReader`s running
+      concurrently on independent inputs (a common server pattern), the allocations
+      stack and can exhaust process memory, causing the operating system to kill the
+      process (OOM). This was confirmed against a real-world RPKI relying party (NLnet
+      Labs Routinator), where concurrent RRDP validation workers parsing a crafted
+      `snapshot.xml` exceeded the memory limit and the process was OOM-killed.
+
+      ## Affected code paths
+
+      Consumers using `NsReader` (which always calls `NamespaceResolver::push` before
+      yielding `Start`/`Empty`), or calling `NamespaceResolver::push` directly. A plain
+      `Reader` that does not perform namespace resolution is not affected.
+
+      ## Remediation
+
+      Upgrade to `quick-xml >= 0.41.0`. `NamespaceResolver::push` now rejects a start
+      tag that declares more than `DEFAULT_MAX_DECLARATIONS_PER_ELEMENT` (256)
+      namespace bindings, returning the new `NamespaceError::TooManyDeclarations`
+      instead of allocating without limit. The limit is configurable via
+      `NamespaceResolver::set_max_declarations_per_element` (use `usize::MAX` to
+      restore the previous unbounded behavior), and `NsReader::resolver_mut()` is
+      provided to reach it.
+
+      There is no clean workaround for `NsReader` consumers before 0.41.0, as the
+      allocation happens inside the reader with no configuration knob to cap it.
+    ├ Announcement: https://github.com/tafia/quick-xml/issues/970
+    ├ Solution: Upgrade to >=0.41.0 (try `cargo update -p quick-xml`)
+    ├ quick-xml v0.39.2
+      └── wayland-scanner v0.31.9
+          ├── wayland-client v0.31.13
+          │   ├── ashpd v0.13.13
+          │   │   ├── gpui-base v0.7.0
+          │   │   │   ├── gpui-component v0.7.0
+          │   │   │   │   └── gpui-kit v0.7.0
+          │   │   │   │       └── (dev) surge-ui v0.1.0
+          │   │   │   └── gpui-kit v0.7.0 (*)
+          │   │   ├── gpui-pre-linux v0.3.7
+          │   │   │   └── gpui-pre-platform v0.3.7
+          │   │   │       └── gpui-kit v0.7.0 (*)
+          │   │   └── oo7 v0.6.0
+          │   │       └── gpui-pre-linux v0.3.7 (*)
+          │   ├── calloop-wayland-source v0.4.1
+          │   │   └── gpui-pre-linux v0.3.7 (*)
+          │   ├── gpui-pre-linux v0.3.7 (*)
+          │   ├── wayland-cursor v0.31.13
+          │   │   └── gpui-pre-linux v0.3.7 (*)
+          │   ├── wayland-protocols v0.32.11
+          │   │   ├── ashpd v0.13.13 (*)
+          │   │   ├── gpui-pre-linux v0.3.7 (*)
+          │   │   ├── wayland-protocols-plasma v0.3.11
+          │   │   │   └── gpui-pre-linux v0.3.7 (*)
+          │   │   └── wayland-protocols-wlr v0.3.11
+          │   │       └── gpui-pre-linux v0.3.7 (*)
+          │   ├── wayland-protocols-plasma v0.3.11 (*)
+          │   └── wayland-protocols-wlr v0.3.11 (*)
+          ├── wayland-protocols v0.32.11 (*)
+          ├── wayland-protocols-plasma v0.3.11 (*)
+          └── wayland-protocols-wlr v0.3.11 (*)
+
+error[unsound]: Rand is unsound with a custom logger using `rand::rng()`
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:646:1
+    │
+646 │ rand 0.9.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unsound advisory detected
+    │
+    ├ ID: RUSTSEC-2026-0097
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0097
+    ├ It has been reported (by [@lopopolo](https://github.com/lopopolo)) that the `rand` library is [unsound](https://rust-lang.github.io/unsafe-code-guidelines/glossary.html#soundness-of-code--of-a-library) (i.e. that safe code using the public API can cause Undefined Behaviour) when all the following conditions are met:
+
+      - The `log` and `thread_rng` features are enabled
+      - A [custom logger](https://docs.rs/log/latest/log/#implementing-a-logger) is defined
+      - The custom logger accesses `rand::rng()` (previously `rand::thread_rng()`) and calls any `TryRng` (previously `RngCore`) methods on `ThreadRng`
+      - The `ThreadRng` (attempts to) reseed while called from the custom logger (this happens every 64 kB of generated data)
+      - Trace-level logging is enabled or warn-level logging is enabled and the random source (the `getrandom` crate) is unable to provide a new seed
+
+      `TryRng` (previously `RngCore`) methods for `ThreadRng` use `unsafe` code to cast `*mut BlockRng<ReseedingCore>` to `&mut BlockRng<ReseedingCore>`. When all the above conditions are met this results in an aliased mutable reference, violating the Stacked Borrows rules. Miri is able to detect this violation in sample code. Since construction of [aliased mutable references is Undefined Behaviour](https://doc.rust-lang.org/stable/nomicon/references.html), the behaviour of optimized builds is hard to predict.
+    ├ Announcement: https://github.com/rust-random/rand/pull/1763
+    ├ Solution: Upgrade to >=0.10.1 OR <0.10.0, >=0.9.3 OR <0.9.0, >=0.8.6 (try `cargo update -p rand`)
+    ├ rand v0.9.2
+      ├── gpui-pre v0.3.7
+      │   ├── gpui-base v0.7.0
+      │   │   ├── gpui-component v0.7.0
+      │   │   │   └── gpui-kit v0.7.0
+      │   │   │       └── (dev) surge-ui v0.1.0
+      │   │   └── gpui-kit v0.7.0 (*)
+      │   ├── gpui-component v0.7.0 (*)
+      │   ├── gpui-kit v0.7.0 (*)
+      │   ├── gpui-kit-assets v0.7.0
+      │   │   ├── gpui-component v0.7.0 (*)
+      │   │   └── gpui-kit v0.7.0 (*)
+      │   ├── gpui-pre-apple v0.3.7
+      │   │   └── gpui-pre-macos v0.3.7
+      │   │       └── gpui-pre-platform v0.3.7
+      │   │           └── gpui-kit v0.7.0 (*)
+      │   ├── gpui-pre-linux v0.3.7
+      │   │   └── gpui-pre-platform v0.3.7 (*)
+      │   ├── gpui-pre-macos v0.3.7 (*)
+      │   ├── gpui-pre-platform v0.3.7 (*)
+      │   ├── gpui-pre-web v0.3.7
+      │   │   ├── gpui-kit v0.7.0 (*)
+      │   │   └── gpui-pre-platform v0.3.7 (*)
+      │   ├── gpui-pre-wgpu v0.3.7
+      │   │   ├── gpui-pre-linux v0.3.7 (*)
+      │   │   ├── gpui-pre-platform v0.3.7 (*)
+      │   │   └── gpui-pre-web v0.3.7 (*)
+      │   ├── gpui-pre-windows v0.3.7
+      │   │   └── gpui-pre-platform v0.3.7 (*)
+      │   └── gpui-wry v0.7.0
+      │       └── surge-ui v0.1.0 (*)
+      ├── gpui-pre-scheduler v0.3.7
+      │   ├── gpui-pre v0.3.7 (*)
+      │   └── gpui-pre-web v0.3.7 (*)
+      ├── gpui-pre-windows v0.3.7 (*)
+      ├── num-bigint-dig v0.9.1
+      │   └── oo7 v0.6.0
+      │       └── gpui-pre-linux v0.3.7 (*)
+      ├── proptest v1.11.0
+      │   ├── gpui-pre v0.3.7 (*)
+      │   ├── (dev) surge-acp v0.1.0
+      │   │   ├── surge-cli v0.1.0
+      │   │   ├── (dev) surge-daemon v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   └── surge-ui v0.1.0 (*)
+      │   │   ├── surge-orchestrator v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │   │   ├── surge-telegram v0.1.0
+      │   │   │   │   └── surge-daemon v0.1.0 (*)
+      │   │   │   └── surge-ui v0.1.0 (*)
+      │   │   ├── (dev) surge-telegram v0.1.0 (*)
+      │   │   └── surge-ui v0.1.0 (*)
+      │   ├── (dev) surge-core v0.1.0
+      │   │   ├── surge-acp v0.1.0 (*)
+      │   │   ├── surge-cli v0.1.0 (*)
+      │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   ├── surge-git v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   │   └── surge-orchestrator v0.1.0 (*)
+      │   │   ├── surge-intake v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   │   ├── surge-notify v0.1.0
+      │   │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   │   │   ├── (dev) surge-orchestrator v0.1.0 (*)
+      │   │   │   │   └── surge-telegram v0.1.0 (*)
+      │   │   │   └── surge-orchestrator v0.1.0 (*)
+      │   │   ├── surge-mcp v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   │   ├── surge-orchestrator v0.1.0 (*)
+      │   │   │   └── surge-ui v0.1.0 (*)
+      │   │   ├── surge-notify v0.1.0 (*)
+      │   │   ├── surge-orchestrator v0.1.0 (*)
+      │   │   ├── surge-persistence v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │   │   ├── surge-intake v0.1.0 (*)
+      │   │   │   ├── surge-orchestrator v0.1.0 (*)
+      │   │   │   ├── surge-telegram v0.1.0 (*)
+      │   │   │   └── surge-ui v0.1.0 (*)
+      │   │   ├── surge-telegram v0.1.0 (*)
+      │   │   └── surge-ui v0.1.0 (*)
+      │   ├── (dev) surge-intake v0.1.0 (*)
+      │   └── (dev) surge-persistence v0.1.0 (*)
+      ├── surge-acp v0.1.0 (*)
+      ├── surge-mcp v0.1.0 (*)
+      ├── surge-orchestrator v0.1.0 (*)
+      ├── surge-persistence v0.1.0 (*)
+      └── ulid v1.2.1
+          ├── surge-acp v0.1.0 (*)
+          ├── surge-core v0.1.0 (*)
+          ├── surge-daemon v0.1.0 (*)
+          ├── surge-git v0.1.0 (*)
+          ├── surge-intake v0.1.0 (*)
+          ├── surge-orchestrator v0.1.0 (*)
+          ├── surge-persistence v0.1.0 (*)
+          └── (dev) surge-telegram v0.1.0 (*)
+
+error[vulnerability]: TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:703:1
+    │
+703 │ rustls 0.23.37 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0285
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0285
+    ├ Rustls accepted TLS 1.3 handshake messages sent at the wrong encryption level
+      when they followed a key-changing message in the same record. For example,
+      a plaintext `EncryptedExtensions` message packed into the same record as the
+      `ServerHello` was accepted.
+
+      RFC 8446 section 5.1 requires that handshake messages do not span key changes,
+      and that implementations terminate the connection with an "unexpected_message"
+      alert if they do.
+
+      The handshake transcript is still authenticated, so a network-position attacker
+      cannot use this to alter or complete a handshake; the practical effect is that
+      a peer could send handshake messages that should be encrypted in plaintext
+      without rustls rejecting the connection.
+
+      This is functionally the same bug as Go's
+      [GO-2026-4340](https://pkg.go.dev/vuln/GO-2026-4340) (CVE-2025-61730).
+    ├ Announcement: https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc
+    ├ Solution: Upgrade to >=0.23.45 (try `cargo update -p rustls`)
+    ├ rustls v0.23.37
+      ├── gpui-pre-reqwest v0.12.15
+      │   └── gpui-kit-assets v0.7.0
+      │       ├── gpui-component v0.7.0
+      │       │   └── gpui-kit v0.7.0
+      │       │       └── (dev) surge-ui v0.1.0
+      │       └── gpui-kit v0.7.0 (*)
+      ├── hyper-rustls v0.27.7
+      │   ├── gpui-pre-reqwest v0.12.15 (*)
+      │   ├── octocrab v0.42.1
+      │   │   └── surge-intake v0.1.0
+      │   │       ├── surge-cli v0.1.0
+      │   │       ├── surge-daemon v0.1.0
+      │   │       │   ├── surge-cli v0.1.0 (*)
+      │   │       │   └── surge-ui v0.1.0 (*)
+      │   │       ├── surge-notify v0.1.0
+      │   │       │   ├── surge-cli v0.1.0 (*)
+      │   │       │   ├── surge-daemon v0.1.0 (*)
+      │   │       │   ├── (dev) surge-orchestrator v0.1.0
+      │   │       │   │   ├── surge-cli v0.1.0 (*)
+      │   │       │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │       │   │   ├── surge-telegram v0.1.0
+      │   │       │   │   │   └── surge-daemon v0.1.0 (*)
+      │   │       │   │   └── surge-ui v0.1.0 (*)
+      │   │       │   └── surge-telegram v0.1.0 (*)
+      │   │       └── surge-orchestrator v0.1.0 (*)
+      │   └── reqwest v0.12.28
+      │       ├── lineark-sdk v3.0.1
+      │       │   └── surge-intake v0.1.0 (*)
+      │       ├── surge-acp v0.1.0
+      │       │   ├── surge-cli v0.1.0 (*)
+      │       │   ├── (dev) surge-daemon v0.1.0 (*)
+      │       │   ├── surge-orchestrator v0.1.0 (*)
+      │       │   ├── (dev) surge-telegram v0.1.0 (*)
+      │       │   └── surge-ui v0.1.0 (*)
+      │       ├── surge-daemon v0.1.0 (*)
+      │       └── surge-notify v0.1.0 (*)
+      ├── lettre v0.11.22
+      │   └── surge-notify v0.1.0 (*)
+      ├── reqwest v0.12.28 (*)
+      └── tokio-rustls v0.26.4
+          ├── gpui-pre-reqwest v0.12.15 (*)
+          ├── hyper-rustls v0.27.7 (*)
+          ├── lettre v0.11.22 (*)
+          └── reqwest v0.12.28 (*)
+
+warning[yanked]: detected yanked crate (try `cargo update -p chacha20`)
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:103:1
+    │
+103 │ chacha20 0.10.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+    │
+    ├ chacha20 v0.10.0
+      └── rand v0.10.1
+          └── uuid v1.22.0
+              ├── accesskit v0.24.1
+              │   ├── accesskit_atspi_common v0.19.1
+              │   │   └── accesskit_unix v0.22.1
+              │   │       └── gpui-pre-linux v0.3.7
+              │   │           └── gpui-pre-platform v0.3.7
+              │   │               └── gpui-kit v0.7.0
+              │   │                   └── (dev) surge-ui v0.1.0
+              │   ├── accesskit_consumer v0.38.0
+              │   │   ├── accesskit_atspi_common v0.19.1 (*)
+              │   │   ├── accesskit_macos v0.26.3
+              │   │   │   └── gpui-pre-macos v0.3.7
+              │   │   │       └── gpui-pre-platform v0.3.7 (*)
+              │   │   └── accesskit_windows v0.34.0
+              │   │       └── gpui-pre-windows v0.3.7
+              │   │           └── gpui-pre-platform v0.3.7 (*)
+              │   ├── accesskit_macos v0.26.3 (*)
+              │   ├── accesskit_unix v0.22.1 (*)
+              │   ├── accesskit_windows v0.34.0 (*)
+              │   ├── gpui-pre v0.3.7
+              │   │   ├── gpui-base v0.7.0
+              │   │   │   ├── gpui-component v0.7.0
+              │   │   │   │   └── gpui-kit v0.7.0 (*)
+              │   │   │   └── gpui-kit v0.7.0 (*)
+              │   │   ├── gpui-component v0.7.0 (*)
+              │   │   ├── gpui-kit v0.7.0 (*)
+              │   │   ├── gpui-kit-assets v0.7.0
+              │   │   │   ├── gpui-component v0.7.0 (*)
+              │   │   │   └── gpui-kit v0.7.0 (*)
+              │   │   ├── gpui-pre-apple v0.3.7
+              │   │   │   └── gpui-pre-macos v0.3.7 (*)
+              │   │   ├── gpui-pre-linux v0.3.7 (*)
+              │   │   ├── gpui-pre-macos v0.3.7 (*)
+              │   │   ├── gpui-pre-platform v0.3.7 (*)
+              │   │   ├── gpui-pre-web v0.3.7
+              │   │   │   ├── gpui-kit v0.7.0 (*)
+              │   │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   │   ├── gpui-pre-wgpu v0.3.7
+              │   │   │   ├── gpui-pre-linux v0.3.7 (*)
+              │   │   │   ├── gpui-pre-platform v0.3.7 (*)
+              │   │   │   └── gpui-pre-web v0.3.7 (*)
+              │   │   ├── gpui-pre-windows v0.3.7 (*)
+              │   │   └── gpui-wry v0.7.0
+              │   │       └── surge-ui v0.1.0 (*)
+              │   ├── gpui-pre-linux v0.3.7 (*)
+              │   ├── gpui-pre-macos v0.3.7 (*)
+              │   └── gpui-pre-windows v0.3.7 (*)
+              ├── agent-client-protocol v2.2.0
+              │   ├── surge-acp v0.1.0
+              │   │   ├── surge-cli v0.1.0
+              │   │   ├── (dev) surge-daemon v0.1.0
+              │   │   │   ├── surge-cli v0.1.0 (*)
+              │   │   │   └── surge-ui v0.1.0 (*)
+              │   │   ├── surge-orchestrator v0.1.0
+              │   │   │   ├── surge-cli v0.1.0 (*)
+              │   │   │   ├── (dev) surge-daemon v0.1.0 (*)
+              │   │   │   ├── surge-telegram v0.1.0
+              │   │   │   │   └── surge-daemon v0.1.0 (*)
+              │   │   │   └── surge-ui v0.1.0 (*)
+              │   │   ├── (dev) surge-telegram v0.1.0 (*)
+              │   │   └── surge-ui v0.1.0 (*)
+              │   ├── surge-cli v0.1.0 (*)
+              │   ├── (dev) surge-daemon v0.1.0 (*)
+              │   ├── surge-orchestrator v0.1.0 (*)
+              │   └── surge-ui v0.1.0 (*)
+              ├── gpui-component v0.7.0 (*)
+              ├── gpui-pre v0.3.7 (*)
+              ├── gpui-pre-linux v0.3.7 (*)
+              ├── gpui-pre-macos v0.3.7 (*)
+              ├── gpui-pre-web v0.3.7 (*)
+              ├── gpui-pre-windows v0.3.7 (*)
+              ├── r2d2_sqlite v0.25.0
+              │   └── surge-persistence v0.1.0
+              │       ├── surge-cli v0.1.0 (*)
+              │       ├── (dev) surge-daemon v0.1.0 (*)
+              │       ├── surge-intake v0.1.0
+              │       │   ├── surge-cli v0.1.0 (*)
+              │       │   ├── surge-daemon v0.1.0 (*)
+              │       │   ├── surge-notify v0.1.0
+              │       │   │   ├── surge-cli v0.1.0 (*)
+              │       │   │   ├── surge-daemon v0.1.0 (*)
+              │       │   │   ├── (dev) surge-orchestrator v0.1.0 (*)
+              │       │   │   └── surge-telegram v0.1.0 (*)
+              │       │   └── surge-orchestrator v0.1.0 (*)
+              │       ├── surge-orchestrator v0.1.0 (*)
+              │       ├── surge-telegram v0.1.0 (*)
+              │       └── surge-ui v0.1.0 (*)
+              ├── teloxide-core v0.10.1
+              │   └── teloxide v0.13.0
+              │       ├── surge-daemon v0.1.0 (*)
+              │       └── surge-telegram v0.1.0 (*)
+              └── zbus v5.14.0
+                  ├── accesskit_unix v0.22.1 (*)
+                  ├── ashpd v0.13.13
+                  │   ├── gpui-base v0.7.0 (*)
+                  │   ├── gpui-pre-linux v0.3.7 (*)
+                  │   └── oo7 v0.6.0
+                  │       └── gpui-pre-linux v0.3.7 (*)
+                  ├── atspi-common v0.13.0
+                  │   ├── accesskit_atspi_common v0.19.1 (*)
+                  │   ├── atspi v0.29.0
+                  │   │   └── accesskit_unix v0.22.1 (*)
+                  │   └── atspi-proxies v0.13.0
+                  │       └── atspi v0.29.0 (*)
+                  ├── atspi-proxies v0.13.0 (*)
+                  ├── notify-rust v4.12.0
+                  │   ├── gpui-pre-linux v0.3.7 (*)
+                  │   ├── surge-daemon v0.1.0 (*)
+                  │   ├── surge-notify v0.1.0 (*)
+                  │   └── surge-ui v0.1.0 (*)
+                  └── oo7 v0.6.0 (*)
+
+warning[yanked]: detected yanked crate (try `cargo update -p spin`)
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:771:1
+    │
+771 │ spin 0.9.8 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+    │
+    ├ spin v0.9.8
+      ├── flume v0.11.1
+      │   └── lb-wry v0.53.3
+      │       ├── gpui-wry v0.7.0
+      │       │   └── surge-ui v0.1.0
+      │       └── surge-ui v0.1.0 (*)
+      └── flume v0.12.0
+          └── gpui-pre-scheduler v0.3.7
+              ├── gpui-pre v0.3.7
+              │   ├── gpui-base v0.7.0
+              │   │   ├── gpui-component v0.7.0
+              │   │   │   └── gpui-kit v0.7.0
+              │   │   │       └── (dev) surge-ui v0.1.0 (*)
+              │   │   └── gpui-kit v0.7.0 (*)
+              │   ├── gpui-component v0.7.0 (*)
+              │   ├── gpui-kit v0.7.0 (*)
+              │   ├── gpui-kit-assets v0.7.0
+              │   │   ├── gpui-component v0.7.0 (*)
+              │   │   └── gpui-kit v0.7.0 (*)
+              │   ├── gpui-pre-apple v0.3.7
+              │   │   └── gpui-pre-macos v0.3.7
+              │   │       └── gpui-pre-platform v0.3.7
+              │   │           └── gpui-kit v0.7.0 (*)
+              │   ├── gpui-pre-linux v0.3.7
+              │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   ├── gpui-pre-macos v0.3.7 (*)
+              │   ├── gpui-pre-platform v0.3.7 (*)
+              │   ├── gpui-pre-web v0.3.7
+              │   │   ├── gpui-kit v0.7.0 (*)
+              │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   ├── gpui-pre-wgpu v0.3.7
+              │   │   ├── gpui-pre-linux v0.3.7 (*)
+              │   │   ├── gpui-pre-platform v0.3.7 (*)
+              │   │   └── gpui-pre-web v0.3.7 (*)
+              │   ├── gpui-pre-windows v0.3.7
+              │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   └── gpui-wry v0.7.0 (*)
+              └── gpui-pre-web v0.3.7 (*)
+
+advisories FAILED, bans ok, licenses FAILED, sources ok

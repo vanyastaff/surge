@@ -1,0 +1,63 @@
+    Updating crates.io index
+     Locking 42 packages to highest Rust 1.99.0 compatible versions
+      Adding windows v0.58.0 (available: v0.62.2)
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling serde_derive v1.0.229
+    Checking memchr v2.8.3
+    Checking itoa v1.0.18
+    Checking windows v0.58.0
+    Checking surge-privileged-actor-actual-helpers v0.0.0 (/Users/vanyastafford/Develop/surge/target/windows-privileged-actor-helper-harness)
+error: argument to `Path::join` starts with a path separator
+  --> /Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap/paths.rs:65:59
+   |
+65 |         let root = PathBuf::from(prefix.as_os_str()).join("\\");
+   |                                                           ^^^^
+   |
+   = note: joining a path starting with separator will replace the path instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#join_absolute_paths
+   = note: `-D clippy::join-absolute-paths` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::join_absolute_paths)]`
+help: if this is unintentional, try removing the starting separator
+   |
+65 -         let root = PathBuf::from(prefix.as_os_str()).join("\\");
+65 +         let root = PathBuf::from(prefix.as_os_str()).join("");
+   |
+help: if this is intentional, consider using `Path::new`
+   |
+65 -         let root = PathBuf::from(prefix.as_os_str()).join("\\");
+65 +         let root = PathBuf::from("\\");
+   |
+
+error: using `chunks_exact` with a constant chunk size
+   --> /Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/bootstrap/paths.rs:130:14
+    |
+130 |             .chunks_exact(2)
+    |              ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<2>().0.iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#chunks_exact_to_as_chunks
+    = note: `-D clippy::chunks-exact-to-as-chunks` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::chunks_exact_to_as_chunks)]`
+
+error: argument to `Path::join` starts with a path separator
+  --> /Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/privileged_fixture_tests/context.rs:81:62
+   |
+81 |     let mut current = PathBuf::from(prefix.as_os_str()).join("\\");
+   |                                                              ^^^^
+   |
+   = note: joining a path starting with separator will replace the path instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#join_absolute_paths
+help: if this is unintentional, try removing the starting separator
+   |
+81 -     let mut current = PathBuf::from(prefix.as_os_str()).join("\\");
+81 +     let mut current = PathBuf::from(prefix.as_os_str()).join("");
+   |
+help: if this is intentional, consider using `Path::new`
+   |
+81 -     let mut current = PathBuf::from(prefix.as_os_str()).join("\\");
+81 +     let mut current = PathBuf::from("\\");
+   |
+
+error: could not compile `surge-privileged-actor-actual-helpers` (lib) due to 3 previous errors

@@ -1,0 +1,13 @@
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+error[E0599]: no method named `open_run_reader` found for reference `&surge_persistence::runs::Storage` in the current scope
+   --> crates/surge-orchestrator/src/engine/writer_coverage.rs:140:10
+    |
+139 |       let reader = storage
+    |  __________________-
+140 | |         .open_run_reader(run)
+    | |         -^^^^^^^^^^^^^^^ method not found in `&surge_persistence::runs::Storage`
+    | |_________|
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `surge-orchestrator` (lib) due to 1 previous error

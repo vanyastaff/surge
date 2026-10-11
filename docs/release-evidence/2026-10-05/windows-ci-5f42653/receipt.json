@@ -1,0 +1,16 @@
+{
+  "head": "5f426537b0adb7a18b6c1bbacf1125331b158055",
+  "run": 37721838146,
+  "job": 113131022825,
+  "conclusion": "failure",
+  "tests": {
+    "run": 3705,
+    "passed": 3516,
+    "failed": 189,
+    "skipped": 48
+  },
+  "standard_user_probe_step": "success",
+  "new_control_lock_payload_legacy_case": "PASS",
+  "raw_sha256": "55e56956932cfe22b50ffef2108531572891c005bfee3fe854798490e5a980ec",
+  "scope": "Standard-user native probes only; privileged actors, complete Windows suite and release acceptance remain open."
+}

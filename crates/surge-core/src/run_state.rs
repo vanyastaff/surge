@@ -252,8 +252,33 @@ pub enum TerminalReason {
     Aborted,
 }
 
+/// An MCP tool call recorded without a result (ADR-0021 decision 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedMcpCall {
+    pub session: SessionId,
+    pub tool: String,
+    pub server: String,
+    /// Sequence of the `ToolCalled` event.
+    pub seq: u64,
+}
+
+/// The backtrack edge that most recently re-entered a node, kept until that
+/// node reports its next outcome. The engine uses it to show the re-entered
+/// agent why the previous attempt was sent back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BacktrackFeedback {
+    /// Node whose outcome sent the run back.
+    pub from: NodeKey,
+    /// Sequence of the `EdgeTraversed { kind: Backtrack }` event.
+    pub edge_seq: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunMemory {
+    /// MCP calls whose result was never recorded, oldest first. Cleared when the
+    /// next provider session opens, so only the first stage after an interruption
+    /// sees them; their outcome is unknown and they are never replayed.
+    pub unresolved_mcp_calls: Vec<UnresolvedMcpCall>,
     /// Immutable provider connection history for each stable execution invocation.
     /// Pre-dispatch writer coverage retained until confirmed cleanup.
     pub execution_writers: std::collections::HashMap<
@@ -314,6 +339,23 @@ pub struct RunMemory {
     /// backtrack-aware feature) reads it to detect re-entries without
     /// scanning the event log.
     pub node_visits: BTreeMap<NodeKey, u32>,
+    /// Pending re-entry feedback per target node; see [`BacktrackFeedback`].
+    pub backtrack_feedback: BTreeMap<NodeKey, BacktrackFeedback>,
+    /// Latest escalation into each gate: the exhausted stage and the
+    /// `EdgeTraversed { kind: Escalate }` sequence. A retry backtracking out
+    /// of that gate carries the exhausted stage's feedback, not the gate's.
+    pub escalations: BTreeMap<NodeKey, BacktrackFeedback>,
+    /// The edge of the latest `EdgeTraversed` into each node. The engine reads
+    /// it to recognise an extra escalation attempt
+    /// (`surge_core::escalation::is_alternate_attempt`) after a restart too.
+    pub entered_via: BTreeMap<NodeKey, crate::keys::EdgeKey>,
+    /// Requirement revisions a human made, oldest first. Stages of the same
+    /// task (or every stage, for a run-wide revision) see them in the prompt.
+    pub requirement_revisions: Vec<RequirementRevision>,
+    /// Active agent rotations per stage (`StageRuntimeRotated`), kept until
+    /// the stage routes an outcome (`StageCompleted`). The engine applies the
+    /// latest one so a restarted host resumes on the same agent.
+    pub runtime_rotations: BTreeMap<NodeKey, RuntimeRotation>,
     /// Per-bootstrap-stage latest edit feedback. Updated on every
     /// `BootstrapEditRequested { stage, feedback }` event — the newest
     /// feedback overwrites the previous entry for that stage. Read by the
@@ -366,6 +408,7 @@ impl LedgerState {
         entry.status = to;
         if to != RoadmapStatus::Completed {
             entry.verified = false;
+            entry.accepted_by_human = false;
         }
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
@@ -386,8 +429,8 @@ impl LedgerState {
                 status: RoadmapStatus::Pending,
                 verified: false,
                 discovered_from: Some(discovered_from.clone()),
-                last_authority_node: None,
                 updated_seq: seq,
+                ..LedgerTask::default()
             });
     }
 
@@ -409,7 +452,34 @@ impl LedgerState {
         let entry = self.tasks.entry(task_id.clone()).or_default();
         entry.status = RoadmapStatus::Completed;
         entry.verified = claim == crate::verification_evidence::VerificationClaim::Verified;
+        if entry.verified {
+            entry.accepted_by_human = false;
+        }
         entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+
+    /// Record a human acceptance: completed, never verified, findings kept.
+    fn record_accepted_by_human(
+        &mut self,
+        task_id: &RoadmapTaskId,
+        node: &NodeKey,
+        findings: Option<ContentHash>,
+        seq: u64,
+    ) {
+        let entry = self.tasks.entry(task_id.clone()).or_default();
+        entry.status = RoadmapStatus::Completed;
+        entry.verified = false;
+        entry.accepted_by_human = true;
+        entry.findings = findings;
+        entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+
+    /// Record that a human revised the task's requirement.
+    fn record_requirement_revised(&mut self, task_id: &RoadmapTaskId, seq: u64) {
+        let entry = self.tasks.entry(task_id.clone()).or_default();
+        entry.requirement_revised = true;
         entry.updated_seq = seq;
     }
 }
@@ -427,6 +497,13 @@ pub struct LedgerTask {
     pub last_authority_node: Option<NodeKey>,
     /// Seq of the last event that touched this task.
     pub updated_seq: u64,
+    /// A human accepted the task after its retry ladder was exhausted
+    /// (`TaskAcceptedByHuman`). Never implies `verified`.
+    pub accepted_by_human: bool,
+    /// The verifier's latest findings kept with a human acceptance.
+    pub findings: Option<ContentHash>,
+    /// A human revised the task's requirement (`RequirementRevised`).
+    pub requirement_revised: bool,
 }
 
 impl Default for LedgerTask {
@@ -437,8 +514,34 @@ impl Default for LedgerTask {
             discovered_from: None,
             last_authority_node: None,
             updated_seq: 0,
+            accepted_by_human: false,
+            findings: None,
+            requirement_revised: false,
         }
     }
+}
+
+/// The agent a stage moved to on an exhausted usage limit, and how many
+/// moves this visit has made (bounds ping-pong between exhausted agents).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRotation {
+    /// Registry id of the agent the stage runs on now.
+    pub to: String,
+    /// Moves made since the stage last routed an outcome.
+    pub count: u32,
+}
+
+/// A requirement revision a human made for a stage (`RequirementRevised`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequirementRevision {
+    /// Stage that ran again against the revision.
+    pub node: NodeKey,
+    /// Task it applies to; `None` applies to the whole run.
+    pub task: Option<RoadmapTaskId>,
+    /// The revised requirement.
+    pub text: String,
+    /// Sequence of the `RequirementRevised` event.
+    pub seq: u64,
 }
 
 /// True when `node` exists in `graph` — at the top level **or inside any
@@ -581,14 +684,15 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
             // first cursor lands on `graph.start` with attempt 1 — actual
             // node execution then drives subsequent `StageEntered` events.
             let start = graph.start.clone();
+            let effective = crate::escalation::with_default_escalation_gates(graph);
             Ok(RunState::Pipeline {
-                graph: Arc::new(graph.as_ref().clone()),
+                graph: Arc::new(effective.clone()),
                 cursor: Cursor {
                     node: start,
                     attempt: 1,
                 },
                 memory: RunMemory {
-                    verification_graph: Some(graph.clone()),
+                    verification_graph: Some(Box::new(effective)),
                     ..RunMemory::default()
                 },
                 pending_human_input: None,
@@ -988,6 +1092,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 ..
             } = state
             {
+                let revised = crate::escalation::with_default_escalation_gates(revised);
                 if !revised.nodes.contains_key(&cursor.node) {
                     return Err(FoldError::UnknownNode {
                         node: cursor.node.clone(),
@@ -995,7 +1100,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 }
                 memory.apply_event(event);
                 Ok(RunState::Pipeline {
-                    graph: Arc::new(revised.as_ref().clone()),
+                    graph: Arc::new(revised),
                     cursor,
                     memory,
                     pending_human_input,
@@ -1092,6 +1197,25 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
         // `OutcomeReported`, no fold-side mutation is needed. These explicit
         // arms prevent a future change from accidentally treating the audit
         // events as state transitions.
+        (
+            RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+                parked,
+            },
+            EventPayload::TaskAcceptedByHuman { .. } | EventPayload::RequirementRevised { .. },
+        ) => {
+            memory.apply_override_event(event);
+            Ok(RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                pending_human_input,
+                parked,
+            })
+        },
         (state, EventPayload::HookExecuted { .. }) => Ok(state),
         (state, EventPayload::OutcomeRejectedByHook { .. }) => Ok(state),
         (state, _) => Ok(state),
@@ -1171,6 +1295,80 @@ impl RunMemory {
             crate::node::NodeConfig::HumanGate(_) => GateDecisionPurpose::HumanGate,
             crate::node::NodeConfig::Agent(config) => skill_decision_purpose(config, schema),
             _ => GateDecisionPurpose::Unbound,
+        }
+    }
+
+    /// Human overrides of an exhausted retry ladder (v1 task 1.2). Shared by
+    /// both fold paths so the ledger agrees on every surface.
+    fn apply_override_event(&mut self, event: &RunEvent) {
+        match &event.payload {
+            EventPayload::TaskAcceptedByHuman {
+                node,
+                task: Some(task),
+                findings,
+                ..
+            } => self
+                .ledger
+                .record_accepted_by_human(task, node, *findings, event.seq),
+            EventPayload::StageRuntimeRotated { node, to, .. } => {
+                let count = self
+                    .runtime_rotations
+                    .get(node)
+                    .map_or(0, |rotation| rotation.count);
+                self.runtime_rotations.insert(
+                    node.clone(),
+                    RuntimeRotation {
+                        to: to.clone(),
+                        count: count.saturating_add(1),
+                    },
+                );
+            },
+            EventPayload::StageCompleted { node, .. } => {
+                self.runtime_rotations.remove(node);
+            },
+            EventPayload::RequirementRevised { node, task, text } => {
+                if let Some(task) = task {
+                    self.ledger.record_requirement_revised(task, event.seq);
+                }
+                self.requirement_revisions.push(RequirementRevision {
+                    node: node.clone(),
+                    task: task.clone(),
+                    text: text.clone(),
+                    seq: event.seq,
+                });
+            },
+            _ => {},
+        }
+    }
+
+    fn apply_mcp_call_event(&mut self, event: &RunEvent) {
+        match &event.payload {
+            EventPayload::ToolCalled {
+                session,
+                tool,
+                mcp_server: Some(server),
+                ..
+            } => self.unresolved_mcp_calls.push(UnresolvedMcpCall {
+                session: *session,
+                tool: tool.clone(),
+                server: server.clone(),
+                seq: event.seq,
+            }),
+            EventPayload::ToolResultReceived {
+                session,
+                mcp_server: Some(server),
+                ..
+            } => {
+                if let Some(index) = self
+                    .unresolved_mcp_calls
+                    .iter()
+                    .position(|call| call.session == *session && call.server == *server)
+                {
+                    self.unresolved_mcp_calls.remove(index);
+                }
+            },
+            EventPayload::SessionOpened { .. } => self.unresolved_mcp_calls.clear(),
+            _ => {},
         }
     }
 
@@ -1393,6 +1591,7 @@ impl RunMemory {
                             container: None,
                             cleanup_confirmed: false,
                             conflicting_observation: false,
+                            group_stopped: false,
                         },
                     );
                 if record.intent != *intent {
@@ -1415,6 +1614,11 @@ impl RunMemory {
             EventPayload::ExecutionWriterClosed { writer } => {
                 if let Some(record) = self.execution_writers.get_mut(writer) {
                     record.cleanup_confirmed = true;
+                }
+            },
+            EventPayload::ExecutionWriterGroupStopped { writer } => {
+                if let Some(record) = self.execution_writers.get_mut(writer) {
+                    record.group_stopped = true;
                 }
             },
             EventPayload::SessionClosed { session, .. } => {
@@ -1506,6 +1710,11 @@ impl RunMemory {
             self.bootstrap_edit_loop_cap = config.bootstrap_edit_loop_cap;
         }
         self.apply_recovery_event(event);
+        self.apply_mcp_call_event(event);
+        self.apply_override_event(event);
+        if let EventPayload::EdgeTraversed { edge, to, .. } = &event.payload {
+            self.entered_via.insert(to.clone(), edge.clone());
+        }
         match self.verification.observe(&event.payload) {
             VerificationInvalidation::All => self
                 .ledger
@@ -1520,7 +1729,9 @@ impl RunMemory {
         match &event.payload {
             EventPayload::PipelineMaterialized { graph, .. }
             | EventPayload::GraphRevisionAccepted { graph, .. } => {
-                self.verification_graph = Some(graph.clone())
+                self.verification_graph = Some(Box::new(
+                    crate::escalation::with_default_escalation_gates(graph),
+                ));
             },
             EventPayload::TaskVerified {
                 task_id,
@@ -1582,6 +1793,7 @@ impl RunMemory {
                 outcome,
                 summary,
             } => {
+                self.backtrack_feedback.remove(node);
                 self.outcomes
                     .entry(node.clone())
                     .or_default()
@@ -1616,10 +1828,36 @@ impl RunMemory {
             },
             EventPayload::EdgeTraversed {
                 kind: EdgeKind::Backtrack,
+                from,
                 to,
                 ..
             } => {
                 *self.node_visits.entry(to.clone()).or_insert(0) += 1;
+                let feedback =
+                    self.escalations
+                        .get(from)
+                        .cloned()
+                        .unwrap_or_else(|| BacktrackFeedback {
+                            from: from.clone(),
+                            edge_seq: event.seq,
+                        });
+                self.backtrack_feedback.insert(to.clone(), feedback);
+            },
+            EventPayload::EdgeTraversed {
+                kind: EdgeKind::Escalate,
+                from,
+                to,
+                ..
+            } => {
+                let feedback = BacktrackFeedback {
+                    from: from.clone(),
+                    edge_seq: event.seq,
+                };
+                // An escalation into an agent (the extra attempt) carries the
+                // exhausted stage's feedback like a backtrack does; for a gate
+                // it is cleared by the gate's own outcome.
+                self.backtrack_feedback.insert(to.clone(), feedback.clone());
+                self.escalations.insert(to.clone(), feedback);
             },
             EventPayload::RoadmapPatchDrafted {
                 patch_id,
@@ -1812,6 +2050,54 @@ mod tests {
     use crate::sandbox::SandboxMode;
     use chrono::Utc;
     use std::path::PathBuf;
+
+    #[test]
+    fn unresolved_mcp_calls_track_calls_without_results_until_next_session() {
+        let session = SessionId::new();
+        let called = |tool: &str| EventPayload::ToolCalled {
+            session,
+            tool: tool.into(),
+            args_redacted: ContentHash::compute(b"args"),
+            mcp_server: Some("github".into()),
+        };
+        let mut memory = RunMemory::default();
+        memory.apply_event(&make_event(1, called("create_issue")));
+        memory.apply_event(&make_event(2, called("add_comment")));
+        memory.apply_event(&make_event(
+            3,
+            EventPayload::ToolResultReceived {
+                session,
+                success: true,
+                result: ContentHash::compute(b"ok"),
+                mcp_server: Some("github".into()),
+            },
+        ));
+        // Engine tools are not MCP effects.
+        memory.apply_event(&make_event(
+            4,
+            EventPayload::ToolCalled {
+                session,
+                tool: "read_file".into(),
+                args_redacted: ContentHash::compute(b"args"),
+                mcp_server: None,
+            },
+        ));
+        assert_eq!(memory.unresolved_mcp_calls.len(), 1);
+        assert_eq!(memory.unresolved_mcp_calls[0].tool, "add_comment");
+        assert_eq!(memory.unresolved_mcp_calls[0].seq, 2);
+        memory.apply_event(&make_event(
+            5,
+            EventPayload::SessionOpened {
+                handoff: None,
+                opened: None,
+                node: NodeKey::try_from("impl").unwrap(),
+                session: SessionId::new(),
+                agent: "implementer@1.0".into(),
+                agent_id: None,
+            },
+        ));
+        assert!(memory.unresolved_mcp_calls.is_empty());
+    }
 
     fn make_event(seq: u64, payload: EventPayload) -> RunEvent {
         RunEvent {
@@ -2056,6 +2342,131 @@ mod tests {
             },
         ));
         assert!(m.budget_warning_raised);
+    }
+
+    #[test]
+    fn backtrack_feedback_waits_for_the_reentered_node_outcome() {
+        use crate::keys::EdgeKey;
+
+        let mut m = RunMemory::default();
+        let implement = NodeKey::try_from("implement_1").unwrap();
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let outcome = |node: &NodeKey, key: &str| EventPayload::OutcomeReported {
+            node: node.clone(),
+            outcome: OutcomeKey::try_from(key).unwrap(),
+            summary: String::new(),
+        };
+        m.apply_event(&make_event(1, outcome(&verify, "failed")));
+        m.apply_event(&make_event(
+            2,
+            EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("e_retry").unwrap(),
+                from: verify.clone(),
+                to: implement.clone(),
+                kind: EdgeKind::Backtrack,
+            },
+        ));
+        assert_eq!(
+            m.backtrack_feedback.get(&implement),
+            Some(&BacktrackFeedback {
+                from: verify.clone(),
+                edge_seq: 2,
+            })
+        );
+        m.apply_event(&make_event(3, outcome(&verify, "failed")));
+        assert!(m.backtrack_feedback.contains_key(&implement));
+        m.apply_event(&make_event(4, outcome(&implement, "done")));
+        assert!(m.backtrack_feedback.is_empty());
+    }
+
+    #[test]
+    fn retry_through_an_escalation_gate_keeps_the_exhausted_stage_feedback() {
+        use crate::keys::EdgeKey;
+
+        let mut m = RunMemory::default();
+        let traverse = |edge: &str, from: &str, to: &str, kind| EventPayload::EdgeTraversed {
+            edge: EdgeKey::try_from(edge).unwrap(),
+            from: NodeKey::try_from(from).unwrap(),
+            to: NodeKey::try_from(to).unwrap(),
+            kind,
+        };
+        m.apply_event(&make_event(
+            5,
+            traverse(
+                "e_exhausted",
+                "verify_1",
+                "verify_1_escalation",
+                EdgeKind::Escalate,
+            ),
+        ));
+        m.apply_event(&make_event(
+            9,
+            EventPayload::OutcomeReported {
+                node: NodeKey::try_from("verify_1_escalation").unwrap(),
+                outcome: OutcomeKey::try_from("retry").unwrap(),
+                summary: "human gate decision".into(),
+            },
+        ));
+        m.apply_event(&make_event(
+            10,
+            traverse(
+                "e_retry",
+                "verify_1_escalation",
+                "implement_1",
+                EdgeKind::Backtrack,
+            ),
+        ));
+        assert_eq!(
+            m.backtrack_feedback[&NodeKey::try_from("implement_1").unwrap()],
+            BacktrackFeedback {
+                from: NodeKey::try_from("verify_1").unwrap(),
+                edge_seq: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn human_overrides_fold_into_the_ledger_and_never_verify() {
+        let mut m = RunMemory::default();
+        let verify = NodeKey::try_from("verify").unwrap();
+        let task = RoadmapTaskId::from("login");
+        let findings = ContentHash::compute(b"report");
+        m.apply_event(&make_event(
+            1,
+            EventPayload::RequirementRevised {
+                node: verify.clone(),
+                task: Some(task.clone()),
+                text: "Sessions last 24 hours".into(),
+            },
+        ));
+        m.apply_event(&make_event(
+            2,
+            EventPayload::TaskAcceptedByHuman {
+                node: verify.clone(),
+                task: Some(task.clone()),
+                findings: Some(findings),
+                comment: None,
+            },
+        ));
+        let entry = &m.ledger.tasks[&task];
+        assert_eq!(entry.status, RoadmapStatus::Completed);
+        assert!(!entry.verified);
+        assert!(entry.accepted_by_human);
+        assert!(entry.requirement_revised);
+        assert_eq!(entry.findings, Some(findings));
+        assert_eq!(m.requirement_revisions.len(), 1);
+        assert_eq!(m.requirement_revisions[0].text, "Sessions last 24 hours");
+        // A later status change back into work clears the acceptance.
+        m.apply_event(&make_event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: task.clone(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: verify,
+            },
+        ));
+        assert!(!m.ledger.tasks[&task].accepted_by_human);
     }
 
     #[test]

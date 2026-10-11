@@ -10,6 +10,11 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::PidfileGuard;
+
 /// Errors produced by PID-file operations.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +23,14 @@ pub enum PidfileError {
     /// returned `None` — see [`surge_core::home::surge_home_dir`].
     #[error("home directory not found")]
     NoHome,
+    /// The protected runtime namespace could not be owned.
+    #[cfg(windows)]
+    #[error("runtime ownership: {0}")]
+    Ownership(#[from] surge_persistence::PersistenceError),
+    /// Another owner retains the daemon control file.
+    #[cfg(windows)]
+    #[error("daemon control file is busy")]
+    Busy,
     /// Underlying I/O error reading or writing the daemon directory.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -87,6 +100,7 @@ pub fn read_pid(path: &Path) -> Result<Option<u32>, PidfileError> {
 /// Check whether a process with the given PID is currently alive.
 /// Cross-platform via `sysinfo`.
 #[must_use]
+#[cfg(not(windows))]
 pub fn is_alive(pid: u32) -> bool {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
@@ -103,6 +117,7 @@ pub fn is_alive(pid: u32) -> bool {
 /// has a small race window, but that case (two processes racing after
 /// a previous unclean exit) is rare and M7 documents single-user
 /// operation as the constraint.
+#[cfg(not(windows))]
 pub fn acquire_lock(pid: u32) -> Result<(), PidfileError> {
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -135,12 +150,67 @@ pub fn acquire_lock(pid: u32) -> Result<(), PidfileError> {
 }
 
 /// Release the lock by removing the PID file. Best-effort.
+#[cfg(not(windows))]
 pub fn release_lock() -> Result<(), PidfileError> {
     let path = pid_path()?;
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(PidfileError::Io(e)),
+    }
+}
+
+/// Conservative advisory liveness; unknown Windows observations stay live.
+#[cfg(windows)]
+#[must_use]
+pub fn is_alive(pid: u32) -> bool {
+    windows::is_alive(pid).unwrap_or_else(|error| {
+        tracing::warn!(pid, %error, "daemon process liveness is unknown");
+        true
+    })
+}
+
+/// Own the daemon PID file through terminal runtime shutdown.
+#[cfg(not(windows))]
+pub struct PidfileGuard {
+    home: PathBuf,
+    armed: bool,
+}
+
+#[cfg(not(windows))]
+impl PidfileGuard {
+    /// Acquire the existing Unix PID-file protocol.
+    pub fn acquire(pid: u32) -> Result<Self, PidfileError> {
+        let home = surge_core::home::surge_home_dir().ok_or(PidfileError::NoHome)?;
+        acquire_lock(pid)?;
+        Ok(Self { home, armed: true })
+    }
+
+    /// The immutable home selected at acquisition.
+    #[must_use]
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// Preserve the existing best-effort Unix version marker.
+    pub fn write_version(&self, version: &str) -> Result<(), PidfileError> {
+        let _ = std::fs::write(self.home.join("daemon/version"), version);
+        Ok(())
+    }
+
+    /// Release the PID file after runtime shutdown.
+    pub fn release(mut self) -> Result<(), PidfileError> {
+        self.armed = false;
+        release_lock()
+    }
+}
+
+#[cfg(not(windows))]
+impl Drop for PidfileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = release_lock();
+        }
     }
 }
 

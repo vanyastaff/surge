@@ -1,0 +1,54 @@
+{
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-daemon --lib work_items::reconciliation_tests::positive_projection -- --nocapture",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "raw_path": "target/ci-repair-evidence/positive-projection-baseline-red.log",
+  "raw_sha256": "d4e63e1bdcb2e334287b6ee751541889d8c96357d6da13c2cf7278e16d30d44d",
+  "raw_retention": "ignored local evidence; full snapshots omitted from committed receipt",
+  "source_sha256": {
+    "crates/surge-daemon/src/work_items.rs": "7786cb187f814b3136f0db8dd587a1fba9965be02535493cc32d143461aa4e69",
+    "crates/surge-daemon/src/work_items/reconciliation_tests.rs": "837c2b3cea0e54443c5001d28c3c1506b804b183e4072d22f13eb872129256cb",
+    "crates/surge-daemon/src/work_items/reconciliation_tests/positive_projection.rs": "631fe962026acd37435ad9ac4d3a97a70038cbff4b702a4ef7789722849e87e6"
+  },
+  "runtime_result": [
+    "test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 143 filtered out; finished in 0.25s"
+  ],
+  "assertion": "assertion `left == right` failed: older positive projection changed newer authority",
+  "bounded_snapshot_state_extracts": [
+    {
+      "test": "work_items::reconciliation_tests::positive_projection::launched_projection_preserves_suspend_requested_after_reserved_observation",
+      "side": "left",
+      "attempt_state": "launched",
+      "control_state": "suspend_requested"
+    },
+    {
+      "test": "work_items::reconciliation_tests::positive_projection::launched_projection_preserves_suspend_requested_after_reserved_observation",
+      "side": "right",
+      "attempt_state": "reserved",
+      "control_state": "suspend_requested"
+    },
+    {
+      "test": "work_items::reconciliation_tests::positive_projection::completed_projection_preserves_suspend_requested_after_terminal_inspection",
+      "side": "left",
+      "attempt_state": "completed",
+      "control_state": "terminal"
+    },
+    {
+      "test": "work_items::reconciliation_tests::positive_projection::completed_projection_preserves_suspend_requested_after_terminal_inspection",
+      "side": "right",
+      "attempt_state": "launched",
+      "control_state": "suspend_requested"
+    },
+    {
+      "test": "work_items::reconciliation_tests::positive_projection::launched_projection_preserves_confirmed_suspension_after_launched_observation",
+      "side": "left",
+      "attempt_state": "launched",
+      "control_state": "suspended"
+    },
+    {
+      "test": "work_items::reconciliation_tests::positive_projection::launched_projection_preserves_confirmed_suspension_after_launched_observation",
+      "side": "right",
+      "attempt_state": "suspended",
+      "control_state": "suspended"
+    }
+  ]
+}

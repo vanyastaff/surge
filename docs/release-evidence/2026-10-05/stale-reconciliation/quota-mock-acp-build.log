@@ -1,0 +1,34 @@
+   Compiling futures-util v0.3.34
+   Compiling ring v0.17.14
+   Compiling num-traits v0.2.19
+   Compiling tracing-core v0.1.36
+   Compiling tracing v0.1.44
+   Compiling getrandom v0.4.2
+   Compiling chrono v0.4.44
+   Compiling rustls v0.23.45
+   Compiling schemars v1.2.1
+   Compiling rustls-webpki v0.103.15
+   Compiling idna v1.1.0
+   Compiling hyper-util v0.1.20
+   Compiling tower v0.5.3
+   Compiling digest v0.10.7
+   Compiling serde_with v3.24.0
+   Compiling tokio-rustls v0.26.4
+   Compiling futures-executor v0.3.34
+   Compiling regex-automata v0.4.14
+   Compiling tower-http v0.6.8
+   Compiling sha2 v0.10.9
+   Compiling futures v0.3.34
+   Compiling hyper-rustls v0.27.7
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling url v2.5.8
+   Compiling tempfile v3.27.0
+   Compiling uuid v1.22.0
+   Compiling log v0.4.29
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling agent-client-protocol v2.2.0
+   Compiling reqwest v0.12.28
+   Compiling regex v1.12.3
+   Compiling tokio-util v0.7.18
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 08s

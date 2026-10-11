@@ -98,8 +98,16 @@ impl RouteEvidence {
     }
 
     fn enter_loop(&mut self, graph: &Graph, node: &NodeKey) -> Result<(), StorageError> {
-        if matches!(self.frames.last(),Some(Frame::Loop {node:current,..}) if current==node) {
-            // Iteration/retry keeps the original captured body and traversal counters.
+        if let Some(Frame::Loop {
+            node: current,
+            counts,
+            ..
+        }) = self.frames.last_mut()
+            && current == node
+        {
+            // Iteration/retry keeps the original captured body; each iteration
+            // starts with fresh traversal counters, as the executor does.
+            counts.clear();
             return Ok(());
         }
         let accepted = self.scope_node(graph, node)?;

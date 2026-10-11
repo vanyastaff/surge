@@ -6,6 +6,19 @@
 //! job of Task 5.1 (`crates/surge-orchestrator/tests/archetypes_mock_test.rs`);
 //! this test guards against regressions in the example shape itself.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
+#[path = "common/owned_flow.rs"]
+mod owned_flow;
+
 use assert_cmd::Command;
 use predicates::str::contains;
 use std::path::{Path, PathBuf};
@@ -127,63 +140,76 @@ fn bundled_template_names_and_legacy_aliases_resolve_valid_graphs() {
 #[test]
 fn onboarding_smoke_can_init_describe_and_start_example_run() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::write(temp.path().join("README.md"), "# Smoke\n").unwrap();
-    std::fs::write(
-        temp.path().join("Cargo.toml"),
-        r#"[workspace]
+    let runtime_home = FixtureHome::new().unwrap();
+    {
+        let home_dir = tempfile::tempdir().unwrap();
+        let home = home_dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(temp.path().join("README.md"), "# Smoke\n").unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            r#"[workspace]
 resolver = "2"
 members = []
 "#,
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    Command::cargo_bin("surge")
-        .unwrap()
-        .args(["init", "--default"])
-        .current_dir(temp.path())
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .assert()
-        .success();
+        Command::cargo_bin("surge")
+            .unwrap()
+            .args(["init", "--default"])
+            .current_dir(temp.path())
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .assert()
+            .success();
 
-    Command::cargo_bin("surge")
-        .unwrap()
-        .args(["project", "describe", "--author-mode", "deterministic"])
-        .current_dir(temp.path())
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .assert()
-        .success();
+        Command::cargo_bin("surge")
+            .unwrap()
+            .args(["project", "describe", "--author-mode", "deterministic"])
+            .current_dir(temp.path())
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .assert()
+            .success();
 
-    let example = examples_dir().join("flow_terminal_only.toml");
-    let execution = Command::cargo_bin("surge")
-        .unwrap()
-        .args([
-            "engine",
-            "run",
-            example.to_str().unwrap(),
-            "--worktree",
-            temp.path().to_str().unwrap(),
-        ])
-        .current_dir(temp.path())
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env("SURGE_HOME", home.join(".surge"))
-        .timeout(std::time::Duration::from_secs(15))
-        .assert()
-        .success()
-        .stdout(contains("run-"));
-    let run_id = String::from_utf8(execution.get_output().stdout.clone()).unwrap();
-    let replay = Command::cargo_bin("surge")
-        .unwrap()
-        .args(["engine", "replay", run_id.trim(), "--format", "json"])
-        .env("SURGE_HOME", home.join(".surge"))
-        .current_dir(temp.path())
-        .timeout(std::time::Duration::from_secs(15))
-        .assert()
-        .success();
-    let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
-    assert_eq!(state["view"]["terminal"], "completed");
+        std::fs::copy(
+            examples_dir().join("flow_terminal_only.toml"),
+            temp.path().join("flow.toml"),
+        )
+        .unwrap();
+        owned_flow::commit_project(temp.path());
+        let daemon = owned_flow::start_daemon(runtime_home.path(), temp.path(), None);
+        let workspace = home_dir.path().join("workspace");
+        let execution = Command::cargo_bin("surge")
+            .unwrap()
+            .args([
+                "engine",
+                "run",
+                "flow.toml",
+                "--worktree",
+                workspace.to_str().unwrap(),
+            ])
+            .current_dir(temp.path())
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("SURGE_HOME", runtime_home.path())
+            .timeout(std::time::Duration::from_secs(15))
+            .assert()
+            .success()
+            .stdout(contains("run-"));
+        let run_id = String::from_utf8(execution.get_output().stdout.clone()).unwrap();
+        let replay = Command::cargo_bin("surge")
+            .unwrap()
+            .args(["engine", "replay", run_id.trim(), "--format", "json"])
+            .env("SURGE_HOME", runtime_home.path())
+            .current_dir(temp.path())
+            .timeout(std::time::Duration::from_secs(15))
+            .assert()
+            .success();
+        let state: serde_json::Value = serde_json::from_slice(&replay.get_output().stdout).unwrap();
+        assert_eq!(state["view"]["terminal"], "completed");
+        daemon.close().unwrap();
+    }
+    runtime_home.close().unwrap();
 }

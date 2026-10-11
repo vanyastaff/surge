@@ -4,6 +4,7 @@ assertion_line: 238
 expression: memory
 ---
 RunMemory {
+    unresolved_mcp_calls: [],
     execution_writers: {},
     provider_sessions: {},
     session_establishments: {},
@@ -44,6 +45,11 @@ RunMemory {
     budget_exceeded_noted: false,
     bootstrap_edit_counts: {},
     node_visits: {},
+    backtrack_feedback: {},
+    escalations: {},
+    entered_via: {},
+    requirement_revisions: [],
+    runtime_rotations: {},
     last_edit_feedback_by_stage: {},
     roadmap_patches: {},
     latest_graph_revision: None,

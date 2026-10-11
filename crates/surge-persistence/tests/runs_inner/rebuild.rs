@@ -69,4 +69,5 @@ async fn rebuild_views_is_identity_over_event_log() {
     assert_eq!(pre_stages[0].ended_seq, post_stages[0].ended_seq);
 
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }

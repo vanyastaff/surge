@@ -41,8 +41,8 @@ async fn deliver_one(
     clock: &dyn Clock,
 ) -> bool {
     let claimed = {
-        let mut guard = conn.lock().await;
-        intake_outbox::claim(&mut guard, clock.now_ms())
+        let guard = conn.lock().await;
+        intake_outbox::claim(&guard, clock.now_ms())
     };
     let comment = match claimed {
         Ok(Some(comment)) => comment,
@@ -70,10 +70,10 @@ async fn deliver_one(
         Err(error) => Err(format!("invalid queued task identity: {error}")),
     };
     // Lease eligibility is checked at completion time, not before network I/O.
-    let mut guard = conn.lock().await;
+    let guard = conn.lock().await;
     let now_ms = clock.now_ms();
     let settled = match result {
-        Ok(()) => intake_outbox::acknowledge(&mut guard, &comment, now_ms),
+        Ok(()) => intake_outbox::acknowledge(&guard, &comment, now_ms),
         Err(error) => {
             warn!(%error, task_id = %comment.task_id(), run_id = %comment.run_id(), "terminal comment retained for retry");
             intake_outbox::retry(&guard, &comment, now_ms, &error)

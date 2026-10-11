@@ -14,6 +14,8 @@
 //! could.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -113,70 +115,75 @@ fn graph_with_broken_skills_declaration() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broken_skills_declaration_rejects_before_any_run_or_bridge_state_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    // This run must never progress far enough to write memory — routed at a
-    // throwaway store rather than the developer's real `~/.surge/memory.db`
-    // as a defensive measure even though `validate_for_m6` runs before
-    // `EngineRunConfig.memory_store_path` is ever resolved.
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        // This run must never progress far enough to write memory — routed at a
+        // throwaway store rather than the developer's real `~/.surge/memory.db`
+        // as a defensive measure even though `validate_for_m6` runs before
+        // `EngineRunConfig.memory_store_path` is ever resolved.
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+        let store_path = memory_dir.path().join("memory.db");
 
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    let run_id = RunId::new();
-    let run_config = EngineRunConfig {
-        memory_store_path: Some(store_path),
-        ..EngineRunConfig::default()
-    };
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let result = engine
-        .start_run(
-            run_id,
-            graph_with_broken_skills_declaration(),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await;
+        let run_id = RunId::new();
+        let run_config = EngineRunConfig {
+            memory_store_path: Some(store_path),
+            ..EngineRunConfig::default()
+        };
 
-    let err = match result {
-        Err(e) => e,
-        Ok(_) => panic!(
-            "start_run should reject a broken `skills` declaration but returned Ok — \
+        let result = engine
+            .start_run(
+                run_id,
+                graph_with_broken_skills_declaration(),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await;
+
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!(
+                "start_run should reject a broken `skills` declaration but returned Ok — \
              surge_core::validate's InvalidSkillsDeclaration rule did not fire on the \
              production start_run path"
-        ),
-    };
-    match &err {
-        EngineError::GraphInvalid(msg) => {
-            assert!(
-                msg.contains("skills"),
-                "error should name the broken skills declaration, got: {msg}"
-            );
-            assert!(
-                msg.contains("implement"),
-                "error should name the offending node, got: {msg}"
-            );
-        },
-        other => panic!("expected GraphInvalid, got {other:?}"),
-    }
+            ),
+        };
+        match &err {
+            EngineError::GraphInvalid(msg) => {
+                assert!(
+                    msg.contains("skills"),
+                    "error should name the broken skills declaration, got: {msg}"
+                );
+                assert!(
+                    msg.contains("implement"),
+                    "error should name the offending node, got: {msg}"
+                );
+            },
+            other => panic!("expected GraphInvalid, got {other:?}"),
+        }
 
-    // The rejection must happen before the run touches anything: no bridge
-    // call (no session ever opens), and no per-run storage/event log is
-    // created for `run_id` — i.e. before whatever would come next (a
-    // worktree) could ever be reached.
-    assert!(
-        mock.recorded_calls.lock().await.is_empty(),
-        "a graph-invalid run must never touch the bridge — the node never started"
-    );
-    assert!(
-        storage.open_run_reader(run_id).await.is_err(),
-        "a rejected run must never create per-run storage — proves rejection happens \
+        // The rejection must happen before the run touches anything: no bridge
+        // call (no session ever opens), and no per-run storage/event log is
+        // created for `run_id` — i.e. before whatever would come next (a
+        // worktree) could ever be reached.
+        assert!(
+            mock.recorded_calls.lock().await.is_empty(),
+            "a graph-invalid run must never touch the bridge — the node never started"
+        );
+        assert!(
+            storage.open_run_reader(run_id).await.is_err(),
+            "a rejected run must never create per-run storage — proves rejection happens \
          before any run/worktree state exists, not merely before the agent stage runs"
-    );
+        );
+    }
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
 }

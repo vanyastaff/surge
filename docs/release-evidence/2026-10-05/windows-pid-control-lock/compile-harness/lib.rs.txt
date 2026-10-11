@@ -1,0 +1,15 @@
+// Actual production modules, no security/backend stubs. The harness does not consume their public surface.
+#[allow(dead_code)]
+mod state_home {
+    mod windows {
+        #[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/native.rs"]
+        mod native;
+        #[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/security.rs"]
+        mod security;
+        #[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/namespace.rs"]
+        mod namespace;
+        #[cfg(test)]
+        #[path = "/Users/vanyastafford/Develop/surge/crates/surge-persistence/src/state_home/windows/creation_observation.rs"]
+        mod creation_observation;
+    }
+}

@@ -347,58 +347,61 @@ mod tests {
     async fn cockpit_inbox_owner_checks_delivery_chat_before_enqueue() {
         use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
         use surge_telegram::cockpit::production::InboxCallbacks;
-        let home = tempfile::tempdir().unwrap();
-        let storage = Storage::open(home.path()).await.unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
+            let storage = Storage::open(home.path()).await.unwrap();
+            {
+                let conn = storage.acquire_registry_conn().unwrap();
+                IntakeRepo::new(&conn)
+                    .insert(&IntakeRow {
+                        task_id: "fixture".into(),
+                        source_id: "test".into(),
+                        provider: "test".into(),
+                        run_id: None,
+                        triage_decision: None,
+                        duplicate_of: None,
+                        priority: None,
+                        state: TicketState::InboxNotified,
+                        first_seen: Utc::now(),
+                        last_seen: Utc::now(),
+                        snooze_until: None,
+                        callback_token: Some("bound-token".into()),
+                        tg_chat_id: Some(42),
+                        tg_message_id: Some(10),
+                    })
+                    .unwrap();
+            }
+            let handler = CockpitInboxActions {
+                storage: storage.clone(),
+            };
+            assert!(
+                handler
+                    .handle(43, "inbox:start:bound-token")
+                    .await
+                    .unwrap()
+                    .contains("another chat")
+            );
+            assert!(
+                handler
+                    .handle(42, "inbox:start:missing")
+                    .await
+                    .unwrap()
+                    .contains("expired")
+            );
+            {
+                let conn = storage.acquire_registry_conn().unwrap();
+                assert_eq!(inbox_queue::list_pending_actions(&conn).unwrap().len(), 0);
+            }
+            assert_eq!(
+                handler.handle(42, "inbox:start:bound-token").await.unwrap(),
+                "Inbox action recorded."
+            );
             let conn = storage.acquire_registry_conn().unwrap();
-            IntakeRepo::new(&conn)
-                .insert(&IntakeRow {
-                    task_id: "fixture".into(),
-                    source_id: "test".into(),
-                    provider: "test".into(),
-                    run_id: None,
-                    triage_decision: None,
-                    duplicate_of: None,
-                    priority: None,
-                    state: TicketState::InboxNotified,
-                    first_seen: Utc::now(),
-                    last_seen: Utc::now(),
-                    snooze_until: None,
-                    callback_token: Some("bound-token".into()),
-                    tg_chat_id: Some(42),
-                    tg_message_id: Some(10),
-                })
-                .unwrap();
+            let rows = inbox_queue::list_pending_actions(&conn).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].task_id, "fixture");
         }
-        let handler = CockpitInboxActions {
-            storage: storage.clone(),
-        };
-        assert!(
-            handler
-                .handle(43, "inbox:start:bound-token")
-                .await
-                .unwrap()
-                .contains("another chat")
-        );
-        assert!(
-            handler
-                .handle(42, "inbox:start:missing")
-                .await
-                .unwrap()
-                .contains("expired")
-        );
-        {
-            let conn = storage.acquire_registry_conn().unwrap();
-            assert!(inbox_queue::list_pending_actions(&conn).unwrap().is_empty());
-        }
-        assert_eq!(
-            handler.handle(42, "inbox:start:bound-token").await.unwrap(),
-            "Inbox action recorded."
-        );
-        let conn = storage.acquire_registry_conn().unwrap();
-        let rows = inbox_queue::list_pending_actions(&conn).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].task_id, "fixture");
+        home.close().unwrap();
     }
 
     #[test]

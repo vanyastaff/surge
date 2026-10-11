@@ -1,0 +1,31 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.29s
+     Running tests/bridge_config_options.rs (target/debug/deps/bridge_config_options-69516e626fe9989a)
+
+running 3 tests
+test a_model_the_agent_does_not_offer_keeps_the_session_closed ... ok
+test a_best_effort_option_the_agent_does_not_offer_is_skipped ... ok
+test chosen_model_and_reasoning_level_are_set_on_the_agent_session ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/bridge_control_lifecycle.rs (target/debug/deps/bridge_control_lifecycle-2ac38344cc64b377)
+
+running 15 tests
+test dropped_option_caller_settles_child_and_shutdown_promptly ... ok
+test close_sends_wire_cancel_before_transport_teardown ... ok
+test advertised_filesystem_capabilities_follow_permission_policy ... ok
+test exit_before_handshake_response_never_announces_established ... ok
+test child_exit_during_prompt_does_not_panic_worker ... ok
+test callback_overload_preserves_pending_permission_and_stop ... ok
+test spoofed_reserved_notification_has_no_outcome_authority ... ok
+test noisy_startup_is_drained_before_handshake ... ok
+test config_option_phase_shares_deadline_reaps_and_allows_next_open ... ok
+test initialize_only_handshake_hang_is_retried_once_and_opens ... ok
+test uncertain_session_operation_is_never_automatically_reissued ... ok
+test permission_reply_and_busy_response_work_during_prompt ... ok
+test both_handshake_phases_have_deadlines_and_reap ... ok
+test concurrent_close_never_claims_reap_while_first_cleanup_pending ... ok
+test ignored_wire_cancel_still_forces_and_reaps_child ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.59s

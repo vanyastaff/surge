@@ -2,6 +2,8 @@
 //! independently without interfering with one another.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -50,35 +52,38 @@ fn minimal_graph(name: &str) -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_concurrent_runs_complete_independently() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    let engine = Arc::new(Engine::new(
-        bridge,
-        storage,
-        dispatcher,
-        EngineConfig::default(),
-    ));
+        let engine = Arc::new(Engine::new(
+            bridge,
+            storage,
+            dispatcher,
+            EngineConfig::default(),
+        ));
 
-    let mut handles = vec![];
-    for i in 0..3 {
-        let eng = engine.clone();
-        let dir_path = dir.path().to_path_buf();
-        handles.push(tokio::spawn(async move {
-            let g = minimal_graph(&format!("run-{i}"));
-            let h = eng
-                .start_run(RunId::new(), g, dir_path, EngineRunConfig::default())
-                .await
-                .unwrap();
-            h.await_completion().await.unwrap()
-        }));
+        let mut handles = vec![];
+        for i in 0..3 {
+            let eng = engine.clone();
+            let dir_path = dir.path().to_path_buf();
+            handles.push(tokio::spawn(async move {
+                let g = minimal_graph(&format!("run-{i}"));
+                let h = eng
+                    .start_run(RunId::new(), g, dir_path, EngineRunConfig::default())
+                    .await
+                    .unwrap();
+                h.await_completion().await.unwrap()
+            }));
+        }
+
+        for h in handles {
+            let outcome = h.await.unwrap();
+            assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        }
     }
-
-    for h in handles {
-        let outcome = h.await.unwrap();
-        assert!(matches!(outcome, RunOutcome::Completed { .. }));
-    }
+    dir.close().unwrap();
 }

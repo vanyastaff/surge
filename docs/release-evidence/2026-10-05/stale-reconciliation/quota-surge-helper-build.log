@@ -1,0 +1,20 @@
+   Compiling serde_core v1.0.228
+   Compiling darling_core v0.23.0
+   Compiling serde_json v1.0.151
+   Compiling darling_macro v0.23.0
+   Compiling darling v0.23.0
+   Compiling rmcp v1.6.0
+   Compiling rmcp-macros v1.6.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling is_ci v1.2.0
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling is-terminal v0.4.17
+   Compiling owo-colors v4.3.0
+   Compiling supports-color v2.1.0
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling supports-color v3.0.2
+   Compiling surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 08s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

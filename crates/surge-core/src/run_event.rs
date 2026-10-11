@@ -281,6 +281,12 @@ pub enum EventPayload {
         /// Exact writer whose cleanup completed.
         writer: crate::id::ExecutionWriterId,
     },
+    /// Best-effort cleanup (ADR-0021): the writer's recorded process group was
+    /// observed empty. Coverage stays `GroupOnly`; this is never confirmed closure.
+    ExecutionWriterGroupStopped {
+        /// Exact writer whose recorded group was observed empty.
+        writer: crate::id::ExecutionWriterId,
+    },
     SessionEstablishmentRequested {
         node: NodeKey,
         invocation: crate::id::StageInvocationId,
@@ -431,6 +437,64 @@ pub enum EventPayload {
         loop_id: NodeKey,
         index: u32,
         outcome: OutcomeKey,
+    },
+    /// Verifier ladder split rung: the loop's current task was replaced by
+    /// smaller tasks, inserted right after it in the same loop and run.
+    TaskSplit {
+        /// Loop whose item list grew.
+        loop_id: NodeKey,
+        /// Index of the replaced item.
+        index: u32,
+        /// `id` of the replaced task, when its item carried one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
+        /// New items, in order, inserted at `index + 1`.
+        into: Vec<toml::Value>,
+    },
+    /// A human accepted a stage's work after its retry ladder was exhausted
+    /// (v1 task 1.2). Never verification: the task is recorded as accepted by
+    /// a human and the verifier's findings stay attached.
+    TaskAcceptedByHuman {
+        /// Stage whose repeated rejection was overridden.
+        node: NodeKey,
+        /// Task the stage was working on, when it ran inside a task loop.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<crate::roadmap::RoadmapTaskId>,
+        /// Latest `verification-report` that stage sealed, when it sealed one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        findings: Option<ContentHash>,
+        /// The operator's note.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+    },
+    /// A stage moved to another agent because its own agent's usage limit was
+    /// exhausted (v1 task 1.4). Recorded before the next attempt opens a
+    /// session; the stage keeps that agent until it routes an outcome.
+    StageRuntimeRotated {
+        /// Stage that moved.
+        node: NodeKey,
+        /// Canonical runtime it moved away from.
+        from: String,
+        /// Registry id of the agent it moved to.
+        to: String,
+        /// Why: the exhausted window, as the operator should read it.
+        reason: String,
+        /// No allowed agent differed from the stage's verifier/implementer
+        /// partner, so both now run on the same agent.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        same_as_partner: bool,
+    },
+    /// A human revised the requirement a stage is checked against and sent it
+    /// back for another attempt (v1 task 1.2). Later stages of the same task
+    /// see the revision; a later verification counts as verified against it.
+    RequirementRevised {
+        /// Stage that runs again against the revision.
+        node: NodeKey,
+        /// Task whose requirement changed, when inside a task loop.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<crate::roadmap::RoadmapTaskId>,
+        /// The revised requirement, as the operator wrote it.
+        text: String,
     },
     LoopCompleted {
         loop_id: NodeKey,
@@ -662,10 +726,11 @@ pub enum EventPayload {
         /// and the failure mode).
         reason: String,
         /// Typed origin of this escalation (`.autopilot/competitive-waves/spec.md`
-        /// §15, History 45). Five independent paths raise this event today —
-        /// a `LoopGuard` trip (two kinds), MCP restart-exhaustion, and two
-        /// distinct edit-loop caps (bootstrap flow validation, roadmap
-        /// amendment approval) — and `reason` alone does not let a consumer
+        /// §15, History 45). Several independent paths raise this event —
+        /// a `LoopGuard` trip (two kinds), MCP restart-exhaustion, an
+        /// unavailable selected MCP catalog, a capacity blind-park streak,
+        /// and two distinct edit-loop caps (bootstrap flow validation,
+        /// roadmap amendment approval) — and `reason` alone does not let a consumer
         /// tell them apart without parsing prose back apart, which is
         /// exactly what a durable, queryable trace must not require.
         /// `#[serde(default)]` keeps every pre-existing `EscalationRequested`
@@ -759,6 +824,7 @@ impl EventPayload {
             Self::ExecutionWriterIntent { .. } => "execution_writer_intent",
             Self::ExecutionWriterEstablished { .. } => "execution_writer_established",
             Self::ExecutionWriterClosed { .. } => "execution_writer_closed",
+            Self::ExecutionWriterGroupStopped { .. } => "execution_writer_group_stopped",
             Self::SessionEstablishmentRequested { .. } => "SessionEstablishmentRequested",
             Self::RunSuspended { .. } => "RunSuspended",
             Self::RunRecoveryRequired { .. } => "run_recovery_required",
@@ -778,6 +844,10 @@ impl EventPayload {
             Self::EdgeTraversed { .. } => "EdgeTraversed",
             Self::LoopIterationStarted { .. } => "LoopIterationStarted",
             Self::LoopIterationCompleted { .. } => "LoopIterationCompleted",
+            Self::TaskSplit { .. } => "TaskSplit",
+            Self::TaskAcceptedByHuman { .. } => "TaskAcceptedByHuman",
+            Self::RequirementRevised { .. } => "RequirementRevised",
+            Self::StageRuntimeRotated { .. } => "StageRuntimeRotated",
             Self::LoopCompleted { .. } => "LoopCompleted",
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",
@@ -871,6 +941,17 @@ pub enum EscalationCause {
     /// once per streak (cleared by the next `StageCompleted`), not on every
     /// tick past the limit.
     CapacityBlindParkLimitExceeded,
+    /// An MCP server a stage explicitly selected (`tool_overrides.mcp_add`,
+    /// allowed by the sandbox policy) could not produce its tool catalog at
+    /// session open — startup timeout, `tools/list` timeout, spawn or
+    /// transport failure. The stage proceeds without that server's tools;
+    /// this records that the degradation happened (schema v16).
+    McpSelectedCatalogUnavailable,
+    /// `LoopGuard` saw no activity from a stage attempt for
+    /// `idle_limit_secs` (schema v20).
+    LoopGuardNoProgress,
+    /// `LoopGuard` saw a stage attempt exceed `max_tool_calls` (schema v20).
+    LoopGuardToolCallCap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1708,6 +1789,7 @@ mod tests {
                 },
                 allowed_tools: None,
                 call_timeout: Duration::from_secs(60),
+                startup_timeout: None,
                 restart_on_crash: true,
                 sandbox: None,
             }],

@@ -76,7 +76,7 @@ mod tests {
         initialize(directory.path(), &SurgeConfig::default()).unwrap();
         let repo = git2::Repository::open(directory.path()).unwrap();
         let head = repo.head().unwrap();
-        assert_eq!(head.shorthand(), Some("main"));
+        assert_eq!(head.shorthand().unwrap(), "main");
         let tree = head.peel_to_commit().unwrap().tree().unwrap();
         assert_eq!(tree.len(), 2);
         assert!(tree.get_name("README.md").is_some());

@@ -12,6 +12,8 @@
 //!    the `mock` agent_id without falling through to the legacy fallback.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -160,125 +162,130 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
 
     // Storage / writer for stage events (separate tempdir keeps the runs
     // sqlite away from the profiles tree).
-    let storage_dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(storage_dir.path()).await.unwrap();
-    let run_id = RunId::new();
-    let writer = storage
-        .create_run(run_id, storage_dir.path(), None)
-        .await
-        .unwrap();
-    let artifact_store =
-        surge_persistence::artifacts::ArtifactStore::new(storage_dir.path().join("runs"));
+    let storage_dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(storage_dir.path()).await.unwrap();
+        let run_id = RunId::new();
+        let writer = storage
+            .create_run(run_id, storage_dir.path(), None)
+            .await
+            .unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(storage_dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    // Pin the session id so we can script the OutcomeReported event with
-    // the matching id.
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("implemented").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        // Pin the session id so we can script the OutcomeReported event with
+        // the matching id.
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("implemented").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = AgentConfig {
-        profile: ProfileKey::try_from("implementer@1.0").unwrap(),
-        prompt_overrides: None, // ← critical: forces the agent stage to fall
-        // back to the resolved profile's prompt.system, which is the disk
-        // override (this is what we are actually testing).
-        tool_overrides: None,
-        sandbox_override: None,
-        approvals_override: None,
-        bindings: vec![],
-        rules_overrides: None,
-        limits: Default::default(),
-        hooks: vec![],
-        custom_fields: Default::default(),
-    };
-    let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: storage_dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: Some(registry.clone()),
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("agent stage should succeed when registry resolves to mock");
-
-    pump.await.unwrap();
-
-    // Outcome from the scripted event must propagate as the stage result.
-    assert_eq!(result.as_ref(), "implemented");
-
-    // Stage opened a session, sent a message, and closed cleanly. The
-    // mock bridge's recorded-call history reflects the full lifecycle.
-    let calls = mock.recorded_calls.lock().await;
-    let kinds: Vec<&str> = calls
-        .iter()
-        .map(|c| match c {
-            fixtures::mock_bridge::RecordedCall::OpenSession => "open",
-            fixtures::mock_bridge::RecordedCall::SendMessage { .. } => "send",
-            fixtures::mock_bridge::RecordedCall::ReplyToTool { .. } => "reply",
-            fixtures::mock_bridge::RecordedCall::ReplyToPermission { .. } => "reply_perm",
-            fixtures::mock_bridge::RecordedCall::SessionState { .. } => "state",
-            fixtures::mock_bridge::RecordedCall::CloseSession(_) => "close",
-            fixtures::mock_bridge::RecordedCall::Subscribe => "subscribe",
+            verification_report: None,
         })
-        .collect();
-    assert!(
-        kinds.contains(&"open"),
-        "stage must open a session; got {kinds:?}"
-    );
-    assert!(
-        kinds.contains(&"send"),
-        "stage must send a prompt; got {kinds:?}"
-    );
-    assert!(
-        kinds.contains(&"close"),
-        "stage must close session; got {kinds:?}"
-    );
+        .await;
+
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = AgentConfig {
+            profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+            prompt_overrides: None, // ← critical: forces the agent stage to fall
+            // back to the resolved profile's prompt.system, which is the disk
+            // override (this is what we are actually testing).
+            tool_overrides: None,
+            sandbox_override: None,
+            approvals_override: None,
+            bindings: vec![],
+            rules_overrides: None,
+            limits: Default::default(),
+            hooks: vec![],
+            custom_fields: Default::default(),
+        };
+        let node = NodeKey::try_from("plan_1").unwrap();
+        let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: storage_dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: Some(registry.clone()),
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await
+        .expect("agent stage should succeed when registry resolves to mock");
+
+        pump.await.unwrap();
+
+        // Outcome from the scripted event must propagate as the stage result.
+        assert_eq!(result.as_ref(), "implemented");
+
+        // Stage opened a session, sent a message, and closed cleanly. The
+        // mock bridge's recorded-call history reflects the full lifecycle.
+        let calls = mock.recorded_calls.lock().await;
+        let kinds: Vec<&str> = calls
+            .iter()
+            .map(|c| match c {
+                fixtures::mock_bridge::RecordedCall::OpenSession => "open",
+                fixtures::mock_bridge::RecordedCall::SendMessage { .. } => "send",
+                fixtures::mock_bridge::RecordedCall::ReplyToTool { .. } => "reply",
+                fixtures::mock_bridge::RecordedCall::ReplyToPermission { .. } => "reply_perm",
+                fixtures::mock_bridge::RecordedCall::SessionState { .. } => "state",
+                fixtures::mock_bridge::RecordedCall::CloseSession(_) => "close",
+                fixtures::mock_bridge::RecordedCall::Subscribe => "subscribe",
+            })
+            .collect();
+        assert!(
+            kinds.contains(&"open"),
+            "stage must open a session; got {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"send"),
+            "stage must send a prompt; got {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"close"),
+            "stage must close session; got {kinds:?}"
+        );
+
+        writer.close().await.unwrap();
+    }
+    storage_dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -286,89 +293,94 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
     // Sanity check the legacy path: even without a registry, an
     // implementer-flavoured profile still drives the mock fast path so
     // pre-milestone tests stay green.
-    let storage_dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(storage_dir.path()).await.unwrap();
-    let run_id = RunId::new();
-    let writer = storage
-        .create_run(run_id, storage_dir.path(), None)
+    let storage_dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(storage_dir.path()).await.unwrap();
+        let run_id = RunId::new();
+        let writer = storage
+            .create_run(run_id, storage_dir.path(), None)
+            .await
+            .unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(storage_dir.path().join("runs"));
+
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
+
+            verification_report: None,
+        })
+        .await;
+
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = AgentConfig {
+            profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+            prompt_overrides: None,
+            tool_overrides: None,
+            sandbox_override: None,
+            approvals_override: None,
+            bindings: vec![],
+            rules_overrides: None,
+            limits: Default::default(),
+            hooks: vec![],
+            custom_fields: Default::default(),
+        };
+        let node = NodeKey::try_from("plan_1").unwrap();
+        let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: storage_dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None, // legacy path
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
         .await
-        .unwrap();
-    let artifact_store =
-        surge_persistence::artifacts::ArtifactStore::new(storage_dir.path().join("runs"));
+        .expect("legacy mock fallback path keeps working");
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        pump.await.unwrap();
+        assert_eq!(result.as_ref(), "done");
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
-
-        verification_report: None,
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = AgentConfig {
-        profile: ProfileKey::try_from("implementer@1.0").unwrap(),
-        prompt_overrides: None,
-        tool_overrides: None,
-        sandbox_override: None,
-        approvals_override: None,
-        bindings: vec![],
-        rules_overrides: None,
-        limits: Default::default(),
-        hooks: vec![],
-        custom_fields: Default::default(),
-    };
-    let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: storage_dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None, // legacy path
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("legacy mock fallback path keeps working");
-
-    pump.await.unwrap();
-    assert_eq!(result.as_ref(), "done");
+        writer.close().await.unwrap();
+    }
+    storage_dir.close().unwrap();
 }

@@ -624,32 +624,35 @@ mod tests {
     /// catch it (the valid claim would vanish).
     #[test]
     fn forget_leaves_every_claim_in_place_when_one_id_in_the_list_is_garbage() {
-        let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("memory.db");
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let store_path = dir.path().join("memory.db");
 
-        let store = MemoryStore::open(&store_path).unwrap();
-        let claim = MemoryClaim::from_transcript(
-            "keep me",
-            "transcript:run-01ARZ3NDEKTSV4RRFFQ69G5FAV#turn-1",
-            ContentHash::compute(b"turn 1"),
-        );
-        store.add_claim(&claim).unwrap();
-        drop(store);
+            let store = MemoryStore::open(&store_path).unwrap();
+            let claim = MemoryClaim::from_transcript(
+                "keep me",
+                "transcript:run-01ARZ3NDEKTSV4RRFFQ69G5FAV#turn-1",
+                ContentHash::compute(b"turn 1"),
+            );
+            store.add_claim(&claim).unwrap();
+            drop(store);
 
-        let ids = vec![claim.id().to_string(), "not-a-valid-id".to_string()];
-        let result = forget_claims_at(&store_path, &ids);
-        assert!(
-            result.is_err(),
-            "a garbage id anywhere in the list must fail the whole call"
-        );
+            let ids = vec![claim.id().to_string(), "not-a-valid-id".to_string()];
+            let result = forget_claims_at(&store_path, &ids);
+            assert!(
+                result.is_err(),
+                "a garbage id anywhere in the list must fail the whole call"
+            );
 
-        let reopened = MemoryStore::open(&store_path).unwrap();
-        let remaining = reopened.list_claims().unwrap();
-        assert_eq!(
-            remaining.len(),
-            1,
-            "the valid claim must still be present: zero deletions, not a partial one"
-        );
-        assert_eq!(remaining[0].id(), claim.id());
+            let reopened = MemoryStore::open(&store_path).unwrap();
+            let remaining = reopened.list_claims().unwrap();
+            assert_eq!(
+                remaining.len(),
+                1,
+                "the valid claim must still be present: zero deletions, not a partial one"
+            );
+            assert_eq!(remaining[0].id(), claim.id());
+        }
+        dir.close().unwrap();
     }
 }

@@ -8,6 +8,8 @@
 //! that a real run derives from the loop frame is supplied explicitly here.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -114,170 +116,177 @@ async fn run_stage_steered(
     (Result<OutcomeKey, String>, Vec<EventPayload>),
     Arc<fixtures::mock_bridge::MockBridge>,
 ) {
-    let storage_home = tempfile::tempdir().unwrap();
-    let storage = Storage::open(storage_home.path()).await.unwrap();
-    let frames = if let Some(task) = active_task_id
-        .as_ref()
-        .filter(|_| verification_report.is_some())
-    {
-        for args in [
-            vec!["init"],
-            vec!["config", "user.name", "Fixture"],
-            vec!["config", "user.email", "fixture@example.com"],
-            vec!["add", "."],
-            vec!["commit", "--allow-empty", "-m", "fixture"],
-        ] {
-            assert!(
-                std::process::Command::new("git")
-                    .args(args)
-                    .current_dir(dir)
-                    .output()
-                    .unwrap()
-                    .status
-                    .success()
-            );
-        }
-        let id = task.as_str();
-        let item: toml::Value = toml::from_str(&format!(
+    let storage_home = FixtureHome::new().unwrap();
+    let fixture_result = {
+        let storage = Storage::open(storage_home.path()).await.unwrap();
+        let frames = if let Some(task) = active_task_id
+            .as_ref()
+            .filter(|_| verification_report.is_some())
+        {
+            for args in [
+                vec!["init"],
+                vec!["config", "user.name", "Fixture"],
+                vec!["config", "user.email", "fixture@example.com"],
+                vec!["add", "."],
+                vec!["commit", "--allow-empty", "-m", "fixture"],
+            ] {
+                assert!(
+                    std::process::Command::new("git")
+                        .args(args)
+                        .current_dir(dir)
+                        .output()
+                        .unwrap()
+                        .status
+                        .success()
+                );
+            }
+            let id = task.as_str();
+            let item: toml::Value = toml::from_str(&format!(
             "id = {id:?}\ntitle = \"Acceptance\"\nacceptance_criteria = [\"Acceptance works\"]\n"
         ))
         .unwrap();
-        vec![surge_orchestrator::engine::frames::Frame::Loop(
-            surge_orchestrator::engine::frames::LoopFrame {
-                loop_node: NodeKey::try_from("tasks").unwrap(),
-                config: surge_core::loop_config::LoopConfig {
-                    iterates_over: surge_core::loop_config::IterableSource::Static(vec![
-                        item.clone(),
-                    ]),
-                    body: surge_core::SubgraphKey::try_from("body").unwrap(),
-                    iteration_var_name: "task".into(),
-                    exit_condition: surge_core::loop_config::ExitCondition::AllItems,
-                    on_iteration_failure: Default::default(),
-                    parallelism: Default::default(),
-                    gate_after_each: false,
+            vec![surge_orchestrator::engine::frames::Frame::Loop(
+                surge_orchestrator::engine::frames::LoopFrame {
+                    loop_node: NodeKey::try_from("tasks").unwrap(),
+                    config: surge_core::loop_config::LoopConfig {
+                        iterates_over: surge_core::loop_config::IterableSource::Static(vec![
+                            item.clone(),
+                        ]),
+                        body: surge_core::SubgraphKey::try_from("body").unwrap(),
+                        iteration_var_name: "task".into(),
+                        exit_condition: surge_core::loop_config::ExitCondition::AllItems,
+                        on_iteration_failure: Default::default(),
+                        parallelism: Default::default(),
+                        gate_after_each: false,
+                    },
+                    items: vec![item],
+                    current_index: 0,
+                    attempts_remaining: 0,
+                    return_to: NodeKey::try_from("end").unwrap(),
+                    traversal_counts: Default::default(),
                 },
-                items: vec![item],
-                current_index: 0,
-                attempts_remaining: 0,
-                return_to: NodeKey::try_from("end").unwrap(),
-                traversal_counts: Default::default(),
-            },
-        )]
-    } else {
-        Vec::new()
-    };
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir, None).await.unwrap();
-    if dir.join("reject-ledger.fixture").exists() {
-        let journal = storage_home
-            .path()
-            .join("runs")
-            .join(run_id.to_string())
-            .join("events.sqlite");
-        let output = std::process::Command::new("python3").args([
+            )]
+        } else {
+            Vec::new()
+        };
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir, None).await.unwrap();
+        if dir.join("reject-ledger.fixture").exists() {
+            let journal = storage_home
+                .path()
+                .join("runs")
+                .join(run_id.to_string())
+                .join("events.sqlite");
+            let output = std::process::Command::new("python3").args([
             "-c",
             "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"CREATE TRIGGER fixture_reject_ledger BEFORE INSERT ON events WHEN NEW.kind='TaskStatusChanged' BEGIN SELECT RAISE(ABORT, 'fixture ledger failure'); END\"); c.commit()",
         ]).arg(journal).output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let artifact_store =
-        surge_persistence::artifacts::ArtifactStore::new(storage_home.path().join("runs"));
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(storage_home.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str(outcome).unwrap(),
-        summary: "done".into(),
-        artifacts_produced,
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str(outcome).unwrap(),
+            summary: "done".into(),
+            artifacts_produced,
 
-        verification_report: verification_report.map(Box::new),
-    })
-    .await;
+            verification_report: verification_report.map(Box::new),
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let node = NodeKey::try_from(node_name).unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let node = NodeKey::try_from(node_name).unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(8),
-        execute_agent_stage(AgentStageParams {
-            quota_opening: None,
-            quota_cycle: None,
-            quota_owner: None,
-            continuation: None,
-            frames: &frames,
-            cancel: tokio_util::sync::CancellationToken::new(),
-            steers: steers.clone(),
-            node: &node,
-            attempt: 1,
-            agent_config: cfg,
-            bound_skills: &[],
-            declared_outcomes: declared,
-            bridge: &bridge,
-            writer: &writer,
-            artifact_store: &artifact_store,
-            worktree_path: dir,
-            tool_dispatcher: &dispatcher,
-            run_memory: &memory,
-            run_id,
-            tool_resolutions: &tool_resolutions,
-            human_input_timeout: Duration::from_secs(5),
-            mcp_registry: None,
-            mcp_servers: Vec::new(),
-            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-            profile_registry: if cfg.profile.as_str() == "verifier@2.0" {
-                Some(Arc::new(
-                    surge_orchestrator::profile_loader::ProfileRegistry::new(
-                        surge_orchestrator::profile_loader::DiskProfileSet::empty(),
-                    ),
-                ))
-            } else {
-                None
-            },
-            agent_registry: None,
-            hook_executor: &hook_executor,
-            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-            active_task_id,
-        }),
-    )
-    .await
-    .unwrap_or_else(|_| {
-        Err(surge_orchestrator::engine::stage::StageError::Internal(
-            "bounded fixture timeout".into(),
-        ))
-    })
-    .map_err(|e| e.to_string());
-    let _ = pump.await;
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(256))
+        let result = tokio::time::timeout(
+            Duration::from_secs(8),
+            execute_agent_stage(AgentStageParams {
+                quota_opening: None,
+                quota_cycle: None,
+                quota_owner: None,
+                continuation: None,
+                frames: &frames,
+                cancel: tokio_util::sync::CancellationToken::new(),
+                steers: steers.clone(),
+                node: &node,
+                attempt: 1,
+                agent_config: cfg,
+                bound_skills: &[],
+                declared_outcomes: declared,
+                bridge: &bridge,
+                writer: &writer,
+                artifact_store: &artifact_store,
+                worktree_path: dir,
+                tool_dispatcher: &dispatcher,
+                run_memory: &memory,
+                run_id,
+                tool_resolutions: &tool_resolutions,
+                human_input_timeout: Duration::from_secs(5),
+                mcp_registry: None,
+                mcp_servers: Vec::new(),
+                tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+                output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+                profile_registry: if cfg.profile.as_str() == "verifier@2.0" {
+                    Some(Arc::new(
+                        surge_orchestrator::profile_loader::ProfileRegistry::new(
+                            surge_orchestrator::profile_loader::DiskProfileSet::empty(),
+                        ),
+                    ))
+                } else {
+                    None
+                },
+                agent_registry: None,
+                hook_executor: &hook_executor,
+                pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+                active_task_id,
+            }),
+        )
         .await
-        .unwrap();
-    let payloads: Vec<EventPayload> = events.iter().map(|e| e.payload.payload().clone()).collect();
-    if result.is_err() {
-        eprintln!(
-            "stage failure {result:?}, events={payloads:?}, last_prompt={:?}",
-            mock.last_prompt().await
-        );
-    }
-    ((result, payloads), mock)
+        .unwrap_or_else(|_| {
+            Err(surge_orchestrator::engine::stage::StageError::Internal(
+                "bounded fixture timeout".into(),
+            ))
+        })
+        .map_err(|e| e.to_string());
+        pump.await.unwrap();
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(256))
+            .await
+            .unwrap();
+        let payloads: Vec<EventPayload> =
+            events.iter().map(|e| e.payload.payload().clone()).collect();
+        writer.close().await.unwrap();
+
+        if result.is_err() {
+            eprintln!(
+                "stage failure {result:?}, events={payloads:?}, last_prompt={:?}",
+                mock.last_prompt().await
+            );
+        }
+        ((result, payloads), mock)
+    };
+    storage_home.close().unwrap();
+    fixture_result
 }
 
 #[tokio::test(flavor = "multi_thread")]

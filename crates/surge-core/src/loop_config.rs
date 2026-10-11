@@ -104,6 +104,15 @@ pub struct ToolCallLoopGuardConfig {
     /// engine escalates regardless of tool-call pattern.
     #[serde(default = "default_node_wall_clock_limit_secs")]
     pub node_wall_clock_limit_secs: u64,
+    /// Seconds a stage attempt may go without any agent activity (no event
+    /// from its session, no tool call) before the attempt counts as making
+    /// no progress. `0` turns the check off.
+    #[serde(default = "default_idle_limit_secs")]
+    pub idle_limit_secs: u64,
+    /// Tool calls one stage attempt may make before it counts as a failed
+    /// attempt (a turn cap). `0` turns the cap off.
+    #[serde(default = "default_max_tool_calls")]
+    pub max_tool_calls: u32,
 }
 
 impl Default for ToolCallLoopGuardConfig {
@@ -111,8 +120,23 @@ impl Default for ToolCallLoopGuardConfig {
         Self {
             max_repeat_tool_calls: default_max_repeat_tool_calls(),
             node_wall_clock_limit_secs: default_node_wall_clock_limit_secs(),
+            idle_limit_secs: default_idle_limit_secs(),
+            max_tool_calls: default_max_tool_calls(),
         }
     }
+}
+
+/// Fifteen minutes without a single event or tool call: well past a slow
+/// model turn or a long command's silence, short enough that a hung session
+/// does not hold the run all night.
+fn default_idle_limit_secs() -> u64 {
+    900
+}
+
+/// One thousand tool calls in one attempt: far beyond a normal task, so only
+/// a runaway session reaches it.
+fn default_max_tool_calls() -> u32 {
+    1000
 }
 
 /// Conservative default: three consecutive identical calls are ordinary
@@ -138,6 +162,7 @@ mod guard_config_tests {
         let cfg = ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 5,
             node_wall_clock_limit_secs: 120,
+            ..ToolCallLoopGuardConfig::default()
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: ToolCallLoopGuardConfig = toml::from_str(&toml_s).unwrap();

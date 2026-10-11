@@ -2,6 +2,17 @@
 //! `Storage::sync_task_ledger_index` mirrors that view into the cross-run
 //! registry index (`surge ready` / `surge ledger` read path — Phase 1 M5).
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+
+use runtime_home_fixture::FixtureHome;
+
 use std::path::PathBuf;
 
 use surge_core::RoadmapStatus;
@@ -16,7 +27,7 @@ use surge_persistence::task_ledger::TaskLedgerIndexFilter;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sync_mirrors_run_ledger_into_registry_index() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let project = dir.path().join("project");
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = RunId::new();
@@ -114,4 +125,84 @@ async fn sync_mirrors_run_ledger_into_registry_index() {
         .expect("discovered list");
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0].task_id, "m1-t2");
+    drop(store);
+    writer.close().await.expect("close writer");
+    drop(storage);
+    dir.close().expect("close runtime home");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn human_overrides_reach_the_run_view_and_the_registry_index() {
+    let dir = FixtureHome::new().unwrap();
+    let project = dir.path().join("project");
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let run_id = RunId::new();
+    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let verify = NodeKey::try_from("verify_1").unwrap();
+    for payload in [
+        EventPayload::RequirementRevised {
+            node: verify.clone(),
+            task: Some("login".into()),
+            text: "Sessions last 24 hours".into(),
+        },
+        EventPayload::TaskAcceptedByHuman {
+            node: verify.clone(),
+            task: Some("login".into()),
+            findings: Some(ContentHash::compute(b"report")),
+            comment: None,
+        },
+        // A run-wide revision has no ledger row.
+        EventPayload::RequirementRevised {
+            node: verify.clone(),
+            task: None,
+            text: "Use UTC everywhere".into(),
+        },
+        EventPayload::TaskAcceptedByHuman {
+            node: verify.clone(),
+            task: Some("logout".into()),
+            findings: None,
+            comment: None,
+        },
+        // Sent back into work after acceptance: no longer accepted.
+        EventPayload::TaskStatusChanged {
+            task_id: "logout".into(),
+            from: RoadmapStatus::Completed,
+            to: RoadmapStatus::ReadyForVerification,
+            authority_node: verify.clone(),
+        },
+    ] {
+        writer
+            .append_event(VersionedEventPayload::new(payload))
+            .await
+            .unwrap();
+    }
+    writer.flush().await.unwrap();
+
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let rows = reader.task_ledger().await.unwrap();
+    let login = rows.iter().find(|row| row.task_id == "login").unwrap();
+    assert_eq!(login.status, RoadmapStatus::Completed);
+    assert!(!login.verified && login.accepted_by_human && login.requirement_revised);
+    let logout = rows.iter().find(|row| row.task_id == "logout").unwrap();
+    assert!(!logout.accepted_by_human);
+    assert_eq!(rows.len(), 2);
+
+    storage
+        .sync_task_ledger_index(run_id, &project)
+        .await
+        .expect("sync succeeds");
+    let index = storage
+        .task_ledger_store()
+        .get(run_id, "login")
+        .unwrap()
+        .unwrap();
+    assert!(index.accepted_by_human && index.requirement_revised);
+    assert!(
+        !index.is_evidence_backed(),
+        "a human acceptance is never evidence"
+    );
+    drop(reader);
+    writer.close().await.expect("close writer");
+    drop(storage);
+    dir.close().expect("close runtime home");
 }

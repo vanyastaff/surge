@@ -221,6 +221,15 @@ async fn recover(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+mod windows_start;
+
+#[cfg(windows)]
+async fn start(detached: bool, max_active: usize) -> Result<()> {
+    windows_start::start(detached, max_active).await
+}
+
+#[cfg(not(windows))]
 async fn start(detached: bool, max_active: usize) -> Result<()> {
     use surge_daemon::pidfile;
 

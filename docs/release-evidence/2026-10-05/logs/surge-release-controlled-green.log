@@ -1,0 +1,23 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.10s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/live_provider_smoke.rs (target/debug/deps/live_provider_smoke-dc80de5660546e86)
+
+running 1 test
+
+running 1 test
+smoke durable SessionOpened: 1
+smoke durable HumanInputRequested: 1
+smoke durable HumanInputResolved: 1
+smoke durable StageToolReceipt: 2
+smoke durable OutcomeReported: 1
+smoke durable RunCompleted: 1
+smoke durable RunFailed: 0
+test controlled_daemon_mcp_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.44s
+
+test controlled_daemon_mcp_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.47s

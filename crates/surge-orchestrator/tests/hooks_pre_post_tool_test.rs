@@ -5,6 +5,8 @@
 #![allow(clippy::too_many_lines)]
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -92,222 +94,234 @@ fn shell_hook(id: &str, trigger: HookTrigger, command: &str, on_failure: HookFai
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    // Pin the session id and queue: ToolCall, then OutcomeReported to end the loop.
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::ToolCall {
-        session: session_id,
-        call_id: "call-1".into(),
-        tool: "echo".into(),
-        args_redacted_json: r#"{"text":"hi"}"#.into(),
-        sandbox_decision: SandboxDecision::Allow,
-        meta: ToolCallMeta {
-            mcp_id: None,
-            injected: false,
-        },
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        // Pin the session id and queue: ToolCall, then OutcomeReported to end the loop.
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::ToolCall {
+            session: session_id,
+            call_id: "call-1".into(),
+            tool: "echo".into(),
+            args_redacted_json: r#"{"text":"hi"}"#.into(),
+            sandbox_decision: SandboxDecision::Allow,
+            meta: ToolCallMeta {
+                mcp_id: None,
+                injected: false,
+            },
+        })
+        .await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let dispatched: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(RecordingDispatcher {
-        calls: dispatched.clone(),
-    });
+        let dispatched: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(RecordingDispatcher {
+            calls: dispatched.clone(),
+        });
 
-    // Reject hook: `exit 1` is portable across cmd.exe and POSIX shells.
-    let cfg = agent_cfg_with_hooks(vec![shell_hook(
-        "deny-echo",
-        HookTrigger::PreToolUse,
-        "exit 1",
-        HookFailureMode::Reject,
-    )]);
-    let memory = surge_core::run_state::RunMemory::default();
-    let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
+        // Reject hook: `exit 1` is portable across cmd.exe and POSIX shells.
+        let cfg = agent_cfg_with_hooks(vec![shell_hook(
+            "deny-echo",
+            HookTrigger::PreToolUse,
+            "exit 1",
+            HookFailureMode::Reject,
+        )]);
+        let memory = surge_core::run_state::RunMemory::default();
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let tool_resolutions = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
 
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("agent stage should still complete after pre-hook reject");
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await
+        .expect("agent stage should still complete after pre-hook reject");
 
-    pump.await.unwrap();
-    assert_eq!(result.as_ref(), "done");
+        pump.await.unwrap();
+        assert_eq!(result.as_ref(), "done");
 
-    // Dispatcher must NOT have been invoked.
-    let dispatched = dispatched.lock().await;
-    assert!(
-        dispatched.is_empty(),
-        "pre_tool_use Reject must skip dispatcher; got {dispatched:?}"
-    );
-    drop(dispatched);
+        // Dispatcher must NOT have been invoked.
+        let dispatched = dispatched.lock().await;
+        assert!(
+            dispatched.is_empty(),
+            "pre_tool_use Reject must skip dispatcher; got {dispatched:?}"
+        );
+        drop(dispatched);
 
-    // Bridge must have received a ToolResultPayload::Error reply for the call.
-    let calls = mock.recorded_calls.lock().await;
-    let mut saw_error = false;
-    for call in calls.iter() {
-        if let RecordedCall::ReplyToTool {
-            call_id, payload, ..
-        } = call
-            && call_id == "call-1"
-            && matches!(payload, ToolResultPayload::Error { .. })
-        {
-            saw_error = true;
+        // Bridge must have received a ToolResultPayload::Error reply for the call.
+        let calls = mock.recorded_calls.lock().await;
+        let mut saw_error = false;
+        for call in calls.iter() {
+            if let RecordedCall::ReplyToTool {
+                call_id, payload, ..
+            } = call
+                && call_id == "call-1"
+                && matches!(payload, ToolResultPayload::Error { .. })
+            {
+                saw_error = true;
+            }
         }
+        assert!(
+            saw_error,
+            "expected a ToolResultPayload::Error reply for call-1, got {calls:?}"
+        );
+
+        writer.close().await.unwrap();
     }
-    assert!(
-        saw_error,
-        "expected a ToolResultPayload::Error reply for call-1, got {calls:?}"
-    );
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn post_tool_use_warn_does_not_block_dispatch() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::ToolCall {
-        session: session_id,
-        call_id: "call-2".into(),
-        tool: "echo".into(),
-        args_redacted_json: r#"{"text":"hi"}"#.into(),
-        sandbox_decision: SandboxDecision::Allow,
-        meta: ToolCallMeta {
-            mcp_id: None,
-            injected: false,
-        },
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::ToolCall {
+            session: session_id,
+            call_id: "call-2".into(),
+            tool: "echo".into(),
+            args_redacted_json: r#"{"text":"hi"}"#.into(),
+            sandbox_decision: SandboxDecision::Allow,
+            meta: ToolCallMeta {
+                mcp_id: None,
+                injected: false,
+            },
+        })
+        .await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let dispatched: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(RecordingDispatcher {
-        calls: dispatched.clone(),
-    });
+        let dispatched: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(RecordingDispatcher {
+            calls: dispatched.clone(),
+        });
 
-    let cfg = agent_cfg_with_hooks(vec![shell_hook(
-        "noisy-post",
-        HookTrigger::PostToolUse,
-        "exit 1",
-        HookFailureMode::Warn,
-    )]);
-    let memory = surge_core::run_state::RunMemory::default();
-    let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
+        let cfg = agent_cfg_with_hooks(vec![shell_hook(
+            "noisy-post",
+            HookTrigger::PostToolUse,
+            "exit 1",
+            HookFailureMode::Warn,
+        )]);
+        let memory = surge_core::run_state::RunMemory::default();
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let tool_resolutions = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
 
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("agent stage should complete normally");
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await
+        .expect("agent stage should complete normally");
 
-    pump.await.unwrap();
-    assert_eq!(result.as_ref(), "done");
+        pump.await.unwrap();
+        assert_eq!(result.as_ref(), "done");
 
-    // Dispatcher MUST have run despite the failing post-hook.
-    let dispatched = dispatched.lock().await;
-    assert_eq!(dispatched.as_slice(), &["echo".to_owned()]);
+        // Dispatcher MUST have run despite the failing post-hook.
+        let dispatched = dispatched.lock().await;
+        assert_eq!(dispatched.as_slice(), &["echo".to_owned()]);
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }

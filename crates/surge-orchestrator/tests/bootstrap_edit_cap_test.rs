@@ -1,6 +1,7 @@
 //! Task 23 — bootstrap HumanGate edit-loop cap fails after repeated edits.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use surge_core::run_event::{BootstrapStage, EventPayload};
 
@@ -59,4 +60,5 @@ async fn repeated_description_edits_fail_after_configured_cap() {
             }
         )
     }));
+    harness.close();
 }

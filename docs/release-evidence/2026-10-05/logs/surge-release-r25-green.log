@@ -1,0 +1,37 @@
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.20s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/daemon_merge_gate_e2e.rs (target/debug/deps/daemon_merge_gate_e2e-8aff482b487e18b6)
+
+running 16 tests
+test l3_default_readiness_blocks_when_provider_does_not_implement ... ok
+test interrupted_merge_attempt_escalates_without_retrying_provider ... ok
+test l3_merge_conflict_escalates ... ok
+test l3_merge_is_pinned_to_readiness_head ... ok
+test l3_already_merged_is_success ... ok
+test l3_blocked_posts_merge_blocked_comment_and_escalates ... ok
+
+thread 'lag_recovers_dropped_completion_from_journal' (33354596) panicked at crates/surge-daemon/tests/daemon_merge_gate_e2e.rs:178:10:
+called `Result::unwrap()` on an `Err` value: SingleThreadedRuntime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test lag_recovers_dropped_completion_from_journal ... FAILED
+test l3_ready_merges_and_posts_merged_comment_and_label ... ok
+test merge_receipt_storage_failure_never_calls_provider ... ok
+test rejected_merge_reservation_never_calls_provider ... ok
+test l3_merged_comment_attaches_the_run_report_and_flags_it_unverified ... ok
+test non_l3_task_is_a_no_op ... ok
+test l3_merged_comment_omits_the_run_report_when_publishing_is_disabled ... ok
+test failed_run_outcome_does_not_trigger_gate ... ok
+test idempotent_double_merge ... ok
+test startup_recovers_completed_terminal_ticket_without_broadcast ... ok
+
+failures:
+
+failures:
+    lag_recovers_dropped_completion_from_journal
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+
+error: test failed, to rerun pass `-p surge-daemon --test daemon_merge_gate_e2e`

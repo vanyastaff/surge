@@ -1,0 +1,21 @@
+{
+  "root": "/tmp/surge-native-rollback-v4hzc34r",
+  "old_archive_sha256": "88569c9a783f26296cb31cd16c5b47f6db53c8d35a74201e2f32d9e659573e6b",
+  "new_archive_sha256": "7670f8e9b161609a4632b2203a3021eb976aac4dbac3fba1daa3240d4c994e4c",
+  "status": "PASS",
+  "old_version": "surge 0.1.0 (3136b82, 2026-10-05)",
+  "new_version": "surge 0.1.0 (8e3a781, 2026-10-05)",
+  "restored_runs": [
+    "run-01M46EP9NYW3C2AZG8EY2ZTRXQ",
+    "run-01M46EP9WYGAJ6G0DB5KNMD70P"
+  ],
+  "quarantined_run": "run-01M46EPC1SBX1SHHPMFC62V4XK",
+  "database_checks": [
+    "db/registry.sqlite",
+    "runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ/events.sqlite",
+    "runs/run-01M46EP9WYGAJ6G0DB5KNMD70P/events.sqlite"
+  ],
+  "restored_inventory_entries": 111,
+  "quarantine": "/tmp/surge-native-rollback-v4hzc34r/quarantine",
+  "limitations": "Terminal-only, same current schema; no provider/MCP/external effects or production restore."
+}

@@ -14,6 +14,10 @@
 //! - `SURGE_REAL_ACP_KIND=claude-code|codex|gemini-cli|custom`
 //! - `SURGE_REAL_ACP_ARGS="--flag value"` (split on whitespace)
 
+#[path = "fixtures/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -302,62 +306,65 @@ async fn flow_minimal_agent_against_real_acp_agent() {
     };
 
     let root = tempfile::tempdir().expect("tempdir");
-    let storage_dir = root.path().join("storage");
-    let worktree_dir = root.path().join("worktree");
-    std::fs::create_dir_all(&storage_dir).expect("create storage dir");
-    std::fs::create_dir_all(&worktree_dir).expect("create worktree dir");
+    let home = FixtureHome::new().unwrap();
+    let storage_dir = home.path().to_path_buf();
+    {
+        let worktree_dir = root.path().join("worktree");
+        std::fs::create_dir_all(&worktree_dir).expect("create worktree dir");
 
-    eprintln!(
-        "[real_acp_smoke] RUNNING: bin={} kind={} profile={}",
-        launch.binary.display(),
-        launch.label(),
-        profile
-    );
+        eprintln!(
+            "[real_acp_smoke] RUNNING: bin={} kind={} profile={}",
+            launch.binary.display(),
+            launch.label(),
+            profile
+        );
 
-    let storage = Storage::open(&storage_dir).await.expect("storage");
-    let bridge = Arc::new(RealAcpBridge::new(launch).expect("real ACP bridge"));
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(worktree_dir.clone())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let storage = Storage::open(&storage_dir).await.expect("storage");
+        let bridge = Arc::new(RealAcpBridge::new(launch).expect("real ACP bridge"));
+        let dispatcher =
+            Arc::new(WorktreeToolDispatcher::new(worktree_dir.clone())) as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            load_minimal_agent_graph(&profile),
-            worktree_dir,
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start real ACP smoke run");
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                load_minimal_agent_graph(&profile),
+                worktree_dir,
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start real ACP smoke run");
 
-    let outcome = tokio::time::timeout(RUN_TIMEOUT, handle.await_completion())
-        .await
-        .unwrap_or_else(|_| panic!("real ACP smoke hung for more than {RUN_TIMEOUT:?}"))
-        .expect("real ACP smoke completion");
-    assert!(
-        matches!(outcome, RunOutcome::Completed { .. }),
-        "expected Completed, got {outcome:?}"
-    );
-    drop(engine);
+        let outcome = tokio::time::timeout(RUN_TIMEOUT, handle.await_completion())
+            .await
+            .unwrap_or_else(|_| panic!("real ACP smoke hung for more than {RUN_TIMEOUT:?}"))
+            .expect("real ACP smoke completion");
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        drop(engine);
 
-    let reader = storage.open_run_reader(run_id).await.expect("open reader");
-    let last = reader.current_seq().await.expect("current seq");
-    let events = reader
-        .read_events(EventSeq::ZERO..EventSeq(last.0 + 1))
-        .await
-        .expect("read events");
+        let reader = storage.open_run_reader(run_id).await.expect("open reader");
+        let last = reader.current_seq().await.expect("current seq");
+        let events = reader
+            .read_events(EventSeq::ZERO..EventSeq(last.0 + 1))
+            .await
+            .expect("read events");
 
-    assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. })),
-        "real ACP smoke completed without a persisted RunCompleted event: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev.payload.payload, EventPayload::TokensConsumed { .. })),
-        "real ACP smoke completed without a persisted TokensConsumed event: {events:?}"
-    );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. })),
+            "real ACP smoke completed without a persisted RunCompleted event: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev.payload.payload, EventPayload::TokensConsumed { .. })),
+            "real ACP smoke completed without a persisted TokensConsumed event: {events:?}"
+        );
+    }
+    home.close().unwrap();
 }

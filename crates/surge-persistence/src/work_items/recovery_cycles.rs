@@ -984,10 +984,11 @@ fn insert_cycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_home_fixture::FixtureHome;
     use surge_core::id::WorkItemOperationId;
 
-    async fn fixture() -> (tempfile::TempDir, WorkItemStore, WorkItemLaunchClaim) {
-        let home = tempfile::tempdir().unwrap();
+    async fn fixture() -> (FixtureHome, (WorkItemStore, WorkItemLaunchClaim)) {
+        let home = FixtureHome::new().unwrap();
         let storage = crate::runs::Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
         let intent = WorkItemWorkspace {
@@ -1030,104 +1031,112 @@ mod tests {
             panic!("attempt")
         };
         let claim = store.claim(attempt.run).unwrap();
-        (home, store, claim)
+        (home, (store, claim))
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reservation_and_unknown_evidence_survive_reopen_without_redispatch() {
-        let (home, store, claim) = fixture().await;
-        let invocation = "invocation-01ARZ3NDEKTSV4RRFFQ69G5FAV";
-        let first = RecoveryCandidate::new("claude".into(), AccountEvidence::Unknown).unwrap();
-        let cycle = store.begin_recovery_cycle(&claim, invocation, 0).unwrap();
-        let receipt = store
-            .reserve_recovery_candidate(&claim, &cycle, &first)
-            .unwrap();
-        assert_eq!(receipt.disposition, ReservationDisposition::Reserved);
-        let cycle = store.recovery_cycle(claim.run(), invocation, 1).unwrap();
-        store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &receipt.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        let reopened = crate::runs::Storage::open(home.path())
-            .await
-            .unwrap()
-            .work_items();
-        let cycle = reopened.recovery_cycle(claim.run(), invocation, 1).unwrap();
-        assert_eq!(
-            reopened.recovery_observation(&receipt.receipt).unwrap(),
-            (Some(QuotaObservation::unknown()), None)
-        );
-        let replay = reopened
-            .reserve_recovery_candidate(&claim, &cycle, &first)
-            .unwrap();
-        assert_eq!(replay.receipt, receipt.receipt);
-        assert_eq!(replay.disposition, ReservationDisposition::Replayed);
-        assert_eq!(
-            reopened
-                .recovery_reservations(claim.run(), invocation, 1)
-                .unwrap(),
-            vec![replay.clone()]
-        );
-        assert_eq!(
-            reopened.recovery_cycle(claim.run(), invocation, 1).unwrap(),
-            cycle
-        );
-        let second = RecoveryCandidate::new("codex".into(), AccountEvidence::Unknown).unwrap();
-        assert_eq!(
-            reopened
-                .reserve_recovery_candidate(&claim, &cycle, &second)
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let invocation = "invocation-01ARZ3NDEKTSV4RRFFQ69G5FAV";
+            let first = RecoveryCandidate::new("claude".into(), AccountEvidence::Unknown).unwrap();
+            let cycle = store.begin_recovery_cycle(&claim, invocation, 0).unwrap();
+            let receipt = store
+                .reserve_recovery_candidate(&claim, &cycle, &first)
+                .unwrap();
+            assert_eq!(receipt.disposition, ReservationDisposition::Reserved);
+            let cycle = store.recovery_cycle(claim.run(), invocation, 1).unwrap();
+            store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &receipt.receipt,
+                    &QuotaObservation::unknown(),
+                )
+                .unwrap();
+            let reopened = crate::runs::Storage::open(home.path())
+                .await
                 .unwrap()
-                .disposition,
-            ReservationDisposition::Reserved
-        );
+                .work_items();
+            let cycle = reopened.recovery_cycle(claim.run(), invocation, 1).unwrap();
+            assert_eq!(
+                reopened.recovery_observation(&receipt.receipt).unwrap(),
+                (Some(QuotaObservation::unknown()), None)
+            );
+            let replay = reopened
+                .reserve_recovery_candidate(&claim, &cycle, &first)
+                .unwrap();
+            assert_eq!(replay.receipt, receipt.receipt);
+            assert_eq!(replay.disposition, ReservationDisposition::Replayed);
+            assert_eq!(
+                reopened
+                    .recovery_reservations(claim.run(), invocation, 1)
+                    .unwrap(),
+                vec![replay.clone()]
+            );
+            assert_eq!(
+                reopened.recovery_cycle(claim.run(), invocation, 1).unwrap(),
+                cycle
+            );
+            let second = RecoveryCandidate::new("codex".into(), AccountEvidence::Unknown).unwrap();
+            assert_eq!(
+                reopened
+                    .reserve_recovery_candidate(&claim, &cycle, &second)
+                    .unwrap()
+                    .disposition,
+                ReservationDisposition::Reserved
+            );
+        }
+        home.close().expect("close runtime home");
     }
     const INVOCATION: &str = "invocation-01ARZ3NDEKTSV4RRFFQ69G5FAV";
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bare_and_prefixed_invocation_share_one_cycle_namespace() {
-        let (_home, store, claim) = fixture().await;
-        let prefixed = store.begin_recovery_cycle(&claim, INVOCATION, 0).unwrap();
-        let bare = INVOCATION.strip_prefix("invocation-").unwrap();
-        assert_eq!(
-            store.begin_recovery_cycle(&claim, bare, 0).unwrap(),
-            prefixed
-        );
-        assert_eq!(
-            store.recovery_cycle(claim.run(), bare, 1).unwrap(),
-            prefixed
-        );
-        let mut forged = prefixed.clone();
-        forged.invocation = bare.into();
-        let result = store.finish_recovery_cycle(&claim, &forged);
-        let after = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
-        match result {
-            Ok(()) => assert!(
-                after.closed,
-                "successful finish must durably close the canonical cycle"
-            ),
-            Err(WorkItemError::Conflict(_)) => assert_eq!(after, prefixed),
-            Err(error) => panic!("unexpected finish failure: {error}"),
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let prefixed = store.begin_recovery_cycle(&claim, INVOCATION, 0).unwrap();
+            let bare = INVOCATION.strip_prefix("invocation-").unwrap();
+            assert_eq!(
+                store.begin_recovery_cycle(&claim, bare, 0).unwrap(),
+                prefixed
+            );
+            assert_eq!(
+                store.recovery_cycle(claim.run(), bare, 1).unwrap(),
+                prefixed
+            );
+            let mut forged = prefixed.clone();
+            forged.invocation = bare.into();
+            let result = store.finish_recovery_cycle(&claim, &forged);
+            let after = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
+            match result {
+                Ok(()) => assert!(
+                    after.closed,
+                    "successful finish must durably close the canonical cycle"
+                ),
+                Err(WorkItemError::Conflict(_)) => assert_eq!(after, prefixed),
+                Err(error) => panic!("unexpected finish failure: {error}"),
+            }
+            assert!(
+                store
+                    .reserve_recovery_candidate(&claim, &forged, &candidate("claude"))
+                    .is_err()
+            );
+            assert_eq!(
+                store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap(),
+                prefixed
+            );
+            assert!(
+                store
+                    .begin_recovery_cycle(
+                        &claim,
+                        &surge_core::id::StageInvocationId::nil().to_string(),
+                        0
+                    )
+                    .is_err()
+            );
         }
-        assert!(
-            store
-                .reserve_recovery_candidate(&claim, &forged, &candidate("claude"))
-                .is_err()
-        );
-        assert_eq!(
-            store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap(),
-            prefixed
-        );
-        assert!(
-            store
-                .begin_recovery_cycle(
-                    &claim,
-                    &surge_core::id::StageInvocationId::nil().to_string(),
-                    0
-                )
-                .is_err()
-        );
+        home.close().expect("close runtime home");
     }
     fn candidate(runtime: &str) -> RecoveryCandidate {
         RecoveryCandidate::new(runtime.into(), AccountEvidence::Unknown).unwrap()
@@ -1156,541 +1165,586 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn newer_available_and_unknown_preserve_observation_order() {
-        let (_home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        let cycle = store
-            .record_recovery_observation(&claim, &cycle, &reservation.receipt, &observed(200, true))
-            .unwrap();
-        assert!(
-            store
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let (cycle, reservation) = pending(&store, &claim);
+            let cycle = store
                 .record_recovery_observation(
                     &claim,
                     &cycle,
                     &reservation.receipt,
-                    &observed(100, false)
+                    &observed(200, true),
                 )
-                .is_err()
-        );
-        assert_eq!(
-            store.recovery_observation(&reservation.receipt).unwrap(),
-            (Some(observed(200, true)), None)
-        );
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &observed(300, false),
-            )
-            .unwrap();
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        assert!(
-            store
+                .unwrap();
+            assert!(
+                store
+                    .record_recovery_observation(
+                        &claim,
+                        &cycle,
+                        &reservation.receipt,
+                        &observed(100, false)
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                store.recovery_observation(&reservation.receipt).unwrap(),
+                (Some(observed(200, true)), None)
+            );
+            let cycle = store
                 .record_recovery_observation(
                     &claim,
                     &cycle,
                     &reservation.receipt,
-                    &observed(250, false)
+                    &observed(300, false),
                 )
-                .is_err()
-        );
-        assert_eq!(
-            store.recovery_observation(&reservation.receipt).unwrap(),
-            (
-                Some(QuotaObservation::unknown()),
-                Some(observed(300, false))
-            )
-        );
+                .unwrap();
+            let cycle = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &QuotaObservation::unknown(),
+                )
+                .unwrap();
+            assert!(
+                store
+                    .record_recovery_observation(
+                        &claim,
+                        &cycle,
+                        &reservation.receipt,
+                        &observed(250, false)
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                store.recovery_observation(&reservation.receipt).unwrap(),
+                (
+                    Some(QuotaObservation::unknown()),
+                    Some(observed(300, false))
+                )
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unknown_policy_wake_rolls_once_and_retains_history_across_reopen() {
-        let (home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unsupported(),
-            )
-            .unwrap();
-        let wake =
-            RecoveryWake::new("wake-1".into(), WakeOrigin::PolicyBackoff, 100, 1100).unwrap();
-        let cycle = store
-            .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
-            .unwrap();
-        assert!(
-            store
-                .consume_recovery_wake(&claim, &cycle, wake.identity(), 1099)
-                .is_err()
-        );
-        let reopened = crate::runs::Storage::open(home.path())
-            .await
-            .unwrap()
-            .work_items();
-        assert_eq!(
-            reopened.due_recovery_wakes(1100, 1).unwrap(),
-            vec![cycle.clone()]
-        );
-        let next = reopened
-            .consume_recovery_wake(&claim, &cycle, wake.identity(), 1100)
-            .unwrap();
-        assert_eq!((next.generation, next.probe_count), (2, 1));
-        assert!(
-            store
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let (cycle, reservation) = pending(&store, &claim);
+            let cycle = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &QuotaObservation::unsupported(),
+                )
+                .unwrap();
+            let wake =
+                RecoveryWake::new("wake-1".into(), WakeOrigin::PolicyBackoff, 100, 1100).unwrap();
+            let cycle = store
+                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
+                .unwrap();
+            assert!(
+                store
+                    .consume_recovery_wake(&claim, &cycle, wake.identity(), 1099)
+                    .is_err()
+            );
+            let reopened = crate::runs::Storage::open(home.path())
+                .await
+                .unwrap()
+                .work_items();
+            assert_eq!(
+                reopened.due_recovery_wakes(1100, 1).unwrap(),
+                vec![cycle.clone()]
+            );
+            let next = reopened
                 .consume_recovery_wake(&claim, &cycle, wake.identity(), 1100)
-                .is_err()
-        );
-        assert!(
-            store
-                .recovery_cycle(claim.run(), INVOCATION, 1)
-                .unwrap()
-                .closed
-        );
-        assert_eq!(
-            store.recovery_observation(&reservation.receipt).unwrap(),
-            (Some(QuotaObservation::unsupported()), None)
-        );
-        assert_eq!(
-            store
-                .reserve_recovery_candidate(&claim, &next, &candidate("claude"))
-                .unwrap()
-                .disposition,
-            ReservationDisposition::Reserved
-        );
+                .unwrap();
+            assert_eq!((next.generation, next.probe_count), (2, 1));
+            assert!(
+                store
+                    .consume_recovery_wake(&claim, &cycle, wake.identity(), 1100)
+                    .is_err()
+            );
+            assert!(
+                store
+                    .recovery_cycle(claim.run(), INVOCATION, 1)
+                    .unwrap()
+                    .closed
+            );
+            assert_eq!(
+                store.recovery_observation(&reservation.receipt).unwrap(),
+                (Some(QuotaObservation::unsupported()), None)
+            );
+            assert_eq!(
+                store
+                    .reserve_recovery_candidate(&claim, &next, &candidate("claude"))
+                    .unwrap()
+                    .disposition,
+                ReservationDisposition::Reserved
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_wake_consumption_creates_one_next_cycle() {
-        let (_home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        let wake =
-            RecoveryWake::new("concurrent".into(), WakeOrigin::PolicyBackoff, 100, 1100).unwrap();
-        let cycle = store
-            .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
-            .unwrap();
-        let results = std::thread::scope(|scope| {
-            let first =
-                scope.spawn(|| store.consume_recovery_wake(&claim, &cycle, "concurrent", 1100));
-            let second =
-                scope.spawn(|| store.consume_recovery_wake(&claim, &cycle, "concurrent", 1100));
-            [first.join().unwrap(), second.join().unwrap()]
-        });
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        assert_eq!(
-            store
-                .recovery_cycle(claim.run(), INVOCATION, 2)
-                .unwrap()
-                .probe_count,
-            1
-        );
-        assert!(store.recovery_cycle(claim.run(), INVOCATION, 3).is_err());
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let (cycle, reservation) = pending(&store, &claim);
+            let cycle = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &QuotaObservation::unknown(),
+                )
+                .unwrap();
+            let wake = RecoveryWake::new("concurrent".into(), WakeOrigin::PolicyBackoff, 100, 1100)
+                .unwrap();
+            let cycle = store
+                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
+                .unwrap();
+            let results = std::thread::scope(|scope| {
+                let first =
+                    scope.spawn(|| store.consume_recovery_wake(&claim, &cycle, "concurrent", 1100));
+                let second =
+                    scope.spawn(|| store.consume_recovery_wake(&claim, &cycle, "concurrent", 1100));
+                [first.join().unwrap(), second.join().unwrap()]
+            });
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+            assert_eq!(
+                store
+                    .recovery_cycle(claim.run(), INVOCATION, 2)
+                    .unwrap()
+                    .probe_count,
+                1
+            );
+            assert!(store.recovery_cycle(claim.run(), INVOCATION, 3).is_err());
+        }
+        home.close().expect("close runtime home");
     }
 
     /// Isolates schedule revocation; full Manual-control generation semantics
     /// are covered separately by the real daemon control tests.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelled_schedule_cannot_consume_retained_wake_audit() {
-        let (_home, store, claim) = fixture().await;
-        let invocation = "invocation-01ARZ3NDEKTSV4RRFFQ69G5FAV";
-        let cycle = store.begin_recovery_cycle(&claim, invocation, 0).unwrap();
-        let reservation = store
-            .reserve_recovery_candidate(&claim, &cycle, &candidate("a"))
-            .unwrap();
-        let cycle = store.recovery_cycle(claim.run(), invocation, 1).unwrap();
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let invocation = "invocation-01ARZ3NDEKTSV4RRFFQ69G5FAV";
+            let cycle = store.begin_recovery_cycle(&claim, invocation, 0).unwrap();
+            let reservation = store
+                .reserve_recovery_candidate(&claim, &cycle, &candidate("a"))
+                .unwrap();
+            let cycle = store.recovery_cycle(claim.run(), invocation, 1).unwrap();
+            let cycle = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &QuotaObservation::unknown(),
+                )
+                .unwrap();
+            let wake = RecoveryWake::new("cancelled".into(), WakeOrigin::PolicyBackoff, 100, 1100)
+                .unwrap();
+            store
+                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
+                .unwrap();
+            let mut conn = store.pool.get().unwrap();
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            owner_fence(&tx, &claim).unwrap();
+            invalidate_recovery_wakes(
+                &tx,
+                claim.binding.item,
+                claim.run(),
+                claim.binding.generation,
             )
             .unwrap();
-        let wake =
-            RecoveryWake::new("cancelled".into(), WakeOrigin::PolicyBackoff, 100, 1100).unwrap();
-        store
-            .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
-            .unwrap();
-        let mut conn = store.pool.get().unwrap();
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .unwrap();
-        owner_fence(&tx, &claim).unwrap();
-        invalidate_recovery_wakes(
-            &tx,
-            claim.binding.item,
-            claim.run(),
-            claim.binding.generation,
-        )
-        .unwrap();
-        tx.commit().unwrap();
-        drop(conn);
-        let refreshed = store.recovery_cycle(claim.run(), invocation, 1).unwrap();
-        assert_eq!(
-            refreshed.wake,
-            Some(wake),
-            "cancelled timing remains immutable audit"
-        );
-        assert!(store.due_recovery_wakes(1100, 10).unwrap().is_empty());
-        let result = store.consume_recovery_wake(&claim, &refreshed, "cancelled", 1100);
-        assert!(
-            result.is_err(),
-            "retained audit JSON must not grant wake consumption: {result:?}"
-        );
-        assert_eq!(
-            store.recovery_cycle(claim.run(), invocation, 1).unwrap(),
-            refreshed
-        );
-        assert!(
-            store.recovery_cycle(claim.run(), invocation, 2).is_err(),
-            "cancelled schedule must not allocate a fresh cycle"
-        );
+            tx.commit().unwrap();
+            drop(conn);
+            let refreshed = store.recovery_cycle(claim.run(), invocation, 1).unwrap();
+            assert_eq!(
+                refreshed.wake,
+                Some(wake),
+                "cancelled timing remains immutable audit"
+            );
+            assert!(store.due_recovery_wakes(1100, 10).unwrap().is_empty());
+            let result = store.consume_recovery_wake(&claim, &refreshed, "cancelled", 1100);
+            assert!(
+                result.is_err(),
+                "retained audit JSON must not grant wake consumption: {result:?}"
+            );
+            assert_eq!(
+                store.recovery_cycle(claim.run(), invocation, 1).unwrap(),
+                refreshed
+            );
+            assert!(
+                store.recovery_cycle(claim.run(), invocation, 2).is_err(),
+                "cancelled schedule must not allocate a fresh cycle"
+            );
+        }
+        home.close().expect("close runtime home");
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn confirmed_capacity_rebind_preserves_receipts_but_manual_fence_rejects() {
         use surge_core::execution_recovery::{
             ExecutionControlState, PendingStagePhase, SuspensionFence, SuspensionReason,
         };
-        let (_home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        let wake =
-            RecoveryWake::new("capacity".into(), WakeOrigin::PolicyBackoff, 100, 1100).unwrap();
-        let cycle = store
-            .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
-            .unwrap();
-        let item = store.show(claim.binding.item).unwrap().item;
-        store
-            .mutate(
-                &WorkItemCommand::Suspend {
-                    operation_id: WorkItemOperationId::new(),
-                    item: item.id,
-                    expected_version: item.version,
-                },
-                None,
-                None,
-                "host",
-                100,
-            )
-            .unwrap();
-        assert!(store.due_recovery_wakes(1100, 10).unwrap().is_empty());
-        assert!(
-            store
-                .consume_recovery_wake(&claim, &cycle, "capacity", 1100)
-                .is_err()
-        );
-        assert!(store.rebind_recovery_control(&claim, &cycle, 1).is_err());
-        let cancelled = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
-        assert!(
-            store
-                .rebind_recovery_control(&claim, &cancelled, 1)
-                .is_err()
-        );
-        assert!(store.due_recovery_wakes(1100, 10).unwrap().is_empty());
-
-        // Independent registry fixture models an already journal-confirmed host
-        // Capacity fence. It never converts a cancelled manual control into
-        // capacity authority; this checks storage, not engine/containment proof.
-        let (_capacity_home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        let cycle = store
-            .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
-            .unwrap();
-        let conn = store.pool.get().unwrap();
-        let operation = WorkItemOperationId::new();
-        conn.execute(
-            "INSERT INTO work_item_operations(operation,body_hash,result) VALUES(?,?,?)",
-            params![
-                operation.to_string(),
-                ContentHash::compute(b"capacity-store-fixture").to_string(),
-                "{}"
-            ],
-        )
-        .unwrap();
-        let mut control = surge_core::execution_recovery::WorkItemExecutionControl {
-            item: claim.binding.item,
-            run: claim.run,
-            attempt_generation: claim.binding.generation,
-            generation: 1,
-            operation,
-            state: ExecutionControlState::Suspended,
-            fence: None,
-            allow_new_session: false,
-            diagnostic: None,
-        };
-        conn.execute(
-            "INSERT INTO work_item_execution_controls(run,generation,item,attempt_generation,operation,state,payload) VALUES(?,?,?,?,?,'suspended',?)",
-            params![claim.run.to_string(), 1, claim.binding.item.to_string(), claim.binding.generation, operation.to_string(), serde_json::to_string(&control).unwrap()],
-        ).unwrap();
-        control.state = ExecutionControlState::Suspended;
-        control.fence = Some(SuspensionFence {
-            control_generation: 1,
-            snapshot_seq: 10,
-            pending_stage: PendingStagePhase::Interrupted {
-                node: surge_core::NodeKey::try_from("agent").unwrap(),
-                invocation: INVOCATION.parse().unwrap(),
-            },
-            cleanup_confirmed: true,
-            reason: SuspensionReason::Manual,
-        });
-        control::write_control(&conn, &control).unwrap();
-        assert!(store.rebind_recovery_control(&claim, &cycle, 1).is_err());
-        control.fence.as_mut().unwrap().reason = SuspensionReason::Capacity {
-            wake_at_ms: Some(1100),
-        };
-        control::write_control(&conn, &control).unwrap();
-        conn.execute(
-            "UPDATE work_item_quota_candidates SET observation='{}' WHERE receipt=?",
-            [&reservation.receipt],
-        )
-        .unwrap();
-        assert!(store.rebind_recovery_control(&claim, &cycle, 1).is_err());
-        conn.execute(
-            "UPDATE work_item_quota_candidates SET observation=? WHERE receipt=?",
-            params![
-                serde_json::to_string(&QuotaObservation::unknown()).unwrap(),
-                reservation.receipt
-            ],
-        )
-        .unwrap();
-        drop(conn);
-        let current = store.rebind_recovery_control(&claim, &cycle, 1).unwrap();
-        assert_eq!(current.wake, cycle.wake);
-        assert_eq!(
-            store.capacity_control_association(claim.run(), 1).unwrap(),
-            None,
-            "a capacity-looking fence without a journal association is not quota authority"
-        );
-        assert_eq!(
-            store.due_recovery_wakes(1100, 10).unwrap(),
-            vec![current.clone()]
-        );
-        assert!(
-            store
-                .consume_recovery_wake(&claim, &current, "capacity", 1100)
-                .is_err()
-        );
-        assert_eq!(
-            store.recovery_observation(&reservation.receipt).unwrap(),
-            (Some(QuotaObservation::unknown()), None)
-        );
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stale_revision_claim_and_manual_control_reject_mutations() {
-        let (_home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        assert!(matches!(store.claim(claim.run()), Err(WorkItemError::Busy)));
-        let current = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        assert!(
-            store
-                .reserve_recovery_candidate(&claim, &cycle, &candidate("codex"))
-                .is_err()
-        );
-        let item = store.show(claim.binding.item).unwrap().item;
-        store
-            .mutate(
-                &WorkItemCommand::Suspend {
-                    operation_id: WorkItemOperationId::new(),
-                    item: item.id,
-                    expected_version: item.version,
-                },
-                None,
-                None,
-                "human",
-                100,
-            )
-            .unwrap();
-        assert!(
-            store
-                .reserve_recovery_candidate(&claim, &current, &candidate("codex"))
-                .is_err()
-        );
-        assert!(store.rebind_recovery_control(&claim, &current, 1).is_err());
-        store
-            .pool
-            .get()
-            .unwrap()
-            .execute(
-                "UPDATE work_item_attempts SET claim_token='replacement' WHERE run=?",
-                [claim.run.to_string()],
-            )
-            .unwrap();
-        assert!(
-            store
-                .reserve_recovery_candidate(&claim, &current, &candidate("claude"))
-                .is_err()
-        );
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn known_accounts_deduplicate_and_unknown_accounts_do_not_guess_merges() {
-        let (_home, store, claim) = fixture().await;
-        let cycle = store.begin_recovery_cycle(&claim, INVOCATION, 0).unwrap();
-        let account = AccountEvidence::Known {
-            provider: "provider".into(),
-            account_key: "opaque".into(),
-        };
-        let first = RecoveryCandidate::new("runtime-a".into(), account.clone()).unwrap();
-        let reservation = store
-            .reserve_recovery_candidate(&claim, &cycle, &first)
-            .unwrap();
-        let replay = store
-            .reserve_recovery_candidate(&claim, &cycle, &first)
-            .unwrap();
-        assert_eq!(replay.receipt, reservation.receipt);
-        assert_eq!(replay.disposition, ReservationDisposition::Replayed);
-        let cycle = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
-        assert!(
-            store
-                .reserve_recovery_candidate(
-                    &claim,
-                    &cycle,
-                    &RecoveryCandidate::new("runtime-b".into(), account).unwrap()
-                )
-                .is_err()
-        );
-        let cycle = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
-        store
-            .reserve_recovery_candidate(&claim, &cycle, &candidate("runtime-b"))
-            .unwrap();
-        let cycle = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
-        assert!(
-            store
-                .reserve_recovery_candidate(
-                    &claim,
-                    &cycle,
-                    &RecoveryCandidate::new(
-                        "runtime-b".into(),
-                        AccountEvidence::Known {
-                            provider: "provider".into(),
-                            account_key: "now-observed".into()
-                        }
-                    )
-                    .unwrap()
-                )
-                .is_err()
-        );
-        store
-            .reserve_recovery_candidate(&claim, &cycle, &candidate("runtime-c"))
-            .unwrap();
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unknown_or_expired_evidence_cannot_arm_observed_reset() {
-        let (_home, store, claim) = fixture().await;
-        let (cycle, reservation) = pending(&store, &claim);
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &QuotaObservation::unknown(),
-            )
-            .unwrap();
-        let reset =
-            RecoveryWake::new("reset".into(), WakeOrigin::ObservedReset, 100, 1100).unwrap();
-        assert!(
-            store
-                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &reset)
-                .is_err()
-        );
-        let expired = QuotaObservation::new(QuotaEvidence::Observed {
-            observed_at_ms: 1,
-            expires_at_ms: 10,
-            available: false,
-            reset_at_ms: Some(1100),
-        })
-        .unwrap();
-        let cycle = store
-            .record_recovery_observation(&claim, &cycle, &reservation.receipt, &expired)
-            .unwrap();
-        assert!(
-            store
-                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &reset)
-                .is_err()
-        );
-        let cycle = store
-            .record_recovery_observation(
-                &claim,
-                &cycle,
-                &reservation.receipt,
-                &observed(100, false),
-            )
-            .unwrap();
-        let armed = store
-            .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &reset)
-            .unwrap();
-        assert_eq!(armed.wake, Some(reset));
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn bounded_policy_checks_continue_after_sixteen_cycles() {
-        let (_home, store, claim) = fixture().await;
-        let mut cycle = store.begin_recovery_cycle(&claim, INVOCATION, 0).unwrap();
-        for ordinal in 1..=17 {
-            let receipt = store
-                .reserve_recovery_candidate(&claim, &cycle, &candidate("claude"))
-                .unwrap();
-            cycle = store
-                .recovery_cycle(claim.run(), INVOCATION, cycle.generation)
-                .unwrap();
-            cycle = store
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let (cycle, reservation) = pending(&store, &claim);
+            let cycle = store
                 .record_recovery_observation(
                     &claim,
                     &cycle,
-                    &receipt.receipt,
+                    &reservation.receipt,
                     &QuotaObservation::unknown(),
                 )
                 .unwrap();
-            let at = ordinal * 1000;
-            let wake = RecoveryWake::new(
-                format!("wake-{ordinal}"),
-                WakeOrigin::PolicyBackoff,
-                at,
-                at + 1000,
-            )
-            .unwrap();
-            cycle = store
-                .arm_recovery_wake(&claim, &cycle, &receipt.receipt, &wake)
+            let wake =
+                RecoveryWake::new("capacity".into(), WakeOrigin::PolicyBackoff, 100, 1100).unwrap();
+            let cycle = store
+                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
                 .unwrap();
-            cycle = store
-                .consume_recovery_wake(&claim, &cycle, wake.identity(), at + 1000)
+            let item = store.show(claim.binding.item).unwrap().item;
+            store
+                .mutate(
+                    &WorkItemCommand::Suspend {
+                        operation_id: WorkItemOperationId::new(),
+                        item: item.id,
+                        expected_version: item.version,
+                    },
+                    None,
+                    None,
+                    "host",
+                    100,
+                )
+                .unwrap();
+            assert!(store.due_recovery_wakes(1100, 10).unwrap().is_empty());
+            assert!(
+                store
+                    .consume_recovery_wake(&claim, &cycle, "capacity", 1100)
+                    .is_err()
+            );
+            assert!(store.rebind_recovery_control(&claim, &cycle, 1).is_err());
+            let cancelled = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
+            assert!(
+                store
+                    .rebind_recovery_control(&claim, &cancelled, 1)
+                    .is_err()
+            );
+            assert!(store.due_recovery_wakes(1100, 10).unwrap().is_empty());
+
+            // Independent registry fixture models an already journal-confirmed host
+            // Capacity fence. It never converts a cancelled manual control into
+            // capacity authority; this checks storage, not engine/containment proof.
+            let (capacity_home, owners) = fixture().await;
+            {
+                let (store, claim) = owners;
+                let (cycle, reservation) = pending(&store, &claim);
+                let cycle = store
+                    .record_recovery_observation(
+                        &claim,
+                        &cycle,
+                        &reservation.receipt,
+                        &QuotaObservation::unknown(),
+                    )
+                    .unwrap();
+                let cycle = store
+                    .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &wake)
+                    .unwrap();
+                let conn = store.pool.get().unwrap();
+                let operation = WorkItemOperationId::new();
+                conn.execute(
+                    "INSERT INTO work_item_operations(operation,body_hash,result) VALUES(?,?,?)",
+                    params![
+                        operation.to_string(),
+                        ContentHash::compute(b"capacity-store-fixture").to_string(),
+                        "{}"
+                    ],
+                )
+                .unwrap();
+                let mut control = surge_core::execution_recovery::WorkItemExecutionControl {
+                    item: claim.binding.item,
+                    run: claim.run,
+                    attempt_generation: claim.binding.generation,
+                    generation: 1,
+                    operation,
+                    state: ExecutionControlState::Suspended,
+                    fence: None,
+                    allow_new_session: false,
+                    diagnostic: None,
+                };
+                conn.execute(
+                    "INSERT INTO work_item_execution_controls(run,generation,item,attempt_generation,operation,state,payload) VALUES(?,?,?,?,?,'suspended',?)",
+                    params![claim.run.to_string(), 1, claim.binding.item.to_string(), claim.binding.generation, operation.to_string(), serde_json::to_string(&control).unwrap()],
+                ).unwrap();
+                control.state = ExecutionControlState::Suspended;
+                control.fence = Some(SuspensionFence {
+                    control_generation: 1,
+                    snapshot_seq: 10,
+                    pending_stage: PendingStagePhase::Interrupted {
+                        node: surge_core::NodeKey::try_from("agent").unwrap(),
+                        invocation: INVOCATION.parse().unwrap(),
+                    },
+                    cleanup_confirmed: true,
+                    reason: SuspensionReason::Manual,
+                });
+                control::write_control(&conn, &control).unwrap();
+                assert!(store.rebind_recovery_control(&claim, &cycle, 1).is_err());
+                control.fence.as_mut().unwrap().reason = SuspensionReason::Capacity {
+                    wake_at_ms: Some(1100),
+                };
+                control::write_control(&conn, &control).unwrap();
+                conn.execute(
+                    "UPDATE work_item_quota_candidates SET observation='{}' WHERE receipt=?",
+                    [&reservation.receipt],
+                )
+                .unwrap();
+                assert!(store.rebind_recovery_control(&claim, &cycle, 1).is_err());
+                conn.execute(
+                    "UPDATE work_item_quota_candidates SET observation=? WHERE receipt=?",
+                    params![
+                        serde_json::to_string(&QuotaObservation::unknown()).unwrap(),
+                        reservation.receipt
+                    ],
+                )
+                .unwrap();
+                drop(conn);
+                let current = store.rebind_recovery_control(&claim, &cycle, 1).unwrap();
+                assert_eq!(current.wake, cycle.wake);
+                assert_eq!(
+                    store.capacity_control_association(claim.run(), 1).unwrap(),
+                    None,
+                    "a capacity-looking fence without a journal association is not quota authority"
+                );
+                assert_eq!(
+                    store.due_recovery_wakes(1100, 10).unwrap(),
+                    vec![current.clone()]
+                );
+                assert!(
+                    store
+                        .consume_recovery_wake(&claim, &current, "capacity", 1100)
+                        .is_err()
+                );
+                assert_eq!(
+                    store.recovery_observation(&reservation.receipt).unwrap(),
+                    (Some(QuotaObservation::unknown()), None)
+                );
+            }
+            capacity_home.close().expect("close runtime home");
+        }
+        home.close().expect("close runtime home");
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_revision_claim_and_manual_control_reject_mutations() {
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let (cycle, reservation) = pending(&store, &claim);
+            assert!(matches!(store.claim(claim.run()), Err(WorkItemError::Busy)));
+            let current = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &QuotaObservation::unknown(),
+                )
+                .unwrap();
+            assert!(
+                store
+                    .reserve_recovery_candidate(&claim, &cycle, &candidate("codex"))
+                    .is_err()
+            );
+            let item = store.show(claim.binding.item).unwrap().item;
+            store
+                .mutate(
+                    &WorkItemCommand::Suspend {
+                        operation_id: WorkItemOperationId::new(),
+                        item: item.id,
+                        expected_version: item.version,
+                    },
+                    None,
+                    None,
+                    "human",
+                    100,
+                )
+                .unwrap();
+            assert!(
+                store
+                    .reserve_recovery_candidate(&claim, &current, &candidate("codex"))
+                    .is_err()
+            );
+            assert!(store.rebind_recovery_control(&claim, &current, 1).is_err());
+            store
+                .pool
+                .get()
+                .unwrap()
+                .execute(
+                    "UPDATE work_item_attempts SET claim_token='replacement' WHERE run=?",
+                    [claim.run.to_string()],
+                )
+                .unwrap();
+            assert!(
+                store
+                    .reserve_recovery_candidate(&claim, &current, &candidate("claude"))
+                    .is_err()
+            );
+        }
+        home.close().expect("close runtime home");
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn known_accounts_deduplicate_and_unknown_accounts_do_not_guess_merges() {
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let cycle = store.begin_recovery_cycle(&claim, INVOCATION, 0).unwrap();
+            let account = AccountEvidence::Known {
+                provider: "provider".into(),
+                account_key: "opaque".into(),
+            };
+            let first = RecoveryCandidate::new("runtime-a".into(), account.clone()).unwrap();
+            let reservation = store
+                .reserve_recovery_candidate(&claim, &cycle, &first)
+                .unwrap();
+            let replay = store
+                .reserve_recovery_candidate(&claim, &cycle, &first)
+                .unwrap();
+            assert_eq!(replay.receipt, reservation.receipt);
+            assert_eq!(replay.disposition, ReservationDisposition::Replayed);
+            let cycle = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
+            assert!(
+                store
+                    .reserve_recovery_candidate(
+                        &claim,
+                        &cycle,
+                        &RecoveryCandidate::new("runtime-b".into(), account).unwrap()
+                    )
+                    .is_err()
+            );
+            let cycle = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
+            store
+                .reserve_recovery_candidate(&claim, &cycle, &candidate("runtime-b"))
+                .unwrap();
+            let cycle = store.recovery_cycle(claim.run(), INVOCATION, 1).unwrap();
+            assert!(
+                store
+                    .reserve_recovery_candidate(
+                        &claim,
+                        &cycle,
+                        &RecoveryCandidate::new(
+                            "runtime-b".into(),
+                            AccountEvidence::Known {
+                                provider: "provider".into(),
+                                account_key: "now-observed".into()
+                            }
+                        )
+                        .unwrap()
+                    )
+                    .is_err()
+            );
+            store
+                .reserve_recovery_candidate(&claim, &cycle, &candidate("runtime-c"))
                 .unwrap();
         }
-        assert_eq!((cycle.generation, cycle.probe_count), (18, 17));
+        home.close().expect("close runtime home");
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unknown_or_expired_evidence_cannot_arm_observed_reset() {
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let (cycle, reservation) = pending(&store, &claim);
+            let cycle = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &QuotaObservation::unknown(),
+                )
+                .unwrap();
+            let reset =
+                RecoveryWake::new("reset".into(), WakeOrigin::ObservedReset, 100, 1100).unwrap();
+            assert!(
+                store
+                    .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &reset)
+                    .is_err()
+            );
+            let expired = QuotaObservation::new(QuotaEvidence::Observed {
+                observed_at_ms: 1,
+                expires_at_ms: 10,
+                available: false,
+                reset_at_ms: Some(1100),
+            })
+            .unwrap();
+            let cycle = store
+                .record_recovery_observation(&claim, &cycle, &reservation.receipt, &expired)
+                .unwrap();
+            assert!(
+                store
+                    .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &reset)
+                    .is_err()
+            );
+            let cycle = store
+                .record_recovery_observation(
+                    &claim,
+                    &cycle,
+                    &reservation.receipt,
+                    &observed(100, false),
+                )
+                .unwrap();
+            let armed = store
+                .arm_recovery_wake(&claim, &cycle, &reservation.receipt, &reset)
+                .unwrap();
+            assert_eq!(armed.wake, Some(reset));
+        }
+        home.close().expect("close runtime home");
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bounded_policy_checks_continue_after_sixteen_cycles() {
+        let (home, owners) = fixture().await;
+        {
+            let (store, claim) = owners;
+            let mut cycle = store.begin_recovery_cycle(&claim, INVOCATION, 0).unwrap();
+            for ordinal in 1..=17 {
+                let receipt = store
+                    .reserve_recovery_candidate(&claim, &cycle, &candidate("claude"))
+                    .unwrap();
+                cycle = store
+                    .recovery_cycle(claim.run(), INVOCATION, cycle.generation)
+                    .unwrap();
+                cycle = store
+                    .record_recovery_observation(
+                        &claim,
+                        &cycle,
+                        &receipt.receipt,
+                        &QuotaObservation::unknown(),
+                    )
+                    .unwrap();
+                let at = ordinal * 1000;
+                let wake = RecoveryWake::new(
+                    format!("wake-{ordinal}"),
+                    WakeOrigin::PolicyBackoff,
+                    at,
+                    at + 1000,
+                )
+                .unwrap();
+                cycle = store
+                    .arm_recovery_wake(&claim, &cycle, &receipt.receipt, &wake)
+                    .unwrap();
+                cycle = store
+                    .consume_recovery_wake(&claim, &cycle, wake.identity(), at + 1000)
+                    .unwrap();
+            }
+            assert_eq!((cycle.generation, cycle.probe_count), (18, 17));
+        }
+        home.close().expect("close runtime home");
     }
     #[test]
     fn deserialization_enforces_private_constructor_invariants() {

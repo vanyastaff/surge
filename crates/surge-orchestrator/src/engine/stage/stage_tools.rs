@@ -388,7 +388,7 @@ mod verification_transport_tests {
     use super::*;
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reports_keep_candidate_identity_and_changed_retry_is_rejected() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = surge_persistence::runs::Storage::open(home.path())
             .await
             .unwrap();
@@ -459,5 +459,8 @@ mod verification_transport_tests {
                 "same call ID cannot replace its report"
             );
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 }

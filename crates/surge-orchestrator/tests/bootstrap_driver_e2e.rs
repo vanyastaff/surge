@@ -1,6 +1,8 @@
 //! Task 19 — bootstrap driver smoke test with scripted agents and approvals.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -122,112 +124,116 @@ async fn run_bootstrap_materializes_followup_graph() {
     unsafe {
         std::env::set_var("SURGE_BIN", &noop_bin);
     }
-    let dir = tempfile::tempdir().unwrap();
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    // `flow_generator` in the bundled bootstrap flow binds `profile_catalog`
-    // as a required `run_artifact`, which `Engine::start_run` only seeds when
-    // a `ProfileRegistry` is wired (see `engine_profile_catalog_seed_test.rs`).
-    // Without it, the third stage never opens a session and this test hangs
-    // waiting for a subscriber that never appears.
-    let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
-    let engine = Arc::new(Engine::new(
-        bridge,
-        storage,
-        dispatcher,
-        EngineConfig {
-            profile_registry: Some(profile_registry),
-            ..EngineConfig::default()
-        },
-    ));
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        // `flow_generator` in the bundled bootstrap flow binds `profile_catalog`
+        // as a required `run_artifact`, which `Engine::start_run` only seeds when
+        // a `ProfileRegistry` is wired (see `engine_profile_catalog_seed_test.rs`).
+        // Without it, the third stage never opens a session and this test hangs
+        // waiting for a subscriber that never appears.
+        let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+        let engine = Arc::new(Engine::new(
+            bridge,
+            storage,
+            dispatcher,
+            EngineConfig {
+                profile_registry: Some(profile_registry),
+                ..EngineConfig::default()
+            },
+        ));
 
-    let mut gate_tap = engine.subscribe_tap();
-    let run_id = RunId::new();
-    let description_session = SessionId::new();
-    let roadmap_session = SessionId::new();
-    let flow_session = SessionId::new();
-    mock.pin_session_ids(vec![description_session, roadmap_session, flow_session])
-        .await;
+        let mut gate_tap = engine.subscribe_tap();
+        let run_id = RunId::new();
+        let description_session = SessionId::new();
+        let roadmap_session = SessionId::new();
+        let flow_session = SessionId::new();
+        mock.pin_session_ids(vec![description_session, roadmap_session, flow_session])
+            .await;
 
-    let driver_engine = engine.clone();
-    let worktree = dir.path().to_path_buf();
-    let driver = tokio::spawn(async move {
-        run_bootstrap_in_worktree(
-            driver_engine.as_ref(),
-            "build an adaptive bootstrap flow".into(),
-            run_id,
-            worktree,
-            None,
-            Some(store_path),
+        let driver_engine = engine.clone();
+        let worktree = dir.path().to_path_buf();
+        let driver = tokio::spawn(async move {
+            run_bootstrap_in_worktree(
+                driver_engine.as_ref(),
+                "build an adaptive bootstrap flow".into(),
+                run_id,
+                worktree,
+                None,
+                Some(store_path),
+            )
+            .await
+        });
+
+        // Contents must satisfy each profile's `produced_artifacts` contract
+        // (`validate_profile_artifact_contracts` in `engine/stage/agent.rs`) —
+        // reuse the repo's own canonical valid fixtures rather than inventing
+        // under-specified content that the contract would reject.
+        wait_for_subscribe_count(&mock, 1).await;
+        tokio::fs::write(
+            dir.path().join("description.md"),
+            include_str!("fixtures/artifacts/valid/description.md"),
         )
         .await
-    });
+        .unwrap();
+        report_agent_outcome(&mock, description_session, "drafted", &["description.md"]).await;
+        approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
 
-    // Contents must satisfy each profile's `produced_artifacts` contract
-    // (`validate_profile_artifact_contracts` in `engine/stage/agent.rs`) —
-    // reuse the repo's own canonical valid fixtures rather than inventing
-    // under-specified content that the contract would reject.
-    wait_for_subscribe_count(&mock, 1).await;
-    tokio::fs::write(
-        dir.path().join("description.md"),
-        include_str!("fixtures/artifacts/valid/description.md"),
-    )
-    .await
-    .unwrap();
-    report_agent_outcome(&mock, description_session, "drafted", &["description.md"]).await;
-    approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
+        // `roadmap-planner@1.0` declares `required_artifacts = ["roadmap.toml",
+        // "roadmap.md"]` — both must be written and reported.
+        wait_for_subscribe_count(&mock, 2).await;
+        tokio::fs::write(
+            dir.path().join("roadmap.toml"),
+            include_str!("fixtures/artifacts/valid/roadmap.toml"),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            dir.path().join("roadmap.md"),
+            include_str!("fixtures/artifacts/valid/roadmap.md"),
+        )
+        .await
+        .unwrap();
+        report_agent_outcome(
+            &mock,
+            roadmap_session,
+            "drafted",
+            &["roadmap.toml", "roadmap.md"],
+        )
+        .await;
+        approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
 
-    // `roadmap-planner@1.0` declares `required_artifacts = ["roadmap.toml",
-    // "roadmap.md"]` — both must be written and reported.
-    wait_for_subscribe_count(&mock, 2).await;
-    tokio::fs::write(
-        dir.path().join("roadmap.toml"),
-        include_str!("fixtures/artifacts/valid/roadmap.toml"),
-    )
-    .await
-    .unwrap();
-    tokio::fs::write(
-        dir.path().join("roadmap.md"),
-        include_str!("fixtures/artifacts/valid/roadmap.md"),
-    )
-    .await
-    .unwrap();
-    report_agent_outcome(
-        &mock,
-        roadmap_session,
-        "drafted",
-        &["roadmap.toml", "roadmap.md"],
-    )
-    .await;
-    approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
+        wait_for_subscribe_count(&mock, 3).await;
+        tokio::fs::write(
+            dir.path().join("flow.toml"),
+            include_str!("fixtures/golden_multi_milestone_flow.toml"),
+        )
+        .await
+        .unwrap();
+        report_agent_outcome(&mock, flow_session, "drafted", &["flow.toml"]).await;
+        approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
 
-    wait_for_subscribe_count(&mock, 3).await;
-    tokio::fs::write(
-        dir.path().join("flow.toml"),
-        include_str!("fixtures/golden_multi_milestone_flow.toml"),
-    )
-    .await
-    .unwrap();
-    report_agent_outcome(&mock, flow_session, "drafted", &["flow.toml"]).await;
-    approve_next_gate(engine.as_ref(), run_id, &mut gate_tap).await;
-
-    let materialized = driver.await.unwrap().expect("bootstrap driver succeeds");
-    assert_eq!(materialized.bootstrap_run_id, run_id);
-    assert_eq!(
-        materialized.materialized_graph.metadata.name,
-        "golden_multi_milestone"
-    );
-    assert_eq!(
-        materialized
-            .artifacts
-            .iter()
-            .map(|artifact| artifact.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["description", "roadmap", "flow"]
-    );
+        let materialized = driver.await.unwrap().expect("bootstrap driver succeeds");
+        assert_eq!(materialized.bootstrap_run_id, run_id);
+        assert_eq!(
+            materialized.materialized_graph.metadata.name,
+            "golden_multi_milestone"
+        );
+        assert_eq!(
+            materialized
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["description", "roadmap", "flow"]
+        );
+    }
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
 }

@@ -44,6 +44,14 @@ impl SurgeNotification {
             .autohide(false)
     }
 
+    pub fn run_unconfirmed(run_short: &str) -> Notification {
+        Notification::warning(SharedString::from(format!(
+            "Run {run_short}: resource settlement could not be confirmed"
+        )))
+        .title("Run Completion Unconfirmed")
+        .autohide(false)
+    }
+
     pub fn run_aborted(run_short: &str, reason: &str) -> Notification {
         Notification::warning(SharedString::from(format!("{run_short}: {reason}")))
             .title("Run Aborted")
@@ -151,6 +159,10 @@ pub fn os_notify_global(event: &surge_orchestrator::engine::ipc::GlobalDaemonEve
         G::RunFinished { run_id, outcome } => {
             let short = run_id.short();
             match outcome {
+                RunOutcome::SettlementFailed { .. } => (
+                    "Run Completion Unconfirmed".into(),
+                    format!("Run {short}: resource settlement could not be confirmed"),
+                ),
                 RunOutcome::Completed { .. } => (
                     "Run Completed".into(),
                     format!("Run {short} completed successfully"),

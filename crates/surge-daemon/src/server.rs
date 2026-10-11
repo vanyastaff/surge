@@ -134,31 +134,35 @@ pub async fn run_with_supervisor(
     .await
 }
 
-fn spawn_task_reconciliation(
+async fn reconcile_tasks(
     tracking: &TrackingContext,
     admission: &Arc<AdmissionController>,
     broadcast: &Arc<BroadcastRegistry>,
     shutdown: &CancellationToken,
 ) {
-    let task_tracking = tracking.clone();
-    let task_admission = admission.clone();
-    let task_broadcast = broadcast.clone();
-    let task_shutdown = shutdown.clone();
-    tokio::spawn(async move {
-        let mut cursor = None;
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        loop {
-            tokio::select! {
-                ()=task_shutdown.cancelled()=>break,
-                _=interval.tick()=>{
-                    match crate::work_items::reconcile_page(&task_tracking,&task_admission,&task_broadcast,cursor.as_deref()).await {
-                        Ok(next)=>cursor=next,
-                        Err(error)=>{tracing::warn!(%error,"task reconciliation page failed");cursor=None;},
-                    }
-                }
-            }
+    let mut cursor = None;
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            _ = interval.tick() => {}
         }
-    });
+        if shutdown.is_cancelled() {
+            break;
+        }
+        // Finish this actual page, including its blocking SQL owner, before
+        // acknowledging cooperative shutdown. Hard abort is not settlement.
+        match crate::work_items::reconcile_page(tracking, admission, broadcast, cursor.as_deref())
+            .await
+        {
+            Ok(next) => cursor = next,
+            Err(error) => {
+                tracing::warn!(%error, "task reconciliation page failed");
+                cursor = None;
+            },
+        }
+    }
 }
 
 async fn run_host(
@@ -172,18 +176,10 @@ async fn run_host(
 ) -> Result<(), DaemonError> {
     use interprocess::local_socket::ListenerOptions;
 
-    spawn_task_reconciliation(&tracking, &admission, &broadcast, &shutdown);
-
     let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
-    // F2: Unlink any stale socket file from a previous unclean exit.
-    // On Windows, the named pipe doesn't live on the filesystem so this is a no-op.
     #[cfg(unix)]
-    {
-        if cfg.socket_path.exists() {
-            let _ = std::fs::remove_file(&cfg.socket_path);
-        }
-    }
+    let socket_directory = crate::socket_security::SocketDirectory::prepare(&cfg.socket_path)?;
 
     let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&cfg.socket_path)
         .map_err(DaemonError::Io)?;
@@ -196,19 +192,7 @@ async fn run_host(
     // `surge mcp logs` exposes captured MCP stderr only over it, with
     // no per-verb authz. Restrict access to the daemon's OS user.
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&cfg.socket_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            if let Err(e) = std::fs::set_permissions(&cfg.socket_path, perms) {
-                tracing::warn!(
-                    error = %e,
-                    "failed to set 0600 on daemon socket; access may be broader than intended"
-                );
-            }
-        }
-    }
+    let _bound_socket = socket_directory.publish(&cfg.socket_path)?;
     // On Windows the named pipe is not a filesystem object; interprocess
     // creates it with the default DACL (creating user + Administrators),
     // which already excludes other local users (documented in ADR-0014).
@@ -220,69 +204,76 @@ async fn run_host(
     // FIFO and trigger the same Admitted-arm logic that
     // `dispatch::StartRun` runs (broadcast.register, facade.start_run,
     // spawn_forward_task, RunAccepted publication).
-    spawn_drain_task(
-        admission.clone(),
-        broadcast.clone(),
-        facade.clone(),
-        tracking.clone(),
-        pending_starts.clone(),
-        shutdown.clone(),
+    // Maintenance futures belong to this host, and only start after every
+    // fallible socket setup operation succeeded.
+    let serve = async {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                Some(result) = connections.join_next(), if !connections.is_empty() => {
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "connection task failed");
+                    }
+                }
+                () = shutdown.cancelled() => {
+                    tracing::info!("shutdown signal received; closing listener");
+                    break;
+                }
+                conn = listener.accept() => {
+                    match conn {
+                        Ok(stream) => {
+                            let facade = facade.clone();
+                            let tracking = tracking.clone();
+                            let admission = admission.clone();
+                            let broadcast = broadcast.clone();
+                            let pending_starts = pending_starts.clone();
+                            let shutdown_for_conn = shutdown.clone();
+                            let bootstrap = bootstrap.clone();
+                            connections.spawn(async move {
+                                if let Err(e) = handle_connection(
+                                    stream,
+                                    facade,
+                                    tracking,
+                                    admission,
+                                    broadcast,
+                                    pending_starts,
+                                    shutdown_for_conn,
+                                    bootstrap,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(err = %e, "connection ended with error");
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(err = %e, "accept failed");
+                        }
+                    }
+                }
+            }
+        }
+        // A finished server now means every admitted connection handler settled.
+        // The daemon's outer grace deadline still bounds this join; aborting this
+        // server task drops the JoinSet and cancels any remaining handlers.
+        while let Some(result) = connections.join_next().await {
+            if let Err(error) = result {
+                tracing::warn!(%error, "connection task failed during shutdown");
+            }
+        }
+    };
+    tokio::join!(
+        reconcile_tasks(&tracking, &admission, &broadcast, &shutdown),
+        drain_queue(
+            &admission,
+            &broadcast,
+            facade.as_ref(),
+            &tracking,
+            &pending_starts,
+            &shutdown
+        ),
+        serve,
     );
-
-    let mut connections = tokio::task::JoinSet::new();
-    loop {
-        tokio::select! {
-            Some(result) = connections.join_next(), if !connections.is_empty() => {
-                if let Err(error) = result {
-                    tracing::warn!(%error, "connection task failed");
-                }
-            }
-            () = shutdown.cancelled() => {
-                tracing::info!("shutdown signal received; closing listener");
-                break;
-            }
-            conn = listener.accept() => {
-                match conn {
-                    Ok(stream) => {
-                        let facade = facade.clone();
-                        let tracking = tracking.clone();
-                        let admission = admission.clone();
-                        let broadcast = broadcast.clone();
-                        let pending_starts = pending_starts.clone();
-                        let shutdown_for_conn = shutdown.clone();
-                        let bootstrap = bootstrap.clone();
-                        connections.spawn(async move {
-                            if let Err(e) = handle_connection(
-                                stream,
-                                facade,
-                                tracking,
-                                admission,
-                                broadcast,
-                                pending_starts,
-                                shutdown_for_conn,
-                                bootstrap,
-                            )
-                            .await
-                            {
-                                tracing::warn!(err = %e, "connection ended with error");
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!(err = %e, "accept failed");
-                    }
-                }
-            }
-        }
-    }
-    // A finished server now means every admitted connection handler settled.
-    // The daemon's outer grace deadline still bounds this join; aborting this
-    // server task drops the JoinSet and cancels any remaining handlers.
-    while let Some(result) = connections.join_next().await {
-        if let Err(error) = result {
-            tracing::warn!(%error, "connection task failed during shutdown");
-        }
-    }
     Ok(())
 }
 
@@ -1275,38 +1266,27 @@ fn mcp_health_label(h: surge_mcp::McpHealth) -> &'static str {
     }
 }
 
-/// Spawn the drain-queue task. Wakes on every admission state change
-/// (run completion, etc.) and pops queued runs while a slot is free,
-/// triggering the same admitted-arm logic that a fresh `StartRun`
-/// would. Exits cleanly on `shutdown.cancelled()`.
-fn spawn_drain_task(
-    admission: Arc<AdmissionController>,
-    broadcast: Arc<BroadcastRegistry>,
-    facade: Arc<dyn EngineFacade>,
-    tracking: TrackingContext,
-    pending_starts: PendingStarts,
-    shutdown: CancellationToken,
+/// Drive queued admission until cooperative shutdown, finishing an active pass.
+async fn drain_queue(
+    admission: &Arc<AdmissionController>,
+    broadcast: &Arc<BroadcastRegistry>,
+    facade: &dyn EngineFacade,
+    tracking: &TrackingContext,
+    pending_starts: &PendingStarts,
+    shutdown: &CancellationToken,
 ) {
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => {
-                    tracing::debug!("drain-queue task exiting (shutdown)");
-                    break;
-                }
-                () = admission.wait_changed() => {
-                    drain_one_pass(
-                        &admission,
-                        &broadcast,
-                        facade.as_ref(),
-                        &tracking,
-                        &pending_starts,
-                    )
-                    .await;
-                }
-            }
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            () = admission.wait_changed() => {}
         }
-    });
+        if shutdown.is_cancelled() {
+            break;
+        }
+        drain_one_pass(admission, broadcast, facade, tracking, pending_starts).await;
+    }
+    tracing::debug!("drain-queue task settled (shutdown)");
 }
 
 /// Pop every queued run we currently have a slot for and admit it.
@@ -1631,5 +1611,88 @@ mod tests {
             },
             other => panic!("expected SubscriberLagged global event, got {other:?}"),
         }
+    }
+
+    async fn assert_maintenance_settled(invalid_socket: bool) {
+        use surge_orchestrator::engine::{
+            Engine, EngineConfig, facade::LocalEngineFacade,
+            tools::worktree::WorktreeToolDispatcher,
+        };
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = surge_persistence::runs::Storage::open(home.path())
+            .await
+            .unwrap();
+        let engine = Arc::new(Engine::new(
+            Arc::new(surge_acp::bridge::AcpBridge::with_defaults().unwrap()),
+            storage.clone(),
+            Arc::new(WorktreeToolDispatcher::new(home.path().to_path_buf())),
+            EngineConfig::default(),
+        ));
+        let facade: Arc<dyn EngineFacade> = Arc::new(LocalEngineFacade::new(engine.clone()));
+        let baseline_storage = Arc::strong_count(&storage);
+        let baseline_facade = Arc::strong_count(&facade);
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        // Nextest may give TMPDIR a path longer than sockaddr_un permits.
+        #[cfg(unix)]
+        let socket_home = tempfile::tempdir_in("/tmp").unwrap();
+        #[cfg(unix)]
+        let valid_socket = socket_home.path().join("settle.sock");
+        #[cfg(windows)]
+        let valid_socket = home.path().join("settle.sock");
+        let socket_path = if invalid_socket {
+            PathBuf::from("invalid\0socket")
+        } else {
+            valid_socket
+        };
+        let result = run_runs_only(
+            ServerConfig {
+                max_active: 1,
+                max_queue: 1,
+                socket_path,
+            },
+            facade.clone(),
+            TrackingContext::new(engine.clone(), storage.clone()),
+            Arc::new(BroadcastRegistry::new()),
+            Arc::new(AdmissionController::new(1, 1)),
+            shutdown,
+        )
+        .await;
+        assert_eq!(
+            result.is_err(),
+            invalid_socket,
+            "unexpected socket setup result: {result:?}"
+        );
+        // This body runs on the sole runtime worker. No yield separates the
+        // server's return from the owner observation, so detached tasks cannot
+        // accidentally make the baseline pass by running first.
+        assert_eq!(
+            Arc::strong_count(&storage),
+            baseline_storage,
+            "server returned while maintenance retained Storage"
+        );
+        assert_eq!(
+            Arc::strong_count(&facade),
+            baseline_facade,
+            "server returned while drain retained its facade"
+        );
+        drop(facade);
+        drop(engine);
+        drop(storage);
+        home.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn startup_error_retains_no_maintenance_owner() {
+        tokio::spawn(assert_maintenance_settled(true))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn shutdown_return_settles_maintenance_owners() {
+        tokio::spawn(assert_maintenance_settled(false))
+            .await
+            .unwrap();
     }
 }

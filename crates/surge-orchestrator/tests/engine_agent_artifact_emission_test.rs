@@ -8,6 +8,8 @@
 //! casing in `bindings.rs`.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -59,7 +61,7 @@ fn agent_cfg_with_profile(profile: &str) -> AgentConfig {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = FixtureHome::new().unwrap();
     let spec_body = b"# Spec\nproduced by the agent.\n";
     let design_body = b"# Design\nalso produced.\n";
     tokio::fs::write(dir.path().join("spec.md"), spec_body)
@@ -217,6 +219,11 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         artifact_indices.iter().all(|(i, _)| *i < outcome_idx),
         "all ArtifactProduced events must precede OutcomeReported (got artifacts {artifact_indices:?}, outcome at {outcome_idx})",
     );
+
+    writer.close().await.unwrap();
+    drop(reader);
+    drop(storage);
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -225,487 +232,511 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
     // log a warning and continue: no ArtifactProduced event for the missing
     // path, but the existing path still emits one and OutcomeReported is
     // still appended.
-    let dir = tempfile::tempdir().unwrap();
-    let real_body = b"# Real\nthis one exists.\n";
-    tokio::fs::write(dir.path().join("real.md"), real_body)
+    let dir = FixtureHome::new().unwrap();
+    {
+        let real_body = b"# Real\nthis one exists.\n";
+        tokio::fs::write(dir.path().join("real.md"), real_body)
+            .await
+            .unwrap();
+
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "partial".into(),
+            verification_report: None,
+            artifacts_produced: vec!["real.md".into(), "ghost.md".into()],
+        })
+        .await;
+
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg();
+        let node = NodeKey::try_from("spec_author").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
         .await
         .unwrap();
+        pump.await.unwrap();
+        assert_eq!(result.as_ref(), "done");
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+        let reader = storage.open_run_reader(run_id).await.expect("reader");
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(64))
+            .await
+            .expect("read_events");
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "partial".into(),
-        verification_report: None,
-        artifacts_produced: vec!["real.md".into(), "ghost.md".into()],
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg();
-    let node = NodeKey::try_from("spec_author").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .unwrap();
-    pump.await.unwrap();
-    assert_eq!(result.as_ref(), "done");
-
-    let reader = storage.open_run_reader(run_id).await.expect("reader");
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(64))
-        .await
-        .expect("read_events");
-
-    let mut artifact_names: Vec<String> = Vec::new();
-    let mut saw_outcome = false;
-    for ev in &events {
-        match &ev.payload.payload {
-            EventPayload::ArtifactProduced { name, .. } => artifact_names.push(name.clone()),
-            EventPayload::OutcomeReported { .. } => saw_outcome = true,
-            _ => {},
+        let mut artifact_names: Vec<String> = Vec::new();
+        let mut saw_outcome = false;
+        for ev in &events {
+            match &ev.payload.payload {
+                EventPayload::ArtifactProduced { name, .. } => artifact_names.push(name.clone()),
+                EventPayload::OutcomeReported { .. } => saw_outcome = true,
+                _ => {},
+            }
         }
+        assert_eq!(
+            artifact_names,
+            vec!["real".to_string()],
+            "only the existing path should produce an ArtifactProduced event",
+        );
+        assert!(
+            saw_outcome,
+            "OutcomeReported must still be appended even when one declared artifact path is missing"
+        );
+
+        writer.close().await.unwrap();
     }
-    assert_eq!(
-        artifact_names,
-        vec!["real".to_string()],
-        "only the existing path should produce an ArtifactProduced event",
-    );
-    assert!(
-        saw_outcome,
-        "OutcomeReported must still be appended even when one declared artifact path is missing"
-    );
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compatible_artifacts_with_the_same_stem_get_distinct_names() {
-    let dir = tempfile::tempdir().unwrap();
-    tokio::fs::write(
-        dir.path().join("spec.toml"),
-        br#"schema_version = 1
+    let dir = FixtureHome::new().unwrap();
+    {
+        tokio::fs::write(
+            dir.path().join("spec.toml"),
+            br#"schema_version = 1
 
 [spec]
 subtasks = [
   { id = "one", acceptance_criteria = ["first check passes"] },
 ]
 "#,
-    )
-    .await
-    .unwrap();
-    tokio::fs::write(
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
         dir.path().join("spec.md"),
         b"# Spec\n\n## Goal\nShip it.\n\n## Subtasks\n- one\n\n## Acceptance Criteria\n- [ ] passes\n",
     )
     .await
     .unwrap();
-    tokio::fs::create_dir_all(dir.path().join("docs"))
-        .await
-        .unwrap();
-    tokio::fs::write(dir.path().join("docs").join("spec.md"), b"docs spec")
-        .await
-        .unwrap();
+        tokio::fs::create_dir_all(dir.path().join("docs"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("docs").join("spec.md"), b"docs spec")
+            .await
+            .unwrap();
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "colliding artifacts".into(),
-        artifacts_produced: vec!["spec.toml".into(), "spec.md".into(), "docs/spec.md".into()],
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "colliding artifacts".into(),
+            artifacts_produced: vec!["spec.toml".into(), "spec.md".into(), "docs/spec.md".into()],
 
-        verification_report: None,
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg();
-    let node = NodeKey::try_from("spec_author").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .unwrap();
-    pump.await.unwrap();
-
-    assert_eq!(result.as_ref(), "done");
-
-    let reader = storage.open_run_reader(run_id).await.expect("reader");
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(64))
-        .await
-        .expect("read_events");
-    let artifact_names: Vec<String> = events
-        .iter()
-        .filter_map(|ev| match &ev.payload.payload {
-            EventPayload::ArtifactProduced { name, .. } => Some(name.clone()),
-            _ => None,
+            verification_report: None,
         })
-        .collect();
+        .await;
 
-    assert_eq!(
-        artifact_names,
-        vec![
-            "spec_toml".to_string(),
-            "spec_md".to_string(),
-            "docs_spec_md".to_string()
-        ],
-        "colliding stems should be disambiguated without dropping valid artifacts",
-    );
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg();
+        let node = NodeKey::try_from("spec_author").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await
+        .unwrap();
+        pump.await.unwrap();
+
+        assert_eq!(result.as_ref(), "done");
+
+        let reader = storage.open_run_reader(run_id).await.expect("reader");
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(64))
+            .await
+            .expect("read_events");
+        let artifact_names: Vec<String> = events
+            .iter()
+            .filter_map(|ev| match &ev.payload.payload {
+                EventPayload::ArtifactProduced { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            artifact_names,
+            vec![
+                "spec_toml".to_string(),
+                "spec_md".to_string(),
+                "docs_spec_md".to_string()
+            ],
+            "colliding stems should be disambiguated without dropping valid artifacts",
+        );
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn artifact_paths_that_escape_worktree_are_skipped() {
-    let dir = tempfile::tempdir().unwrap();
-    let worktree = dir.path().join("worktree");
-    tokio::fs::create_dir_all(&worktree).await.unwrap();
-    let real_body = b"# Real\ninside worktree.\n";
-    let secret_body = b"# Secret\noutside worktree.\n";
-    let absolute_secret = dir.path().join("absolute-secret.md");
-    tokio::fs::write(worktree.join("real.md"), real_body)
-        .await
-        .unwrap();
-    tokio::fs::write(dir.path().join("secret.md"), secret_body)
-        .await
-        .unwrap();
-    tokio::fs::write(&absolute_secret, secret_body)
-        .await
-        .unwrap();
+    let dir = FixtureHome::new().unwrap();
+    {
+        let worktree = dir.path().join("worktree");
+        tokio::fs::create_dir_all(&worktree).await.unwrap();
+        let real_body = b"# Real\ninside worktree.\n";
+        let secret_body = b"# Secret\noutside worktree.\n";
+        let absolute_secret = dir.path().join("absolute-secret.md");
+        tokio::fs::write(worktree.join("real.md"), real_body)
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("secret.md"), secret_body)
+            .await
+            .unwrap();
+        tokio::fs::write(&absolute_secret, secret_body)
+            .await
+            .unwrap();
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, &worktree, None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, &worktree, None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("done").unwrap(),
-        summary: "partial".into(),
-        verification_report: None,
-        artifacts_produced: vec![
-            "real.md".into(),
-            "../secret.md".into(),
-            absolute_secret.to_string_lossy().into_owned(),
-        ],
-    })
-    .await;
-
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
-
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let cfg = agent_cfg();
-    let node = NodeKey::try_from("spec_author").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: &worktree,
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: None,
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .unwrap();
-    pump.await.unwrap();
-    assert_eq!(result.as_ref(), "done");
-
-    let reader = storage.open_run_reader(run_id).await.expect("reader");
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(64))
-        .await
-        .expect("read_events");
-
-    let artifact_names: Vec<String> = events
-        .iter()
-        .filter_map(|ev| match &ev.payload.payload {
-            EventPayload::ArtifactProduced { name, .. } => Some(name.clone()),
-            _ => None,
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("done").unwrap(),
+            summary: "partial".into(),
+            verification_report: None,
+            artifacts_produced: vec![
+                "real.md".into(),
+                "../secret.md".into(),
+                absolute_secret.to_string_lossy().into_owned(),
+            ],
         })
-        .collect();
-    let saw_outcome = events
-        .iter()
-        .any(|ev| matches!(ev.payload.payload, EventPayload::OutcomeReported { .. }));
+        .await;
 
-    assert_eq!(
-        artifact_names,
-        vec!["real".to_string()],
-        "only worktree-relative artifact paths should be persisted",
-    );
-    assert!(
-        saw_outcome,
-        "OutcomeReported must still be appended when unsafe artifact paths are skipped"
-    );
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
+
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let cfg = agent_cfg();
+        let node = NodeKey::try_from("spec_author").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: &worktree,
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: None,
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
+        .await
+        .unwrap();
+        pump.await.unwrap();
+        assert_eq!(result.as_ref(), "done");
+
+        let reader = storage.open_run_reader(run_id).await.expect("reader");
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(64))
+            .await
+            .expect("read_events");
+
+        let artifact_names: Vec<String> = events
+            .iter()
+            .filter_map(|ev| match &ev.payload.payload {
+                EventPayload::ArtifactProduced { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        let saw_outcome = events
+            .iter()
+            .any(|ev| matches!(ev.payload.payload, EventPayload::OutcomeReported { .. }));
+
+        assert_eq!(
+            artifact_names,
+            vec!["real".to_string()],
+            "only worktree-relative artifact paths should be persisted",
+        );
+        assert!(
+            saw_outcome,
+            "OutcomeReported must still be appended when unsafe artifact paths are skipped"
+        );
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
-    let dir = tempfile::tempdir().unwrap();
-    tokio::fs::create_dir_all(dir.path().join("docs").join("adr"))
+    let dir = FixtureHome::new().unwrap();
+    {
+        tokio::fs::create_dir_all(dir.path().join("docs").join("adr"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            dir.path()
+                .join("docs")
+                .join("adr")
+                .join("0001-contracts.md"),
+            b"# ADR 0001\n\n## Status\nDrafted without the required frontmatter.\n",
+        )
         .await
         .unwrap();
-    tokio::fs::write(
-        dir.path()
-            .join("docs")
-            .join("adr")
-            .join("0001-contracts.md"),
-        b"# ADR 0001\n\n## Status\nDrafted without the required frontmatter.\n",
-    )
-    .await
-    .unwrap();
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let run_id = surge_core::id::RunId::new();
-    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
-    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
-    let registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let run_id = surge_core::id::RunId::new();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+        let registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
 
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("drafted").unwrap(),
-        summary: "invalid adr".into(),
-        artifacts_produced: vec!["docs/adr/0001-contracts.md".into()],
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("drafted").unwrap(),
+            summary: "invalid adr".into(),
+            artifacts_produced: vec!["docs/adr/0001-contracts.md".into()],
 
-        verification_report: None,
-    })
-    .await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::from_str("no_decision_needed").unwrap(),
-        summary: "fallback".into(),
-        artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::from_str("no_decision_needed").unwrap(),
+            summary: "fallback".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
+            verification_report: None,
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
-    let memory = surge_core::run_state::RunMemory::default();
-    let mut cfg = agent_cfg_with_profile("architect@1.0");
-    cfg.bindings.push(surge_core::agent_config::Binding {
-        source: surge_core::agent_config::ArtifactSource::Static {
-            content: "Choose a durable artifact format and document the decision.".into(),
-        },
-        target: surge_core::agent_config::TemplateVar("spec".into()),
-        optional: false,
-    });
-    let node = NodeKey::try_from("architect").unwrap();
-    let tool_resolutions =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let hook_executor = HookExecutor::new();
-    let result = execute_agent_stage(AgentStageParams {
-        quota_opening: None,
-        quota_cycle: None,
-        quota_owner: None,
-        continuation: None,
-        frames: &[],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        steers: Vec::new(),
-        node: &node,
-        attempt: 1,
-        agent_config: &cfg,
-        bound_skills: &[],
-        declared_outcomes: &[],
-        bridge: &bridge,
-        writer: &writer,
-        artifact_store: &artifact_store,
-        worktree_path: dir.path(),
-        tool_dispatcher: &dispatcher,
-        run_memory: &memory,
-        run_id,
-        tool_resolutions: &tool_resolutions,
-        human_input_timeout: Duration::from_secs(5),
-        mcp_registry: None,
-        mcp_servers: Vec::new(),
-        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
-        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
-        profile_registry: Some(registry),
-        agent_registry: None,
-        hook_executor: &hook_executor,
-        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
-        active_task_id: None,
-    })
-    .await
-    .expect("stage should retry after invalid ADR contract rejection");
-    pump.await.unwrap();
-    assert_eq!(result.as_ref(), "no_decision_needed");
-
-    let reader = storage.open_run_reader(run_id).await.expect("reader");
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(64))
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+        let memory = surge_core::run_state::RunMemory::default();
+        let mut cfg = agent_cfg_with_profile("architect@1.0");
+        cfg.bindings.push(surge_core::agent_config::Binding {
+            source: surge_core::agent_config::ArtifactSource::Static {
+                content: "Choose a durable artifact format and document the decision.".into(),
+            },
+            target: surge_core::agent_config::TemplateVar("spec".into()),
+            optional: false,
+        });
+        let node = NodeKey::try_from("architect").unwrap();
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let hook_executor = HookExecutor::new();
+        let result = execute_agent_stage(AgentStageParams {
+            quota_opening: None,
+            quota_cycle: None,
+            quota_owner: None,
+            continuation: None,
+            frames: &[],
+            cancel: tokio_util::sync::CancellationToken::new(),
+            steers: Vec::new(),
+            node: &node,
+            attempt: 1,
+            agent_config: &cfg,
+            bound_skills: &[],
+            declared_outcomes: &[],
+            bridge: &bridge,
+            writer: &writer,
+            artifact_store: &artifact_store,
+            worktree_path: dir.path(),
+            tool_dispatcher: &dispatcher,
+            run_memory: &memory,
+            run_id,
+            tool_resolutions: &tool_resolutions,
+            human_input_timeout: Duration::from_secs(5),
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
+            tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+            output_spill: surge_core::spill_config::OutputSpillConfig::default(),
+            profile_registry: Some(registry),
+            agent_registry: None,
+            hook_executor: &hook_executor,
+            pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+            active_task_id: None,
+        })
         .await
-        .expect("read_events");
+        .expect("stage should retry after invalid ADR contract rejection");
+        pump.await.unwrap();
+        assert_eq!(result.as_ref(), "no_decision_needed");
 
-    let mut saw_contract_rejection = false;
-    let mut outcome_names = Vec::new();
-    let artifact_count = events
-        .iter()
-        .filter(|ev| matches!(ev.payload.payload, EventPayload::ArtifactProduced { .. }))
-        .count();
-    for ev in events {
-        match ev.payload.payload {
-            EventPayload::OutcomeRejectedByHook {
-                outcome, hook_id, ..
-            } => {
-                assert_eq!(outcome.as_ref(), "drafted");
-                assert_eq!(hook_id, "profile-artifact-contract:adr");
-                saw_contract_rejection = true;
-            },
-            EventPayload::OutcomeReported { outcome, .. } => {
-                outcome_names.push(outcome.to_string());
-            },
-            _ => {},
+        let reader = storage.open_run_reader(run_id).await.expect("reader");
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(64))
+            .await
+            .expect("read_events");
+
+        let mut saw_contract_rejection = false;
+        let mut outcome_names = Vec::new();
+        let artifact_count = events
+            .iter()
+            .filter(|ev| matches!(ev.payload.payload, EventPayload::ArtifactProduced { .. }))
+            .count();
+        for ev in events {
+            match ev.payload.payload {
+                EventPayload::OutcomeRejectedByHook {
+                    outcome, hook_id, ..
+                } => {
+                    assert_eq!(outcome.as_ref(), "drafted");
+                    assert_eq!(hook_id, "profile-artifact-contract:adr");
+                    saw_contract_rejection = true;
+                },
+                EventPayload::OutcomeReported { outcome, .. } => {
+                    outcome_names.push(outcome.to_string());
+                },
+                _ => {},
+            }
         }
-    }
 
-    assert!(
-        saw_contract_rejection,
-        "invalid ADR should be rejected by the profile artifact contract"
-    );
-    assert_eq!(
-        outcome_names,
-        vec!["no_decision_needed".to_string()],
-        "the rejected drafted outcome must not be persisted"
-    );
-    assert_eq!(
-        artifact_count, 0,
-        "invalid artifacts must not be emitted before contract validation passes"
-    );
+        assert!(
+            saw_contract_rejection,
+            "invalid ADR should be rejected by the profile artifact contract"
+        );
+        assert_eq!(
+            outcome_names,
+            vec!["no_decision_needed".to_string()],
+            "the rejected drafted outcome must not be persisted"
+        );
+        assert_eq!(
+            artifact_count, 0,
+            "invalid artifacts must not be emitted before contract validation passes"
+        );
+
+        writer.close().await.unwrap();
+    }
+    dir.close().unwrap();
 }

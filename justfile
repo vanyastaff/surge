@@ -39,17 +39,17 @@ default:
 [group("build")]
 [doc("Build the core workspace (excludes the GPUI desktop shell)")]
 build:
-    cargo build {{ workspace_exclude }}
+    cargo build --locked {{ workspace_exclude }}
 
 [group("build")]
 [doc("Build everything, including the surge-ui desktop shell")]
 build-all:
-    cargo build --workspace
+    cargo build --locked --workspace
 
 [group("build")]
 [doc("Build only the surge-ui desktop shell")]
 build-ui:
-    cargo build -p surge-ui
+    cargo build --locked -p surge-ui
 
 [group("build")]
 [doc("Build surge-ui and wrap it in a macOS Surge.app bundle (macOS only)")]
@@ -57,14 +57,14 @@ bundle-ui *args: build-ui
     bash scripts/bundle-macos-app.sh {{ args }}
 
 [group("build")]
-[doc("Build the surge CLI in release mode")]
+[doc("Build the surge CLI and daemon in release mode")]
 build-release:
-    cargo build --release -p surge-cli --bin surge
+    cargo build --locked --release -p surge-cli --bin surge -p surge-daemon --bin surge-daemon
 
 [group("build")]
 [doc("Build the mock ACP agent (needed for ignored integration tests)")]
 build-mock-agent:
-    cargo build -p surge-acp --bin mock_acp_agent
+    cargo build --locked -p surge-acp --bin mock_acp_agent
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Test
@@ -73,17 +73,23 @@ build-mock-agent:
 [group("test")]
 [doc("Run the workspace test suite (excludes surge-ui). Pass extra args after --")]
 test *args:
-    cargo test {{ workspace_exclude }} {{ args }}
+    cargo test --locked {{ workspace_exclude }} {{ args }}
 
 [group("test")]
 [doc("Run tests for a single crate (e.g. just test-crate surge-core)")]
 test-crate crate *args:
-    cargo test -p {{ crate }} {{ args }}
+    cargo test --locked -p {{ crate }} {{ args }}
 
 [group("test")]
-[doc("Run the ignored M5 engine integration tests (rebuilds mock_acp_agent first)")]
+[doc("Run the required local mock/restart integration allowlist")]
 test-ignored: build-mock-agent
-    cargo test -p surge-acp -p surge-orchestrator --tests -- --ignored
+    cargo build --locked -p surge-cli --bin surge -p surge-daemon --bin surge-daemon
+    cargo build --locked -p surge-mcp --example mock_mcp_server --features mock-server
+    cargo test --locked -p surge-acp --test bridge_rate_limit_classification --test reconnect_integration_test -- --ignored
+    cargo test --locked -p surge-orchestrator --test engine_e2e_linear_pipeline --test engine_concurrent_runs --test engine_resume_after_crash -- --ignored
+    cargo test --locked -p surge-mcp --features mock-server --test mcp_stdio_e2e -- --ignored
+    cargo test --locked -p surge-daemon --test live_provider_smoke controlled_daemon_mcp_smoke -- --ignored --exact
+    cargo test --locked -p surge-cli --test daemon_restart -- --ignored
 
 [group("test")]
 [doc("Run the full test suite — workspace tests + ignored integration tests")]
@@ -92,7 +98,7 @@ test-all: test test-ignored
 [group("test")]
 [doc("Run tests via cargo-nextest (faster runner; install: just install-tools)")]
 nextest *args:
-    cargo nextest run {{ workspace_exclude }} {{ args }}
+    cargo nextest run --locked {{ workspace_exclude }} {{ args }}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Lint & format
@@ -101,7 +107,7 @@ nextest *args:
 [group("lint")]
 [doc("Check code formatting without modifying files")]
 fmt-check:
-    cargo fmt --check
+    cargo fmt --all --check
 
 [group("lint")]
 [doc("Apply rustfmt to the whole workspace")]
@@ -111,13 +117,14 @@ fmt:
 [group("lint")]
 [doc("Strict clippy on surge-core and surge-acp (warnings → errors)")]
 clippy-strict:
-    cargo clippy -p surge-core --all-targets --all-features -- -D warnings
-    cargo clippy -p surge-acp --all-targets -- -D warnings
+    cargo clippy --locked -p surge-core --all-targets --all-features -- -D warnings
+    cargo clippy --locked -p surge-acp --all-targets -- -D warnings
 
 [group("lint")]
-[doc("Permissive clippy on the whole workspace (does not fail on warnings)")]
+[doc("Strict clippy on the whole workspace (all and default features)")]
 clippy:
-    cargo clippy --workspace --all-targets --all-features
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --locked --workspace --all-targets -- -D warnings
 
 [group("lint")]
 [doc("Run all lints — fmt-check + clippy-strict + clippy (mirrors ci.yml)")]
@@ -185,6 +192,11 @@ bench-one name:
 audit:
     cargo audit
 
+[group("security")]
+[doc("Check locked dependencies against advisory, license and source policy")]
+deny:
+    cargo deny --locked check advisories licenses bans sources
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CI aggregates
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,8 +206,8 @@ audit:
 ci: fmt-check clippy-strict clippy test
 
 [group("ci")]
-[doc("Full local check suite — ci + audit + ignored integration tests")]
-ci-full: ci audit test-ignored
+[doc("Full local check suite — ci + audit + deny + local integration tests")]
+ci-full: ci audit deny test-ignored
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Maintenance
@@ -216,9 +228,10 @@ clean-worktrees:
 # ──────────────────────────────────────────────────────────────────────────────
 
 [group("tooling")]
-[doc("Install dev tooling used by recipes above (cargo-audit, cargo-nextest)")]
+[doc("Install dev tooling used by recipes above (audit, deny, nextest)")]
 install-tools:
-    cargo install --locked cargo-audit
+    cargo install --locked cargo-audit --version 0.22.2
+    cargo install --locked cargo-deny --version 0.20.2
     cargo install --locked cargo-nextest
 
 [group("tooling")]

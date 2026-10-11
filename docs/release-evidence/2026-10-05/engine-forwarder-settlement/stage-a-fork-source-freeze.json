@@ -1,0 +1,21 @@
+{
+  "status": "source ready; uncompiled and unexecuted",
+  "accepted_plan_sha256": "9b509500aa927a3368c0ebfe2d931c71fca035ea6c08f34ce5a365d0e789ac54",
+  "review_counter": "1/3 unchanged",
+  "source_owner": "caller_plan_security",
+  "sources": {
+    "crates/surge-orchestrator/src/engine/fork.rs": "b6a2cf103d2db8ab992235563094dcac8363738eddefaa19196f15ab64bc3908",
+    "crates/surge-persistence/src/artifacts.rs": "ca3d838e723b55900e7737b08890eedef79b7d5fbf98187b4018f6d6a778f1d5"
+  },
+  "contract": "Storage reserve_new_run -> one actual blocking worker owns complete non-Clone reservation through synchronous artifact copies and checkpoint restore -> create_reserved_run consumes original reservation",
+  "tests": [
+    "cancelled_fork_copy_worker_retains_original_reservation: awaiting task aborted, separate Storage must report actual writer exclusion while worker blocked; worker released and runtime joined before copied bytes/no journal/cleanup assertions",
+    "fork_owns_artifact_bytes_after_parent_copy_is_removed: independent persisted count confirms one opening/epoch and database identity binding after complete fork"
+  ],
+  "limits": [
+    "No actual cancellation RED claimed before new reservation API exists.",
+    "Private worker gate pauses immediately before copying, not inside an OS syscall.",
+    "Unix named-identity validation retains accepted cooperative same-user trust boundary; no hostile same-user TOCTOU elimination claim.",
+    "No Cargo run until coherent persistence source freeze/root token."
+  ]
+}

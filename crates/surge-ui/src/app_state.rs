@@ -177,6 +177,19 @@ impl AppState {
                     });
                 }
             },
+            GlobalDaemonEvent::RunFinished {
+                run_id,
+                outcome: RunOutcome::SettlementFailed { failures, .. },
+            } => {
+                tracing::warn!(%run_id, ?failures, "run completion unconfirmed; keeping current status");
+                if let Some(stream) = self.run_streams.get_mut(run_id) {
+                    stream.apply(
+                        &surge_orchestrator::engine::handle::EngineRunEvent::StreamError {
+                            message: format!("resource settlement failed: {failures:?}"),
+                        },
+                    );
+                }
+            },
             GlobalDaemonEvent::RunFinished { run_id, outcome } => {
                 // `RunOutcome` is `#[non_exhaustive]`. For known variants
                 // we map to the matching `RunStatus`. For an unknown
@@ -590,6 +603,28 @@ mod tests {
     use surge_core::config::{AgentConfig, ResilienceConfig, Transport};
 
     use super::*;
+
+    #[test]
+    fn settlement_failure_cannot_mark_existing_or_unknown_run_finished() {
+        use surge_orchestrator::engine::handle::{RunOutcome, RunSettlementFailure};
+        let mut state = AppState::new();
+        let known = RunId::new();
+        state.apply_global_event(&GlobalDaemonEvent::RunAccepted { run_id: known });
+        for run_id in [known, RunId::new()] {
+            state.apply_global_event(&GlobalDaemonEvent::RunFinished {
+                run_id,
+                outcome: RunOutcome::SettlementFailed {
+                    original: Box::new(RunOutcome::Completed {
+                        terminal: "end".try_into().unwrap(),
+                    }),
+                    failures: vec![RunSettlementFailure::WriterSeal],
+                },
+            });
+        }
+        assert_eq!(state.runs.len(), 1);
+        assert_eq!(state.runs[0].status, RunStatus::Active);
+        assert!(state.runs[0].ended_at.is_none());
+    }
 
     fn project_config(path: &std::path::Path, agent: &str, budget: f64) {
         let mut config = SurgeConfig {

@@ -13,8 +13,18 @@ pub(crate) struct WriterSlotError;
 
 /// Shared actual actor and wrapper lifetime, including cancelled caller futures.
 pub(crate) struct WriterLease {
+    pub(crate) authority: super::host_settlement::HeldOpening,
     pub(crate) _token: Arc<WriterToken>,
-    pub(crate) _file_lock: FileLock,
+    pub(crate) file_lock: FileLock,
+    #[cfg(windows)]
+    pub(crate) namespace: Arc<crate::state_home::SqliteNamespaceOwner>,
+}
+
+impl WriterLease {
+    pub(crate) fn verify(&self) -> Result<(), super::error::OpenError> {
+        self.file_lock.identity()?;
+        self.authority.verify()
+    }
 }
 
 /// Sentinel object whose Arc lifetime represents an active writer slot.
@@ -30,18 +40,6 @@ pub struct ActiveWriters {
 }
 
 impl ActiveWriters {
-    /// Try to acquire the writer slot for the given RunId.
-    ///
-    /// Returns `Some(Arc<WriterToken>)` if no live writer holds the slot.
-    /// Returns `None` if another live writer is currently holding the slot.
-    pub fn try_acquire(
-        &self,
-        run_id: RunId,
-    ) -> impl std::future::Future<Output = Result<Option<Arc<WriterToken>>, WriterSlotError>> {
-        let inner = &self.inner;
-        async move { Self::acquire_from(inner, run_id) }
-    }
-
     /// Runtime-independent entry sharing precisely the normal writer's token.
     pub(crate) fn try_acquire_sync(
         &self,
@@ -89,18 +87,18 @@ mod tests {
     async fn second_acquire_fails_while_first_held() {
         let m = ActiveWriters::default();
         let id = RunId::new();
-        let t1 = m.try_acquire(id).await.unwrap().unwrap();
-        assert!(m.try_acquire(id).await.unwrap().is_none());
+        let t1 = m.try_acquire_sync(id).unwrap().unwrap();
+        assert!(m.try_acquire_sync(id).unwrap().is_none());
         drop(t1);
-        let t2 = m.try_acquire(id).await.unwrap().unwrap();
+        let t2 = m.try_acquire_sync(id).unwrap().unwrap();
         assert_eq!(Arc::strong_count(&t2), 1);
     }
 
     #[tokio::test]
     async fn different_run_ids_independent() {
         let m = ActiveWriters::default();
-        let a = m.try_acquire(RunId::new()).await.unwrap().unwrap();
-        let b = m.try_acquire(RunId::new()).await.unwrap().unwrap();
+        let a = m.try_acquire_sync(RunId::new()).unwrap().unwrap();
+        let b = m.try_acquire_sync(RunId::new()).unwrap().unwrap();
         assert_eq!(Arc::strong_count(&a), 1);
         assert_eq!(Arc::strong_count(&b), 1);
     }
@@ -110,7 +108,7 @@ mod tests {
         let m = ActiveWriters::default();
         let id = RunId::new();
         assert!(!m.is_held(&id).await.unwrap());
-        let t = m.try_acquire(id).await.unwrap().unwrap();
+        let t = m.try_acquire_sync(id).unwrap().unwrap();
         assert!(m.is_held(&id).await.unwrap());
         drop(t);
         assert!(!m.is_held(&id).await.unwrap());

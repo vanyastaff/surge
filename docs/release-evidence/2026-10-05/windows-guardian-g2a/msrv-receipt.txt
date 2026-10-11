@@ -1,0 +1,6 @@
+Command: env CARGO_INCREMENTAL=0 cargo +1.96.0 check --locked -p surge-core --all-targets --all-features
+Host: macOS Apple Silicon
+Exit: 0
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.03s
+Captured from exec session 2934; native Windows behavior is not exercised.

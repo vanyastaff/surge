@@ -9,6 +9,17 @@ use thiserror::Error;
 /// Failure modes for opening or creating a `Storage`, run reader, or run writer.
 #[derive(Debug, Error)]
 pub enum OpenError {
+    /// Durable run authority refused an opening without journal mutation.
+    #[error("run opening refused: {0}")]
+    Authority(String),
+    /// Native ownership refused before a pathname-based consumer could run.
+    #[error("state-home {category}: {message}")]
+    StateHome {
+        /// Stable failure category without private object content.
+        category: &'static str,
+        /// SDK status or structural refusal reason.
+        message: String,
+    },
     /// The in-process writer ownership registry is poisoned.
     #[error("writer ownership registry is poisoned")]
     WriterOwnershipPoisoned,
@@ -86,6 +97,10 @@ pub enum StorageError {
         run_id: RunId,
     },
 
+    /// Event sequence lies outside the positive SQLite sequence domain.
+    #[error("invalid event sequence bound or row")]
+    InvalidEventSequence,
+
     /// Connection pool error.
     #[error("pool error: {0}")]
     Pool(String),
@@ -130,6 +145,17 @@ pub enum WriterError {
 /// Failure modes for `RunWriter::close`.
 #[derive(Debug, Error)]
 pub enum CloseError {
+    /// Graceful shutdown could not obtain its actor-issued seal receipt.
+    #[error("writer seal receipt failed: {0}")]
+    Receipt(SealReceiptError),
+    /// Receipt loss and actor failure were both observed after joining the actor.
+    #[error("writer seal receipt failed: {receipt}; actor settlement failed: {actor}")]
+    ReceiptAndActor {
+        /// First receipt failure.
+        receipt: SealReceiptError,
+        /// Independently collected actual actor join result.
+        actor: Box<CloseError>,
+    },
     /// A writer-level error while flushing or closing.
     #[error(transparent)]
     Writer(#[from] WriterError),
@@ -150,4 +176,32 @@ mod tests {
         let err = OpenError::WriterAlreadyHeld { run_id: id };
         assert!(err.to_string().contains("run-"));
     }
+}
+
+/// Failure obtaining a serialized seal acknowledgment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SealReceiptError {
+    /// The actor no longer accepts commands.
+    #[error("command channel closed")]
+    CommandChannelClosed,
+    /// The actor did not send a successful close/prefix receipt.
+    #[error("reply channel closed")]
+    ReplyChannelClosed,
+}
+
+/// Finite observation of an actual writer failure; carries no private SQL details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriterFailure {
+    /// The owning writer requested priority interruption or was dropped.
+    Interrupted,
+    /// The actor returned an error while opening, querying or closing.
+    ActorFailed,
+}
+
+/// A lifecycle observation channel lost its actor without a terminal receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FeedLifecycleError {
+    /// A closed channel still reported Running; settlement is unconfirmed.
+    #[error("writer lifecycle owner lost before terminal receipt")]
+    WriterLost,
 }

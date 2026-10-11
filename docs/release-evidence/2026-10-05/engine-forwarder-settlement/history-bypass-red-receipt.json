@@ -1,0 +1,118 @@
+{
+  "status": "ACTUAL_HISTORICAL_BYPASS_RED_CONFIRMED_NO_DURABLE_FIX",
+  "head": "825c11a4d0f5ec38e6ee484c5131716df50c1eec",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "durable_plan_sha256": "9b509500aa927a3368c0ebfe2d931c71fca035ea6c08f34ce5a365d0e789ac54",
+  "aux_plan_sha256": "254bab802b2e80e79b187eb78f7e5cef6753fdc64feedbea418bc6952abbbd35",
+  "consumer_source_freeze_sha256": "391134f61a387e63a7e025be9f4739d2ad4a104e95c06f7ca6e53c6f37362234",
+  "source_freeze_verified_unchanged": true,
+  "runs": [
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-daemon --lib history_bypass_fixture::actual_completed_run_reports_exhausted_forwarder_pool -- --exact --nocapture",
+      "session": 19429,
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "filtered": 156,
+      "test_seconds": 0.12,
+      "log": "history-bypass-producer-control.log.gz"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-daemon --lib history_after_actual_settlement_failure -- --nocapture",
+      "session": 32276,
+      "exit_code": 101,
+      "passed": 0,
+      "failed": 3,
+      "filtered": 154,
+      "test_seconds": 0.29,
+      "log": "history-bypass-daemon-red.log.gz"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-cli --bin surge commands::engine::history_bypass_tests::history_after_actual_settlement_failure_cli_reopen -- --exact --nocapture",
+      "session": 86918,
+      "exit_code": 101,
+      "passed": 0,
+      "failed": 1,
+      "filtered": 112,
+      "test_seconds": 0.14,
+      "child": {
+        "passed": 1,
+        "failed": 0,
+        "filtered": 112,
+        "test_seconds": 0.13,
+        "receipt": "authorized"
+      },
+      "log": "history-bypass-cli-red.log.gz"
+    }
+  ],
+  "causal_controls": [
+    "Actual Engine terminal-only graph, no synthetic terminal events or outcome wrapper",
+    "Actual writer Sealed prefix 4 before exhausting forwarder reader pool",
+    "Available real zero-timeout checkout and SELECT 1 succeeds",
+    "All actual pool slots held; actual checkout timeout supplies ForwarderRead",
+    "Actual Engine joined outcome SettlementFailed with original Completed and sole ForwarderRead; StreamError without Terminal",
+    "Released slots restore actual checkout; probe, Engine, bridge and Storage owners released",
+    "Fresh Storage read validates terminal fold, exactly one RunCompleted and exact sealed prefix"
+  ],
+  "observed_bypasses": {
+    "durable_outcome": "Some(Completed { terminal: end })",
+    "intake_reconcile": {
+      "state": "Completed",
+      "terminal_outbox_rows": 1
+    },
+    "merge_reconcile": {
+      "mock_provider_merge_calls": 1,
+      "merge_attempted_rows": 1
+    },
+    "cli_actual_history_reopen": "Ok => authorized"
+  },
+  "cleanup_evidence": "Every daemon safe-oracle failure occurs after Fixture::close and, where present, checked close_registry. CLI child returned its observation and exited successfully; parent completed checked FixtureHome and receipt-file cleanup before asserting expected rejected. No cleanup failure appeared. Producer setup failures are not classified as the intended RED.",
+  "scope_limits": [
+    "Host macOS execution only; no native Windows result claimed",
+    "Merge provider is actual called MockTaskSource, no remote external merge",
+    "No durable schema or production historical-consumer behavior changed",
+    "No strict Clippy or broad test-suite run in this gate",
+    "Existing proc-macro-error2 future-incompatibility warning present"
+  ],
+  "raw_log_sha256": {
+    "history-bypass-producer-control.log": "c160bc3f985172e887f9bf888da20f1e5b4e076d1653799171a7db8995b65e1d",
+    "history-bypass-daemon-red.log": "12a56dbe6b9354258531404256f0b16a1764571f932267277b2d53b1e82fe446",
+    "history-bypass-cli-red.log": "bc7910ceee1f3609f56010602f2654facd407ef15921679e9b77da0d7e97de54"
+  },
+  "source_hashes": {
+    "scripts/test-support/failed_settlement.rs": "0485544f0d22ffd7cc63b27f090b86c0071362d7bd9c179f706351578d44d0f0",
+    "crates/surge-daemon/src/history_bypass_fixture.rs": "5dc0d6fee00716b2d2db4b93b48e9e65ffc2f3603bb4d7fbd07f6498ddd6a20e",
+    "crates/surge-daemon/src/intake_completion/history_bypass_tests.rs": "db44dfb507205fa43dd8d1c77c9e517900c2f8cd9c0087d6a205fe6869322781",
+    "crates/surge-daemon/src/automation_merge_gate/history_bypass_tests.rs": "02d19a3fd6a186bd57b671949fde1aa8c8323caf635b4e8e1b3a71f3c5b5e172",
+    "crates/surge-cli/src/commands/engine/history_bypass_tests.rs": "37f6e0cfbef1b903a7abcb2beed092a1b2c51db8f70fdad1103d3f19ce347e40",
+    "crates/surge-daemon/src/lib.rs": "562ce7ae193b5cd5a12f8a905700e0404bbce566187bcdfd8e6f1e955b88484c",
+    "crates/surge-daemon/src/intake_completion.rs": "9d051e1c4914131048f621438336e2917f4c9049ee637a5f4e0c78139e40903e",
+    "crates/surge-daemon/src/automation_merge_gate.rs": "b4e88dd20e4bad13d910524ea02ebb1f234ac80afdf47bcdd3e9e77019d06ac8",
+    "crates/surge-cli/src/commands/engine.rs": "f547bae363805c4398af30b88954c7c357a8324f1491990a6df64567135e326e",
+    "crates/surge-daemon/Cargo.toml": "a5f01d732e34c1ba2172befd36ddeccc69219914c6c72586a0919075a059de28",
+    "crates/surge-cli/Cargo.toml": "c72ab21e567c8a513f0f8dc3666bbfcde70a7cf31d7c17c434b364db7ba5a3e4",
+    "Cargo.lock": "813dc0a36e7100cb95554f2313fb195920a041342d67fa704eca8cf2d7773b6e",
+    "crates/surge-orchestrator/Cargo.toml": "85ac2fc660db0949dc3953e5b4e97a120c212c06a406c1ee818a08a67e48b97d",
+    "crates/surge-orchestrator/src/engine/engine.rs": "603d6973912e49301a0970b14e21b83c448ac8de359c1be18fa798887046bbb8",
+    "crates/surge-orchestrator/src/engine/run_execution.rs": "ce08e0d13bbccf9d0e3fc8a766ba890bfe85b276884bf0300b4ff6638eb66755",
+    "crates/surge-orchestrator/src/engine/mod.rs": "52b6454c2f9c4edfd0e278e485fba9875c0dde948d384a48610db1245b8dc1e5",
+    "crates/surge-orchestrator/src/engine/test_support.rs": "4ff4ad2bc71566ce15f7494b615352831323dd9d6e02a43c9eb7bebe19514133",
+    "crates/surge-orchestrator/src/engine/run_forwarder.rs": "d19a1868f8e23671d743efeb9e10c060e8365f9398974b8a60477e3f591d2577",
+    "crates/surge-orchestrator/src/engine/run_task.rs": "0e094e09f317d35db800a2999c6ad087c43ab1db6eaa7271dde34cd4d6b0e8cb",
+    "crates/surge-orchestrator/src/engine/handle.rs": "889e982ab666137c947da0c6b8689114c34eb1034653fde6aa2e2a30c093ba65",
+    "crates/surge-persistence/src/runs/reader.rs": "a46ed3dce4117a51098799a823efae3ae238e093b414d50d2516212eddf4bbb0",
+    "crates/surge-persistence/src/runs/mod.rs": "462402c9b53111511b87f0c051eceeffcecc9a804964f60d93809667237433c1",
+    "crates/surge-persistence/src/runs/reader/feed_probe_tests.rs": "4b32d7de79d6f11b8a505b6a12415d7bc2919bf8d0dc9fc74518a3434e02af30",
+    "crates/surge-persistence/src/runs/run_writer.rs": "3d1902b053b090afb49d50b25e1c14257ef060a84bb06f88915661ec0da55700",
+    "crates/surge-persistence/src/runs/writer.rs": "971060f9b4dd8d5d211678bc46f0e0e50c53b60e1c409ac9c7ecbf863cd225ae",
+    "crates/surge-persistence/src/runs/storage.rs": "6cf38ff70ac466275fd259d5f34fb5cdc744351aa2b8e263355d3ebfd6923ddc",
+    "crates/surge-persistence/src/runs/pool.rs": "d76088bb61b6836935d300c9a95e833a10a149c2a5c999b8c5f3cabf2941a786",
+    "crates/surge-persistence/src/runs/connection.rs": "9f185958b1c518a034f03f920be735f8e519cf39c003ce16bce85f5a7bc62fb7"
+  },
+  "gzip_sha256": {
+    "history-bypass-producer-control.log.gz": "60f338a7ea9570d479174989ad4e26f17029bafc26c98c8ad2acdd6995020dee",
+    "history-bypass-daemon-red.log.gz": "94eed55144423f7d5c9cbc4867fb3cea2fae994a8ce234c81ced9c0e850d1eff",
+    "history-bypass-cli-red.log.gz": "d20ea786f9ff11a8b5fef427441ea9febc3185756718f78c2096efcaa7647862"
+  },
+  "gzip_verified": "Decompressed bytes identical to original raw logs; no normalization; originals retained under target/ci-repair-evidence."
+}

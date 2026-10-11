@@ -1,0 +1,35 @@
+{
+  "precursor_sha256": "f63c3e1cfb673590ebbf39d21abcdaec7cd2545c9dce9a0e72cc2f6531971cba",
+  "sources": {
+    "crates/surge-orchestrator/src/engine/fork.rs": "b1b6f3c0e5aac7955ef4db2eeba4250a303c429fa0972c82594ef6a3d8ec59b9",
+    "crates/surge-orchestrator/src/engine/error.rs": "09edae506b01f574d19342d0e01e4428cdbecd02117911568d8eceff597848ba"
+  },
+  "red": {
+    "command": "CARGO_INCREMENTAL=0 cargo nextest run --locked -p surge-orchestrator --lib -E 'test(engine::fork::tests::)' --no-fail-fast",
+    "log": "/tmp/surge-fork-settlement-red.log",
+    "tests": 15,
+    "passed": 10,
+    "failed": 5,
+    "skipped": 427,
+    "failure": "all five WriterAlreadyHeld at immediate writer reacquisition",
+    "build_seconds": 39.36,
+    "test_seconds": 0.889
+  },
+  "green": {
+    "command": "CARGO_INCREMENTAL=0 cargo nextest run --locked -p surge-orchestrator --lib -E 'test(engine::fork::tests::)' --no-fail-fast",
+    "log": "/tmp/surge-fork-settlement-green.log",
+    "tests": 17,
+    "passed": 17,
+    "failed": 0,
+    "skipped": 427,
+    "build_seconds": 29.21,
+    "test_seconds": 0.705
+  },
+  "clippy": {
+    "command": "CARGO_INCREMENTAL=0 cargo clippy --locked -p surge-orchestrator --all-targets --all-features -- -D warnings",
+    "log": "/tmp/surge-fork-settlement-clippy.log",
+    "status": "FAIL: 5 underscore bindings + 6 excessive-nesting fixture diagnostics; source-only repairs applied afterward, rerun pending"
+  },
+  "native_windows": "UNVERIFIED",
+  "independent_review": "PENDING"
+}

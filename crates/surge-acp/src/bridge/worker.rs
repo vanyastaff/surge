@@ -506,8 +506,7 @@ async fn open_session_attempt(
                     },
                     Err(error) => return Err(error),
                 };
-                super::effect_fence::admitted(
-                    config.effect_fence.as_ref(),
+                handshake_step(
                     connection.set_session_config_option(
                         agent_client_protocol::schema::v1::SetSessionConfigOptionRequest::new(
                             response.session_id.clone(),
@@ -515,22 +514,25 @@ async fn open_session_attempt(
                             value,
                         ),
                     ),
+                    "set_config_option",
+                    shutdown,
+                    reply,
+                    deadline,
+                    handshake_timeout,
+                    config.effect_fence.as_ref(),
                 )
-                .await?
-                .map_err(|error| match error {
-                    crate::sdk_v1::SdkCallError::HostEffectRefused(error) => error.into(),
-                    crate::sdk_v1::SdkCallError::Protocol(error) => {
-                        OpenSessionError::HandshakeFailed {
-                            reason: secrets
-                                .redact_json(&format!("session/set_config_option failed: {error}")),
-                        }
-                    },
-                })?;
+                .await?;
             }
             Ok::<(), OpenSessionError>(())
         }
         .await;
         if let Err(error) = applied {
+            let error = match error {
+                OpenSessionError::HandshakeFailed { reason } => OpenSessionError::HandshakeFailed {
+                    reason: secrets.redact_json(&reason),
+                },
+                other => other,
+            };
             connection.stop();
             let _ = io_task_handle.await;
             drop(connection);
@@ -693,6 +695,12 @@ pub(crate) fn kill_owned_child(child: &mut Child) -> std::io::Result<()> {
         let pid = i32::try_from(id).map_err(std::io::Error::other)?;
         match killpg(Pid::from_raw(pid), Signal::SIGKILL) {
             Ok(()) | Err(nix::errno::Errno::ESRCH) => {},
+            // macOS refuses to signal a process group whose only member is a
+            // child that has already exited but is not yet reaped (EPERM),
+            // while the pid-level kill below still succeeds and reaping then
+            // follows. A genuine permission failure fails there too and is
+            // reported by `start_kill`.
+            Err(nix::errno::Errno::EPERM) => {},
             Err(error) => return Err(std::io::Error::from_raw_os_error(error as i32)),
         }
     }
@@ -1525,5 +1533,19 @@ mod tests {
         let names: Vec<_> = visible.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["read_file"]);
         assert_eq!(hidden, vec!["shell_exec"]);
+    }
+
+    /// A child that exited but is not yet reaped must not make cleanup fail:
+    /// macOS answers `killpg` on its group with EPERM.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn killing_an_exited_unreaped_child_is_not_an_error() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]).process_group(0);
+        let mut child = command.spawn().unwrap();
+        // Let it exit; it stays a zombie until waited on.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        kill_owned_child(&mut child).expect("an already-exited child is not a cleanup failure");
+        assert!(child.wait().await.unwrap().success());
     }
 }

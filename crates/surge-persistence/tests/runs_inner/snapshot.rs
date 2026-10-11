@@ -66,4 +66,5 @@ async fn handcrafted_linear_flow_view_snapshot() {
     assert_yaml_snapshot!("linear_flow_cost", cost);
 
     writer.close().await.expect("close");
+    t.close().expect("close runtime home");
 }

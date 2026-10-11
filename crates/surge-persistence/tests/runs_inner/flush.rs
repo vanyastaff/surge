@@ -48,4 +48,5 @@ async fn flush_drains_pending_appends() {
         .close()
         .await
         .expect("close");
+    t.close().expect("close runtime home");
 }

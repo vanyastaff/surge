@@ -5,6 +5,16 @@
 //! binary forks it and we assert the child run is created with the inherited
 //! prefix.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -123,63 +133,69 @@ async fn seed_parent(home: &Path) -> RunId {
     seed_stage_boundary_checkpoint(&writer, &project, parent, seqs[1], &start).await;
     // Release the writer + registry handles before the binary opens the same
     // SURGE_HOME in a separate process.
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     parent
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn engine_fork_creates_child_from_seeded_parent() {
-    let tmp = tempfile::tempdir().unwrap();
-    let parent = seed_parent(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let parent = seed_parent(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["engine", "fork", &parent.to_string(), "--seq", "2"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("events copied: 2"), "stdout was: {stdout}");
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["engine", "fork", &parent.to_string(), "--seq", "2"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        assert!(stdout.contains("events copied: 2"), "stdout was: {stdout}");
 
-    // Parse the child run id from stdout and read it back from storage to prove
-    // the run was actually persisted — not just that the banner was printed.
-    let child_line = stdout
-        .lines()
-        .find(|l| l.contains("new run:"))
-        .unwrap_or_else(|| panic!("stdout must report the new run id; was: {stdout}"));
-    let child_id = child_line
-        .split_whitespace()
-        .last()
-        .expect("new run line has an id");
-    let child: RunId = child_id
-        .parse()
-        .unwrap_or_else(|e| panic!("new run id '{child_id}' must parse: {e}"));
+        // Parse the child run id from stdout and read it back from storage to prove
+        // the run was actually persisted — not just that the banner was printed.
+        let child_line = stdout
+            .lines()
+            .find(|l| l.contains("new run:"))
+            .unwrap_or_else(|| panic!("stdout must report the new run id; was: {stdout}"));
+        let child_id = child_line
+            .split_whitespace()
+            .last()
+            .expect("new run line has an id");
+        let child: RunId = child_id
+            .parse()
+            .unwrap_or_else(|e| panic!("new run id '{child_id}' must parse: {e}"));
 
-    let storage = Storage::open(tmp.path()).await.unwrap();
-    let reader = storage
-        .open_run_reader(child)
-        .await
-        .expect("forked child run must be persisted on disk");
-    let seq = reader.current_seq().await.unwrap();
-    assert_eq!(
-        seq.as_u64(),
-        2,
-        "child run must hold the 2 inherited events from the parent prefix"
-    );
+        let storage = Storage::open(tmp.path()).await.unwrap();
+        let reader = storage
+            .open_run_reader(child)
+            .await
+            .expect("forked child run must be persisted on disk");
+        let seq = reader.current_seq().await.unwrap();
+        assert_eq!(
+            seq.as_u64(),
+            2,
+            "child run must hold the 2 inherited events from the parent prefix"
+        );
+    }
+    tmp.close().unwrap();
 }
 
 #[test]
 fn engine_fork_nonexistent_run_fails_cleanly() {
-    let tmp = tempfile::tempdir().unwrap();
-    // Syntactically valid ULID, but there is no such run on disk.
-    let fake = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["engine", "fork", fake, "--seq", "1"])
-        .assert()
-        .failure();
+    let tmp = FixtureHome::new().unwrap();
+    {
+        // Syntactically valid ULID, but there is no such run on disk.
+        let fake = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["engine", "fork", fake, "--seq", "1"])
+            .assert()
+            .failure();
+    }
+    tmp.close().unwrap();
 }
 
 /// A graph with one Agent node `impl_1` plus a terminal `end`, so `--prompt`
@@ -270,7 +286,7 @@ async fn seed_agent_parent(home: &Path) -> RunId {
         .await
         .unwrap();
     seed_stage_boundary_checkpoint(&writer, &project, parent, seqs[1], &start).await;
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     parent
 }
@@ -279,63 +295,66 @@ async fn seed_agent_parent(home: &Path) -> RunId {
 async fn engine_fork_with_prompt_edit_rewrites_child_graph() {
     use surge_persistence::runs::seq::EventSeq;
 
-    let tmp = tempfile::tempdir().unwrap();
-    let parent = seed_agent_parent(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let parent = seed_agent_parent(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args([
-            "engine",
-            "fork",
-            &parent.to_string(),
-            "--seq",
-            "2",
-            "--prompt",
-            "impl_1=retry: prefer X",
-        ])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(
-        stdout.contains("edits applied: 1 prompt"),
-        "stdout was: {stdout}"
-    );
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args([
+                "engine",
+                "fork",
+                &parent.to_string(),
+                "--seq",
+                "2",
+                "--prompt",
+                "impl_1=retry: prefer X",
+            ])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        assert!(
+            stdout.contains("edits applied: 1 prompt"),
+            "stdout was: {stdout}"
+        );
 
-    // Read the child's materialized graph back and confirm the prompt landed.
-    let child_id = stdout
-        .lines()
-        .find(|l| l.contains("new run:"))
-        .and_then(|l| l.split_whitespace().last())
-        .unwrap_or_else(|| panic!("stdout must report the new run id; was: {stdout}"));
-    let child: RunId = child_id.parse().unwrap();
+        // Read the child's materialized graph back and confirm the prompt landed.
+        let child_id = stdout
+            .lines()
+            .find(|l| l.contains("new run:"))
+            .and_then(|l| l.split_whitespace().last())
+            .unwrap_or_else(|| panic!("stdout must report the new run id; was: {stdout}"));
+        let child: RunId = child_id.parse().unwrap();
 
-    let storage = Storage::open(tmp.path()).await.unwrap();
-    let reader = storage.open_run_reader(child).await.unwrap();
-    let max = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(max.as_u64() + 1))
-        .await
-        .unwrap();
-    let graph = events
-        .iter()
-        .find_map(|e| match &e.payload.payload {
-            EventPayload::PipelineMaterialized { graph, .. } => Some((**graph).clone()),
-            _ => None,
-        })
-        .expect("child has a materialized graph");
-    let node = graph
-        .nodes
-        .get(&NodeKey::try_from("impl_1").unwrap())
-        .unwrap();
-    let NodeConfig::Agent(cfg) = &node.config else {
-        panic!("impl_1 must be an Agent node");
-    };
-    assert_eq!(
-        cfg.prompt_overrides
-            .as_ref()
-            .and_then(|o| o.append_system.as_deref()),
-        Some("retry: prefer X"),
-        "the forked child's graph must carry the --prompt append"
-    );
+        let storage = Storage::open(tmp.path()).await.unwrap();
+        let reader = storage.open_run_reader(child).await.unwrap();
+        let max = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(max.as_u64() + 1))
+            .await
+            .unwrap();
+        let graph = events
+            .iter()
+            .find_map(|e| match &e.payload.payload {
+                EventPayload::PipelineMaterialized { graph, .. } => Some((**graph).clone()),
+                _ => None,
+            })
+            .expect("child has a materialized graph");
+        let node = graph
+            .nodes
+            .get(&NodeKey::try_from("impl_1").unwrap())
+            .unwrap();
+        let NodeConfig::Agent(cfg) = &node.config else {
+            panic!("impl_1 must be an Agent node");
+        };
+        assert_eq!(
+            cfg.prompt_overrides
+                .as_ref()
+                .and_then(|o| o.append_system.as_deref()),
+            Some("retry: prefer X"),
+            "the forked child's graph must carry the --prompt append"
+        );
+    }
+    tmp.close().unwrap();
 }

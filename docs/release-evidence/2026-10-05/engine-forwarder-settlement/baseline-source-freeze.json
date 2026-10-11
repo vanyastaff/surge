@@ -1,0 +1,25 @@
+{
+  "scope": "Baseline RED only; no production forwarder repair",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-orchestrator --test engine_forwarder_ownership_test ownership_tests::completed_run_releases_actual_reader_pool_owners -- --exact --nocapture",
+  "exit_code": 101,
+  "result": "Actual behavioral RED: completed engine retains 1 of 2 real reader pool managers after all legitimate owners drop; public stream ownership control passed; child exit observed",
+  "files": {
+    "crates/surge-orchestrator/Cargo.toml": "9b2229b86e8dcd33c6588ac2e6302cb1001ddee7109b90f54081c8abeca260cc",
+    "crates/surge-persistence/Cargo.toml": "2d9d1b882bea44a2a536566d56c38ac17b8e2215eff1f23a2a893adf84ecd00c",
+    "crates/surge-persistence/src/runs/storage.rs": "39226a129018c8b339adf358ff7e995555f91836f27265c321201423b1096854",
+    "crates/surge-persistence/src/runs/storage/reader_pool_witness.rs": "5d5bceac750f06ea2e80bcad6737d743977988ca1e1a4c188f7f97d7f64af6fd",
+    "crates/surge-orchestrator/src/engine/event_tap/ownership_tests.rs": "d9376289490d8f7198cf96a21a3aae69c33fa17c386b5d9c3063dc176703ea76",
+    "crates/surge-orchestrator/tests/engine_forwarder_ownership_test.rs": "52b68b8ad4aec5b797ee30e0970a1f8eb1691670e5e3dcc44d81431c4a8831b0"
+  },
+  "logs": {
+    "engine-forwarder-baseline-red.log": "a6bbf1204d0b1c64eedc91d4dc4f4a7b156e95c916ff1112126494baed718ff1",
+    "engine-forwarder-baseline-compile-1.log": "e9a7a6d577612bd8ba84d312b222ad6d265dedf2ce353447fd938d83661b1dc5"
+  },
+  "limits": [
+    "manager destruction is not proof of physical SQLite close order",
+    "initial compile failure E0433 fixed only by shared-fixture root alias, not counted as RED",
+    "persistence Cargo.toml also contains pre-existing actor helper Console/LibraryLoader Windows features owned by another worker",
+    "no production repair or full native acceptance"
+  ]
+}

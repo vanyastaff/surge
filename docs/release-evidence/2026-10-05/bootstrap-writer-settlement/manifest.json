@@ -1,0 +1,13 @@
+{
+  "source_sha256": {
+    "crates/surge-orchestrator/src/bootstrap_driver.rs": "5dea0394313772d04814c2e09c87a621e2c6cfef45a45b1835319ccee6f5eb5d"
+  },
+  "raw_log_sha256": {
+    "surge-telemetry-writer-final-tests.log": "df2c7b3b43c08f60f5ca3cf2f0fc62be254f064e51da43aa72413de3347f5afa",
+    "surge-telemetry-writer-msrv-retry.log": "db5d785460d891d610b1a73727fab556e54cd3343472ddf3fd07a40d3a264fc1",
+    "surge-telemetry-writer-clippy.log": "38ad300b704d05ec7ba7eab5a057f7cbb2f3b401a45eef49f3791df211185464",
+    "surge-telemetry-writer-msrv.log": "ce0ef7a4d64c6d569d03300f9f83703f1118b45a31571b7c92ddb076926e67dd",
+    "surge-telemetry-writer-green.log": "e91c1427bd197274cae6be247afe8085c48a822da938eec35dede7e30de80ebb",
+    "surge-telemetry-writer-red.log": "04c3b643969793ef0326d4c6ce281416b896cd87739ff2731820c68d3212301a"
+  }
+}

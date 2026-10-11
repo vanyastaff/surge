@@ -513,7 +513,7 @@ mod tests {
         let early = chrono::DateTime::parse_from_rfc3339("2026-05-13T09:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        assert!(list_due_cockpit_snoozes(&conn, early).unwrap().is_empty());
+        assert_eq!(list_due_cockpit_snoozes(&conn, early).unwrap().len(), 0);
 
         // Cutoff after the wake-up: row surfaces.
         let late = chrono::DateTime::parse_from_rfc3339("2026-05-13T11:00:00Z")
@@ -526,7 +526,7 @@ mod tests {
 
         // Marking processed removes the row from the due list.
         mark_action_processed(&conn, seq).unwrap();
-        assert!(list_due_cockpit_snoozes(&conn, late).unwrap().is_empty());
+        assert_eq!(list_due_cockpit_snoozes(&conn, late).unwrap().len(), 0);
     }
 
     #[test]

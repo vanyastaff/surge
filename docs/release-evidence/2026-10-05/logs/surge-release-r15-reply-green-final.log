@@ -1,0 +1,11 @@
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.08s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_telegram-c57878d2b855a05b)
+
+running 2 tests
+test cockpit::production::reply_admission::tests::pairing_reply_remains_available_without_admission ... ok
+test cockpit::production::reply_admission::tests::revoked_command_reply_never_reaches_bot_endpoint ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 105 filtered out; finished in 0.04s

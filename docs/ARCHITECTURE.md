@@ -288,7 +288,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 │   └── worktree/                # git worktree branch for this run
 ```
 
-- **Append-only event log per run** — SQLite with WAL mode, triggers prevent UPDATE / DELETE on `events`. Payloads serialized as `bincode`.
+- **Append-only event log per run** — SQLite with WAL mode, triggers prevent UPDATE / DELETE on `events`. Payloads serialized as JSON bytes; the legacy `to_bincode` / `from_bincode` method names preserve the existing API.
 - **Materialized views** (`stage_executions`, `pending_approvals`, `cost_summary`, `task_ledger`, …) maintained by the engine in the same transaction as the event append. Rebuildable from events if corrupted. The registry DB additionally holds a cross-run `task_ledger_index` (mirrors each run's ledger for `surge ready` / `surge ledger`, the same pattern as `roadmap_patch_index`).
 - **Concurrency** — only the daemon writes; CLI / UI / bot are readers. WAL mode lets readers proceed without blocking the writer.
 - **Artifacts** — content-addressed files on disk, referenced from events.
@@ -348,3 +348,13 @@ Open questions still unresolved:
 - [Workflow](workflow.md) — user-facing AFK workflow, flow model, run lifecycle diagrams
 - [CLI](cli.md) — concrete commands that exercise the engine today
 - [Development](development.md) — running tests and lints across the workspace
+
+## MCP cold recovery (accepted, not implemented)
+
+[ADR-0021](adr/0021-mcp-restart-recovery.md) replaces the managed VM and
+effect-broker direction of [ADR-0020](adr/0020-managed-mcp-recovery.md). On cold
+recovery the daemon stops the prior MCP server's process group, records that
+best-effort (`GroupOnly`) cleanup, starts a fresh server from the frozen
+manifest and resumes. Interrupted tool calls are reported to the agent and never
+replayed. Identity conflicts, changed manifests and bad private inputs still
+refuse. ACP enforcement remains delegated.

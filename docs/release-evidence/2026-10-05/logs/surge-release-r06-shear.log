@@ -1,0 +1,214 @@
+    Blocking waiting for file lock on package cache
+shear/unused_dependency
+
+  × unused dependency `bincode`
+    ╭─[crates/surge-core/Cargo.toml:18:1]
+ 17 │ hex        = { workspace = true }
+ 18 │ bincode    = { workspace = true }
+    · ───┬───
+    ·    ╰── not used in code
+ 19 │ semver     = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `toml_edit`
+    ╭─[crates/surge-core/Cargo.toml:15:1]
+ 14 │ chrono     = { workspace = true }
+ 15 │ toml_edit  = { workspace = true }
+    · ────┬────
+    ·     ╰── not used in code
+ 16 │ sha2       = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `ulid`
+    ╭─[crates/surge-git/Cargo.toml:15:1]
+ 14 │ serde_json = { workspace = true }
+ 15 │ ulid = { workspace = true }
+    · ──┬─
+    ·   ╰── not used in code
+ 16 │ dirs = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `tokio-stream`
+    ╭─[crates/surge-intake/Cargo.toml:19:1]
+ 18 │ futures = { workspace = true }
+ 19 │ tokio-stream = { workspace = true }
+    · ──────┬─────
+    ·       ╰── not used in code
+ 20 │ rusqlite = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `ulid`
+    ╭─[crates/surge-intake/Cargo.toml:17:1]
+ 16 │ chrono = { workspace = true }
+ 17 │ ulid = { workspace = true }
+    · ──┬─
+    ·   ╰── not used in code
+ 18 │ futures = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `insta`
+    ╭─[crates/surge-intake/Cargo.toml:26:1]
+ 25 │ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+ 26 │ insta = { workspace = true }
+    · ──┬──
+    ·   ╰── not used in code
+ 27 │ proptest = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `tempfile`
+    ╭─[crates/surge-intake/Cargo.toml:28:1]
+ 27 │ proptest = { workspace = true }
+ 28 │ tempfile = { workspace = true }
+    · ────┬───
+    ·     ╰── not used in code
+ 29 │ tokio-test = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `tokio-test`
+    ╭─[crates/surge-intake/Cargo.toml:29:1]
+ 28 │ tempfile = { workspace = true }
+ 29 │ tokio-test = { workspace = true }
+    · ─────┬────
+    ·      ╰── not used in code
+ 30 │ wiremock = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `tracing`
+    ╭─[crates/surge-notify/Cargo.toml:14:1]
+ 13 │ thiserror.workspace = true
+ 14 │ tracing.workspace = true
+    · ───┬───
+    ·    ╰── not used in code
+ 15 │ tokio = { workspace = true }
+    ╰────
+  help: remove this dependency
+
+shear/unused_dependency
+
+  × unused dependency `tempfile`
+    ╭─[crates/surge-notify/Cargo.toml:27:1]
+ 26 │ tiny_http.workspace = true
+ 27 │ tempfile.workspace = true
+    · ────┬───
+    ·     ╰── not used in code
+    ╰────
+  help: remove this dependency
+
+shear/unlinked_files
+
+  ⚠ 1 unlinked file in `surge-orchestrator`
+  │ src/engine/quota_recovery.rs
+  help: delete this file
+
+shear/misplaced_dependency
+
+  × misplaced dependency `tokio-stream`
+    ╭─[crates/surge-persistence/Cargo.toml:24:1]
+ 23 │ async-stream = { workspace = true }
+ 24 │ tokio-stream = { workspace = true }
+    · ──────┬─────
+    ·       ╰── only used in dev targets
+ 25 │ futures-core = "0.3"
+    ╰────
+  help: move this dependency to `[dev-dependencies]`
+
+shear/unused_dependency
+
+  × unused dependency `serde`
+    ╭─[crates/surge-telegram/Cargo.toml:12:1]
+ 11 │ chrono.workspace = true
+ 12 │ serde.workspace = true
+    · ──┬──
+    ·   ╰── not used in code
+ 13 │ serde_json.workspace = true
+    ╰────
+  help: remove this dependency
+
+shear/unlinked_files
+
+  ⚠ 2 unlinked files in `surge-ui`
+  │ src/screens/preview_assets.rs
+  │ src/screens/run_preview.rs
+  help: delete these files
+
+shear/unused_workspace_dependency
+
+  × unused workspace dependency `bincode`
+    ╭─[Cargo.toml:77:1]
+ 76 │ # Binary serialization
+ 77 │ bincode = "1.3"
+    · ───┬───
+    ·    ╰── not used by any workspace member
+ 78 │
+    ╰────
+  help: remove this dependency
+
+shear/unused_workspace_dependency
+
+  × unused workspace dependency `petgraph`
+    ╭─[Cargo.toml:92:1]
+ 91 │ # Graph
+ 92 │ petgraph = "0.7"
+    · ────┬───
+    ·     ╰── not used by any workspace member
+ 93 │
+    ╰────
+  help: remove this dependency
+
+shear/unused_workspace_dependency
+
+  × unused workspace dependency `tokio-test`
+     ╭─[Cargo.toml:148:1]
+ 147 │ # Tokio testing utilities
+ 148 │ tokio-test = "0.4"
+     · ─────┬────
+     ·      ╰── not used by any workspace member
+ 149 │
+     ╰────
+  help: remove this dependency
+
+shear/summary
+
+  ✗ 15 errors
+  ⚠ 2 warnings
+
+Advice:
+  ☞ run with `--fix` to fix 15 issues
+  ☞ to suppress a dependency issue
+   ╭─[Cargo.toml:2:12]
+ 1 │ [package.metadata.cargo-shear] # or [workspace.metadata.cargo-shear]
+ 2 │ ignored = ["crate-name"]
+   ·            ──────┬─────
+   ·                  ╰── add a crate name here
+   ╰────
+  ☞ to suppress a file issue
+   ╭─[Cargo.toml:2:18]
+ 1 │ [package.metadata.cargo-shear] # or [workspace.metadata.cargo-shear]
+ 2 │ ignored-paths = ["tests/compile/*.rs"]
+   ·                  ──────────┬─────────
+   ·                            ╰── add a file pattern here
+   ╰────

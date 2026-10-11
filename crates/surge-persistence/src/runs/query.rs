@@ -22,7 +22,7 @@ use crate::runs::seq::EventSeq;
 /// Lightweight per-run status the cockpit's `/status` command renders.
 ///
 /// All optional fields are `None` until the corresponding event appears in
-/// the log. `terminal` is `true` once a `RunCompleted` or `RunFailed` event
+/// the log. `terminal` is `true` once a `RunCompleted`, `RunFailed` or `RunAborted` event
 /// has been observed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunStatusSnapshot {
@@ -36,7 +36,7 @@ pub struct RunStatusSnapshot {
     pub last_outcome: Option<String>,
     /// Most-recent stage `attempt` from `StageEntered`, or `None`.
     pub last_attempt: Option<u32>,
-    /// `true` once a terminal event (`RunCompleted` or `RunFailed`) lands.
+    /// `true` once a terminal event (`RunCompleted`, `RunFailed` or `RunAborted`) lands.
     pub terminal: bool,
     /// `true` only for `RunFailed`. Distinguishes failed-terminal from
     /// success-terminal for card rendering.
@@ -136,7 +136,7 @@ pub fn aggregate_status_with_registry(
             EventPayload::OutcomeReported { outcome, .. } => {
                 snap.last_outcome = Some(outcome.as_str().to_owned());
             },
-            EventPayload::RunCompleted { .. } => {
+            EventPayload::RunCompleted { .. } | EventPayload::RunAborted { .. } => {
                 snap.terminal = true;
             },
             EventPayload::RunFailed { .. } => {
@@ -456,6 +456,46 @@ mod tests {
         )];
         let snap = aggregate_status(run_id, &events);
         assert_eq!(snap.last_outcome.as_deref(), Some("approve"));
+    }
+
+    #[test]
+    fn run_aborted_marks_terminal_not_failed_consistent_with_display() {
+        let run_id = RunId::new();
+        let events = [
+            event(
+                1,
+                1_000,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/p"),
+                    initial_prompt: String::new(),
+                    config: run_config(),
+                },
+            ),
+            event(
+                2,
+                1_100,
+                EventPayload::StageEntered {
+                    node: node("gate"),
+                    attempt: 1,
+                },
+            ),
+            event(
+                3,
+                1_200,
+                EventPayload::RunAborted {
+                    reason: "operator cancelled".into(),
+                },
+            ),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(
+            snap.display,
+            RunDisplayState::Done(surge_core::TerminalReason::Aborted)
+        );
+        assert!(snap.terminal);
+        assert!(!snap.failed);
+        assert_eq!(snap.active_node.as_deref(), Some("gate"));
     }
 
     #[test]

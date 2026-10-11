@@ -46,6 +46,21 @@ pub enum LoopGuardTrip {
         /// Configured wall-clock budget that was exceeded.
         limit: Duration,
     },
+    /// The attempt showed no activity (no session event, no tool call) for
+    /// longer than `idle_limit_secs`.
+    NoProgress {
+        /// Time since the last activity.
+        idle: Duration,
+        /// Configured idle limit that was exceeded.
+        limit: Duration,
+    },
+    /// The attempt made more tool calls than `max_tool_calls`.
+    ToolCallCapExceeded {
+        /// Tool calls observed, including this one.
+        calls: u32,
+        /// Configured cap that was exceeded.
+        cap: u32,
+    },
 }
 
 impl LoopGuardTrip {
@@ -69,6 +84,16 @@ impl LoopGuardTrip {
                  {limit_secs}s wall-clock budget; escalating",
                 elapsed_secs = elapsed.as_secs(),
                 limit_secs = limit.as_secs(),
+            ),
+            Self::NoProgress { idle, limit } => format!(
+                "node loop guard: no progress for {idle_secs}s (limit {limit_secs}s); \
+                 ending this attempt",
+                idle_secs = idle.as_secs(),
+                limit_secs = limit.as_secs(),
+            ),
+            Self::ToolCallCapExceeded { calls, cap } => format!(
+                "node loop guard: {calls} tool calls in one attempt (cap {cap}); \
+                 ending this attempt"
             ),
         }
     }
@@ -100,6 +125,8 @@ pub enum Verdict {
 pub struct LoopGuard {
     config: ToolCallLoopGuardConfig,
     started_at: Instant,
+    last_activity: Instant,
+    calls: u32,
     last_call_fingerprint: Option<ContentHash>,
     repeat_streak: u32,
 }
@@ -108,9 +135,12 @@ impl LoopGuard {
     /// Build a guard for one node, starting its wall-clock budget now.
     #[must_use]
     pub fn new(config: ToolCallLoopGuardConfig) -> Self {
+        let now = Instant::now();
         Self {
             config,
-            started_at: Instant::now(),
+            started_at: now,
+            last_activity: now,
+            calls: 0,
             last_call_fingerprint: None,
             repeat_streak: 0,
         }
@@ -125,6 +155,14 @@ impl LoopGuard {
     /// order differs would not match, which in practice does not happen — a
     /// single agent turn does not vary key order for the same call.
     pub fn observe(&mut self, call: &ToolCall) -> Verdict {
+        self.touch();
+        self.calls = self.calls.saturating_add(1);
+        if self.config.max_tool_calls > 0 && self.calls > self.config.max_tool_calls {
+            return Verdict::Escalate(LoopGuardTrip::ToolCallCapExceeded {
+                calls: self.calls,
+                cap: self.config.max_tool_calls,
+            });
+        }
         let fingerprint =
             ContentHash::compute(format!("{}\u{0}{}", call.tool, call.arguments).as_bytes());
 
@@ -157,7 +195,20 @@ impl LoopGuard {
         if elapsed > limit {
             return Verdict::Escalate(LoopGuardTrip::NodeDeadlineExceeded { elapsed, limit });
         }
+        if self.config.idle_limit_secs > 0 {
+            let limit = Duration::from_secs(self.config.idle_limit_secs);
+            let idle = self.last_activity.elapsed();
+            if idle > limit {
+                return Verdict::Escalate(LoopGuardTrip::NoProgress { idle, limit });
+            }
+        }
         Verdict::Continue
+    }
+
+    /// Record agent activity (a session event or a tool call); resets the
+    /// no-progress clock.
+    pub fn touch(&mut self) {
+        self.last_activity = Instant::now();
     }
 }
 
@@ -178,6 +229,7 @@ mod tests {
         let mut guard = LoopGuard::new(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 3,
             node_wall_clock_limit_secs: 3600,
+            ..ToolCallLoopGuardConfig::default()
         });
         for i in 0..10 {
             let verdict = guard.observe(&call("shell_exec", serde_json::json!({ "n": i })));
@@ -190,6 +242,7 @@ mod tests {
         let mut guard = LoopGuard::new(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 3,
             node_wall_clock_limit_secs: 3600,
+            ..ToolCallLoopGuardConfig::default()
         });
         let repeated = call("read_file", serde_json::json!({ "path": "a.rs" }));
         for _ in 0..3 {
@@ -202,6 +255,7 @@ mod tests {
         let mut guard = LoopGuard::new(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 3,
             node_wall_clock_limit_secs: 3600,
+            ..ToolCallLoopGuardConfig::default()
         });
         let repeated = call("read_file", serde_json::json!({ "path": "a.rs" }));
         for _ in 0..3 {
@@ -226,6 +280,7 @@ mod tests {
         let mut guard = LoopGuard::new(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 2,
             node_wall_clock_limit_secs: 3600,
+            ..ToolCallLoopGuardConfig::default()
         });
         let a = call("read_file", serde_json::json!({ "path": "a.rs" }));
         let b = call("read_file", serde_json::json!({ "path": "b.rs" }));
@@ -242,6 +297,7 @@ mod tests {
         let guard = LoopGuard::new(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 3,
             node_wall_clock_limit_secs: 3600,
+            ..ToolCallLoopGuardConfig::default()
         });
         assert_eq!(guard.deadline(), Verdict::Continue);
     }
@@ -253,6 +309,7 @@ mod tests {
         let guard = LoopGuard::new(ToolCallLoopGuardConfig {
             max_repeat_tool_calls: 3,
             node_wall_clock_limit_secs: 0,
+            ..ToolCallLoopGuardConfig::default()
         });
         match guard.deadline() {
             Verdict::Escalate(LoopGuardTrip::NodeDeadlineExceeded { limit, .. }) => {
@@ -273,5 +330,56 @@ mod tests {
         assert!(msg.contains("shell_exec"));
         assert!(msg.contains('4'));
         assert!(msg.contains('3'));
+    }
+
+    #[test]
+    fn tool_call_cap_trips_on_the_first_call_past_it() {
+        let mut guard = LoopGuard::new(ToolCallLoopGuardConfig {
+            max_tool_calls: 2,
+            ..ToolCallLoopGuardConfig::default()
+        });
+        assert_eq!(
+            guard.observe(&call("a", serde_json::json!({}))),
+            Verdict::Continue
+        );
+        assert_eq!(
+            guard.observe(&call("b", serde_json::json!({}))),
+            Verdict::Continue
+        );
+        assert_eq!(
+            guard.observe(&call("c", serde_json::json!({}))),
+            Verdict::Escalate(LoopGuardTrip::ToolCallCapExceeded { calls: 3, cap: 2 })
+        );
+        let mut unlimited = LoopGuard::new(ToolCallLoopGuardConfig {
+            max_tool_calls: 0,
+            ..ToolCallLoopGuardConfig::default()
+        });
+        for n in 0..50 {
+            assert_eq!(
+                unlimited.observe(&call("t", serde_json::json!({ "n": n }))),
+                Verdict::Continue
+            );
+        }
+    }
+
+    #[test]
+    fn no_progress_trips_after_idle_limit_and_activity_resets_it() {
+        let mut guard = LoopGuard::new(ToolCallLoopGuardConfig {
+            idle_limit_secs: 1,
+            ..ToolCallLoopGuardConfig::default()
+        });
+        assert_eq!(guard.deadline(), Verdict::Continue);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(matches!(
+            guard.deadline(),
+            Verdict::Escalate(LoopGuardTrip::NoProgress { limit, .. }) if limit == Duration::from_secs(1)
+        ));
+        guard.touch();
+        assert_eq!(guard.deadline(), Verdict::Continue);
+        let off = LoopGuard::new(ToolCallLoopGuardConfig {
+            idle_limit_secs: 0,
+            ..ToolCallLoopGuardConfig::default()
+        });
+        assert_eq!(off.deadline(), Verdict::Continue);
     }
 }

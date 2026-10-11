@@ -17,7 +17,9 @@
 /// migrated forward by materializing every existing row as an unverified,
 /// `Asserted`-confidence claim (see `MemoryStore::migrate_one_step`) — see
 /// `docs/schema-versioning.md`.
-pub const SCHEMA_VERSION: i32 = 2;
+///
+/// **v3:** repair external-content FTS update/delete triggers and rebuild indexes.
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// Schema version table DDL.
 pub const CREATE_SCHEMA_VERSION_TABLE: &str = r#"
@@ -66,19 +68,18 @@ END
 /// Trigger to keep FTS5 in sync when updating discoveries.
 pub const CREATE_DISCOVERIES_FTS_UPDATE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS discoveries_fts_update AFTER UPDATE ON discoveries BEGIN
-    UPDATE discoveries_fts
-    SET title = new.title,
-        content = new.content,
-        category = new.category,
-        tags = new.tags
-    WHERE rowid = new.rowid;
+    INSERT INTO discoveries_fts(discoveries_fts, rowid, title, content, category, tags)
+    VALUES ('delete', old.rowid, old.title, old.content, old.category, old.tags);
+    INSERT INTO discoveries_fts(rowid, title, content, category, tags)
+    VALUES (new.rowid, new.title, new.content, new.category, new.tags);
 END
 "#;
 
 /// Trigger to keep FTS5 in sync when deleting discoveries.
 pub const CREATE_DISCOVERIES_FTS_DELETE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS discoveries_fts_delete AFTER DELETE ON discoveries BEGIN
-    DELETE FROM discoveries_fts WHERE rowid = old.rowid;
+    INSERT INTO discoveries_fts(discoveries_fts, rowid, title, content, category, tags)
+    VALUES ('delete', old.rowid, old.title, old.content, old.category, old.tags);
 END
 "#;
 
@@ -126,21 +127,18 @@ END
 /// Trigger to keep FTS5 in sync when updating patterns.
 pub const CREATE_PATTERNS_FTS_UPDATE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS patterns_fts_update AFTER UPDATE ON patterns BEGIN
-    UPDATE patterns_fts
-    SET name = new.name,
-        description = new.description,
-        example = new.example,
-        language = new.language,
-        category = new.category,
-        tags = new.tags
-    WHERE rowid = new.rowid;
+    INSERT INTO patterns_fts(patterns_fts, rowid, name, description, example, language, category, tags)
+    VALUES ('delete', old.rowid, old.name, old.description, old.example, old.language, old.category, old.tags);
+    INSERT INTO patterns_fts(rowid, name, description, example, language, category, tags)
+    VALUES (new.rowid, new.name, new.description, new.example, new.language, new.category, new.tags);
 END
 "#;
 
 /// Trigger to keep FTS5 in sync when deleting patterns.
 pub const CREATE_PATTERNS_FTS_DELETE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS patterns_fts_delete AFTER DELETE ON patterns BEGIN
-    DELETE FROM patterns_fts WHERE rowid = old.rowid;
+    INSERT INTO patterns_fts(patterns_fts, rowid, name, description, example, language, category, tags)
+    VALUES ('delete', old.rowid, old.name, old.description, old.example, old.language, old.category, old.tags);
 END
 "#;
 
@@ -190,22 +188,18 @@ END
 /// Trigger to keep FTS5 in sync when updating gotchas.
 pub const CREATE_GOTCHAS_FTS_UPDATE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS gotchas_fts_update AFTER UPDATE ON gotchas BEGIN
-    UPDATE gotchas_fts
-    SET title = new.title,
-        description = new.description,
-        symptom = new.symptom,
-        solution = new.solution,
-        severity = new.severity,
-        category = new.category,
-        tags = new.tags
-    WHERE rowid = new.rowid;
+    INSERT INTO gotchas_fts(gotchas_fts, rowid, title, description, symptom, solution, severity, category, tags)
+    VALUES ('delete', old.rowid, old.title, old.description, old.symptom, old.solution, old.severity, old.category, old.tags);
+    INSERT INTO gotchas_fts(rowid, title, description, symptom, solution, severity, category, tags)
+    VALUES (new.rowid, new.title, new.description, new.symptom, new.solution, new.severity, new.category, new.tags);
 END
 "#;
 
 /// Trigger to keep FTS5 in sync when deleting gotchas.
 pub const CREATE_GOTCHAS_FTS_DELETE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS gotchas_fts_delete AFTER DELETE ON gotchas BEGIN
-    DELETE FROM gotchas_fts WHERE rowid = old.rowid;
+    INSERT INTO gotchas_fts(gotchas_fts, rowid, title, description, symptom, solution, severity, category, tags)
+    VALUES ('delete', old.rowid, old.title, old.description, old.symptom, old.solution, old.severity, old.category, old.tags);
 END
 "#;
 
@@ -256,22 +250,18 @@ END
 /// Trigger to keep FTS5 in sync when updating file contexts.
 pub const CREATE_FILE_CONTEXTS_FTS_UPDATE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS file_contexts_fts_update AFTER UPDATE ON file_contexts BEGIN
-    UPDATE file_contexts_fts
-    SET file_path = new.file_path,
-        summary = new.summary,
-        key_apis = new.key_apis,
-        description = new.description,
-        language = new.language,
-        module_category = new.module_category,
-        tags = new.tags
-    WHERE rowid = new.rowid;
+    INSERT INTO file_contexts_fts(file_contexts_fts, rowid, file_path, summary, key_apis, description, language, module_category, tags)
+    VALUES ('delete', old.rowid, old.file_path, old.summary, old.key_apis, old.description, old.language, old.module_category, old.tags);
+    INSERT INTO file_contexts_fts(rowid, file_path, summary, key_apis, description, language, module_category, tags)
+    VALUES (new.rowid, new.file_path, new.summary, new.key_apis, new.description, new.language, new.module_category, new.tags);
 END
 "#;
 
 /// Trigger to keep FTS5 in sync when deleting file contexts.
 pub const CREATE_FILE_CONTEXTS_FTS_DELETE_TRIGGER: &str = r#"
 CREATE TRIGGER IF NOT EXISTS file_contexts_fts_delete AFTER DELETE ON file_contexts BEGIN
-    DELETE FROM file_contexts_fts WHERE rowid = old.rowid;
+    INSERT INTO file_contexts_fts(file_contexts_fts, rowid, file_path, summary, key_apis, description, language, module_category, tags)
+    VALUES ('delete', old.rowid, old.file_path, old.summary, old.key_apis, old.description, old.language, old.module_category, old.tags);
 END
 "#;
 

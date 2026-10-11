@@ -1,0 +1,109 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 3495cd4b-9c16-4a83-9824-39cd3929564c with nextest profile: default
+    Starting 4 tests across 2 binaries (133 tests skipped)
+        FAIL [   0.137s] (1/4) surge-daemon server::tests::startup_error_retains_no_maintenance_owner
+  stdout ───
+
+    running 1 test
+    test server::tests::startup_error_retains_no_maintenance_owner ... FAILED
+
+    failures:
+
+    failures:
+        server::tests::startup_error_retains_no_maintenance_owner
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39901382) panicked at crates/surge-daemon/src/server.rs:1661:9:
+    assertion `left == right` failed: server returned while maintenance retained Storage
+      left: 3
+     right: 2
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'server::tests::startup_error_retains_no_maintenance_owner' (39901373) panicked at crates/surge-daemon/src/server.rs:1681:14:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "assertion `left == right` failed: server returned while maintenance retained Storage\n  left: 3\n right: 2", ...)
+
+        FAIL [   0.137s] (2/4) surge-daemon server::tests::shutdown_return_settles_maintenance_owners
+  stdout ───
+
+    running 1 test
+    test server::tests::shutdown_return_settles_maintenance_owners ... FAILED
+
+    failures:
+
+    failures:
+        server::tests::shutdown_return_settles_maintenance_owners
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39901383) panicked at crates/surge-daemon/src/server.rs:1657:9:
+    assertion `left == right` failed
+      left: true
+     right: false
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'server::tests::shutdown_return_settles_maintenance_owners' (39901374) panicked at crates/surge-daemon/src/server.rs:1688:14:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "assertion `left == right` failed\n  left: true\n right: false", ...)
+
+        FAIL [   0.236s] (3/4) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+  stdout ───
+
+    running 1 test
+    test consumer_shutdown_waits_for_joined_execution_after_terminal_receipt ... FAILED
+
+    failures:
+
+    failures:
+        consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.22s
+
+  stderr ───
+
+    thread 'consumer_shutdown_waits_for_joined_execution_after_terminal_receipt' (39901371) panicked at crates/surge-daemon/tests/inbox_callback_e2e.rs:595:5:
+    consumer returned before accepted execution completion was joined
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   2.162s] (4/4) surge-daemon inbox::state_sync::tests::failed_completion_settles_with_event_sender_still_open
+  stdout ───
+
+    running 1 test
+    test inbox::state_sync::tests::failed_completion_settles_with_event_sender_still_open ... FAILED
+
+    failures:
+
+    failures:
+        inbox::state_sync::tests::failed_completion_settles_with_event_sender_still_open
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out; finished in 2.14s
+
+  stderr ───
+
+    thread 'inbox::state_sync::tests::failed_completion_settles_with_event_sender_still_open' (39901372) panicked at crates/surge-daemon/src/inbox/state_sync.rs:410:9:
+    failed completion must settle without waiting for event sender closure
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   2.164s] 4 tests run: 0 passed, 4 failed, 133 skipped
+        FAIL [   0.137s] (1/4) surge-daemon server::tests::startup_error_retains_no_maintenance_owner
+        FAIL [   0.137s] (2/4) surge-daemon server::tests::shutdown_return_settles_maintenance_owners
+        FAIL [   0.236s] (3/4) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+        FAIL [   2.162s] (4/4) surge-daemon inbox::state_sync::tests::failed_completion_settles_with_event_sender_still_open
+error: test run failed

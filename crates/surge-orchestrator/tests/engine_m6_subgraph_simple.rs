@@ -11,6 +11,8 @@
 //! SubgraphConfig::outputs maps inner_end's success to outer outcome "completed".
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -134,51 +136,54 @@ fn build_subgraph_graph() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn subgraph_emits_entered_and_exited_then_completes() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
 
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            build_subgraph_graph(),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                build_subgraph_graph(),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    let outcome = handle.await_completion().await.expect("await_completion");
-    match outcome {
-        RunOutcome::Completed { .. } => {},
-        other => panic!("expected Completed, got {other:?}"),
+        let outcome = handle.await_completion().await.expect("await_completion");
+        match outcome {
+            RunOutcome::Completed { .. } => {},
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        storage
+            .inspect_folded_run(run_id)
+            .await
+            .expect("actual subgraph journal must retain trusted routing scope");
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(EventSeq::ZERO..EventSeq(i64::MAX as u64))
+            .await
+            .unwrap();
+
+        let payloads: Vec<&EventPayload> = events.iter().map(|e| e.payload.payload()).collect();
+
+        let entered = payloads
+            .iter()
+            .filter(|p| matches!(p, EventPayload::SubgraphEntered { .. }))
+            .count();
+        let exited = payloads
+            .iter()
+            .filter(|p| matches!(p, EventPayload::SubgraphExited { .. }))
+            .count();
+
+        assert_eq!(entered, 1, "expected 1 SubgraphEntered event");
+        assert_eq!(exited, 1, "expected 1 SubgraphExited event");
     }
-    storage
-        .inspect_folded_run(run_id)
-        .await
-        .expect("actual subgraph journal must retain trusted routing scope");
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(EventSeq::ZERO..EventSeq(i64::MAX as u64))
-        .await
-        .unwrap();
-
-    let payloads: Vec<&EventPayload> = events.iter().map(|e| e.payload.payload()).collect();
-
-    let entered = payloads
-        .iter()
-        .filter(|p| matches!(p, EventPayload::SubgraphEntered { .. }))
-        .count();
-    let exited = payloads
-        .iter()
-        .filter(|p| matches!(p, EventPayload::SubgraphExited { .. }))
-        .count();
-
-    assert_eq!(entered, 1, "expected 1 SubgraphEntered event");
-    assert_eq!(exited, 1, "expected 1 SubgraphExited event");
+    dir.close().unwrap();
 }

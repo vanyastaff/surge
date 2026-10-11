@@ -741,3 +741,29 @@ assume otherwise:**
 - A provider's `Retry-After` **HTTP header** turns out to be observable
   through some agent runtime's ACP adapter (as opposed to only its JSON
   error body) — worth a dedicated classifier note if so.
+
+## Addendum 2026-10-05 — agent switching on limits (v1 task 1.4)
+
+The rotation text above (R41 "shape only", "always refused") describes the
+account-rotation seam (`rotation_profile`, `verify_rotation_target`), which
+stays unchanged and still serves task-owned runs. Ordinary runs gain a
+separate, working mechanism:
+
+- `[capacity].fallback_agents = ["codex-acp", ...]` (registry ids, in order).
+  Empty keeps parking exactly as before.
+- When a stage's agent is exhausted — at the pre-dispatch check or after a
+  429 — the engine builds candidates from the stage's own agent and the
+  fallback list, keeps those that are configured, launchable and have capacity
+  left in the ledger, and picks the first that is not the exhausted runtime,
+  preferring one that differs from the stage's verifier/implementer partner
+  (`surge_core::agent_rotation::choose`). If only a partner-matching agent
+  fits it is used and the event is flagged `same_as_partner`; if none fits the
+  run parks and wakes as before.
+- The decision is recorded as `StageRuntimeRotated` (schema v21) before the
+  next attempt opens a session. The fold keeps the active rotation until the
+  stage routes an outcome, so a restarted host resumes on the same agent and
+  never repeats a provider effect; a rotation never continues the old
+  provider session (a new session on the new agent). A stage moves at most
+  once per configured fallback per visit, which stops ping-pong between
+  exhausted agents. Stages under a frozen task quota plan keep their planned
+  runtime.

@@ -37,7 +37,20 @@ explicitly.)
 `Storage::list_runs` runs **stale-PID detection** first: any
 `Running`/`Bootstrapping` row whose recorded daemon PID is no longer alive
 is flipped to `Crashed`. After a daemon crash that is exactly the
-population recovery scans.
+population recovery scans. The rewrite is a compare-and-set on status and
+daemon PID, so a run another daemon resumed in between is never overwritten.
+
+Registry lock waits never park an async worker. `Storage`'s run-registry
+methods run on tokio's blocking pool (`surge_persistence::runs::registry_exec`);
+their status, park, wake and capacity writes are fenced against caller
+cancellation: a dropped caller abandons a write that has not yet taken the
+registry write lock, and otherwise the drop waits for the commit, so a
+registry write never lands after a later write that superseded it. The other
+registry stores (task ownership journal, inbox, roadmap, ledger, bootstrap)
+stay synchronous, which keeps their cancellation semantics unchanged; every
+registry connection's busy handler (`runs::busy`) sleeps through
+`block_in_place`, so a contended wait hands the worker's core to another
+thread instead of blocking it.
 
 Decision order (first match wins):
 

@@ -107,7 +107,7 @@ fn keep_app_changes(
         .head()
         .map_err(fail)?
         .shorthand()
-        .unwrap_or("HEAD")
+        .map_err(fail)?
         .to_string();
     let mut index = run.index().map_err(fail)?;
     for path in app_paths {
@@ -137,13 +137,14 @@ fn keep_app_changes(
 
     let repo = Repository::open(project).map_err(fail)?;
     let head = repo.head().map_err(fail)?;
-    let Some(target_ref) = head.name().filter(|_| head.is_branch()).map(str::to_string) else {
+    if !head.is_branch() {
         return Ok(KeepOutcome::Committed {
             branch,
             reason: "the project is not on a branch".into(),
         });
-    };
-    let target = head.shorthand().unwrap_or("HEAD").to_string();
+    }
+    let target_ref = head.name().map_err(fail)?.to_string();
+    let target = head.shorthand().map_err(fail)?.to_string();
     let mut options = StatusOptions::new();
     options.include_untracked(false);
     let dirty = repo
@@ -956,7 +957,7 @@ mod tests {
         assert_eq!(changes.base_label, "Working changes before first commit");
         assert_eq!(changes.files[0].path, "new.txt");
         assert!(changes.files[0].patch.contains("+first content"));
-        assert!(super::read_changes(root.path(), Some(git2::Oid::zero())).is_err());
+        assert!(super::read_changes(root.path(), Some(git2::Oid::ZERO_SHA1)).is_err());
     }
 
     #[test]

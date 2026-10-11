@@ -8,7 +8,8 @@ date = "2026-05-17"
 
 ## Status
 
-Accepted.
+Accepted. Decision 4 is superseded for the future managed opt-in path by
+[ADR-0020](0020-managed-mcp-recovery.md); the native implementation remains unchanged.
 
 ## Context
 
@@ -84,6 +85,52 @@ enough to record once here rather than re-deriving them per unit.
    captured stderr only to that user. Captured stderr is redacted (secret-shape
    masking, always on in v0.1) before it reaches `tracing` or the file.
 
+7. **Startup has its own deadline, separate from `call_timeout`** (amended
+   2026-10-05). The handshake wait includes process spawn and interpreter
+   startup, which a per-RPC budget does not model: a Python stdio server with
+   `call_timeout = 275ms` missed its handshake on a hosted macOS runner and the
+   stage silently ran without its tools. `McpServerRef` gains an optional
+   `startup_timeout` bounding spawn + `initialize`; `call_timeout` bounds only
+   RPCs (`tools/call`, one deadline across `tools/list` pages, the health
+   probe). The registry's caller budget for a tool call applies after the
+   connection is running, so a reconnect is never cut short by it. A missed
+   startup deadline is the distinct `McpError::StartupTimeout` and counts as a
+   failed restart attempt. Unset resolves to `max(30s, call_timeout)`: never
+   shorter than the previous shared deadline, so no existing configuration
+   regresses.
+
+   *Snapshot and hash contract.* The field is `#[serde(default,
+   skip_serializing_if = "Option::is_none")]` on both `McpServerRef` and
+   `OwnedFlowMcpManifestEntry`. Unset values serialize to the exact bytes
+   written before the field existed, so frozen owned-flow server objects,
+   envelopes and their HMACs from earlier runs keep verifying, and the
+   manifest `schema_version` stays 1. An explicit value is part of the frozen
+   public entry and the authenticated private object, so changing it after
+   acceptance fails hydration like any other policy change. An older binary
+   given a manifest with an explicit value rejects it (`deny_unknown_fields`
+   on the entry, canonical-bytes mismatch on the server object). That is
+   fail-closed, never a silent fallback to `call_timeout`. A resumed run that
+   predates the field gets the new unset resolution, which is never shorter
+   than its original deadline. Changing `DEFAULT_STARTUP_TIMEOUT` therefore
+   changes resumed runs and must be recorded here.
+
+8. **A selected server's catalog failure is escalated, not silently
+   degraded** (amended 2026-10-05). When a stage selects a server and the
+   sandbox policy allows it, the operator chose that capability. Losing it at
+   session open used to be a single WARN, and one failing server also dropped
+   every other selected server's tools. The catalog is now built per server
+   (`McpRegistry::list_tools_per_server`). Healthy servers keep their tools.
+   Each failing server produces `EscalationRequested { cause:
+   McpSelectedCatalogUnavailable }` with the stage, server and opaque
+   `McpError` text, and the stage proceeds. Failing the stage was rejected:
+   the agent can often finish with engine tools, and the existing `on_error`
+   routing is for stage outcomes, not tool availability (decision 1). The
+   operator now sees the degradation and can stop the run. The new cause is a
+   nested-enum variant, so the event payload schema is bumped to v16 (see
+   `docs/schema-versioning.md`). Escalations are per stage start, not
+   deduplicated across stages, which mirrors the per-dispatcher
+   restart-exhaustion dedup.
+
 ## Alternatives Rejected
 
 - **Persistent daemon `McpDiagnosticManager` subsystem** (HashMap of live
@@ -93,6 +140,12 @@ enough to record once here rather than re-deriving them per unit.
   something to act on. Rejected for the request-scoped validate-drop.
 - **Notify-only give-up** (direct `surge-notify`, no event): invisible to the
   cockpit and event tap. Rejected per decision 2.
+- **Widen `call_timeout` to cover startup** (the PR 89 fixture repair): this
+  keeps one knob for two different costs and makes every RPC wait as long as
+  a cold `npx` start. Rejected for decision 7.
+- **Fail the stage when a selected catalog is unavailable**: this turns a
+  transient startup miss into a stage failure even when engine tools would
+  do. Rejected for decision 8's escalate-and-proceed.
 - **OS sandbox wrapper for arbitrary MCP binaries**: no common flag grammar;
   conflicts with ADR-0006's runtime-owns-enforcement boundary.
 
@@ -109,6 +162,10 @@ enough to record once here rather than re-deriving them per unit.
   unimplemented deliverable.
 
 ## Revisit Triggers
+
+- Operators routinely abort runs after `mcp_selected_catalog_unavailable`.
+  That would mean selection should be a hard stage precondition (fail
+  closed) rather than escalate-and-proceed.
 
 - A persistent shared-server mode (`McpServerRef::isolation = Shared`) lands —
   `surge mcp start/stop` then gain real long-lived semantics.

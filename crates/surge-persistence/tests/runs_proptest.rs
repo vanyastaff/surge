@@ -3,13 +3,23 @@
 //! Separate test binary so proptest's long-running shrink cycle doesn't slow
 //! down the regular integration suite.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+
+use runtime_home_fixture::FixtureHome;
+
 use std::sync::Arc;
 
 use proptest::prelude::*;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_core::{RunId, SessionId};
 use surge_persistence::runs::{EventSeq, MockClock, Storage};
-use tempfile::TempDir;
 
 fn payload_strategy() -> impl Strategy<Value = VersionedEventPayload> {
     (0u32..1000, 0u32..1000, 0u32..100).prop_map(|(p, o, c)| {
@@ -39,7 +49,7 @@ proptest! {
             .unwrap();
 
         runtime.block_on(async {
-            let tmp = TempDir::new().unwrap();
+            let tmp = FixtureHome::new().unwrap();
             let clock = MockClock::new(1_700_000_000_000);
             let storage = Storage::open_with(tmp.path(), Arc::new(clock)).await.unwrap();
             let run_id = RunId::new();
@@ -61,6 +71,8 @@ proptest! {
                 prop_assert_eq!(ev.seq, expected_seqs[i]);
             }
             writer.close().await.unwrap();
+            drop(storage);
+            tmp.close().expect("close runtime home");
             Ok(())
         }).unwrap();
     }
@@ -83,7 +95,7 @@ proptest! {
             .unwrap();
 
         runtime.block_on(async {
-            let tmp = TempDir::new().unwrap();
+            let tmp = FixtureHome::new().unwrap();
             let clock = MockClock::new(1_700_000_000_000);
             let storage = Storage::open_with(tmp.path(), Arc::new(clock)).await.unwrap();
             let run_id = RunId::new();
@@ -101,6 +113,8 @@ proptest! {
             prop_assert_eq!(before.cache_hits, after.cache_hits);
 
             writer.close().await.unwrap();
+            drop(storage);
+            tmp.close().expect("close runtime home");
             Ok(())
         }).unwrap();
     }

@@ -1,0 +1,35 @@
+{
+  "base": "14884ff0e71685caba38794c11fa227bf426693c",
+  "source_sha256": {
+    "crates/surge-core/src/config/io.rs": "8d5a15b638d88965e2525e4ed439e716a504571accadfd679f056fe2e6745f10",
+    "crates/surge-core/src/config/io/windows_atomic.rs": "a8e014896fc9b93e2c7bc282b98fa4709a3fb67b364c8a35bfc9cf9840a7b837",
+    "crates/surge-core/Cargo.toml": "7fb0979e55ba6da0b23b71c8493bdcd46dd1e7362a9f81ca5701c8720c70cdf4",
+    "Cargo.lock": "6e9479c206ff50ebe479d855cc155032f0b1a449e61d2b19f14bb572e6da5322"
+  },
+  "receipt_sha256": {
+    "msrv-mac.log.gz": "52323e2d967dbfc910465da46e579b8966b56a88e6cc6fb55e0329d48ed347cb",
+    "msrv-cross.log.gz": "3f677364c01e2e3fc632dffbae677772d2c2a5b1233d7bf79b00a7352911d2e9",
+    "mac-clippy.log.gz": "e1037185f72ea113f9acba7e2720666fcf274d4989ce4c014ec7bfd9276519b5",
+    "fmt-final.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "cross-clippy.log.gz": "43d168607df5eca6228a2e588ad02391b6f5bc94ecb94dfbd9635c0fd9623efa",
+    "cross-check.log.gz": "b8bf3e7b48fa64d7d568dc203d36ab79c5d7977e9cd8d9ea0960e5f0c2ba34cd",
+    "cross-clippy-green.log.gz": "93a1a081fdf1be38cc2361083fba073f8a52c1d9e4addaca08d8c5a2a31cc206",
+    "core.log.gz": "5e66d3e7bdb67a6eea1b7f27d0435e9ed5c41b26e0742d20b1a80fdcbbcf4d30",
+    "repair1-msrv-cross.log.gz": "75717dfb443b6855dc2d68f6d6db656b6b6ccfaa3fd9f25a2894db533c4bef2e",
+    "repair1-fmt.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "repair1-mac-clippy.log.gz": "3d49ff600a2a62d9bc4313b8f764157818335a5008e3815436247de5f36c12b8",
+    "repair1-cross-clippy.log.gz": "19d72b33ad54bd022dc03f12ed35b32e9332ee6e9df06231e9e4714b76a99267"
+  },
+  "native_execution": "pending",
+  "new_tests_initial_native_RED": "not captured; existing concurrent-save native failure is baseline RED",
+  "reviews": "independent spec and unsafe/API/security COMPLETE for implementation scope",
+  "repair1": {
+    "base": "77fff58",
+    "source_sha256": {
+      "crates/surge-core/src/config/io/windows_atomic.rs": "3bd545591e1df599d3ef58b899e50b58d527508113c12792320e40ad88d37eb1"
+    },
+    "reason": "tempfile NamedTempFile fields path before file; no DELETE sharing caused cleanup before close",
+    "reviews": "fresh spec and unsafe/API/security COMPLETE",
+    "native_acceptance": "pending"
+  }
+}

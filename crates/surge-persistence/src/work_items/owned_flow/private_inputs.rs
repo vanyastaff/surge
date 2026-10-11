@@ -304,9 +304,7 @@ pub(super) fn hydrate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::{
-        ContentHash, id::WorkItemId, mcp_config::McpTransportConfig, sandbox::SandboxMode,
-    };
+    use surge_core::{ContentHash, id::WorkItemId};
     fn binding(identity: OwnedFlowRequestIdentity) -> InputBinding {
         let checkout = if cfg!(windows) {
             std::path::PathBuf::from(r"C:\repo")
@@ -334,7 +332,9 @@ mod tests {
             },
         )
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn server(name: &str) -> McpServerRef {
+        use surge_core::{mcp_config::McpTransportConfig, sandbox::SandboxMode};
         McpServerRef::new(
             name.into(),
             McpTransportConfig::stdio(
@@ -374,7 +374,12 @@ mod tests {
         verify_request(home.path(), b"explicit private request", &identity).unwrap();
         assert!(verify_request(home.path(), b"changed private request", &identity).is_err());
         let context = binding(identity);
-        let servers = vec![server("first"), server("second")];
+        // One legacy-shaped entry (no startup deadline) and one explicit one:
+        // both must survive the authenticated freeze/hydrate round trip.
+        let servers = vec![
+            server("first"),
+            server("second").with_startup_timeout(Some(std::time::Duration::from_secs(20))),
+        ];
         let manifest = freeze(
             home.path(),
             &context,
@@ -384,6 +389,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hydrate(home.path(), &manifest).unwrap(), servers);
+        let projected = serde_json::to_value(&manifest).unwrap();
+        assert!(
+            projected["mcp"]["entries"][0]
+                .get("startup_timeout")
+                .is_none()
+        );
+        assert_eq!(projected["mcp"]["entries"][1]["startup_timeout"], "20s");
+        let mut widened = projected.clone();
+        widened["mcp"]["entries"][1]["startup_timeout"] = serde_json::json!("10m");
+        let widened: OwnedFlowInputsManifest = serde_json::from_value(widened).unwrap();
+        assert!(hydrate(home.path(), &widened).is_err());
         let public = serde_json::to_string(&manifest).unwrap();
         for sentinel in [
             "PRIVATE-COMMAND-SENTINEL",

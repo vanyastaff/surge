@@ -40,6 +40,16 @@ pub enum EngineError {
     #[error("storage error: {0}")]
     Storage(String),
 
+    /// The original operation failed and its writer also failed to close.
+    #[error("{operation}; writer settlement also failed: {close}")]
+    OperationAndWriterClose {
+        /// Original operation error, without losing its concrete variant.
+        #[source]
+        operation: Box<EngineError>,
+        /// Additional actual writer close/join error.
+        close: Box<surge_persistence::runs::CloseError>,
+    },
+
     /// An ACP bridge operation failed.
     #[error("bridge error: {0}")]
     Bridge(String),
@@ -126,6 +136,28 @@ pub enum EngineError {
     /// event to seed the child run.
     #[error("invalid fork request: {0}")]
     ForkInvalid(String),
+
+    /// A fork writer failed to settle after its operation succeeded.
+    #[error("fork writer {run} failed to close: {close}")]
+    ForkWriterClose {
+        /// Run whose writer failed to settle.
+        run: RunId,
+        /// Actual writer close or join failure.
+        #[source]
+        close: Box<surge_persistence::runs::CloseError>,
+    },
+
+    /// Both a fork operation and its writer settlement failed.
+    #[error("{operation}; fork writer {run} also failed to close: {close}")]
+    ForkOperationAndClose {
+        /// Run whose writer failed to settle.
+        run: RunId,
+        /// Original operation error, including any child settlement failure.
+        #[source]
+        operation: Box<EngineError>,
+        /// Additional writer close or join failure.
+        close: Box<surge_persistence::runs::CloseError>,
+    },
 }
 
 fn format_node_cycle(nodes: &[surge_core::keys::NodeKey]) -> String {

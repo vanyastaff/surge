@@ -1,0 +1,99 @@
+[
+  {
+    "command": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-clippy-all.log"
+  },
+  {
+    "command": "cargo clippy --locked --workspace --all-targets -- -D warnings",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-clippy-default.log"
+  },
+  {
+    "command": "cargo fmt --all --check",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-fmt.log"
+  },
+  {
+    "command": "CARGO_INCREMENTAL=0 cargo +1.96.0 check --locked --workspace --exclude surge-ui --all-targets",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-msrv-retry.log"
+  },
+  {
+    "command": "cargo test --locked -p surge-cli --test daemon_restart -- --ignored --test-threads=1",
+    "exit": 0,
+    "passed": 2,
+    "log": "logs/surge-release-frozen-restart.log"
+  },
+  {
+    "command": "cargo test --locked -p surge-daemon --test live_provider_smoke controlled_daemon_mcp_smoke -- --ignored --exact --nocapture",
+    "exit": 0,
+    "passed": 1,
+    "log": "logs/surge-release-controlled-green.log"
+  },
+  {
+    "command": "actionlint",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-actionlint.log"
+  },
+  {
+    "command": "python3.12 -m unittest discover -s scripts -p test_release.py -v",
+    "exit": 0,
+    "passed": 5,
+    "log": "logs/surge-release-frozen-packaging.log"
+  },
+  {
+    "command": "cargo nextest run --locked --workspace --no-fail-fast --test-threads 4",
+    "exit": 100,
+    "run": 3840,
+    "passed": 3830,
+    "failed": 10,
+    "skipped": 37,
+    "log": "logs/surge-release-frozen-nextest.log"
+  },
+  {
+    "command": "OPENSSL_STATIC=1 MACOSX_DEPLOYMENT_TARGET=15.0 cargo build --locked --release -p surge-cli -p surge-daemon",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-native-build.log"
+  },
+  {
+    "command": "otool -L/-l, file, --version: both optimized binaries",
+    "exit": 0,
+    "minimum_os": "15.0",
+    "non_system_dylibs": 0,
+    "log": "logs/surge-release-frozen-linkage.log"
+  },
+  {
+    "command": "strip target/release-readiness/bin/surge target/release-readiness/bin/surge-daemon",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-strip.log"
+  },
+  {
+    "command": "python3.12 scripts/release.py package --target aarch64-apple-darwin --bin-dir target/release-readiness/bin --output target/release-readiness",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-package.log"
+  },
+  {
+    "command": "scripts.release.validate_archive and packed Apache license/README checks",
+    "exit": 0,
+    "members": 5,
+    "log": "logs/surge-release-frozen-archive-check.log"
+  },
+  {
+    "command": "python3.12 /tmp/surge-release-r22-smoke.py <native archive>",
+    "exit": 0,
+    "log": "logs/surge-release-frozen-archive-smoke-green2.log",
+    "commands": "logs/surge-release-frozen-archive-commands.log"
+  },
+  {
+    "command": "OPENSSL_STATIC=1 MACOSX_DEPLOYMENT_TARGET=15.0 SURGE_STAGE_TRANSITION_BUDGET_CHECK=1 cargo bench --locked -p surge-orchestrator --bench stage_transition -- --quick --save-baseline release-readiness",
+    "exit": 0,
+    "budget_samples": 64,
+    "enforced_p95_budget_us": 5000,
+    "criterion_interval_us": [
+      224.19,
+      233.83
+    ],
+    "log": "logs/surge-release-frozen-bench.log"
+  }
+]

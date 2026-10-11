@@ -1,6 +1,7 @@
 //! Task 21 — bootstrap materializes the linear-3 archetype.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use surge_core::run_event::{BootstrapStage, EventPayload};
 use surge_orchestrator::engine::validate::validate_for_m6;
@@ -72,4 +73,5 @@ async fn bootstrap_linear_3_materializes_valid_followup_graph() {
         telemetry.2.as_ref().map(|archetype| archetype.name),
         Some(surge_core::ArchetypeName::Linear3)
     );
+    harness.close();
 }

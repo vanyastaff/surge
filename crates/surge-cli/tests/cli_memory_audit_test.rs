@@ -14,6 +14,16 @@
 //! `MemoryStore` opened at any other path would find no claims at all and
 //! this test would fail with an empty `run_correlated`, not a compile error.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
 use std::path::Path;
 
 use surge_core::id::RunId;
@@ -49,7 +59,7 @@ async fn seed_loop_guard_stopped_run(home: &Path) -> RunId {
         .await
         .unwrap();
     writer.flush().await.unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
 
     storage
         .set_run_status(&run_id, RunStatus::Crashed, Some(1))
@@ -60,46 +70,49 @@ async fn seed_loop_guard_stopped_run(home: &Path) -> RunId {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn memory_audit_json_correlates_a_claim_with_a_loop_guard_stopped_run() {
-    let home = tempfile::tempdir().unwrap();
-    let run_id = seed_loop_guard_stopped_run(home.path()).await;
+    let home = FixtureHome::new().unwrap();
+    {
+        let run_id = seed_loop_guard_stopped_run(home.path()).await;
 
-    // Written at exactly the path `MemoryStore::default_path()` must
-    // resolve to once the real binary below sees `SURGE_HOME=home`.
-    let memory_store = MemoryStore::open(&home.path().join("memory.db")).unwrap();
-    let claim = MemoryClaim::from_transcript(
-        "root cause was the node running past its wall-clock budget",
-        format!("transcript:{run_id}#turn-2"),
-        ContentHash::compute(b"turn 2"),
-    );
-    memory_store.add_claim(&claim).unwrap();
-    drop(memory_store);
+        // Written at exactly the path `MemoryStore::default_path()` must
+        // resolve to once the real binary below sees `SURGE_HOME=home`.
+        let memory_store = MemoryStore::open(&home.path().join("memory.db")).unwrap();
+        let claim = MemoryClaim::from_transcript(
+            "root cause was the node running past its wall-clock budget",
+            format!("transcript:{run_id}#turn-2"),
+            ContentHash::compute(b"turn 2"),
+        );
+        memory_store.add_claim(&claim).unwrap();
+        drop(memory_store);
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", home.path())
-        .args(["memory", "audit", "--format", "json"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", home.path())
+            .args(["memory", "audit", "--format", "json"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
 
-    let run_correlated = json["run_correlated"]
-        .as_array()
-        .expect("run_correlated array");
-    assert_eq!(
-        run_correlated.len(),
-        1,
-        "expected exactly one correlated claim: {stdout}"
-    );
-    let finding = &run_correlated[0];
-    // `RunId`'s `Display` (used by `to_string()`) prefixes with `run-`;
-    // its `Serialize` impl (what the JSON output actually carries) does
-    // not — compare against the same serialization the CLI produced
-    // rather than assuming they match.
-    assert_eq!(finding["run_id"], serde_json::to_value(run_id).unwrap());
-    assert_eq!(finding["run_status"], "crashed");
-    assert_eq!(finding["loop_guard_cause"], "loop_guard_node_deadline");
+        let run_correlated = json["run_correlated"]
+            .as_array()
+            .expect("run_correlated array");
+        assert_eq!(
+            run_correlated.len(),
+            1,
+            "expected exactly one correlated claim: {stdout}"
+        );
+        let finding = &run_correlated[0];
+        // `RunId`'s `Display` (used by `to_string()`) prefixes with `run-`;
+        // its `Serialize` impl (what the JSON output actually carries) does
+        // not — compare against the same serialization the CLI produced
+        // rather than assuming they match.
+        assert_eq!(finding["run_id"], serde_json::to_value(run_id).unwrap());
+        assert_eq!(finding["run_status"], "crashed");
+        assert_eq!(finding["loop_guard_cause"], "loop_guard_node_deadline");
+    }
+    home.close().unwrap();
 }
 
 /// The default output format — no `--format` flag — is what an operator
@@ -110,24 +123,27 @@ async fn memory_audit_json_correlates_a_claim_with_a_loop_guard_stopped_run() {
 /// path renders the loop-guard correlation, not just the JSON one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn memory_audit_text_reports_a_claim_stopped_by_the_loop_guard() {
-    let home = tempfile::tempdir().unwrap();
-    let run_id = seed_loop_guard_stopped_run(home.path()).await;
+    let home = FixtureHome::new().unwrap();
+    {
+        let run_id = seed_loop_guard_stopped_run(home.path()).await;
 
-    let memory_store = MemoryStore::open(&home.path().join("memory.db")).unwrap();
-    let claim = MemoryClaim::from_transcript(
-        "root cause was the node running past its wall-clock budget",
-        format!("transcript:{run_id}#turn-2"),
-        ContentHash::compute(b"turn 2"),
-    );
-    memory_store.add_claim(&claim).unwrap();
-    drop(memory_store);
+        let memory_store = MemoryStore::open(&home.path().join("memory.db")).unwrap();
+        let claim = MemoryClaim::from_transcript(
+            "root cause was the node running past its wall-clock budget",
+            format!("transcript:{run_id}#turn-2"),
+            ContentHash::compute(b"turn 2"),
+        );
+        memory_store.add_claim(&claim).unwrap();
+        drop(memory_store);
 
-    assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", home.path())
-        .args(["memory", "audit"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("stopped by loop guard"))
-        .stdout(predicates::str::contains(run_id.to_string()));
+        assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", home.path())
+            .args(["memory", "audit"])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("stopped by loop guard"))
+            .stdout(predicates::str::contains(run_id.to_string()));
+    }
+    home.close().unwrap();
 }

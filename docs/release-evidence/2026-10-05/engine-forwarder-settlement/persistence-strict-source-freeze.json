@@ -1,0 +1,42 @@
+{
+  "status": "strict host persistence gate passed; full plan and native acceptance remain pending",
+  "supersedes_source_context_of": [
+    "persistence-source-freeze.json",
+    "persistence-post-read-seam.json"
+  ],
+  "historical_receipts": "Earlier files and original hashes remain unchanged; their executed tests are not relabeled as tests of this revision.",
+  "sources": {
+    "crates/surge-persistence/src/runs/writer.rs": "971060f9b4dd8d5d211678bc46f0e0e50c53b60e1c409ac9c7ecbf863cd225ae",
+    "crates/surge-persistence/src/runs/run_writer.rs": "3d1902b053b090afb49d50b25e1c14257ef060a84bb06f88915661ec0da55700",
+    "crates/surge-persistence/src/runs/reader.rs": "b20d772daed3e22fb94b03520435038e44fc34cc80096cc3de955be1f6d63018",
+    "crates/surge-persistence/src/runs/subscribe.rs": "8f5e22785fad8497cdf6fbca03c70760c776e2b982ea99258bd98e82a8e898b9",
+    "crates/surge-persistence/src/runs/error.rs": "406aea211d8228644a41f6bb040d1e067f407aa28c309278bd05ee35848576ba",
+    "crates/surge-persistence/src/runs/mod.rs": "19b71ea81507fdc4775beb294f3e5b5ef77d5d00c8a898e3dcbcdb40869d3ce8",
+    "crates/surge-persistence/src/runs/storage.rs": "6cf38ff70ac466275fd259d5f34fb5cdc744351aa2b8e263355d3ebfd6923ddc",
+    "crates/surge-persistence/src/runs/run_writer/settlement_tests.rs": "069c0a14cf1ef89ae7d57c5f7a7627c345edecf9ef6fbe6505ce1dd2704254f1",
+    "crates/surge-persistence/tests/writer_actor_lease.rs": "3f76a9a49e6ecc597e52c28543ddcc706c80b80cf3423c9343f477816384c0d1"
+  },
+  "changes_since_initial": [
+    "test-support-only actual-empty post-read gate (separate receipt)",
+    "RunWriter retained exclusion field renamed _lease to lease because feed now uses it; constructor/reader references updated; no lint suppression"
+  ],
+  "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo +1.99.0 clippy -p surge-persistence --all-targets --all-features -- -D warnings",
+  "executions": [
+    {
+      "log": "persistence-feed-strict-clippy-first.log",
+      "exit": 101,
+      "diagnostic": "used_underscore_binding reader.rs: writer._lease; stopped at lib"
+    },
+    {
+      "log": "persistence-feed-strict-clippy-second.log",
+      "exit": 0,
+      "elapsed_seconds": 8.89,
+      "scope": "all persistence targets and features on aarch64-apple-darwin; Windows cfg code not compiled by this host gate"
+    }
+  ],
+  "remaining": [
+    "independent complete-plan source verification",
+    "remaining actual failure/runtime teardown matrix coordinated with engine builder",
+    "authoritative Windows/native validation"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "root": "/tmp/surge-native-rollback-l2qkwiw1",
+  "old_archive_sha256": "88569c9a783f26296cb31cd16c5b47f6db53c8d35a74201e2f32d9e659573e6b",
+  "new_archive_sha256": "7670f8e9b161609a4632b2203a3021eb976aac4dbac3fba1daa3240d4c994e4c",
+  "status": "FAIL"
+}

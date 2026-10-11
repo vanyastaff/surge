@@ -60,9 +60,7 @@ fn collect_tracked(
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), GitError> {
     for entry in tree.iter() {
-        let name = entry
-            .name()
-            .ok_or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+        let name = entry.name()?;
         let path = prefix.join(name);
         match entry.kind() {
             Some(ObjectType::Tree) => {

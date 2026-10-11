@@ -68,6 +68,14 @@ pub struct EngineConfig {
     /// Surge deliberately has no per-vendor branch anywhere: choosing a
     /// provider is choosing a registry entry.
     pub agent_registry: Option<Arc<surge_acp::Registry>>,
+    /// Where the extra attempt of an exhausted retry loop runs
+    /// (`surge_core::escalation`). Engine-level like `capacity`, so a resumed
+    /// run keeps it; production wiring copies `SurgeConfig::escalation`.
+    pub escalation: surge_core::escalation::EscalationConfig,
+    /// Agents a stage moves to when its own agent's usage limit is exhausted
+    /// (`[capacity].fallback_agents`, v1 task 1.4), in order. Engine-level so
+    /// a resumed run keeps them. Empty keeps parking.
+    pub fallback_agents: Vec<String>,
 }
 
 impl Default for EngineConfig {
@@ -80,8 +88,32 @@ impl Default for EngineConfig {
             ),
             memory_store_path: None,
             agent_registry: None,
+            escalation: surge_core::escalation::EscalationConfig::default(),
+            fallback_agents: Vec::new(),
         }
     }
+}
+
+/// `SurgeConfig::escalation`, checked against the agent registry: a retry agent
+/// the registry does not know is dropped with a warning, so the extra attempt
+/// runs on the stage's own agent instead of failing at launch.
+#[must_use]
+pub fn escalation_config(
+    config: &surge_core::SurgeConfig,
+    agents: &surge_acp::Registry,
+) -> surge_core::escalation::EscalationConfig {
+    let mut escalation = config.escalation.clone();
+    if let Some(agent) = escalation.retry_agent()
+        && agents.find_normalized(agent).is_none()
+    {
+        tracing::warn!(
+            target: "engine::escalation",
+            retry_agent = agent,
+            "[escalation] retry_agent is not a known agent; extra attempts use the stage's agent"
+        );
+        escalation = surge_core::escalation::EscalationConfig::default();
+    }
+    escalation
 }
 
 /// Controls when the engine writes a snapshot blob to storage.
@@ -364,7 +396,7 @@ mod tests {
     #[test]
     fn engine_run_config_default_mcp_servers_empty() {
         let cfg = EngineRunConfig::default();
-        assert!(cfg.mcp_servers.is_empty());
+        assert_eq!(cfg.mcp_servers.len(), 0);
     }
 
     #[test]
@@ -422,11 +454,11 @@ mod tests {
         // Old serialised blobs without the field should still round-trip.
         let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
         let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
-        assert!(parsed.mcp_servers.is_empty());
-        assert!(parsed.quota_recovery.stages().is_empty());
+        assert_eq!(parsed.mcp_servers.len(), 0);
+        assert_eq!(parsed.quota_recovery.stages().len(), 0);
         // Legacy blobs without `initial_prompt` must default to the empty
         // string so the engine treats them as non-bootstrap runs.
-        assert!(parsed.initial_prompt.is_empty());
+        assert_eq!(parsed.initial_prompt.len(), 0);
         assert!(parsed.bootstrap_parent.is_none());
     }
 

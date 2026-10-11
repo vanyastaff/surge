@@ -1,0 +1,13 @@
+{
+  "file": "crates/surge-persistence/src/state_home/security_tests.rs",
+  "sha256": "213c041a24f506d34400407f05871932a83648e992531095c5021ef39db52c8c",
+  "approved_plan": "/tmp/surge-unprotected-dacl-fixture-repair-plan.md",
+  "approved_plan_sha256": "4370d17c71136e2215fdf97b185129879806f7a92ec6eb74f6ad5d21de105c96",
+  "cross_lint_command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/surge-security-policy-actual-module/target CLIPPY_CONF_DIR=/Users/vanyastafford/Develop/surge cargo +1.99.0 clippy --offline --manifest-path /tmp/surge-unprotected-fixture-sdk-check/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings",
+  "exit": 0,
+  "log": "/tmp/surge-unprotected-fixture-sdk-clippy.log",
+  "harness_scope": "Exact source import/setup-function slice (install_dacl/unprotect_dacl/Descriptor), compiled as cfg(test). No RuntimeHomeOwner or validator stubs; rest of native matrix not compiled by this slice harness. Wrapper allows dead_code for uncalled fixture helpers.",
+  "format": "cargo +1.99.0 fmt --all --check PASS log /tmp/surge-fixture3-module-fmt-green.log",
+  "diff_check": "PASS",
+  "native_before": "Actual04c unprotected fixture failed setup; no native execution of repair yet"
+}

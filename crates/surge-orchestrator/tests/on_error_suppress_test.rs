@@ -7,6 +7,8 @@
 #![allow(clippy::too_many_lines)]
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -156,65 +158,71 @@ fn graph_with_agent(hooks: Vec<Hook>, declared_outcomes: Vec<&str>, edge_outcome
 async fn run_crashing_agent(
     build_graph: impl FnOnce(&Path) -> Graph,
 ) -> (RunOutcome, Vec<surge_persistence::runs::reader::ReadEvent>) {
-    let dir = tempfile::tempdir().unwrap();
-    // Two of this file's three tests drive the run to a genuine
-    // `RunOutcome::Failed` (the crash is never suppressed), which trips
-    // `engine::hooks::memory_writeback::record_node_failure` — route it at
-    // a throwaway store instead of the developer's real `~/.surge/memory.db`.
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    let fixture_result = {
+        // Two of this file's three tests drive the run to a genuine
+        // `RunOutcome::Failed` (the crash is never suppressed), which trips
+        // `engine::hooks::memory_writeback::record_node_failure` — route it at
+        // a throwaway store instead of the developer's real `~/.surge/memory.db`.
 
-    let run_id = RunId::new();
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::SessionEnded {
-        session: session_id,
-        reason: SessionEndReason::AgentCrashed {
-            exit_code: Some(137),
-            stderr_tail: "simulated crash".into(),
-        },
-    })
-    .await;
+        let store_path = memory_dir.path().join("memory.db");
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let graph = build_graph(dir.path());
-    let handle = engine
-        .start_run(
-            run_id,
-            graph,
-            dir.path().to_path_buf(),
-            EngineRunConfig {
-                memory_store_path: Some(store_path),
-                ..EngineRunConfig::default()
+        let run_id = RunId::new();
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::SessionEnded {
+            session: session_id,
+            reason: SessionEndReason::AgentCrashed {
+                exit_code: Some(137),
+                stderr_tail: "simulated crash".into(),
             },
-        )
-        .await
-        .expect("start_run");
+        })
+        .await;
 
-    let mock_for_pump = mock.clone();
-    let pump = tokio::spawn(async move {
-        mock_for_pump.pump_after_subscribe(1).await;
-    });
+        let graph = build_graph(dir.path());
+        let handle = engine
+            .start_run(
+                run_id,
+                graph,
+                dir.path().to_path_buf(),
+                EngineRunConfig {
+                    memory_store_path: Some(store_path),
+                    ..EngineRunConfig::default()
+                },
+            )
+            .await
+            .expect("start_run");
 
-    let outcome = tokio::time::timeout(RUN_WAIT, handle.await_completion())
-        .await
-        .expect("run timed out")
-        .expect("run handle join");
-    pump.await.unwrap();
-    drop(engine);
+        let mock_for_pump = mock.clone();
+        let pump = tokio::spawn(async move {
+            mock_for_pump.pump_after_subscribe(1).await;
+        });
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let last = reader.current_seq().await.unwrap();
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
-        .await
-        .unwrap();
-    (outcome, events)
+        let outcome = tokio::time::timeout(RUN_WAIT, handle.await_completion())
+            .await
+            .expect("run timed out")
+            .expect("run handle join");
+        pump.await.unwrap();
+        drop(engine);
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        (outcome, events)
+    };
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
+    fixture_result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

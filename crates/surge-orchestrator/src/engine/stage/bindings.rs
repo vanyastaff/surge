@@ -457,7 +457,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let resolved = resolve_bindings(&bindings, &mem, dir.path()).await.unwrap();
         assert_eq!(resolved.len(), 1);
-        assert!(resolved[0].1.is_empty());
+        assert_eq!(resolved[0].1.len(), 0);
     }
 
     #[tokio::test]
@@ -478,7 +478,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let resolved = resolve_bindings(&bindings, &mem, dir.path()).await.unwrap();
         assert_eq!(resolved.len(), 1);
-        assert!(resolved[0].1.is_empty());
+        assert_eq!(resolved[0].1.len(), 0);
     }
 
     #[test]

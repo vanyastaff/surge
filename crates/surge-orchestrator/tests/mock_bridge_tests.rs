@@ -2,6 +2,7 @@
 //! and correctly pumps scripted events to subscribers.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use fixtures::mock_bridge::MockBridge;
 use std::collections::BTreeMap;

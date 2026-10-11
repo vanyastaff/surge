@@ -121,7 +121,7 @@ mod tests {
         handle.join().unwrap();
 
         let captured = captured.lock().unwrap().clone();
-        assert!(!captured.is_empty());
+        assert_ne!(captured.len(), 0);
         let parsed: serde_json::Value = serde_json::from_str(&captured[0]).unwrap();
         assert_eq!(parsed["title"], "T");
     }

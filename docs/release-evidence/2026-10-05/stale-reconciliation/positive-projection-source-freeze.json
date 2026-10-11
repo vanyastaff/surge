@@ -1,0 +1,29 @@
+{
+  "status": "focused daemon runtime GREEN; strict CI-toolchain checks and independent final review pending",
+  "sha256": {
+    "crates/surge-daemon/src/work_items.rs": "934a08c8fa2e693acea6c361a9333f3b5ee51dcf4900de3a3fe3abe278a0ddb0",
+    "crates/surge-daemon/src/work_items/reconciliation_tests.rs": "02f5f630d38ba89d13d225b49fa646d21bbb3cd197f117aa904b1fc78090fb30",
+    "crates/surge-daemon/src/work_items/reconciliation_tests/positive_projection.rs": "9f7b0617ba40a359b1e6bdd31e1366d3dc651899f479f559cb48af5b6d553ca4",
+    "crates/surge-daemon/src/work_items/reconciliation_tests/accepted_dispatch.rs": "362c2a6a05f9c105b7e9c5502c376fba8312d5855df8a2b3aa6154aaa2becd78",
+    "crates/surge-daemon/src/work_items/reconciliation_tests/planned_capacity.rs": "89a9bd9d97aaeedca888fcfde6e6d4957b2b677082ad75fbe3ec65635483f1d6",
+    "crates/surge-persistence/src/work_items.rs": "54553a3fd6dd37b16e7181bf123c40808172404d342da21de48ab5564eca19f6",
+    "crates/surge-persistence/src/work_items/control.rs": "de853184b1499e64d11d93a51529b451c1c55efec644c7cff97c8897d7d6c497",
+    "crates/surge-persistence/src/work_items/reconciliation_tests.rs": "a7522529c45fcdc293b8436590e1e3daba5560e80c61137ad3ddb1221e1365e6",
+    "crates/surge-daemon/tests/quota_recovery_route_test.rs": "9437a04ba76e8b68210fea1578b6c1c11ca71245eeb028adbdbb77aabbc5283e"
+  },
+  "runtime_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "gates": [
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-daemon --lib work_items::reconciliation_tests -- --nocapture",
+      "log": "reconciliation-positive-green.log",
+      "sha256": "9fa6f4c1d640d7535af7dc2b56ca4c291f3904796e2708a19e400b6786ce17c7",
+      "result": "15 passed, 0 failed, 0.90s"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-daemon --test quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary -- --exact --nocapture",
+      "log": "quota-mixed429-positive-green.log",
+      "sha256": "eaceb7f9b471b64eb76db1f1c5f833f2dc2d12157fce4248a6fe1bb42c2214b8",
+      "result": "1 passed, 0 failed, 0.86s"
+    }
+  ]
+}

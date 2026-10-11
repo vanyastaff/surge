@@ -121,7 +121,11 @@ flowchart LR
 
 After `RunFinished { Completed }`, the
 [`AutomationMergeGate`](../crates/surge-daemon/src/automation_merge_gate.rs)
-consumer:
+consumer also reconciles durable completed journals at startup, every 30 seconds,
+and after broadcast lag. It scans keyset pages of at most 64 tickets, including
+already-settled tickets, and retains its cursor between passes. Each completion
+handler has a 30-second deadline. The interval is a scheduling cadence, not a
+maximum recovery latency: a page processes its completions sequentially. It:
 
 1. Looks up the ticket via the run id.
 2. Re-fetches the ticket's current labels (the user may have flipped
@@ -130,7 +134,9 @@ consumer:
 4. Calls `intake_emit_log::has(...)` to dedup against a re-fired event —
    a recorded `merged` row means a recovery re-emit can never double-merge.
 5. Evaluates merge readiness via `TaskSource::check_merge_readiness`.
-6. On `Ready`, executes the merge via `TaskSource::merge_pr`; on success
+6. On `Ready`, reserves a unique durable `merge_attempted` receipt before
+   calling `TaskSource::merge_pr`. Receipt lookup or insertion errors refuse the
+   external action. On success it
    posts a `surge:merged` comment + label and a **success** operator
    escalation. On `Blocked` — or a merge that returns a conflict / errors —
    posts a `surge:merge-blocked` comment + label and a **warn** escalation,
@@ -138,6 +144,12 @@ consumer:
 7. Records the terminal decision (`merged` or `merge_blocked`) in
    `intake_emit_log` so retries no-op. The `merged` row is written **before**
    the follow-up comment/label, because the merge is irreversible.
+
+An interrupted attempt without a terminal receipt becomes durable
+`merge_uncertain` before tracker reads or checking current labels. It requires
+manual PR inspection and does not retry the merge. Tracker comments, labels and
+operator notifications are best-effort; failure is logged, and the durable
+uncertainty marker remains even when notification delivery fails.
 
 ### Run Report attachment (optional — reads report data outside the machine)
 

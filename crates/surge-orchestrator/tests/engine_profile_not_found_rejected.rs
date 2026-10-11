@@ -13,6 +13,8 @@
 //! run never touches the bridge and never creates per-run storage).
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -99,71 +101,75 @@ fn graph_with_unresolvable_profile() -> Graph {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unresolvable_profile_rejects_before_any_run_or_bridge_state_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        let store_path = memory_dir.path().join("memory.db");
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    // A real `ProfileRegistry` (bundled profiles, no disk overlay) — the
-    // production wiring `Engine::start_run` needs before `ProfileNotFound`
-    // can fire at all; a `None` registry keeps the legacy resolver-free
-    // path where this rule never runs.
-    let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
-    let engine = Engine::new(
-        bridge,
-        storage.clone(),
-        dispatcher,
-        EngineConfig {
-            profile_registry: Some(profile_registry),
-            ..EngineConfig::default()
-        },
-    );
+        // A real `ProfileRegistry` (bundled profiles, no disk overlay) — the
+        // production wiring `Engine::start_run` needs before `ProfileNotFound`
+        // can fire at all; a `None` registry keeps the legacy resolver-free
+        // path where this rule never runs.
+        let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+        let engine = Engine::new(
+            bridge,
+            storage.clone(),
+            dispatcher,
+            EngineConfig {
+                profile_registry: Some(profile_registry),
+                ..EngineConfig::default()
+            },
+        );
 
-    let run_id = RunId::new();
-    let run_config = EngineRunConfig {
-        memory_store_path: Some(store_path),
-        ..EngineRunConfig::default()
-    };
+        let run_id = RunId::new();
+        let run_config = EngineRunConfig {
+            memory_store_path: Some(store_path),
+            ..EngineRunConfig::default()
+        };
 
-    let result = engine
-        .start_run(
-            run_id,
-            graph_with_unresolvable_profile(),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await;
+        let result = engine
+            .start_run(
+                run_id,
+                graph_with_unresolvable_profile(),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await;
 
-    let err = match result {
-        Err(e) => e,
-        Ok(_) => panic!(
-            "start_run should reject a graph naming an unresolvable profile but returned \
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!(
+                "start_run should reject a graph naming an unresolvable profile but returned \
              Ok — ValidationErrorKind::ProfileNotFound did not reach the production \
              start_run path"
-        ),
-    };
-    match &err {
-        EngineError::GraphInvalid(msg) => {
-            assert!(
-                msg.contains("definitely-not-a-real-profile"),
-                "error should name the unresolvable profile, got: {msg}"
-            );
-        },
-        other => panic!("expected GraphInvalid, got {other:?}"),
-    }
+            ),
+        };
+        match &err {
+            EngineError::GraphInvalid(msg) => {
+                assert!(
+                    msg.contains("definitely-not-a-real-profile"),
+                    "error should name the unresolvable profile, got: {msg}"
+                );
+            },
+            other => panic!("expected GraphInvalid, got {other:?}"),
+        }
 
-    assert!(
-        mock.recorded_calls.lock().await.is_empty(),
-        "a graph-invalid run must never touch the bridge — the node never started"
-    );
-    assert!(
-        storage.open_run_reader(run_id).await.is_err(),
-        "a rejected run must never create per-run storage — proves rejection happens \
+        assert!(
+            mock.recorded_calls.lock().await.is_empty(),
+            "a graph-invalid run must never touch the bridge — the node never started"
+        );
+        assert!(
+            storage.open_run_reader(run_id).await.is_err(),
+            "a rejected run must never create per-run storage — proves rejection happens \
          before any run/worktree state exists"
-    );
+        );
+    }
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
 }

@@ -14,6 +14,8 @@
 //!   skill instructions show up in `MockBridge::last_prompt()`.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -387,193 +389,205 @@ fn graph_with_declared_skill_and_approval(declared: Vec<SkillRef>, gate_enabled:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unpinned_skill_unanswered_rejects_before_any_session_opens() {
-    let dir = tempfile::tempdir().unwrap();
-    write_project_skill(dir.path(), "reviewer", "code-reviewer", "Review carefully.");
-    // This test drives the run to a genuine `RunOutcome::Failed` (skill
-    // approval rejected), which trips
-    // `engine::hooks::memory_writeback::record_node_failure` — route it at
-    // a throwaway store instead of the developer's real `~/.surge/memory.db`.
-    let memory_dir = tempfile::tempdir().unwrap();
-    let store_path = memory_dir.path().join("memory.db");
+    let dir = FixtureHome::new().unwrap();
+    let memory_dir = FixtureHome::new().unwrap();
+    {
+        write_project_skill(dir.path(), "reviewer", "code-reviewer", "Review carefully.");
+        // This test drives the run to a genuine `RunOutcome::Failed` (skill
+        // approval rejected), which trips
+        // `engine::hooks::memory_writeback::record_node_failure` — route it at
+        // a throwaway store instead of the developer's real `~/.surge/memory.db`.
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+        let store_path = memory_dir.path().join("memory.db");
 
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    let declared = vec![SkillRef {
-        name: "code-reviewer".into(),
-        provider: SkillProvider::ProjectDir,
-        version: None,
-        hash: None, // unpinned — always requires approval
-    }];
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let run_id = RunId::new();
-    let run_config = EngineRunConfig {
-        human_input_timeout: Duration::from_millis(50),
-        memory_store_path: Some(store_path),
-        ..EngineRunConfig::default()
-    };
-    let handle = engine
-        .start_run(
-            run_id,
-            graph_with_declared_skill(declared),
-            dir.path().to_path_buf(),
-            run_config,
-        )
-        .await
-        .expect("start_run");
+        let declared = vec![SkillRef {
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            version: None,
+            hash: None, // unpinned — always requires approval
+        }];
 
-    // Nobody ever calls `engine.resolve_human_input` — the operator prompt
-    // times out and the node must never start.
-    let outcome = handle.await_completion().await.unwrap();
-    match outcome {
-        RunOutcome::Failed { error } => {
-            assert!(
-                error.contains("skill approval"),
-                "failure reason should name the skill-approval rejection: {error}"
-            );
-        },
-        other => panic!("expected Failed, got {other:?}"),
+        let run_id = RunId::new();
+        let run_config = EngineRunConfig {
+            human_input_timeout: Duration::from_millis(50),
+            memory_store_path: Some(store_path),
+            ..EngineRunConfig::default()
+        };
+        let handle = engine
+            .start_run(
+                run_id,
+                graph_with_declared_skill(declared),
+                dir.path().to_path_buf(),
+                run_config,
+            )
+            .await
+            .expect("start_run");
+
+        // Nobody ever calls `engine.resolve_human_input` — the operator prompt
+        // times out and the node must never start.
+        let outcome = handle.await_completion().await.unwrap();
+        match outcome {
+            RunOutcome::Failed { error } => {
+                assert!(
+                    error.contains("skill approval"),
+                    "failure reason should name the skill-approval rejection: {error}"
+                );
+            },
+            other => panic!("expected Failed, got {other:?}"),
+        }
+
+        assert!(
+            mock.recorded_calls.lock().await.is_empty(),
+            "an unapproved skill must reject before any bridge call — the node never started"
+        );
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64),
+            )
+            .await
+            .unwrap();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|re| re.payload.payload.discriminant_str())
+            .collect();
+        assert!(
+            kinds.contains(&"HumanInputRequested"),
+            "the skill-trust prompt must go out on the delivered path, got {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"HumanInputTimedOut"),
+            "an unanswered prompt must time out, got {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&"SkillBound"),
+            "a rejected skill must never be bound, got {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&"SessionOpened"),
+            "a rejected skill must never open an agent session, got {kinds:?}"
+        );
     }
-
-    assert!(
-        mock.recorded_calls.lock().await.is_empty(),
-        "an unapproved skill must reject before any bridge call — the node never started"
-    );
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64))
-        .await
-        .unwrap();
-    let kinds: Vec<&str> = events
-        .iter()
-        .map(|re| re.payload.payload.discriminant_str())
-        .collect();
-    assert!(
-        kinds.contains(&"HumanInputRequested"),
-        "the skill-trust prompt must go out on the delivered path, got {kinds:?}"
-    );
-    assert!(
-        kinds.contains(&"HumanInputTimedOut"),
-        "an unanswered prompt must time out, got {kinds:?}"
-    );
-    assert!(
-        !kinds.contains(&"SkillBound"),
-        "a rejected skill must never be bound, got {kinds:?}"
-    );
-    assert!(
-        !kinds.contains(&"SessionOpened"),
-        "a rejected skill must never open an agent session, got {kinds:?}"
-    );
+    memory_dir.close().unwrap();
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pinned_skill_binds_and_instructions_reach_the_agent_prompt() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
-    let dir = tempfile::tempdir().unwrap();
-    write_project_skill(
-        dir.path(),
-        "reviewer",
-        "code-reviewer",
-        "Only ever review; never edit files directly.",
-    );
+    let dir = FixtureHome::new().unwrap();
+    {
+        write_project_skill(
+            dir.path(),
+            "reviewer",
+            "code-reviewer",
+            "Only ever review; never edit files directly.",
+        );
 
-    // Discover the real hash so the declared pin matches — no approval
-    // round trip expected on this path.
-    let catalog = surge_core::skill::SkillCatalog::discover(&[surge_core::skill::SkillRoot {
-        provider: SkillProvider::ProjectDir,
-        path: dir.path().join(".claude/skills"),
-    }]);
-    let (_, real) = catalog
-        .resolve(&SkillRef {
+        // Discover the real hash so the declared pin matches — no approval
+        // round trip expected on this path.
+        let catalog = surge_core::skill::SkillCatalog::discover(&[surge_core::skill::SkillRoot {
+            provider: SkillProvider::ProjectDir,
+            path: dir.path().join(".claude/skills"),
+        }]);
+        let (_, real) = catalog
+            .resolve(&SkillRef {
+                name: "code-reviewer".into(),
+                provider: SkillProvider::ProjectDir,
+                version: None,
+                hash: None,
+            })
+            .unwrap();
+
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+
+        // Auto-complete the agent stage once it opens a session, exactly like
+        // `engine_agent_stage_unit.rs` does — this test cares about what the
+        // prompt carried, not about driving a real ACP subprocess.
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
+
+            verification_report: None,
+        })
+        .await;
+        let pump = skill_pump(mock.clone(), 1);
+
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+        let declared = vec![SkillRef {
             name: "code-reviewer".into(),
             provider: SkillProvider::ProjectDir,
             version: None,
-            hash: None,
-        })
-        .unwrap();
+            hash: Some(real.hash),
+        }];
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                graph_with_declared_skill(declared),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    // Auto-complete the agent stage once it opens a session, exactly like
-    // `engine_agent_stage_unit.rs` does — this test cares about what the
-    // prompt carried, not about driving a real ACP subprocess.
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        let outcome = SkillRunWatch::new(&engine, &storage, handle, pump, deadline)
+            .finish()
+            .await;
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => panic!("expected Completed, got {other:?}"),
+        }
 
-        verification_report: None,
-    })
-    .await;
-    let pump = skill_pump(mock.clone(), 1);
+        let prompt = mock
+            .last_prompt()
+            .await
+            .expect("agent stage must have sent a prompt");
+        assert!(
+            prompt.contains("Only ever review; never edit files directly."),
+            "the bound skill's instructions must reach the agent's prompt, got: {prompt}"
+        );
 
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
-
-    let declared = vec![SkillRef {
-        name: "code-reviewer".into(),
-        provider: SkillProvider::ProjectDir,
-        version: None,
-        hash: Some(real.hash),
-    }];
-
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            graph_with_declared_skill(declared),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
-
-    let outcome = SkillRunWatch::new(&engine, &storage, handle, pump, deadline)
-        .finish()
-        .await;
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed, got {other:?}"),
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64),
+            )
+            .await
+            .unwrap();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|re| re.payload.payload.discriminant_str())
+            .collect();
+        assert!(
+            kinds.contains(&"SkillBound"),
+            "the pinned skill must bind, got {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&"HumanInputRequested"),
+            "a matching pin must never prompt, got {kinds:?}"
+        );
     }
-
-    let prompt = mock
-        .last_prompt()
-        .await
-        .expect("agent stage must have sent a prompt");
-    assert!(
-        prompt.contains("Only ever review; never edit files directly."),
-        "the bound skill's instructions must reach the agent's prompt, got: {prompt}"
-    );
-
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64))
-        .await
-        .unwrap();
-    let kinds: Vec<&str> = events
-        .iter()
-        .map(|re| re.payload.payload.discriminant_str())
-        .collect();
-    assert!(
-        kinds.contains(&"SkillBound"),
-        "the pinned skill must bind, got {kinds:?}"
-    );
-    assert!(
-        !kinds.contains(&"HumanInputRequested"),
-        "a matching pin must never prompt, got {kinds:?}"
-    );
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -585,73 +599,76 @@ async fn plugin_packaged_skill_binds_via_dot_claude_plugins_root() {
     // `skills/<name>/SKILL.md`) so the `.claude/plugins` root is actually
     // exercised end to end through the real engine harness, not just
     // asserted to be present in `default_skill_roots`'s return value.
-    let dir = tempfile::tempdir().unwrap();
-    write_project_plugin_skill(
-        dir.path(),
-        "my-plugin",
-        "code-reviewer",
-        "Plugin-packaged review instructions.",
-    );
+    let dir = FixtureHome::new().unwrap();
+    {
+        write_project_plugin_skill(
+            dir.path(),
+            "my-plugin",
+            "code-reviewer",
+            "Plugin-packaged review instructions.",
+        );
 
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
 
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: session_id,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok".into(),
+            artifacts_produced: vec![],
 
-        verification_report: None,
-    })
-    .await;
-    let pump = skill_pump(mock.clone(), 1);
-
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
-
-    // Unpinned but declared on a node with the gate explicitly disabled —
-    // this test is about proving the `.claude/plugins` root resolves at
-    // all, not re-covering the approval path already covered above.
-    let declared = vec![SkillRef {
-        name: "code-reviewer".into(),
-        provider: SkillProvider::ProjectDir,
-        version: None,
-        hash: None,
-    }];
-
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            graph_with_declared_skill_and_approval(declared, false),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
-
-    let outcome = SkillRunWatch::new(&engine, &storage, handle, pump, deadline)
-        .finish()
+            verification_report: None,
+        })
         .await;
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed, got {other:?}"),
-    }
+        let pump = skill_pump(mock.clone(), 1);
 
-    let prompt = mock
-        .last_prompt()
-        .await
-        .expect("agent stage must have sent a prompt");
-    assert!(
-        prompt.contains("Plugin-packaged review instructions."),
-        "a skill packaged under .claude/plugins must still reach the agent's \
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+        // Unpinned but declared on a node with the gate explicitly disabled —
+        // this test is about proving the `.claude/plugins` root resolves at
+        // all, not re-covering the approval path already covered above.
+        let declared = vec![SkillRef {
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            version: None,
+            hash: None,
+        }];
+
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                graph_with_declared_skill_and_approval(declared, false),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
+
+        let outcome = SkillRunWatch::new(&engine, &storage, handle, pump, deadline)
+            .finish()
+            .await;
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let prompt = mock
+            .last_prompt()
+            .await
+            .expect("agent stage must have sent a prompt");
+        assert!(
+            prompt.contains("Plugin-packaged review instructions."),
+            "a skill packaged under .claude/plugins must still reach the agent's \
          prompt, got: {prompt}"
-    );
+        );
+    }
+    dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -666,154 +683,159 @@ async fn approved_skill_gate_does_not_leak_into_legitimate_stage_revisit() {
 
 async fn approved_skill_completion_fixture(revisit: bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
-    let dir = tempfile::tempdir().unwrap();
-    write_project_skill(
-        dir.path(),
-        "reviewer",
-        "code-reviewer",
-        "Only ever review; never edit files directly.",
-    );
-
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let bridge: Arc<dyn BridgeFacade> = mock.clone();
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-
-    // Auto-complete the agent stage once it opens a session, exactly like
-    // `engine_agent_stage_unit.rs` does — this test cares about what the
-    // prompt carried, not about driving a real ACP subprocess.
-    let session_id = SessionId::new();
-    mock.pin_next_session_id(session_id).await;
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::try_from(if revisit { "again" } else { "done" }).unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
-
-        verification_report: None,
-    })
-    .await;
-    let pump = skill_pump(mock.clone(), 1);
-
-    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
-
-    let declared = vec![SkillRef {
-        name: "code-reviewer".into(),
-        provider: SkillProvider::ProjectDir,
-        version: None,
-        hash: None,
-    }];
-
-    let mut graph = graph_with_declared_skill(declared);
-    if revisit {
-        let node = NodeKey::try_from("implement").unwrap();
-        graph
-            .nodes
-            .get_mut(&node)
-            .unwrap()
-            .declared_outcomes
-            .push(OutcomeDecl {
-                id: "again".parse().unwrap(),
-                description: "revisit once".into(),
-                edge_kind_hint: EdgeKind::Backtrack,
-                is_terminal: false,
-                ledger_effect: Default::default(),
-            });
-        graph.edges.push(Edge {
-            id: "e_revisit".parse().unwrap(),
-            from: PortRef {
-                node: node.clone(),
-                outcome: "again".parse().unwrap(),
-            },
-            to: node,
-            kind: EdgeKind::Backtrack,
-            policy: EdgePolicy::default(),
-        });
-    }
-    let run_id = RunId::new();
-    let handle = engine
-        .start_run(
-            run_id,
-            graph,
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
-
-    let mut watch = SkillRunWatch::new(&engine, &storage, handle, pump, deadline);
-    let request = watch.gate(0).await;
-    watch.approve(request.0.clone(), request.1).await;
-    if revisit {
-        let second = watch.gate(1).await;
-        assert_ne!(
-            request.1, second.1,
-            "a legitimate revisit owns a new decision"
+    let dir = FixtureHome::new().unwrap();
+    {
+        write_project_skill(
+            dir.path(),
+            "reviewer",
+            "code-reviewer",
+            "Only ever review; never edit files directly.",
         );
-        watch.approve(request.0.clone(), request.1).await;
-        let second_session = SessionId::new();
-        mock.pin_next_session_id(second_session).await;
+
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+
+        // Auto-complete the agent stage once it opens a session, exactly like
+        // `engine_agent_stage_unit.rs` does — this test cares about what the
+        // prompt carried, not about driving a real ACP subprocess.
+        let session_id = SessionId::new();
+        mock.pin_next_session_id(session_id).await;
         mock.enqueue_event(BridgeEvent::OutcomeReported {
-            session: second_session,
-            outcome: "done".parse().unwrap(),
-            summary: "second stage".into(),
+            session: session_id,
+            outcome: OutcomeKey::try_from(if revisit { "again" } else { "done" }).unwrap(),
+            summary: "ok".into(),
             artifacts_produced: vec![],
+
             verification_report: None,
         })
         .await;
-        watch.add_pump(skill_pump(mock.clone(), 2));
-        watch.approve(second.0, second.1).await;
-    }
-    let outcome = watch.finish().await;
-    match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed, got {other:?}"),
-    }
+        let pump = skill_pump(mock.clone(), 1);
 
-    let prompt = mock
-        .last_prompt()
-        .await
-        .expect("agent stage must have sent a prompt");
-    assert!(
-        prompt.contains("Only ever review; never edit files directly."),
-        "the bound skill's instructions must reach the agent's prompt, got: {prompt}"
-    );
+        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let reader = storage.open_run_reader(run_id).await.unwrap();
-    let events = reader
-        .read_events(surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64))
-        .await
-        .unwrap();
-    let kinds: Vec<&str> = events
-        .iter()
-        .map(|re| re.payload.payload.discriminant_str())
-        .collect();
-    assert!(
-        kinds.contains(&"SkillBound"),
-        "the pinned skill must bind, got {kinds:?}"
-    );
-    assert!(kinds.contains(&"HumanInputRequested"));
-    assert_eq!(
-        kinds
+        let declared = vec![SkillRef {
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            version: None,
+            hash: None,
+        }];
+
+        let mut graph = graph_with_declared_skill(declared);
+        if revisit {
+            let node = NodeKey::try_from("implement").unwrap();
+            graph
+                .nodes
+                .get_mut(&node)
+                .unwrap()
+                .declared_outcomes
+                .push(OutcomeDecl {
+                    id: "again".parse().unwrap(),
+                    description: "revisit once".into(),
+                    edge_kind_hint: EdgeKind::Backtrack,
+                    is_terminal: false,
+                    ledger_effect: Default::default(),
+                });
+            graph.edges.push(Edge {
+                id: "e_revisit".parse().unwrap(),
+                from: PortRef {
+                    node: node.clone(),
+                    outcome: "again".parse().unwrap(),
+                },
+                to: node,
+                kind: EdgeKind::Backtrack,
+                policy: EdgePolicy::default(),
+            });
+        }
+        let run_id = RunId::new();
+        let handle = engine
+            .start_run(
+                run_id,
+                graph,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
+
+        let mut watch = SkillRunWatch::new(&engine, &storage, handle, pump, deadline);
+        let request = watch.gate(0).await;
+        watch.approve(request.0.clone(), request.1).await;
+        if revisit {
+            let second = watch.gate(1).await;
+            assert_ne!(
+                request.1, second.1,
+                "a legitimate revisit owns a new decision"
+            );
+            watch.approve(request.0.clone(), request.1).await;
+            let second_session = SessionId::new();
+            mock.pin_next_session_id(second_session).await;
+            mock.enqueue_event(BridgeEvent::OutcomeReported {
+                session: second_session,
+                outcome: "done".parse().unwrap(),
+                summary: "second stage".into(),
+                artifacts_produced: vec![],
+                verification_report: None,
+            })
+            .await;
+            watch.add_pump(skill_pump(mock.clone(), 2));
+            watch.approve(second.0, second.1).await;
+        }
+        let outcome = watch.finish().await;
+        match outcome {
+            RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let prompt = mock
+            .last_prompt()
+            .await
+            .expect("agent stage must have sent a prompt");
+        assert!(
+            prompt.contains("Only ever review; never edit files directly."),
+            "the bound skill's instructions must reach the agent's prompt, got: {prompt}"
+        );
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let events = reader
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64),
+            )
+            .await
+            .unwrap();
+        let kinds: Vec<&str> = events
             .iter()
-            .filter(|kind| **kind == "HumanInputRequested")
-            .count(),
-        if revisit { 2 } else { 1 }
-    );
-    assert_eq!(events.iter().filter(|event|matches!(event.payload.payload(), surge_core::EventPayload::StageEntered { node, .. } if node.as_str()=="implement")).count(), if revisit {2} else {1});
-    let mut memory = surge_core::run_state::RunMemory::default();
-    for event in events {
-        memory.apply_event(&surge_core::RunEvent {
-            run_id,
-            seq: event.seq.as_u64(),
-            timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
-            payload: event.payload.payload().clone(),
-        });
+            .map(|re| re.payload.payload.discriminant_str())
+            .collect();
+        assert!(
+            kinds.contains(&"SkillBound"),
+            "the pinned skill must bind, got {kinds:?}"
+        );
+        assert!(kinds.contains(&"HumanInputRequested"));
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == "HumanInputRequested")
+                .count(),
+            if revisit { 2 } else { 1 }
+        );
+        assert_eq!(events.iter().filter(|event|matches!(event.payload.payload(), surge_core::EventPayload::StageEntered { node, .. } if node.as_str()=="implement")).count(), if revisit {2} else {1});
+        let mut memory = surge_core::run_state::RunMemory::default();
+        for event in events {
+            memory.apply_event(&surge_core::RunEvent {
+                run_id,
+                seq: event.seq.as_u64(),
+                timestamp: chrono::DateTime::from_timestamp_millis(event.timestamp_ms).unwrap(),
+                payload: event.payload.payload().clone(),
+            });
+        }
+        assert!(
+            memory.gate_decisions.is_empty(),
+            "completed skill approval is not an outstanding HumanGate route: {:?}",
+            memory.gate_decisions
+        );
     }
-    assert!(
-        memory.gate_decisions.is_empty(),
-        "completed skill approval is not an outstanding HumanGate route: {:?}",
-        memory.gate_decisions
-    );
+    dir.close().unwrap();
 }

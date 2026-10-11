@@ -1,0 +1,23 @@
+{
+  "source_sha256": {
+    "crates/surge-persistence/src/state_home.rs": "090d4c493470bd6d5f5aa54653dc292b1bab0b26e2024f6dc2f090d5a1040b8c",
+    "crates/surge-persistence/src/state_home/windows/mod.rs": "cccecf53c2e5ece6f793817db4dd8577faa3421c5f5d0677861dc999af1c4833",
+    "crates/surge-persistence/src/state_home/windows/native.rs": "c4c594fd10c602f843e717cfaad0946c2e4054501592c3a61240f0bca225e388",
+    "crates/surge-persistence/src/lib.rs": "04b7ee8f3ec5642f87e5f571d1fccece3d76c59805b972182e9d08fa01c29cfa",
+    "crates/surge-persistence/Cargo.toml": "7b9d29fc80e14b245f335c01178cc74d545cd42a3c1d2297d5920ea833b8cad9",
+    "scripts/windows-native-probe.ps1": "198ad262529e428e29d4804aeecea422c634ee21a44bc27abe9f20fbba065352",
+    ".github/workflows/ci.yml": "a488bc8a1ea6871a378c9ba52e5f442f23930b5b84939241e1b565c73cbaa2c2"
+  },
+  "receipts_sha256": {
+    "target/windows-native-flush-checks/macos-persistence-clippy.log": "cd2121f76aa334a5d7d5e4905467a6a9ac42ab305e06298e997355d6d0babf81",
+    "target/windows-native-flush-checks/persistence-fmt.log": "8a18c83653ab1b60434342976744a17f3401479f0830a1a09a2089eb4076a324",
+    "target/windows-native-flush-checks/actual-module-windows-msrv.log": "f2597f492f6736784755dbe4fad120ea9979ba65c0d6c723d242c6a36e438941",
+    "target/windows-native-flush-checks/actual-module-windows-clippy.log": "695a54f0cbac0f90e55e03226b969d7877179ef694bf8a7d4996d8851332b013"
+  },
+  "limitations": [
+    "Windows actual-module cross compile only, no native execution",
+    "Full persistence Windows crosscheck stopped before module at missing MSVC stdlib.h",
+    "PowerShell not available locally; mandatory dedicated-standard-user CI execution pending",
+    "No private-capability guards changed"
+  ]
+}

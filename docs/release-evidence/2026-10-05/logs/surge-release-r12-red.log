@@ -1,0 +1,66 @@
+   Compiling smallvec v1.15.1
+   Compiling num-traits v0.2.19
+   Compiling rustix v1.1.4
+   Compiling cc v1.2.57
+   Compiling syn v3.0.6
+   Compiling futures-sink v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling slab v0.4.12
+   Compiling futures-channel v0.3.34
+   Compiling tracing v0.1.44
+   Compiling regex-automata v0.4.14
+   Compiling parking_lot_core v0.9.12
+   Compiling tokio-macros v2.6.1
+   Compiling wait-timeout v0.2.1
+   Compiling parking_lot v0.12.5
+   Compiling ulid v1.2.1
+   Compiling scheduled-thread-pool v0.2.7
+   Compiling rand_xorshift v0.4.0
+   Compiling async-stream-impl v0.3.6
+   Compiling tokio v1.50.0
+   Compiling r2d2 v0.8.10
+   Compiling tempfile v3.27.0
+   Compiling chrono v0.4.44
+   Compiling rusty-fork v0.3.1
+   Compiling console v0.16.3
+   Compiling async-stream v0.3.6
+   Compiling libsqlite3-sys v0.30.1
+   Compiling proptest v1.11.0
+   Compiling insta v1.47.2
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling schemars v1.2.1
+   Compiling futures-macro v0.3.34
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling futures-util v0.3.34
+   Compiling rusqlite v0.32.1
+   Compiling tokio-stream v0.1.18
+   Compiling r2d2_sqlite v0.25.0
+   Compiling futures-executor v0.3.34
+   Compiling futures v0.3.34
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.95s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-4e809714c96ec25c)
+
+running 3 tests
+test runs::storage::existing_run_upgrade_tests::writer_missing_run_does_not_create_events_database ... ok
+
+thread 'runs::storage::existing_run_upgrade_tests::writer_upgrades_legacy_run_before_current_reads_and_preserves_history' (33290708) panicked at crates/surge-persistence/src/runs/storage.rs:854:58:
+called `Result::unwrap()` on an `Err` value: Sqlite(SqlInputError { error: Error { code: Unknown, extended_code: 1 }, msg: "no such column: known_cost_usd", sql: "SELECT node_id, attempt, started_seq, ended_seq, started_at, ended_at,\n                outcome, cost_usd, tokens_in, tokens_out, known_cost_usd, cost_unknown\n         FROM stage_executions ORDER BY started_seq", offset: 129 })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'runs::storage::existing_run_upgrade_tests::writer_refuses_unknown_schema_without_upgrade_and_releases_ownership' (33290707) panicked at crates/surge-persistence/src/runs/storage.rs:911:9:
+assertion failed: matches!(result, Err(OpenError::MigrationFailed(message)) if
+    message.contains("per-run-9999-future"))
+test runs::storage::existing_run_upgrade_tests::writer_upgrades_legacy_run_before_current_reads_and_preserves_history ... FAILED
+test runs::storage::existing_run_upgrade_tests::writer_refuses_unknown_schema_without_upgrade_and_releases_ownership ... FAILED
+
+failures:
+
+failures:
+    runs::storage::existing_run_upgrade_tests::writer_refuses_unknown_schema_without_upgrade_and_releases_ownership
+    runs::storage::existing_run_upgrade_tests::writer_upgrades_legacy_run_before_current_reads_and_preserves_history
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 492 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p surge-persistence --lib`

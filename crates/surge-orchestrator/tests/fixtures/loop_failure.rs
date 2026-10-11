@@ -12,7 +12,8 @@ mod static_loop_graph;
 
 pub async fn failing_body(policy: FailurePolicy) -> (RunOutcome, Vec<EventPayload>) {
     let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let bridge = Arc::new(super::fixtures::mock_bridge::MockBridge::new());
     let engine = Engine::new(
         bridge,
@@ -47,6 +48,11 @@ pub async fn failing_body(policy: FailurePolicy) -> (RunOutcome, Vec<EventPayloa
         .read_events(EventSeq(1)..EventSeq(reader.current_seq().await.unwrap().as_u64() + 1))
         .await
         .unwrap();
+    drop(reader);
+    drop(engine);
+    drop(storage);
+    home.close().unwrap();
+    dir.close().unwrap();
     (
         outcome,
         events
@@ -119,7 +125,8 @@ pub async fn scripted_body(
 ) -> (RunOutcome, Vec<EventPayload>) {
     use surge_acp::bridge::event::BridgeEvent;
     let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
+    let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+    let storage = Storage::open(home.path()).await.unwrap();
     let bridge = Arc::new(super::fixtures::mock_bridge::MockBridge::new());
     let sessions: Vec<_> = script
         .iter()
@@ -171,13 +178,22 @@ pub async fn scripted_body(
         pump.await.unwrap();
     } else {
         pump.abort();
-        let _ = pump.await;
+        match pump.await {
+            Ok(()) => {},
+            Err(error) if error.is_cancelled() => {},
+            Err(error) => panic!("script pump failed: {error}"),
+        }
     }
     let reader = storage.open_run_reader(run).await.unwrap();
     let events = reader
         .read_events(EventSeq(1)..EventSeq(reader.current_seq().await.unwrap().as_u64() + 1))
         .await
         .unwrap();
+    drop(reader);
+    drop(engine);
+    drop(storage);
+    home.close().unwrap();
+    dir.close().unwrap();
     (
         outcome,
         events

@@ -951,7 +951,6 @@ mod plan_recovery_tests {
     use std::collections::HashSet;
     use surge_core::id::RunId;
     use surge_persistence::runs::Storage;
-    use tempfile::tempdir;
 
     const NOW: i64 = 1_700_000_000_000;
 
@@ -965,80 +964,90 @@ mod plan_recovery_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn plans_resume_failed_worktree_and_skips_terminal() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let wt_root = tmp.path().join("worktrees");
-
-        // Run A — candidate with a present worktree → Resume.
-        let run_a = RunId::new();
-        let custom_path = tmp.path().join("custom-checkout");
-        let _wa = storage.create_run(run_a, &custom_path, None).await.unwrap();
-        std::fs::create_dir_all(&custom_path).unwrap();
-
-        // Run B — candidate with an absent worktree → MarkFailedWorktreeLost.
-        let run_b = RunId::new();
-        let _wb = storage.create_run(run_b, "/proj", None).await.unwrap();
-
-        // Run C — terminal (Completed) → not a candidate, no decision.
-        let run_c = RunId::new();
-        let _wc = storage.create_run(run_c, "/proj", None).await.unwrap();
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         {
-            let conn = storage.acquire_registry_conn().unwrap();
-            conn.execute(
-                "UPDATE runs SET status = 'completed', ended_at = ?1 WHERE id = ?2",
-                params![NOW, run_c.to_string()],
-            )
-            .unwrap();
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let wt_root = tmp.path().join("worktrees");
+
+            // Run A — candidate with a present worktree → Resume.
+            let run_a = RunId::new();
+            let custom_path = tmp.path().join("custom-checkout");
+            let present_writer = storage.create_run(run_a, &custom_path, None).await.unwrap();
+            std::fs::create_dir_all(&custom_path).unwrap();
+
+            // Run B — candidate with an absent worktree → MarkFailedWorktreeLost.
+            let run_b = RunId::new();
+            let lost_writer = storage.create_run(run_b, "/proj", None).await.unwrap();
+
+            // Run C — terminal (Completed) → not a candidate, no decision.
+            let run_c = RunId::new();
+            let terminal_writer = storage.create_run(run_c, "/proj", None).await.unwrap();
+            {
+                let conn = storage.acquire_registry_conn().unwrap();
+                conn.execute(
+                    "UPDATE runs SET status = 'completed', ended_at = ?1 WHERE id = ?2",
+                    params![NOW, run_c.to_string()],
+                )
+                .unwrap();
+            }
+
+            let report = plan_recovery(&storage, &opts(wt_root), &HashSet::new())
+                .await
+                .unwrap();
+
+            assert_eq!(report.decisions.len(), 2, "only A and B are candidates");
+            let a = report
+                .decisions
+                .iter()
+                .find(|d| d.run_id == run_a)
+                .expect("A present");
+            assert_eq!(a.action, RecoveryAction::Resume);
+            assert_eq!(a.worktree_path, custom_path);
+            let b = report
+                .decisions
+                .iter()
+                .find(|d| d.run_id == run_b)
+                .expect("B present");
+            assert_eq!(b.action, RecoveryAction::MarkFailedWorktreeLost);
+            assert!(
+                report.decisions.iter().all(|d| d.run_id != run_c),
+                "terminal run C must not appear"
+            );
+            present_writer.close().await.unwrap();
+            lost_writer.close().await.unwrap();
+            terminal_writer.close().await.unwrap();
         }
-
-        let report = plan_recovery(&storage, &opts(wt_root), &HashSet::new())
-            .await
-            .unwrap();
-
-        assert_eq!(report.decisions.len(), 2, "only A and B are candidates");
-        let a = report
-            .decisions
-            .iter()
-            .find(|d| d.run_id == run_a)
-            .expect("A present");
-        assert_eq!(a.action, RecoveryAction::Resume);
-        assert_eq!(a.worktree_path, custom_path);
-        let b = report
-            .decisions
-            .iter()
-            .find(|d| d.run_id == run_b)
-            .expect("B present");
-        assert_eq!(b.action, RecoveryAction::MarkFailedWorktreeLost);
-        assert!(
-            report.decisions.iter().all(|d| d.run_id != run_c),
-            "terminal run C must not appear"
-        );
+        tmp.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn active_run_is_reported_as_skip_already_active() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let wt_root = tmp.path().join("worktrees");
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let wt_root = tmp.path().join("worktrees");
 
-        let run = RunId::new();
-        let _w = storage
-            .create_run(run, wt_root.join(run.to_string()), None)
-            .await
-            .unwrap();
-        std::fs::create_dir_all(wt_root.join(run.to_string())).unwrap();
+            let run = RunId::new();
+            let writer = storage
+                .create_run(run, wt_root.join(run.to_string()), None)
+                .await
+                .unwrap();
+            std::fs::create_dir_all(wt_root.join(run.to_string())).unwrap();
 
-        let mut active = HashSet::new();
-        active.insert(run);
+            let mut active = HashSet::new();
+            active.insert(run);
 
-        let report = plan_recovery(&storage, &opts(wt_root), &active)
-            .await
-            .unwrap();
-        assert_eq!(report.decisions.len(), 1);
-        assert_eq!(
-            report.decisions[0].action,
-            RecoveryAction::SkipAlreadyActive
-        );
+            let report = plan_recovery(&storage, &opts(wt_root), &active)
+                .await
+                .unwrap();
+            assert_eq!(report.decisions.len(), 1);
+            assert_eq!(
+                report.decisions[0].action,
+                RecoveryAction::SkipAlreadyActive
+            );
+            writer.close().await.unwrap();
+        }
+        tmp.close().unwrap();
     }
 
     /// Task 12 M3 review, BLOCKING #2, end-to-end through `plan_recovery`
@@ -1049,56 +1058,61 @@ mod plan_recovery_tests {
     /// with nothing calling it.
     #[tokio::test(flavor = "multi_thread")]
     async fn plan_recovery_leaves_not_yet_due_parked_runs_parked_and_resumes_due_ones() {
-        let tmp = tempdir().unwrap();
-        let storage = Storage::open(tmp.path()).await.unwrap();
-        let wt_root = tmp.path().join("worktrees");
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(tmp.path()).await.unwrap();
+            let wt_root = tmp.path().join("worktrees");
 
-        // Not yet due: wake_at in the future.
-        let run_waiting = RunId::new();
-        let _w1 = storage
-            .create_run(run_waiting, wt_root.join(run_waiting.to_string()), None)
-            .await
-            .unwrap();
-        std::fs::create_dir_all(wt_root.join(run_waiting.to_string())).unwrap();
-        storage
-            .set_run_parked(&run_waiting, NOW + 3_600_000)
-            .await
-            .unwrap();
+            // Not yet due: wake_at in the future.
+            let run_waiting = RunId::new();
+            let waiting_writer = storage
+                .create_run(run_waiting, wt_root.join(run_waiting.to_string()), None)
+                .await
+                .unwrap();
+            std::fs::create_dir_all(wt_root.join(run_waiting.to_string())).unwrap();
+            storage
+                .set_run_parked(&run_waiting, NOW + 3_600_000)
+                .await
+                .unwrap();
 
-        // Due: wake_at already passed.
-        let run_due = RunId::new();
-        let _w2 = storage
-            .create_run(run_due, wt_root.join(run_due.to_string()), None)
-            .await
-            .unwrap();
-        std::fs::create_dir_all(wt_root.join(run_due.to_string())).unwrap();
-        storage
-            .set_run_parked(&run_due, NOW - 3_600_000)
-            .await
-            .unwrap();
+            // Due: wake_at already passed.
+            let run_due = RunId::new();
+            let due_writer = storage
+                .create_run(run_due, wt_root.join(run_due.to_string()), None)
+                .await
+                .unwrap();
+            std::fs::create_dir_all(wt_root.join(run_due.to_string())).unwrap();
+            storage
+                .set_run_parked(&run_due, NOW - 3_600_000)
+                .await
+                .unwrap();
 
-        let report = plan_recovery(&storage, &opts(wt_root), &HashSet::new())
-            .await
-            .unwrap();
+            let report = plan_recovery(&storage, &opts(wt_root), &HashSet::new())
+                .await
+                .unwrap();
 
-        let waiting = report
-            .decisions
-            .iter()
-            .find(|d| d.run_id == run_waiting)
-            .expect("waiting run present");
-        assert_eq!(
-            waiting.action,
-            RecoveryAction::SkipParked {
-                wake_at_ms: Some(NOW + 3_600_000)
-            }
-        );
+            let waiting = report
+                .decisions
+                .iter()
+                .find(|d| d.run_id == run_waiting)
+                .expect("waiting run present");
+            assert_eq!(
+                waiting.action,
+                RecoveryAction::SkipParked {
+                    wake_at_ms: Some(NOW + 3_600_000)
+                }
+            );
 
-        let due = report
-            .decisions
-            .iter()
-            .find(|d| d.run_id == run_due)
-            .expect("due run present");
-        assert_eq!(due.action, RecoveryAction::Resume);
+            let due = report
+                .decisions
+                .iter()
+                .find(|d| d.run_id == run_due)
+                .expect("due run present");
+            assert_eq!(due.action, RecoveryAction::Resume);
+            waiting_writer.close().await.unwrap();
+            due_writer.close().await.unwrap();
+        }
+        tmp.close().unwrap();
     }
 }
 

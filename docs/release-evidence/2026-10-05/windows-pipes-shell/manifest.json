@@ -1,0 +1,21 @@
+{
+  "base": "77fff58",
+  "source_sha256": {
+    "crates/surge-daemon/tests/owned_flow_framing_trace.rs": "9fcf441d8a513f933949741bd848931f7ddb8f111f47006b0667480d153c4422",
+    "crates/surge-daemon/tests/owned_flow_ipc.rs": "b636b27b520a1e850e307a92196809847d1b591511f5710a907039458dfd9500",
+    "crates/surge-daemon/tests/quota_recovery_route_test.rs": "0f66194d3fc756046cfd508833419a7eef1d19dd2efce087a4efd4fbe3af46fd",
+    "crates/surge-daemon/tests/work_item_route_test.rs": "a5a03b50521a8ac53f49f22de4e2c5e4d79d0067863d8ba3c749dcdc727a054b",
+    "crates/surge-orchestrator/src/engine/hooks/mod.rs": "e725875c717fdc713256f315e7444290aef240de388f98c7d6b5e1f7b163a3fe",
+    "crates/surge-orchestrator/src/engine/tools/worktree.rs": "7df35c9de246647ca8dd2dc9548daa0498fd2acf7d4151f877fde41b6234ee6b"
+  },
+  "receipt_sha256": {
+    "daemon-clippy.log.gz": "98e73ab89afb2a07f098d71e1d7428f45b475c3f8abe77f8203c40e2be46c24d",
+    "orchestrator-clippy.log.gz": "25f930dc1022aef40f7274797a230bd74af0303e910f4190930f92cd0d6800d7",
+    "hooks.log.gz": "242d73672f7e08e7b480813b5f109e27ab4442eaf4009d981b726a4174c52a9c",
+    "daemon.log.gz": "14ad108072a25a9599382a9f153986b7a37229ee0ed681ff61983f2519aecb33",
+    "worktree.log.gz": "e5824767f859f4aab6bdb177d7ff6ccadef35bc76c591bfe1b24c70053fb7c6e"
+  },
+  "reviews": "pre-code ACCEPTABLE; independent spec and API/security quality COMPLETE",
+  "native_execution": "pending",
+  "new_native_cases_initial_RED": "not captured"
+}

@@ -1,0 +1,10 @@
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.27s
+     Running tests/mcp_stdio_e2e.rs (target/debug/deps/mcp_stdio_e2e-85b1c9b05f94a6e5)
+
+running 3 tests
+test list_tools_includes_echo_and_crash_now ... ok
+test call_echo_round_trips ... ok
+test outstanding_live_service_is_reported_as_unconfirmed_cleanup ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.72s

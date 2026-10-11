@@ -106,3 +106,13 @@ mod bootstrap_profile_tests {
 }
 
 pub mod recipe_admission;
+
+#[cfg(test)]
+pub(crate) mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}

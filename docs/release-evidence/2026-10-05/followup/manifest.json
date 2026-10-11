@@ -1,0 +1,57 @@
+{
+  "rust_source_commit": "8e3a781cb26666933a314c2e0d3361810ef1a21d",
+  "test_checkout": "062008c",
+  "rust_manifest_lock_diff_from_source": "empty: git diff --quiet 8e3a781 HEAD -- Cargo.toml Cargo.lock crates returned 0",
+  "ignored_allowlist": {
+    "ACP": 2,
+    "engine": 3,
+    "MCP_stdio": 3,
+    "controlled_daemon": 1,
+    "restart": 2,
+    "passed": 11
+  },
+  "native_rollback": "PASS; same-schema terminal-only; exact snapshot before reopening",
+  "verdict": "NO-GO",
+  "files": [
+    {
+      "file": "snapshot-inventory.json",
+      "bytes": 13517,
+      "sha256": "e1573b6276a20530ccd777e294aae3bf84b04ac9ed5ebc51f09b4c876df162c5"
+    },
+    {
+      "file": "raw-files.json",
+      "bytes": 1944,
+      "sha256": "a66b78b7d9df1692ffd49d160fed0b4957e9dcfa7dacbafb463c8f4376fbf8b5"
+    },
+    {
+      "file": "independent-review.md",
+      "bytes": 1666,
+      "sha256": "3edf0f0141cd3a77ee485aceafd7f3ef516e5c1de3cc2e641e48a9a4390b314e"
+    },
+    {
+      "file": "native-rollback-result.json",
+      "bytes": 902,
+      "sha256": "3721d580fb3d6577cb423a223433123896d051b523b1cd6d0c5570c62d6f6fba"
+    },
+    {
+      "file": "native-rollback-first.py",
+      "bytes": 7401,
+      "sha256": "89741d07303c5e7e337262711425156b3daa17a4cc79750c2b2f49a628b792d9"
+    },
+    {
+      "file": "native-rollback-first-result.json",
+      "bytes": 256,
+      "sha256": "0dc24bc309193eb064878557b4800b1b924e741f48b66178d2ab6e07aa3cb87d"
+    },
+    {
+      "file": "native-rollback.py",
+      "bytes": 7770,
+      "sha256": "1e752724007a50b3a051a20a3ca9807ad07fb46cb0298888c441fb2e64b36fb3"
+    },
+    {
+      "file": "raw-logs.tar.gz",
+      "bytes": 4887,
+      "sha256": "cbc50a4af5efe083724892aa80ca4545d259ab5780906f98169136cfb86831ea"
+    }
+  ]
+}

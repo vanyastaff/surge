@@ -104,7 +104,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn success_terminal_emits_run_completed() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -127,11 +127,14 @@ mod tests {
             TerminalOutcome::Completed { node: n } => assert_eq!(n.as_ref(), "end"),
             other => panic!("expected Completed, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn failure_terminal_emits_run_failed() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -154,11 +157,14 @@ mod tests {
             TerminalOutcome::Failed { error } => assert_eq!(error, "oops"),
             other => panic!("expected Failed, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn aborted_terminal_emits_run_aborted() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -181,5 +187,8 @@ mod tests {
             TerminalOutcome::Aborted { reason } => assert_eq!(reason, "user cancelled"),
             other => panic!("expected Aborted, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 }

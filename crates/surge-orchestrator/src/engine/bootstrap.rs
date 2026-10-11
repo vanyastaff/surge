@@ -577,11 +577,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_flow_returns_missing_artifact_decision() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
 
-        let (_storage, _run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, _run_id, writer) = fresh_writer(home.path()).await;
         let memory = RunMemory::default();
         let node = NodeKey::try_from("flow_generator").unwrap();
 
@@ -590,11 +591,15 @@ mod tests {
             .expect("post processing");
 
         assert!(matches!(decision, FlowValidationDecision::MissingArtifact));
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_profile_inputs_retry_before_materialization() {
         use crate::profile_loader::{DiskProfileSet, ProfileRegistry};
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -618,7 +623,7 @@ mod tests {
         let profiles = tmp.path().join("profiles");
         std::fs::create_dir(&profiles).unwrap();
         let registry = ProfileRegistry::new(DiskProfileSet::scan(&profiles).unwrap());
-        let (storage, run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, run_id, writer) = fresh_writer(home.path()).await;
         let decision = run_flow_generator_post_processing_with_registry(
             &NodeKey::try_from("flow_generator").unwrap(),
             &RunMemory::default(),
@@ -636,16 +641,20 @@ mod tests {
         let kinds = payload_kinds(&storage, run_id).await;
         assert!(kinds.contains(&"BootstrapEditRequested"));
         assert!(!kinds.contains(&"PipelineMaterialized"));
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn valid_flow_emits_pipeline_materialized_and_decision_materialized() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(worktree.join(FLOW_ARTIFACT_FILENAME), valid_flow_toml()).unwrap();
 
-        let (storage, run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, run_id, writer) = fresh_writer(home.path()).await;
         let memory = RunMemory::default();
         let node = NodeKey::try_from("flow_generator").unwrap();
 
@@ -659,10 +668,14 @@ mod tests {
             kinds.contains(&"PipelineMaterialized"),
             "expected PipelineMaterialized in event log, got {kinds:?}"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn parse_failure_emits_edit_request_before_stage_outcome_is_committed() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -672,7 +685,7 @@ mod tests {
         )
         .unwrap();
 
-        let (storage, run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, run_id, writer) = fresh_writer(home.path()).await;
         let memory = RunMemory::default();
         let node = NodeKey::try_from("flow_generator").unwrap();
 
@@ -703,16 +716,20 @@ mod tests {
             "post-processing must leave the stage outcome to its owning invocation batch (kinds = {kinds:?})"
         );
         assert_eq!(kinds[edit_index], "BootstrapEditRequested");
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn validation_failure_emits_edit_requested_with_validator_feedback() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(worktree.join(FLOW_ARTIFACT_FILENAME), invalid_flow_toml()).unwrap();
 
-        let (_storage, _run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, _run_id, writer) = fresh_writer(home.path()).await;
         let memory = RunMemory::default();
         let node = NodeKey::try_from("flow_generator").unwrap();
 
@@ -729,10 +746,14 @@ mod tests {
             },
             other => panic!("expected EditRequested, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn flow_without_archetype_is_sent_back_with_the_catalog() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -744,7 +765,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_storage, _run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, _run_id, writer) = fresh_writer(home.path()).await;
         let memory = RunMemory::default();
         let node = NodeKey::try_from("flow_generator").unwrap();
 
@@ -759,16 +780,20 @@ mod tests {
             },
             other => panic!("expected EditRequested, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cap_exceeded_emits_escalation_and_returns_cap_exceeded() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(worktree.join(FLOW_ARTIFACT_FILENAME), invalid_flow_toml()).unwrap();
 
-        let (storage, run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, run_id, writer) = fresh_writer(home.path()).await;
         let mut counts: BTreeMap<BootstrapStage, u32> = BTreeMap::new();
         counts.insert(BootstrapStage::Flow, 3);
         let memory = RunMemory {
@@ -796,6 +821,9 @@ mod tests {
             !kinds.contains(&"BootstrapEditRequested"),
             "BootstrapEditRequested must NOT be emitted on cap exceedance, got {kinds:?}"
         );
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     /// Build a TOML graph that passes `validate_for_m6` but declares the
@@ -816,6 +844,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn archetype_mismatch_emits_edit_requested_with_topology_feedback() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -825,7 +854,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_storage, _run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, _run_id, writer) = fresh_writer(home.path()).await;
         let memory = RunMemory::default();
         let node = NodeKey::try_from("flow_generator").unwrap();
 
@@ -846,16 +875,20 @@ mod tests {
             },
             other => panic!("expected EditRequested, got {other:?}"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cap_zero_disables_check_and_keeps_emitting_edit_requested() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(worktree.join(FLOW_ARTIFACT_FILENAME), invalid_flow_toml()).unwrap();
 
-        let (_storage, _run_id, writer) = fresh_writer(tmp.path()).await;
+        let (storage, _run_id, writer) = fresh_writer(home.path()).await;
         let mut counts: BTreeMap<BootstrapStage, u32> = BTreeMap::new();
         counts.insert(BootstrapStage::Flow, 99);
         let memory = RunMemory {
@@ -873,5 +906,8 @@ mod tests {
             decision,
             FlowValidationDecision::EditRequested { .. }
         ));
+        writer.close().await.unwrap();
+        drop(storage);
+        home.close().unwrap();
     }
 }

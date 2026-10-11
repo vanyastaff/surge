@@ -225,7 +225,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn entry_pushes_subgraph_frame_and_advances_to_inner_start() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -326,11 +326,14 @@ mod tests {
             },
             Frame::Loop(_) => panic!("expected Subgraph frame"),
         }
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_subgraph_reference_returns_error() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -388,6 +391,9 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(StageError::SubgraphMissing(k)) if k == missing_inner));
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[test]
@@ -415,7 +421,7 @@ mod tests {
     fn resolve_subgraph_inputs_empty_slice_returns_empty_vec() {
         let memory = RunMemory::default();
         let result = resolve_subgraph_inputs(&[], &memory).unwrap();
-        assert!(result.is_empty());
+        assert_eq!(result.len(), 0);
     }
 
     #[test]
@@ -441,7 +447,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn exit_pops_frame_and_projects_first_matching_output() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -498,5 +504,8 @@ mod tests {
 
         assert!(frames.is_empty(), "frame popped");
         assert_eq!(cursor.node, return_to, "cursor restored to return_to");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 }

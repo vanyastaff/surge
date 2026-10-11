@@ -1,0 +1,35 @@
+{
+  "scope": "Direct SQLite draft migration constraint preflight only; not Rust migration acceptance or host receipt validation",
+  "red": [
+    {
+      "case": "missing_version",
+      "accepted": true
+    },
+    {
+      "case": "missing_digest",
+      "accepted": true
+    }
+  ],
+  "green": {
+    "scope": "SQLite constraint preflight only, not Rust or migration-runtime acceptance",
+    "schema_sha256": "5cb0bb1610ba720488f4787e8d5b46887e1bcd874e7cc46ccb77690fa9ff3cea",
+    "cases": [
+      {
+        "case": "missing_version",
+        "accepted": false,
+        "expected": false
+      },
+      {
+        "case": "missing_digest",
+        "accepted": false,
+        "expected": false
+      },
+      {
+        "case": "complete",
+        "accepted": true,
+        "expected": true
+      }
+    ]
+  },
+  "limitations": "Only terminal tuple NULL/version/digest completeness and a positive control were tested. Other schema, runtime ownership, full plan and release gates remain open."
+}

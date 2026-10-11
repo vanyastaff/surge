@@ -324,19 +324,17 @@ fn verify_repository(repo: &Repository, spec: &RunWorktreeSpec) -> Result<(), Gi
 
 fn verify_creation(repo: &Repository, spec: &RunWorktreeSpec) -> Result<(), GitError> {
     let message = spec.creation_message()?;
-    let valid = repo
-        .reflog(&format!("refs/heads/{}", spec.branch()))
-        .ok()
-        .is_some_and(|log| {
-            log.len()
-                .checked_sub(1)
-                .and_then(|index| log.get(index))
-                .is_some_and(|entry| {
-                    entry.id_old().is_zero()
-                        && entry.id_new() == spec.base.commit
-                        && entry.message() == Some(message.as_str())
-                })
-        });
+    let valid = match repo.reflog(&format!("refs/heads/{}", spec.branch())) {
+        Ok(log) => match log.len().checked_sub(1).and_then(|index| log.get(index)) {
+            Some(entry) => {
+                entry.id_old().is_zero()
+                    && entry.id_new() == spec.base.commit
+                    && entry.message()? == Some(message.as_str())
+            },
+            None => false,
+        },
+        Err(_) => false,
+    };
     if !valid {
         return Err(conflict(
             &spec.path,
@@ -426,7 +424,7 @@ fn verify_checkout(
             WorktreeConflict::RegistrationWorkdirMismatch,
         ));
     }
-    if linked.name() != Some(spec.run_id.short().as_str()) {
+    if linked.name()? != Some(spec.run_id.short().as_str()) {
         return Err(conflict(
             &spec.path,
             WorktreeConflict::RegistrationNameMismatch,
@@ -444,7 +442,7 @@ fn verify_checkout(
         ));
     }
     let head = checkout.find_reference("HEAD")?;
-    if head.symbolic_target() != Some(format!("refs/heads/{}", spec.branch()).as_str()) {
+    if head.symbolic_target()? != Some(format!("refs/heads/{}", spec.branch()).as_str()) {
         return Err(conflict(&spec.path, WorktreeConflict::BranchMismatch));
     }
     let commit = checkout.head()?.peel_to_commit()?.id();

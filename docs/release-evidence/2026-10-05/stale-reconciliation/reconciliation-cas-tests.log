@@ -1,0 +1,79 @@
+   Compiling syn v2.0.117
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling serde_derive v1.0.228
+   Compiling smallvec v1.15.1
+   Compiling num-traits v0.2.19
+   Compiling rustix v1.1.4
+   Compiling parking_lot_core v0.9.12
+   Compiling serde_json v1.0.151
+   Compiling cc v1.2.57
+   Compiling parking_lot v0.12.5
+   Compiling libsqlite3-sys v0.30.1
+   Compiling tempfile v3.27.0
+   Compiling chrono v0.4.44
+   Compiling syn v3.0.6
+   Compiling futures-sink v0.3.34
+   Compiling futures-channel v0.3.34
+   Compiling futures-macro v0.3.34
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling ref-cast-impl v1.0.25
+   Compiling tracing-attributes v0.1.31
+   Compiling serde_derive_internals v0.29.1
+   Compiling futures-io v0.3.34
+   Compiling slab v0.4.12
+   Compiling toml_edit v0.22.27
+   Compiling futures-util v0.3.34
+   Compiling schemars_derive v1.2.1
+   Compiling tracing v0.1.44
+   Compiling ref-cast v1.0.25
+   Compiling pest_generator v2.8.6
+   Compiling regex-automata v0.4.14
+   Compiling scheduled-thread-pool v0.2.7
+   Compiling tokio-macros v2.6.1
+   Compiling thiserror-impl v2.0.18
+   Compiling wait-timeout v0.2.1
+   Compiling bit-vec v0.8.0
+   Compiling quick-error v1.2.3
+   Compiling rusty-fork v0.3.1
+   Compiling rusqlite v0.32.1
+   Compiling schemars v1.2.1
+   Compiling bit-set v0.8.0
+   Compiling tokio v1.50.0
+   Compiling humantime-serde v1.1.1
+   Compiling thiserror v2.0.18
+   Compiling r2d2 v0.8.10
+   Compiling matchers v0.2.0
+   Compiling pest_derive v2.8.6
+   Compiling futures-executor v0.3.34
+   Compiling toml v0.8.23
+   Compiling ulid v1.2.1
+   Compiling rand_xorshift v0.4.0
+   Compiling semver v1.0.27
+   Compiling async-stream-impl v0.3.6
+   Compiling console v0.16.3
+   Compiling unarray v0.1.4
+   Compiling similar v2.7.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling insta v1.47.2
+   Compiling proptest v1.11.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling async-stream v0.3.6
+   Compiling futures v0.3.34
+   Compiling r2d2_sqlite v0.25.0
+   Compiling tokio-stream v0.1.18
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 21s
+     Running unittests src/lib.rs (target/debug/deps/surge_persistence-38c6b8052e46f851)
+
+running 6 tests
+test work_items::reconciliation_tests::reconciliation_changed_eligible_attempt_is_superseded ... ok
+test work_items::reconciliation_tests::reconciliation_terminal_under_same_claim_is_superseded ... ok
+test work_items::reconciliation_tests::reconciliation_none_to_new_control_preserves_all_authority_and_wake ... ok
+test work_items::reconciliation_tests::reconciliation_same_generation_control_payload_changes_are_fenced ... ok
+test work_items::reconciliation_tests::reconciliation_current_failure_sets_exact_diagnostic_without_changing_wake ... ok
+test work_items::reconciliation_tests::reconciliation_rejects_stale_token_foreign_claim_and_changed_binding ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 508 filtered out; finished in 0.56s
+

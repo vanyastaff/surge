@@ -1,0 +1,18 @@
+{
+  "job": "113131022822",
+  "source_revision_prefix": "5f42653",
+  "raw_path": "target/ci-repair-evidence/macos-5f42653-complete.log",
+  "raw_sha256": "71dcc0824f4bd3325ec410b115c898a53b293ee9b11a05c21f90b9e6ff1cf9e7",
+  "bounded_lines": [
+    "2026-10-08T03:25:50.1573790Z \u001b[33;1m        SLOW\u001b[0m [> 30.000s] (\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500) \u001b[35;1msurge-daemon::quota_recovery_route_test\u001b[0m \u001b[34;1mnormal_task_mixed_skip_and_actual_429_never_reopens_primary\u001b[0m",
+    "2026-10-08T03:25:51.7249450Z \u001b[31;1m        FAIL\u001b[0m [  31.563s] (2061/3760) \u001b[35;1msurge-daemon::quota_recovery_route_test\u001b[0m \u001b[34;1mnormal_task_mixed_skip_and_actual_429_never_reopens_primary\u001b[0m",
+    "2026-10-08T03:25:51.7309690Z     test normal_task_mixed_skip_and_actual_429_never_reopens_primary ... FAILED",
+    "2026-10-08T03:25:51.7311830Z         normal_task_mixed_skip_and_actual_429_never_reopens_primary",
+    "2026-10-08T03:25:51.7313240Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 35 filtered out; finished in 31.52s",
+    "2026-10-08T03:25:51.7354970Z     \u001b[0m\u001b[31;1mthread 'normal_task_mixed_skip_and_actual_429_never_reopens_primary' (71853) panicked at crates/surge-daemon/tests/quota_recovery_route_test.rs:1336:13:\u001b[0m",
+    "2026-10-08T03:25:51.7686980Z       18: normal_task_mixed_skip_and_actual_429_never_reopens_primary",
+    "2026-10-08T03:25:51.7689000Z       20: call_once<quota_recovery_route_test::normal_task_mixed_skip_and_actual_429_never_reopens_primary::{closure_env#0}, ()>",
+    "2026-10-08T03:27:06.1758910Z \u001b[31;1m        FAIL\u001b[0m [  31.563s] (2061/3760) \u001b[35;1msurge-daemon::quota_recovery_route_test\u001b[0m \u001b[34;1mnormal_task_mixed_skip_and_actual_429_never_reopens_primary\u001b[0m"
+  ],
+  "attribution": "Observed CI failure; exact stale-page cause remains unconfirmed without attempt diagnostic."
+}

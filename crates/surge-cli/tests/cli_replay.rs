@@ -4,6 +4,16 @@
 //! through the persistence layer (no agent runtime), then the real `surge`
 //! binary folds it and emits the enriched JSON view.
 
+mod runtime_home_fixture {
+    #[cfg(windows)]
+    use surge_persistence::RuntimeHomeOwner;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/test-support/runtime_home.rs"
+    ));
+}
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -86,36 +96,39 @@ async fn seed_completed_run(home: &Path) -> RunId {
         ])
         .await
         .unwrap();
-    drop(writer);
+    writer.close().await.unwrap();
     drop(storage);
     run
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn engine_replay_json_emits_enriched_view() {
-    let tmp = tempfile::tempdir().unwrap();
-    let run = seed_completed_run(tmp.path()).await;
+    let tmp = FixtureHome::new().unwrap();
+    {
+        let run = seed_completed_run(tmp.path()).await;
 
-    let assert = assert_cmd::Command::cargo_bin("surge")
-        .unwrap()
-        .env("SURGE_HOME", tmp.path())
-        .args(["engine", "replay", &run.to_string(), "--format", "json"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
+        let assert = assert_cmd::Command::cargo_bin("surge")
+            .unwrap()
+            .env("SURGE_HOME", tmp.path())
+            .args(["engine", "replay", &run.to_string(), "--format", "json"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
 
-    assert_eq!(json["events_folded"], 3);
-    assert_eq!(json["terminal"], true);
-    assert_eq!(json["view"]["terminal"], "completed");
+        assert_eq!(json["events_folded"], 3);
+        assert_eq!(json["terminal"], true);
+        assert_eq!(json["view"]["terminal"], "completed");
 
-    let nodes = json["view"]["nodes"].as_array().expect("nodes array");
-    let end = nodes
-        .iter()
-        .find(|n| n["node"] == "end")
-        .expect("end node present");
-    // The terminal node is promoted to `completed` by RunCompleted even though
-    // it never received a StageCompleted event.
-    assert_eq!(end["status"], "completed");
+        let nodes = json["view"]["nodes"].as_array().expect("nodes array");
+        let end = nodes
+            .iter()
+            .find(|n| n["node"] == "end")
+            .expect("end node present");
+        // The terminal node is promoted to `completed` by RunCompleted even though
+        // it never received a StageCompleted event.
+        assert_eq!(end["status"], "completed");
+    }
+    tmp.close().unwrap();
 }

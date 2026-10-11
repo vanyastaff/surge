@@ -1,0 +1,8 @@
+[1] RunStarted
+[2] PipelineMaterialized
+[3] OwnedFlowInputsBound
+[4] ArtifactProduced
+[5] ArtifactProduced
+[6] WorkItemAttemptBound
+[7] StageEntered
+[8] HumanInputRequested

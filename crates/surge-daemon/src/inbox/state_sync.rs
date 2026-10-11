@@ -5,6 +5,7 @@ use crate::intake_completion::{
     durable_outcome, format_completion, post_comment_bounded, terminal_kind,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -35,42 +36,75 @@ impl TicketStateSync {
 
     /// Drive the loop: consume events from `handle.events`, apply FSM
     /// transitions, and enqueue terminal tracker comments. Returns when the run
-    /// reaches a terminal state or the broadcast sender is dropped.
+    /// completion task returns; event history alone does not confirm settlement.
     pub async fn run(self, mut handle: RunHandle) {
         info!(task_id = %self.task_id, run_id = %handle.run_id, "TicketStateSync started");
         let mut went_active = false;
+        let mut observed = None;
+        let mut projected = false;
+        let mut events_open = true;
         loop {
-            match handle.events.recv().await {
-                Ok(EngineRunEvent::Persisted { .. }) if !went_active => {
-                    if let Err(e) = self.set_active(&handle.run_id) {
-                        warn!(error = %e, "transition to Active failed");
-                    }
-                    went_active = true;
-                },
-                Ok(EngineRunEvent::Terminal { outcome }) => {
-                    self.on_terminal(&handle.run_id, &outcome).await;
+            tokio::select! {
+                biased;
+                joined = &mut handle.completion => {
+                    self.on_completion(handle.run_id, joined, observed, projected).await;
                     return;
                 },
-                Ok(_) => {
-                    // Unknown future variant — ignore and keep looping.
-                },
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    warn!(
-                        skipped,
-                        "ticket subscriber lagged; checking durable run history"
-                    );
-                    if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
-                        self.on_terminal(&handle.run_id, &outcome).await;
-                        return;
+                () = tokio::time::sleep(Duration::from_millis(1)), if observed.is_some() && !projected => {
+                    if let Some(outcome) = observed.as_ref() {
+                        self.on_terminal(&handle.run_id, outcome).await;
+                        projected = true;
                     }
                 },
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
-                        self.on_terminal(&handle.run_id, &outcome).await;
-                    }
-                    return;
+                event = handle.events.recv(), if events_open && observed.is_none() => match event {
+                    Ok(EngineRunEvent::Persisted { .. }) if !went_active => {
+                        if let Err(error) = self.set_active(&handle.run_id) {
+                            warn!(%error, "transition to Active failed");
+                        }
+                        went_active = true;
+                    },
+                    Ok(EngineRunEvent::Terminal { outcome }) => {
+                        observed = Some(outcome);
+                    },
+                    Ok(_) => {},
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "ticket subscriber lagged; checking durable run history");
+                        if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
+                            observed = Some(outcome);
+                        }
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        events_open = false;
+                        if let Some(outcome) = durable_outcome(&self.storage, handle.run_id).await {
+                            observed = Some(outcome);
+                        }
+                    },
                 },
             }
+        }
+    }
+
+    async fn on_completion(
+        &self,
+        run_id: surge_core::RunId,
+        joined: Result<RunOutcome, tokio::task::JoinError>,
+        observed: Option<RunOutcome>,
+        projected: bool,
+    ) {
+        match joined {
+            Ok(RunOutcome::SettlementFailed { failures, .. }) => {
+                warn!(%run_id, ?failures, "ticket completion unconfirmed: resource settlement failed");
+            },
+            Ok(outcome) => match observed {
+                Some(previous) if previous != outcome => {
+                    warn!(%run_id, ?previous, ?outcome, "ticket event disagrees with joined completion");
+                },
+                Some(_) if projected => {},
+                Some(_) | None => self.on_terminal(&run_id, &outcome).await,
+            },
+            Err(error) => {
+                warn!(%run_id, %error, "ticket execution completion failed");
+            },
         }
     }
 
@@ -91,9 +125,9 @@ impl TicketStateSync {
                 .storage
                 .acquire_registry_conn()
                 .map_err(|error| error.to_string())
-                .and_then(|mut conn| {
+                .and_then(|conn| {
                     intake_outbox::enqueue_terminal(
-                        &mut conn,
+                        &conn,
                         self.task_id.as_str(),
                         &run_id.to_string(),
                         kind,
@@ -149,12 +183,12 @@ mod tests {
         Arc<MockTaskSource>,
         Arc<Storage>,
         surge_core::RunId,
-        tempfile::TempDir,
+        crate::runtime_home_fixture::FixtureHome,
     ) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::RunId::new();
-        let _writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+        let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
         let task_id = TaskId::try_new("mock:test#1").unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
@@ -183,6 +217,7 @@ mod tests {
             storage.clone(),
             source.clone() as Arc<dyn TaskSource>,
         );
+        writer.close().await.unwrap();
         (sync, source, storage, run_id, dir)
     }
 
@@ -193,7 +228,7 @@ mod tests {
     /// working as designed and resumes on its own.
     #[tokio::test(flavor = "multi_thread")]
     async fn on_terminal_parked_leaves_ticket_state_untouched_and_posts_a_pause_comment() {
-        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
         let wake_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:05:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -225,13 +260,17 @@ mod tests {
             "a parked run must not transition the ticket FSM — it is not finished, and no \
              TicketState represents \"paused, resumes on its own\" today"
         );
+        drop(conn);
+        drop(sync);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn on_terminal_completed_still_transitions_as_before() {
         // Regression guard: the `Option<TicketState>` refactor must not
         // have quietly turned the three real terminal outcomes into no-ops.
-        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
         sync.on_terminal(
             &run_id,
             &RunOutcome::Completed {
@@ -240,7 +279,7 @@ mod tests {
         )
         .await;
 
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
@@ -254,12 +293,16 @@ mod tests {
             .unwrap()
             .expect("ticket row must still exist");
         assert_eq!(row.state, TicketState::Completed);
+        drop(conn);
+        drop(sync);
+        drop(storage);
+        dir.close().unwrap();
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_handle_cannot_promote_or_complete_reassigned_ticket() {
-        let (sync, source, storage, old_run, _dir) = seeded_sync().await;
+        let (sync, source, storage, old_run, dir) = seeded_sync().await;
         let new_run = surge_core::RunId::new();
-        let _writer = storage.create_run(new_run, "/new", None).await.unwrap();
+        let writer = storage.create_run(new_run, "/new", None).await.unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
             conn.execute(
@@ -276,7 +319,7 @@ mod tests {
             },
         )
         .await;
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         let row = IntakeRepo::new(&conn)
             .fetch("mock:test#1")
@@ -284,11 +327,16 @@ mod tests {
             .unwrap();
         assert_eq!(row.state, TicketState::RunStarted);
         assert_eq!(row.run_id, Some(new_run.to_string()));
+        writer.close().await.unwrap();
+        drop(conn);
+        drop(sync);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn completed_ticket_cannot_be_reactivated_or_announced_as_parked() {
-        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
         sync.on_terminal(
             &run_id,
             &RunOutcome::Aborted {
@@ -304,7 +352,7 @@ mod tests {
             },
         )
         .await;
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
@@ -321,11 +369,15 @@ mod tests {
                 .state,
             TicketState::Aborted
         );
+        drop(conn);
+        drop(sync);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn lagged_subscriber_continues_to_a_terminal_event() {
-        let (sync, source, storage, run_id, _dir) = seeded_sync().await;
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
         let (tx, rx) = tokio::sync::broadcast::channel(1);
         for _ in 0..2 {
             tx.send(EngineRunEvent::Persisted {
@@ -352,7 +404,7 @@ mod tests {
             }),
         })
         .await;
-        assert!(source.posted_comments().await.is_empty());
+        assert_eq!(source.posted_comments().await.len(), 0);
         let conn = storage.acquire_registry_conn().unwrap();
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
@@ -369,5 +421,146 @@ mod tests {
                 .state,
             TicketState::Aborted
         );
+        drop(conn);
+        drop(storage);
+        dir.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_completion_settles_with_event_sender_still_open() {
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
+        let (sender, receiver) = tokio::sync::broadcast::channel(8);
+        let completion = tokio::spawn(std::future::pending::<RunOutcome>());
+        completion.abort();
+        let settled = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            sync.run(RunHandle {
+                run_id,
+                events: receiver,
+                completion,
+            }),
+        )
+        .await;
+        assert!(
+            settled.is_ok(),
+            "failed completion must settle without waiting for event sender closure"
+        );
+        assert_eq!(fetch_ticket_state(&storage), TicketState::Active);
+        drop(sender);
+        drop(source);
+        drop(storage);
+        dir.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn observed_terminal_cannot_commit_before_failed_settlement_join() {
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
+        let original = RunOutcome::Completed {
+            terminal: "end".try_into().unwrap(),
+        };
+        let (events, receiver) = tokio::sync::broadcast::channel(2);
+        events
+            .send(EngineRunEvent::Terminal {
+                outcome: original.clone(),
+            })
+            .unwrap();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let completion = tokio::spawn(async move {
+            released.await.unwrap();
+            RunOutcome::SettlementFailed {
+                original: Box::new(original),
+                failures: vec![
+                    surge_orchestrator::engine::handle::RunSettlementFailure::ForwarderRead,
+                ],
+            }
+        });
+        let mut follower = Box::pin(sync.run(RunHandle {
+            run_id,
+            events: receiver,
+            completion,
+        }));
+        let was_pending = futures::poll!(follower.as_mut()).is_pending();
+        let before_join = fetch_ticket_state(&storage);
+        release.send(()).unwrap();
+        follower.await;
+        assert!(was_pending);
+        assert_eq!(before_join, TicketState::Active);
+        assert_eq!(fetch_ticket_state(&storage), TicketState::Active);
+        assert_eq!(source.posted_comments().await, []);
+        let count: i64 = storage
+            .acquire_registry_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(events);
+        drop(source);
+        drop(storage);
+        dir.close().unwrap();
+    }
+
+    fn fetch_ticket_state(storage: &Storage) -> TicketState {
+        let conn = storage.acquire_registry_conn().unwrap();
+        IntakeRepo::new(&conn)
+            .fetch("mock:test#1")
+            .unwrap()
+            .unwrap()
+            .state
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn successful_completion_settles_with_event_sender_still_open() {
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
+        let (sender, receiver) = tokio::sync::broadcast::channel(8);
+        let completion = tokio::spawn(async {
+            RunOutcome::Completed {
+                terminal: surge_core::keys::NodeKey::try_new("end").unwrap(),
+            }
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            sync.run(RunHandle {
+                run_id,
+                events: receiver,
+                completion,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fetch_ticket_state(&storage), TicketState::Completed);
+        drop(sender);
+        drop(source);
+        drop(storage);
+        dir.close().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn closed_events_still_wait_for_actual_completion() {
+        let (sync, source, storage, run_id, dir) = seeded_sync().await;
+        let (sender, receiver) = tokio::sync::broadcast::channel(8);
+        drop(sender);
+        let (release, pending) = tokio::sync::oneshot::channel();
+        let completion = tokio::spawn(async { pending.await.unwrap() });
+        let mut follower = Box::pin(sync.run(RunHandle {
+            run_id,
+            events: receiver,
+            completion,
+        }));
+        assert!(futures::poll!(follower.as_mut()).is_pending());
+        release
+            .send(RunOutcome::Aborted {
+                reason: "settled".into(),
+            })
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), follower.as_mut())
+            .await
+            .unwrap();
+        drop(follower);
+        assert_eq!(fetch_ticket_state(&storage), TicketState::Aborted);
+        drop(source);
+        drop(storage);
+        dir.close().unwrap();
     }
 }

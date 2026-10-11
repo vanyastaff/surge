@@ -1,0 +1,24 @@
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.56s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/owned_flow_mcp_recovery.rs (target/debug/deps/owned_flow_mcp_recovery-6099c88ca8de9c5b)
+
+running 1 test
+
+thread 'unresolved_mcp_domain_seals_false_fence_and_blocks_actual_cold_dispatch' (33598973) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:777:9:
+populated-unconfirmed child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpoazcD5/cold-host-stdout-XzUayF; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpoazcD5/cold-host-stderr-GlCReB
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpoazcD5
+test unresolved_mcp_domain_seals_false_fence_and_blocks_actual_cold_dispatch ... FAILED
+
+failures:
+
+failures:
+    unresolved_mcp_domain_seals_false_fence_and_blocks_actual_cold_dispatch
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.27s
+
+error: test failed, to rerun pass `-p surge-daemon --test owned_flow_mcp_recovery`

@@ -1,6 +1,6 @@
 # Product strategy
 
-Status: decision note, written 2026-07-07. Companion to the market survey in
+Status: decision note, written 2026-07-07, updated 2026-10-05. Companion to the market survey in
 [`agent-os-landscape.md`](agent-os-landscape.md) and the technical reference in
 [`ARCHITECTURE.md`](ARCHITECTURE.md). This page records *what we bet on and in
 which order*; the landscape page records *what everyone else is doing*.
@@ -21,6 +21,209 @@ Two user pains anchor everything below:
 2. **Large projects** — work that exceeds one context window forces the user to
    hand-slice specs/features into many sessions; state is lost between them and
    projects stall before completion.
+
+## Product decisions — 2026-10-05
+
+Recorded from a product interview with the maintainer. Where this section and
+older text below disagree, this section wins.
+
+- **Audience: people and developers.** Plain language by default, technical
+  detail on request. The desktop is the primary interface; the CLI serves
+  automation and debugging.
+- **First contact: the macOS desktop app** with the daemon inside. The CLI and
+  Telegram stay first-class, but the release is judged by the desktop path.
+- **The promise: large projects get finished.** Verification, the task ledger
+  and the event log are how Surge keeps that promise, not the headline. Demos
+  show multi-milestone projects, not a single PR.
+- **MCP recovery follows agent-runtime practice.** No managed VM or effect
+  broker: the prior server's process group is stopped and a fresh server is
+  started; an interrupted call is reported to the agent, never replayed
+  ([ADR-0021](adr/0021-mcp-restart-recovery.md), superseding ADR-0020).
+- **Local only.** No remote daemon and no hosted executor. During a run the
+  desktop keeps the Mac awake and shows it.
+- **Fully open source.** MIT/Apache-2.0, no telemetry, no paid tier; everything
+  valuable lives in the open core.
+- **First priority once the release is unblocked: prove the promise.** Run real
+  multi-stage projects through the desktop and fix every failure they find. No
+  curated demo recording is kept in the repository.
+- **A project has no finale; it has stages.** Every stage the user asked for is
+  driven to completion. New ideas can be added at any time and are completed the
+  same way.
+- **New idea during a stage:** the planner proposes where it goes in the roadmap
+  (a task in a stage or a new stage); the user approves with one action and the
+  current stage keeps running. An urgent bug takes the same path but may be
+  proposed first in the current stage. Feedback on a finished stage is a new
+  idea too.
+- **End of a stage:** Surge continues to the next stage and notifies the user
+  with a short report and a "run it" action. No acceptance gate by default.
+- **A project opens on a dashboard:** "needs your decision" first, then stages
+  with progress, recent activity, "add an idea" and "run the app". The
+  conversation is reached from the dashboard.
+- **Agent selection is automatic within user limits.** Surge detects installed
+  agents and, where available, their models, limits and quality ratings, then
+  assigns stages itself. Before approving a flow the user can change the
+  assignment or ask for a revision. Providers or individual models can be
+  disabled entirely, and allowed models, effort levels and thinking modes
+  restricted. These limits constrain the planner and are validated at flow
+  load, not only displayed. Ratings ship as registry data
+  ([ADR-0019](adr/0019-providers-are-registry-data.md)) refreshed on the user's
+  request; Surge never silently fetches third-party sites.
+
+- **Two equal starting points:** "new project from an idea" and "open an existing
+  folder". For an existing project Surge scans it (`project describe`), proposes
+  stages and never touches the working copy; all work happens in worktrees,
+  stated in one line when the project opens.
+- **No agent installed or signed in:** the app guides step by step (supported
+  agents, copyable install and sign-in commands) and switches screens itself
+  once `surge doctor` sees the agent ready. Surge downloads nothing on its own.
+- **Default agent permissions: project folder plus network** (`workspace+network`).
+  Writes outside the worktree go through an elevation request in the Inbox. The
+  verifier stays sealed (read-only, no network) regardless of this setting.
+- **Notifications:** native macOS notifications by default; Telegram is opt-in
+  in settings for replying from a phone.
+- **Git is always visible** (branches, commits, diffs), with short hover hints
+  for key terms instead of renamed concepts.
+
+- **Subscription limit mid-stage:** the task moves to another allowed agent;
+  if none fits, the run parks until the reset and wakes itself (ADR-0016). The
+  user is notified; no decision is required. Allowed models, effort and
+  thinking limits apply to the switch, and the verifier stays on a different
+  vendor than the implementer where possible, with a warning otherwise.
+- **Spend visibility: actuals only, no forecasts.** Show what the agent actually
+  reports (share of a subscription limit where available, otherwise tokens);
+  never invent dollar figures while ACP reports no cost.
+- **Budgets are off by default** and can be enabled per project or stage in
+  settings.
+
+- **Repeated verifier rejection follows a ladder:** retry with a different or
+  stronger allowed model, then the planner splits the task using the
+  verifier's findings, then ask the user. Tasks that do not depend on it keep
+  running. This implements the reserved `ExceededAction::Escalate` behind edge
+  `max_traversals`.
+- **The user can override a rejection** either by accepting as is or by revising
+  the requirement and re-verifying. Accept-as-is is always shown as "accepted by
+  a human", never "verified", and keeps the verifier's findings in the report.
+- **Loop protection is independent of budgets:** a session with no progress
+  (no new events, repeated identical tool calls, or a turn cap) counts as a
+  failed attempt and enters the same ladder. Thresholds default sensibly and
+  are configurable in `surge.toml`.
+
+- **Several projects run in parallel by priority.** When limits are short, the
+  project higher in a user-ordered list gets the agent; waiting work ages up so
+  lower projects are not starved, and a project blocked on the user holds no
+  agent share.
+- **Each project is its own space.** There is no combined cross-project view;
+  the user switches between projects. The app opens the last project, the
+  switcher badges projects that need a decision, and native notifications come
+  from every project. Fleet is scoped to the current project.
+
+- **Planning is a step-by-step wizard.** An idea first gets 3–5 clarifying
+  questions with defaults, then the user shapes each step: description, stages,
+  agents and flow, start. A feature in a live project uses a short version (1–3
+  questions, proposed roadmap place, approve); a small bug needs no questions.
+- **The master agent plans, then steps back.** During planning it proposes the
+  flow, including nodes with different viewpoints (for example a spec critic or
+  a second tester); the user can also configure them. During execution it does
+  not intervene in flows or agent sessions and only assists through MCP
+  (context, memory, tools).
+- **While work runs:** one line per task (who, which step, how long), expandable
+  to the agent's live feed.
+- **Course correction is stop and restart against a revised requirement**, not
+  chatting with a running agent. The worktree's code is kept and the restart
+  continues from it. Pillar B2 (steering without stopping) is not a desktop
+  goal.
+- **A two-layer second brain:** project memory in the repository
+  (`.surge/memory`) and local personal memory carried across projects, both
+  with provenance and editable; personal entries are supplied only when
+  relevant. A local code index (file and symbol map) is refreshed at run start
+  and served to agents through Surge's MCP; nothing leaves the machine.
+- **Three ways to customize** skills, MCP, roles and flow templates: the UI, files
+  and a conversation with the master agent. Files (TOML profiles, flows,
+  skills, MCP) are the single source of truth; the UI edits them, and the master
+  agent proposes a diff for approval and never applies it on its own.
+- **First release cut: a reliable core, everything else in updates.** v1 (macOS,
+  desktop) ships ADR-0021 MCP recovery, the idea/folder-to-stages path with the
+  wizard, the ledger and verifier, limit parking, guided agent onboarding,
+  native notifications and keep-awake; plus the project dashboard, new ideas
+  during work, the verifier ladder with loop protection, and agent switching on
+  limits with model/effort/thinking restrictions. After v1: benchmark ratings,
+  cross-project priorities (equal share until then), Telegram in onboarding,
+  budget UI, Windows and Linux.
+
+- **Context inside a task is the runtime's job.** Surge's defense against context
+  rot is task sizing at planning time and a fresh session per task; within a
+  session the agent runtime's own compaction is used. A compaction is recorded
+  and fed back to the planner as a signal to size similar tasks smaller.
+- **Disagreement between viewpoint agents is settled by a judge agent**, on a
+  different model or vendor than both sides where possible; its decision and
+  rationale go into the stage report. Viewpoints are ordinary role profiles.
+- **A Hub for skills and MCP servers.** The user installs from it; the planner
+  picks per node only from what is installed; the user confirms in the wizard.
+  Installs are hash-pinned, never silently updated, and MCP servers run under
+  the delegated sandbox. Provisionally the Hub is a client over existing
+  official catalogs (such as the official MCP registry and skill catalogs) plus
+  the user's own skills and servers from a folder or git; Surge hosts and
+  moderates nothing, and every entry shows its source.
+
+- **Existing projects keep their conventions.** Surge reads existing agent
+  instructions (`CLAUDE.md`, `AGENTS.md`, Cursor rules) as context and never
+  replaces them.
+- **Surge's project files live in the repository** under `.surge/` (memory, flows,
+  profiles, `surge.toml`) and are committed; run journals and the code index
+  stay local in `~/.surge`.
+- **One PR per task; the user merges by default**, with auto-merge as a project
+  setting. Without a GitHub remote the same PR exists locally as a branch with
+  a review card in the app. Dependent tasks stack on unmerged PRs while
+  independent tasks continue; the dashboard shows "N PRs waiting to merge" with
+  a hint about auto-merge.
+- **Conflicts with the user's own commits** are resolved by an agent and then
+  re-verified; if the agent cannot resolve them, the rejection ladder applies.
+
+- **Verification is test-based for now.** Results can be anything (a website, an
+  app on any platform, a script), so v1 adds no browser or visual checking. The
+  existing App Tester stays an optional flow node. The verifier checks that the
+  tests actually cover the stage's criteria, not only that they pass.
+- **Who writes tests depends on the chosen method.** If the user wants TDD, the
+  master agent puts a test-author first in the flow; otherwise the implementer
+  writes the tests. The method is one question in the wizard's agents-and-flow
+  step, with a default proposed per project type.
+
+- **The CLI is for automation and debugging** (start, status, diagnostics,
+  traces, replay); the desktop is the primary interface.
+- **Run history is a desktop timeline** with "go back here" on each step and a
+  revised requirement, the same mechanism as stop-and-restart.
+- **Surge's MCP surface grows with the desktop.** Every v1 feature (ideas,
+  approvals, merges, Hub) is also available through `surge mcp serve`; writes
+  stay behind `--allow-write`.
+
+Accepted risks: an agent can repeat a non-idempotent call after a crash despite
+the notice; without stage gates a defect in one stage can surface after the
+next stage builds on it; benchmark ratings age and may not reflect a given
+project (local per-run history can complement them later, with no telemetry);
+default network access lets an agent fetch anything (accepted for unattended
+runs); command-only agent onboarding may be hard for people without a terminal
+and should be tested with a real user; a switched agent finishes a task in a
+different style; without a default budget an API-key user can overspend, so
+loop protection must not depend on budgets; the
+rejection ladder spends limits on a task that may be badly specified; "accept
+as is" can become a habit; a low-priority project advances slowly until aging
+lifts it; without a combined view, users with many projects rely on badges and
+notifications; the wizard lengthens time to first result; stop-and-restart spends
+an attempt on a small correction; three customization paths are three surfaces
+to test; "no context loss" stays a differentiator only while vendors leave
+context management to the user, so back it with Surge's own measurements on
+large projects; trusting runtime compaction means a rare oversized task can
+still degrade, so sizing quality must be measured; the judge is one more model
+call and failure point; Hub quality depends on third-party catalogs; manual merging grows PR
+stacks where a fix at the bottom shakes everything above; an agent can
+misread a human change while resolving a conflict; dozens of PRs per stage add
+noise to a team's GitHub; test-only verification can pass a feature that does
+not work, especially UI; without TDD the implementer writes tests for its own
+code and protection rests on the verifier's coverage check; terminal-first
+developers may miss a CLI command (partly covered by MCP); the MCP surface is
+one more surface per v1 feature; the v1 cut is sizable new code (`Escalate` and `Rotate` are
+reserved today), so it, not MCP alone, sets the release date; first-party vendor tools may absorb "finishing projects", which would erode the
+differentiation (see revisit triggers below).
 
 ## What the research established
 
@@ -241,7 +444,14 @@ Everything in [`ARCHITECTURE.md` §13](ARCHITECTURE.md) stands. Additionally:
 
 ## Differentiation sentence
 
-Managed agents and first-party manager views try to complete a task inside one
-vendor's walls. Surge is the local-first layer that makes fleets of agents
-from any vendor finish whole projects — with a ledger that can't lose work, a
-verifier that can't be gamed, and an event log that can replay how it happened.
+Updated 2026-10-05. Vendor tools can take a task from start to finish, but on
+large work they hit the context window: it gets compacted, plans dead-end and
+agents get lazier. Their answer is advice to the user — compact, start a new
+session, split the task. In Surge that is the system's job, not the user's.
+The brief is refined with the user before any code is written; the whole path
+to the result is visible up front; every task runs in a fresh session against a
+durable ledger, so context is never lost and work resumes whenever the user
+wants, including after limits reset. Several agents from different vendors can
+look at the same work from different angles, each node gets exactly the skills
+and MCP servers it needs, and a project memory plus a code index make agents
+faster on the user's project. All of it local, open source and from any vendor.

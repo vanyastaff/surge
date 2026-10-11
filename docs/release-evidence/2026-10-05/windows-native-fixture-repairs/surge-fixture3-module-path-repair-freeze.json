@@ -1,0 +1,17 @@
+{
+  "file": "crates/surge-persistence/src/state_home/creation_security_tests.rs",
+  "supersedes_source_sha256": "2d58418202c559383def045b0d8a33a85985c25c5b76be3c8096a57d59d6ba80",
+  "source_sha256": "3faf034fa5f1b7ae6c37c86826b8f12e43bb9bf8035c2ae918e52d68e421363e",
+  "change": "Explicit path for nested observation module only; no test semantic change",
+  "red": {
+    "command": "cargo +1.99.0 fmt --all --check",
+    "exit": 1,
+    "log": "/tmp/surge-fixture3-module-fmt-red.log"
+  },
+  "green": {
+    "command": "cargo +1.99.0 fmt --all --check",
+    "exit": 0,
+    "log": "/tmp/surge-fixture3-module-fmt-green.log"
+  },
+  "native_execution": "pending; original fixture3 freeze historical record retained"
+}

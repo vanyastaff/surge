@@ -69,7 +69,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn matching_arm_wins() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -100,11 +100,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.as_ref(), "rust");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn no_match_falls_back_to_default() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let writer = storage
             .create_run(surge_core::id::RunId::new(), dir.path(), None)
@@ -133,5 +136,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.as_ref(), "generic");
+        writer.close().await.unwrap();
+        drop(storage);
+        dir.close().unwrap();
     }
 }

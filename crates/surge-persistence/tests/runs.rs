@@ -2,7 +2,7 @@
 //!
 //! Each submodule covers a focused integration scenario; see the per-module
 //! docstring for the specific behavior under test. All tests use isolated
-//! `~/.surge/` homes via `tempfile::TempDir` and a deterministic `MockClock`.
+//! `~/.surge/` homes via a retained `FixtureHome` and a deterministic `MockClock`.
 //!
 //! Module layout: this file is the test-binary root. The `runs` module below
 //! re-exports the fixtures + per-test modules so tests can `use

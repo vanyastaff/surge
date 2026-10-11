@@ -1,0 +1,20 @@
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.56s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-8b1eaa767c938271)
+
+running 10 tests
+test admission::tests::cancel_queued_removes_from_fifo ... ok
+test admission::tests::queue_full_does_not_block_admission_after_drain ... ok
+test admission::tests::complete_then_pop_admits_next ... ok
+test admission::tests::rejects_with_queue_full_when_both_caps_hit ... ok
+test admission::tests::over_cap_queues_in_fifo ... ok
+test admission::tests::completion_before_wait_retains_queue_wake ... ok
+test admission::tests::bootstrap_rollback_before_wait_retains_queue_wake ... ok
+test admission::tests::snapshot_counts ... ok
+test admission::tests::try_admit_no_queue_rejects_at_cap ... ok
+test admission::tests::under_cap_admits ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.00s

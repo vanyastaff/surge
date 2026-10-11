@@ -499,3 +499,84 @@ async fn uncertain_session_operation_is_never_automatically_reissued() {
     );
     assert_reaped(root.path());
 }
+
+fn stalled_option_config(root: &Path) -> SessionConfig {
+    let record = root.join("option-request").display().to_string();
+    let mut config = config(
+        root,
+        &[
+            "--config-options",
+            "--stall-config-option",
+            "--config-file",
+            &record,
+        ],
+    );
+    config.config_selections = vec![session::ConfigSelection {
+        category: session::ConfigCategory::Model,
+        value: "Mock Opus".into(),
+        best_effort: false,
+    }];
+    config
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn config_option_phase_shares_deadline_reaps_and_allows_next_open() {
+    let root = tempfile::tempdir().unwrap();
+    let bridge = bridge();
+    let result = bridge
+        .open_session(stalled_option_config(root.path()))
+        .await;
+    let timed_out = matches!(
+        &result,
+        Err(OpenSessionError::HandshakeTimedOut {
+            phase: "set_config_option",
+            ..
+        })
+    );
+    if let Ok(session) = result {
+        bridge.close_session(session.session).await.unwrap();
+    }
+    assert_reaped(root.path());
+    let next = bridge.open_session(config(root.path(), &[])).await.unwrap();
+    bridge.close_session(next.session).await.unwrap();
+    bridge.shutdown().await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("option-request"))
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["model=opus"],
+        "published option must never be retried"
+    );
+    assert!(
+        timed_out,
+        "option request must use the shared handshake deadline"
+    );
+    assert_reaped(root.path());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropped_option_caller_settles_child_and_shutdown_promptly() {
+    let root = tempfile::tempdir().unwrap();
+    let bridge = generous_bridge();
+    {
+        let opening = bridge.open_session(stalled_option_config(root.path()));
+        tokio::pin!(opening);
+        tokio::select! {
+            result = &mut opening => panic!("opening ended before option request marker: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(2), async {
+                while !root.path().join("option-request").exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }) => result.unwrap(),
+        }
+    }
+    let start = std::time::Instant::now();
+    bridge.shutdown().await.unwrap();
+    let elapsed = start.elapsed();
+    assert_reaped(root.path());
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "dropped option caller wedged shutdown: {elapsed:?}"
+    );
+}

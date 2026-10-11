@@ -1,0 +1,140 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.36s
+────────────
+ Nextest run ID ac7907c2-9ba4-4a91-8df4-ec9baed50cf8 with nextest profile: default
+    Starting 15 tests across 1 binary (427 tests skipped)
+        FAIL [   0.543s] ( 1/15) surge-orchestrator engine::fork::tests::child_snapshot_error_returns_with_writer_released
+  stdout ───
+
+    running 1 test
+    test engine::fork::tests::child_snapshot_error_returns_with_writer_released ... FAILED
+
+    failures:
+
+    failures:
+        engine::fork::tests::child_snapshot_error_returns_with_writer_released
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 441 filtered out; finished in 0.27s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39910099) panicked at crates/surge-orchestrator/src/engine/fork.rs:1072:65:
+    called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683994646914856269189413653212134)) }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'engine::fork::tests::child_snapshot_error_returns_with_writer_released' (39910098) panicked at crates/surge-orchestrator/src/engine/fork.rs:1081:18:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683994646914856269189413653212134)) }", ...)
+
+        PASS [   0.550s] ( 2/15) surge-orchestrator engine::fork::tests::fork_edit_unknown_node_rejected
+        FAIL [   0.550s] ( 3/15) surge-orchestrator engine::fork::tests::child_append_error_returns_with_writer_released
+  stdout ───
+
+    running 1 test
+    test engine::fork::tests::child_append_error_returns_with_writer_released ... FAILED
+
+    failures:
+
+    failures:
+        engine::fork::tests::child_append_error_returns_with_writer_released
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 441 filtered out; finished in 0.40s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39910082) panicked at crates/surge-orchestrator/src/engine/fork.rs:1045:65:
+    called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683994649721737407905417287045105)) }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'engine::fork::tests::child_append_error_returns_with_writer_released' (39910081) panicked at crates/surge-orchestrator/src/engine/fork.rs:1053:18:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683994649721737407905417287045105)) }", ...)
+
+        PASS [   0.600s] ( 4/15) surge-orchestrator engine::fork::tests::fork_edit_non_agent_node_rejected
+        PASS [   0.661s] ( 5/15) surge-orchestrator engine::fork::tests::fork_copies_prefix_and_records_lineage
+        PASS [   0.661s] ( 6/15) surge-orchestrator engine::fork::tests::fork_inherits_snapshot_so_child_resumes_at_fork_position
+        PASS [   0.671s] ( 7/15) surge-orchestrator engine::fork::tests::fork_profile_override_edits_child_graph
+        PASS [   0.171s] ( 8/15) surge-orchestrator engine::fork::tests::fork_rejects_out_of_bounds_seq
+        PASS [   0.738s] ( 9/15) surge-orchestrator engine::fork::tests::fork_owns_artifact_bytes_after_parent_copy_is_removed
+        FAIL [   0.224s] (10/15) surge-orchestrator engine::fork::tests::fork_rejects_corrupt_inherited_artifact_without_lineage
+  stdout ───
+
+    running 1 test
+    test engine::fork::tests::fork_rejects_corrupt_inherited_artifact_without_lineage ... FAILED
+
+    failures:
+
+    failures:
+        engine::fork::tests::fork_rejects_corrupt_inherited_artifact_without_lineage
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 441 filtered out; finished in 0.20s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39910208) panicked at crates/surge-orchestrator/src/engine/fork.rs:1013:66:
+    called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683994888345677880033063474887859)) }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'engine::fork::tests::fork_rejects_corrupt_inherited_artifact_without_lineage' (39910202) panicked at crates/surge-orchestrator/src/engine/fork.rs:1026:10:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683994888345677880033063474887859)) }", ...)
+
+        PASS [   0.199s] (11/15) surge-orchestrator engine::fork::tests::fork_rejects_prefix_not_starting_with_run_started
+        PASS [   0.261s] (12/15) surge-orchestrator engine::fork::tests::fork_prompt_append_edits_child_graph
+        PASS [   0.170s] (13/15) surge-orchestrator engine::fork::tests::isolated_fork_without_checkpoint_leaves_no_child
+        FAIL [   0.199s] (14/15) surge-orchestrator engine::fork::tests::fork_reused_destination_preserves_existing_artifacts
+  stdout ───
+
+    running 1 test
+    test engine::fork::tests::fork_reused_destination_preserves_existing_artifacts ... FAILED
+
+    failures:
+
+    failures:
+        engine::fork::tests::fork_reused_destination_preserves_existing_artifacts
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 441 filtered out; finished in 0.17s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39910288) panicked at crates/surge-orchestrator/src/engine/fork.rs:967:66:
+    called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683995030400704402108898299872364)) }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'engine::fork::tests::fork_reused_destination_preserves_existing_artifacts' (39910286) panicked at crates/surge-orchestrator/src/engine/fork.rs:983:10:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683995030400704402108898299872364)) }", ...)
+
+        FAIL [   0.214s] (15/15) surge-orchestrator engine::fork::tests::parent_lineage_error_returns_with_both_writers_released
+  stdout ───
+
+    running 1 test
+    test engine::fork::tests::parent_lineage_error_returns_with_both_writers_released ... FAILED
+
+    failures:
+
+    failures:
+        engine::fork::tests::parent_lineage_error_returns_with_both_writers_released
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 441 filtered out; finished in 0.18s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39910308) panicked at crates/surge-orchestrator/src/engine/fork.rs:1098:66:
+    called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683995042765749772109320496552697)) }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'engine::fork::tests::parent_lineage_error_returns_with_both_writers_released' (39910307) panicked at crates/surge-orchestrator/src/engine/fork.rs:1114:18:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "called `Result::unwrap()` on an `Err` value: WriterAlreadyHeld { run_id: RunId(Ulid(2165683995042765749772109320496552697)) }", ...)
+
+────────────
+     Summary [   0.889s] 15 tests run: 10 passed, 5 failed, 427 skipped
+        FAIL [   0.543s] ( 1/15) surge-orchestrator engine::fork::tests::child_snapshot_error_returns_with_writer_released
+        FAIL [   0.550s] ( 3/15) surge-orchestrator engine::fork::tests::child_append_error_returns_with_writer_released
+        FAIL [   0.224s] (10/15) surge-orchestrator engine::fork::tests::fork_rejects_corrupt_inherited_artifact_without_lineage
+        FAIL [   0.199s] (14/15) surge-orchestrator engine::fork::tests::fork_reused_destination_preserves_existing_artifacts
+        FAIL [   0.214s] (15/15) surge-orchestrator engine::fork::tests::parent_lineage_error_returns_with_both_writers_released
+error: test run failed

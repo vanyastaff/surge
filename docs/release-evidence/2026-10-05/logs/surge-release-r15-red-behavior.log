@@ -1,0 +1,49 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+warning: field `admission` is never read
+  --> crates/surge-telegram/src/cockpit/outgoing_admission.rs:10:16
+   |
+ 8 | pub(super) struct AdmittedTelegramApi<A> {
+   |                   ------------------- field in this struct
+ 9 |     pub(super) api: A,
+10 |     pub(super) admission: PairingsAdmission,
+   |                ^^^^^^^^^
+   |
+   = note: `AdmittedTelegramApi` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `surge-telegram` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.74s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_telegram-c57878d2b855a05b)
+
+running 3 tests
+
+thread 'cockpit::production::outgoing_admission::tests::outgoing_cards_recheck_pair_revoke_and_repair' (33328813) panicked at crates/surge-telegram/src/cockpit/outgoing_admission.rs:113:9:
+assertion failed: api.send_message(42, "unpaired secret", &[]).await.is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'cockpit::production::outgoing_admission::tests::pairing_lookup_failure_is_reported_without_network_delegation' (33328814) panicked at crates/surge-telegram/src/cockpit/outgoing_admission.rs:196:9:
+assertion failed: matches!(api.send_message(42, "secret", &[]).await,
+    Err(crate::error::TelegramCockpitError::Persistence(_)))
+
+thread 'cockpit::production::outgoing_admission::tests::revoked_reconcile_preserves_card_until_repair_without_sending' (33328815) panicked at crates/surge-telegram/src/cockpit/outgoing_admission.rs:165:9:
+assertion failed: reconcile_open_cards(&store, &TerminalSnapshot, &api, 300).await.is_err()
+test cockpit::production::outgoing_admission::tests::outgoing_cards_recheck_pair_revoke_and_repair ... FAILED
+test cockpit::production::outgoing_admission::tests::revoked_reconcile_preserves_card_until_repair_without_sending ... FAILED
+test cockpit::production::outgoing_admission::tests::pairing_lookup_failure_is_reported_without_network_delegation ... FAILED
+
+failures:
+
+failures:
+    cockpit::production::outgoing_admission::tests::outgoing_cards_recheck_pair_revoke_and_repair
+    cockpit::production::outgoing_admission::tests::pairing_lookup_failure_is_reported_without_network_delegation
+    cockpit::production::outgoing_admission::tests::revoked_reconcile_preserves_card_until_repair_without_sending
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.15s
+
+error: test failed, to rerun pass `-p surge-telegram --lib`

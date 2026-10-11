@@ -46,7 +46,7 @@ one runtime; read the limits there.
 - **Thirteen archetypes** — `feature`, `bug-fix`, `refactor`, `security`, `docs`, `migration`, `performance`,
   `spike`, `linear-3`, `linear-with-review`, `multi-milestone`, `single-task`, and `code-review` for judging an
   existing change. `surge engine run --template <name> --prompt "<what you want>"` runs one directly.
-- **Desktop app** — Fleet, Roadmap, Missions, Flow, Inbox, Backlog, Agents, Memory and Settings on real run data.
+- **Optional desktop app (in development)** — Fleet, Roadmap, Missions, Flow, Inbox, Backlog, Agents, Memory and Settings on real run data.
 - **Source-agnostic intake** — CLI, Telegram, UI, GitHub Issues and Linear share one path.
 - **One git worktree per run** — managed via `git2`; merged or discarded on terminal outcome.
 
@@ -59,24 +59,35 @@ Factory, Aperant and Agentlas, including where they are ahead. No head-to-head b
 
 Crates: `surge-core` (graph, profile, roadmap, event, validation types), `surge-acp` (ACP client / bridge / registry),
 `surge-orchestrator` (engine, bootstrap, roadmap amendment), `surge-persistence` (SQLite runs, memory, analytics),
-`surge-daemon` (local engine host), `surge-cli`, `surge-notify`, `surge-intake`, `surge-telegram`, `surge-mcp`
+`surge-daemon` (local engine host), `surge-process` (protected owner panic boundary),
+`surge-cli`, `surge-notify`, `surge-intake`, `surge-telegram`, `surge-mcp`
 (supervised MCP client), `surge-git`, `surge-ui` (GPUI desktop app).
 
 ## Quick Start
 
 ```bash
-# Build everything, including the desktop app
-cargo build --workspace
+# Build the CLI and daemon together from this checkout
+cargo build --locked --release -p surge-cli -p surge-daemon
+./target/release/surge --version
+./target/release/surge-daemon --version
 
-# From an idea to a plan you approve (needs an authenticated agent runtime, e.g. Claude Code)
-cd your-project && surge init --default
+# No agent needed; run from this checkout
+./target/release/surge engine run examples/flow_terminal_only.toml --watch
+```
+
+Install both executables together on `PATH` using the
+[installation instructions](docs/getting-started.md#install-a-release-archive).
+Then, from your project directory:
+
+```bash
+surge init --default
 surge bootstrap "a small command-line pomodoro timer in Rust"
-
-# Or run the smallest possible flow — no agent needed
-cargo run -p surge-cli --bin surge -- engine run examples/flow_terminal_only.toml --watch
 ```
 
 Full setup, agent configuration, and daemon usage are in [`docs/getting-started.md`](docs/getting-started.md).
+
+Windows archives currently have [runtime capability limitations](docs/getting-started.md#windows-runtime-limitations).
+The optional desktop shell is not included in release archives.
 
 ## Documentation
 
@@ -104,3 +115,9 @@ Licensed under either of:
 - MIT License ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
+
+macOS release binaries statically link OpenSSL 3, distributed under the Apache
+License, Version 2.0 included in `LICENSE-APACHE`. OpenSSL is developed by the
+[OpenSSL Project](https://github.com/openssl/openssl); its
+[license terms](https://github.com/openssl/openssl/blob/openssl-3.6.4/LICENSE.txt)
+are included with the archives.

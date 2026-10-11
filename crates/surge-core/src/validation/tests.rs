@@ -728,6 +728,7 @@ fn empty_server_name_is_error() {
         },
         allowed_tools: None,
         call_timeout: Duration::from_secs(60),
+        startup_timeout: None,
         restart_on_crash: true,
         sandbox: None,
     };
@@ -755,6 +756,7 @@ fn command_path_with_dotdot_segment_is_error() {
         },
         allowed_tools: None,
         call_timeout: Duration::from_secs(60),
+        startup_timeout: None,
         restart_on_crash: true,
         sandbox: None,
     };
@@ -941,6 +943,7 @@ fn validate_with_run_config_happy_path_returns_no_mcp_errors() {
             },
             allowed_tools: None,
             call_timeout: Duration::from_secs(60),
+            startup_timeout: None,
             restart_on_crash: true,
             sandbox: None,
         }],

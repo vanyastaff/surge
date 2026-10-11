@@ -19,6 +19,8 @@
 //! The real end-to-end body is deferred to M5.1.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,23 +84,26 @@ async fn request_human_input_resolved_completes_run() {
     // Drop-join hang, and just assert the API surface exists by exercising
     // resolve_human_input on an unknown run (returns RunNotFound).
 
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge: Arc<dyn BridgeFacade> = Arc::new(fixtures::mock_bridge::MockBridge::new());
-    let dispatcher =
-        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge: Arc<dyn BridgeFacade> = Arc::new(fixtures::mock_bridge::MockBridge::new());
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
 
-    // Smoke: resolve_human_input on unknown run returns RunNotFound (proves API exists).
-    let r = engine
-        .resolve_human_input(
-            RunId::new(),
-            Some("c1".into()),
-            serde_json::json!({"answer": "go"}),
-        )
-        .await;
-    assert!(
-        matches!(r, Err(EngineError::RunNotFound(_))),
-        "expected RunNotFound, got {r:?}"
-    );
+        // Smoke: resolve_human_input on unknown run returns RunNotFound (proves API exists).
+        let r = engine
+            .resolve_human_input(
+                RunId::new(),
+                Some("c1".into()),
+                serde_json::json!({"answer": "go"}),
+            )
+            .await;
+        assert!(
+            matches!(r, Err(EngineError::RunNotFound(_))),
+            "expected RunNotFound, got {r:?}"
+        );
+    }
+    dir.close().unwrap();
 }

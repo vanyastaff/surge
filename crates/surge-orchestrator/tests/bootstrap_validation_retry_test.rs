@@ -1,6 +1,7 @@
 //! Task 23 — Flow Generator validation retries backtrack before materializing.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use surge_core::run_event::{BootstrapStage, EventPayload};
 use surge_orchestrator::engine::bootstrap::VALIDATION_FAILED_OUTCOME;
@@ -73,4 +74,5 @@ async fn flow_generator_invalid_twice_then_valid_materializes_after_two_edits() 
         })
         .count();
     assert_eq!(validation_failed_outcomes, 2);
+    harness.close();
 }

@@ -1,0 +1,9 @@
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s
+     Running tests/bridge_control_lifecycle.rs (target/debug/deps/bridge_control_lifecycle-2ac38344cc64b377)
+
+running 2 tests
+test dropped_option_caller_settles_child_and_shutdown_promptly ... ok
+test config_option_phase_shares_deadline_reaps_and_allows_next_open ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.53s

@@ -291,6 +291,14 @@ fn run_new(args: NewArgs) -> Result<()> {
     let key = ProfileKey::try_new(&args.name)
         .with_context(|| format!("invalid profile name {:?}", args.name))?;
 
+    #[cfg(windows)]
+    let _runtime_owner = if args.dir.is_none() {
+        Some(surge_persistence::RuntimeHomeOwner::prepare(
+            &super::common::surge_home_dir()?,
+        )?)
+    } else {
+        None
+    };
     let dir = match args.dir {
         Some(d) => d,
         None => surge_orchestrator::profile_loader::profiles_dir()

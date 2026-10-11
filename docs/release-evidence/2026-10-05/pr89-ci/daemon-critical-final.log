@@ -1,0 +1,282 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.26s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID eda8cc67-24b9-40c7-b055-53714b208c84 with nextest profile: default
+    Starting 72 tests across 2 binaries
+        PASS [   0.043s] ( 1/72) surge-daemon::owned_flow_mcp_recovery child_owned_flow_mcp_probe
+        PASS [   0.054s] ( 2/72) surge-daemon::owned_flow_mcp_recovery cold_host::tests::owned_child_probe
+        PASS [   0.097s] ( 3/72) surge-daemon::owned_flow_mcp_recovery cold_host::tests::readiness_requires_a_fresh_marker_and_owned_process_can_be_reaped
+        PASS [   0.099s] ( 4/72) surge-daemon::owned_flow_mcp_recovery cold_host::tests::dropping_the_owner_during_panic_reaps_its_actual_child
+        PASS [   0.130s] ( 5/72) surge-daemon::owned_flow_mcp_recovery cold_host::tests::readiness_timeout_and_early_exit_reap_the_owned_child
+        PASS [   0.134s] ( 6/72) surge-daemon::owned_flow_mcp_recovery cold_host::tests::natural_exit_status_is_preserved_and_exit_timeout_reaps_owned_child
+        PASS [   0.572s] ( 7/72) surge-daemon::owned_flow_mcp_recovery cold_host::tests::regular_marker_swapped_to_fifo_errors_without_blocking_and_reaps_child
+        FAIL [   1.372s] ( 8/72) surge-daemon::owned_flow_mcp_recovery legacy_global_policy_references_survive_actual_start_and_resume
+  stdout ───
+
+    running 1 test
+    test legacy_global_policy_references_survive_actual_start_and_resume ... FAILED
+
+    failures:
+
+    failures:
+        legacy_global_policy_references_survive_actual_start_and_resume
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 1.33s
+
+  stderr ───
+
+    thread 'legacy_global_policy_references_survive_actual_start_and_resume' (35385350) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    legacy-resume child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmppbmLPC/cold-host-stdout-fx1dY2; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmppbmLPC/cold-host-stderr-1NqGEk
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmppbmLPC
+
+        FAIL [   1.237s] ( 9/72) surge-daemon::owned_flow_mcp_recovery optional_whitelists_and_server_override_survive_actual_start_and_resume
+  stdout ───
+
+    running 1 test
+    test optional_whitelists_and_server_override_survive_actual_start_and_resume ... FAILED
+
+    failures:
+
+    failures:
+        optional_whitelists_and_server_override_survive_actual_start_and_resume
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 1.20s
+
+  stderr ───
+
+    thread 'optional_whitelists_and_server_override_survive_actual_start_and_resume' (35385440) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    legacy-policy-tools-none-resume child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp3kLo08/cold-host-stdout-eTIuYs; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp3kLo08/cold-host-stderr-KuM345
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp3kLo08
+
+        PASS [   2.125s] (10/72) surge-daemon::owned_flow_mcp_recovery legacy_engine_catalog_enforces_actual_configured_275ms_deadline
+        PASS [   3.916s] (11/72) surge-daemon::owned_flow_mcp_recovery explicit_empty_survives_real_cold_wake_and_changed_global_defaults
+        PASS [   3.924s] (12/72) surge-daemon::owned_flow_mcp_recovery host_default_empty_survives_real_cold_wake_and_changed_global_defaults
+        PASS [   0.039s] (13/72) surge-daemon::owned_flow_mcp_recovery records_only_reads_committed_newline_records
+        FAIL [  20.760s] (14/72) surge-daemon::owned_flow_mcp_recovery cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect
+  stdout ───
+
+    running 1 test
+    test cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect ... FAILED
+
+    failures:
+
+    failures:
+        cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.72s
+
+  stderr ───
+
+    thread 'cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect' (35385277) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpdrq25u/cold-host-stdout-rzSwQT; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpdrq25u/cold-host-stderr-KXtY0S
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpdrq25u
+
+        FAIL [  20.775s] (15/72) surge-daemon::owned_flow_mcp_recovery missing_and_corrupt_private_inputs_refuse_real_cold_writers
+  stdout ───
+
+    running 1 test
+    test missing_and_corrupt_private_inputs_refuse_real_cold_writers ... FAILED
+
+    failures:
+
+    failures:
+        missing_and_corrupt_private_inputs_refuse_real_cold_writers
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.74s
+
+  stderr ───
+
+    thread 'missing_and_corrupt_private_inputs_refuse_real_cold_writers' (35385368) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp4gWIi4/cold-host-stdout-dNWgUr; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp4gWIi4/cold-host-stderr-kaj02J
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp4gWIi4
+
+        FAIL [  20.839s] (16/72) surge-daemon::owned_flow_mcp_recovery manifest_binding_refusal_must_persist_attention_after_actual_wake
+  stdout ───
+
+    running 1 test
+    test manifest_binding_refusal_must_persist_attention_after_actual_wake ... FAILED
+
+    failures:
+
+    failures:
+        manifest_binding_refusal_must_persist_attention_after_actual_wake
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.80s
+
+  stderr ───
+
+    thread 'manifest_binding_refusal_must_persist_attention_after_actual_wake' (35385371) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpbkrIZx/cold-host-stdout-e6Yai2; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpbkrIZx/cold-host-stderr-pZiKqs
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpbkrIZx
+
+        PASS [   0.616s] (17/72) surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart
+        PASS [   0.600s] (18/72) surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery
+        PASS [   0.247s] (19/72) surge-daemon::work_item_route_test admitted_suspend_with_no_local_actor_returns_pending_original_operation
+        PASS [   0.029s] (20/72) surge-daemon::work_item_route_test child_committed_outcome_host_probe
+        PASS [   0.029s] (21/72) surge-daemon::work_item_route_test child_execution_host_probe
+        PASS [   0.652s] (22/72) surge-daemon::work_item_route_test ambiguous_owned_terminal_history_never_releases_task_ownership
+        PASS [   1.522s] (23/72) surge-daemon::owned_flow_mcp_recovery unresolved_mcp_domain_requires_attention_and_blocks_actual_cold_dispatch
+        FAIL [  20.904s] (24/72) surge-daemon::owned_flow_mcp_recovery ordinary_accepted_manifest_updates_preserve_exact_first_snapshot
+  stdout ───
+
+    running 1 test
+    test ordinary_accepted_manifest_updates_preserve_exact_first_snapshot ... FAILED
+
+    failures:
+
+    failures:
+        ordinary_accepted_manifest_updates_preserve_exact_first_snapshot
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.85s
+
+  stderr ───
+
+    thread 'ordinary_accepted_manifest_updates_preserve_exact_first_snapshot' (35385595) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpQB6nm8/cold-host-stdout-NUhCwv; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpQB6nm8/cold-host-stderr-WdGIBX
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpQB6nm8
+
+        PASS [   0.787s] (25/72) surge-daemon::work_item_route_test cold_committed_outcome_does_not_repeat_a_real_provider_turn
+        FAIL [  20.836s] (26/72) surge-daemon::owned_flow_mcp_recovery populated_cold_valid_twin_keeps_original_transport_and_writer_history
+  stdout ───
+
+    running 1 test
+    test populated_cold_valid_twin_keeps_original_transport_and_writer_history ... FAILED
+
+    failures:
+
+    failures:
+        populated_cold_valid_twin_keeps_original_transport_and_writer_history
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.79s
+
+  stderr ───
+
+    thread 'populated_cold_valid_twin_keeps_original_transport_and_writer_history' (35385689) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp0ScSVN/cold-host-stdout-Zwrmcs; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp0ScSVN/cold-host-stderr-pDdgFn
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmp0ScSVN
+
+        FAIL [  20.796s] (27/72) surge-daemon::owned_flow_mcp_recovery populated_initial_transport_is_exact_and_public_snapshot_opaque
+  stdout ───
+
+    running 1 test
+    test populated_initial_transport_is_exact_and_public_snapshot_opaque ... FAILED
+
+    failures:
+
+    failures:
+        populated_initial_transport_is_exact_and_public_snapshot_opaque
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.76s
+
+  stderr ───
+
+    thread 'populated_initial_transport_is_exact_and_public_snapshot_opaque' (35385767) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmptB1cCI/cold-host-stdout-WJdMHy; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmptB1cCI/cold-host-stderr-lYe4MZ
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmptB1cCI
+
+        PASS [   0.425s] (28/72) surge-daemon::work_item_route_test cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches
+        PASS [   0.588s] (29/72) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+        PASS [   0.771s] (30/72) surge-daemon::work_item_route_test completed_gate_route_kind_must_match_accepted_graph
+        PASS [   0.886s] (31/72) surge-daemon::work_item_route_test committed_gate_effects_survive_owner_death_before_route_without_repetition
+        PASS [   0.326s] (32/72) surge-daemon::work_item_route_test corrupt_owned_startup_graph_payload_cannot_reuse_declared_hash
+        PASS [   0.936s] (33/72) surge-daemon::work_item_route_test continued_accepted_route_survives_rejected_control_ack_without_second_route
+        PASS [   0.351s] (34/72) surge-daemon::work_item_route_test corrupt_owned_startup_late_binding_after_terminal_keeps_ownership
+        FAIL [  20.479s] (35/72) surge-daemon::owned_flow_mcp_recovery published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery
+  stdout ───
+
+    running 1 test
+    test published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery ... FAILED
+
+    failures:
+
+    failures:
+        published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.45s
+
+  stderr ───
+
+    thread 'published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery' (35386080) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpuQrZaM/cold-host-stdout-Ut23Zc; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpuQrZaM/cold-host-stderr-ssj7Ll
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpuQrZaM
+
+        PASS [   0.335s] (36/72) surge-daemon::work_item_route_test corrupt_owned_startup_late_binding_before_terminal_is_attention
+        FAIL [  20.485s] (37/72) surge-daemon::owned_flow_mcp_recovery transplanted_objects_and_changed_manifest_refuse_real_cold_writers
+  stdout ───
+
+    running 1 test
+    test transplanted_objects_and_changed_manifest_refuse_real_cold_writers ... FAILED
+
+    failures:
+
+    failures:
+        transplanted_objects_and_changed_manifest_refuse_real_cold_writers
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 20.45s
+
+  stderr ───
+
+    thread 'transplanted_objects_and_changed_manifest_refuse_real_cold_writers' (35386092) panicked at crates/surge-daemon/tests/owned_flow_mcp_recovery.rs:814:9:
+    populated child readiness failed: cold host exited before readiness: exit status: 101; stdout /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpwd33pW/cold-host-stdout-PmYNTY; stderr /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpwd33pW/cold-host-stderr-KpRtQA
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    failed cold fixture retained at /var/folders/5h/kmnftr3s6r1d30h8rtdll_2m0000gn/T/.tmpwd33pW
+
+        PASS [   0.340s] (38/72) surge-daemon::work_item_route_test corrupt_owned_startup_late_prompt_artifact_is_attention
+        PASS [   0.344s] (39/72) surge-daemon::work_item_route_test corrupt_owned_startup_late_requirements_artifact_is_attention
+        PASS [   0.483s] (40/72) surge-daemon::work_item_route_test disconnected_start_caller_does_not_drop_durable_attempt_or_active_run
+        PASS [   0.530s] (41/72) surge-daemon::work_item_route_test daemon_gate_answer_requires_durable_acceptance_before_success
+        PASS [   0.670s] (42/72) surge-daemon::work_item_route_test durable_terminal_settlement_validates_frozen_requirements_before_releasing_ownership
+        PASS [   0.724s] (43/72) surge-daemon::work_item_route_test execution_owner_prevents_second_live_host_from_replaying_agent_turn
+        PASS [   0.353s] (44/72) surge-daemon::work_item_route_test forged_suspended_human_gate_request_cannot_authorize_cold_continue
+        PASS [   0.574s] (45/72) surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers
+        PASS [   0.805s] (46/72) surge-daemon::work_item_route_test killed_continue_owner_after_route_before_journal_ack_routes_once
+        PASS [   1.516s] (47/72) surge-daemon::work_item_route_test expired_suspended_gate_answer_cannot_reset_original_deadline
+        PASS [   0.632s] (48/72) surge-daemon::work_item_route_test live_tracking_error_with_conflicting_terminals_retains_task_ownership
+        PASS [   1.052s] (49/72) surge-daemon::work_item_route_test legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention
+        PASS [   0.167s] (50/72) surge-daemon::work_item_route_test mock_bridge::tests::admission_rejects_changed_descriptor_closes_and_never_prompts
+        PASS [   0.042s] (51/72) surge-daemon::work_item_route_test mock_bridge::tests::last_prompt_reflects_last_send_message
+        PASS [   0.065s] (52/72) surge-daemon::work_item_route_test mock_bridge::tests::pumps_scripted_event
+        PASS [   0.043s] (53/72) surge-daemon::work_item_route_test mock_bridge::tests::records_open_session
+        PASS [   0.046s] (54/72) surge-daemon::work_item_route_test mock_bridge::tests::records_reply_to_tool
+        PASS [   1.382s] (55/72) surge-daemon::work_item_route_test lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once
+        PASS [   0.933s] (56/72) surge-daemon::work_item_route_test manual_suspend_supersedes_reserved_continue_and_historical_replay_cannot_dispatch
+        PASS [   0.575s] (57/72) surge-daemon::work_item_route_test partial_task_startup_missing_initial_prompt_is_attention_without_dispatch
+        PASS [   0.536s] (58/72) surge-daemon::work_item_route_test pre_admission_task_conflict_is_typed_and_has_no_operation_receipt
+        PASS [   6.173s] (59/72) surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice
+        PASS [   0.585s] (60/72) surge-daemon::work_item_route_test revisited_human_gate_requires_new_occurrence_and_new_decision
+        PASS [   6.184s] (61/72) surge-daemon::work_item_route_test cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider_dispatch
+        PASS [   0.921s] (62/72) surge-daemon::work_item_route_test pure_human_gate_suspend_is_not_abort_and_reuses_original_decision
+        PASS [   6.181s] (63/72) surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch
+        PASS [   0.664s] (64/72) surge-daemon::work_item_route_test suspended_original_gate_answer_is_durable_before_continue
+        PASS [   0.351s] (65/72) surge-daemon::work_item_route_test task_pr_cannot_attach_another_repository_or_unknown_remote
+        PASS [   0.554s] (66/72) surge-daemon::work_item_route_test task_provider_identity_is_durable_before_first_real_acp_prompt
+        PASS [   0.666s] (67/72) surge-daemon::work_item_route_test task_created_over_daemon_survives_restart_and_runs_pinned_requirements
+        PASS [   0.993s] (68/72) surge-daemon::work_item_route_test task_continue_without_provider_restore_capability_preserves_attention
+        PASS [   1.023s] (69/72) surge-daemon::work_item_route_test task_suspend_continue_uses_saved_provider_on_real_acp_wire
+        PASS [   1.311s] (70/72) surge-daemon::work_item_route_test task_pr_normalized_remote_mapping_replay_and_rejection_preserve_association
+        PASS [   5.908s] (71/72) surge-daemon::work_item_route_test killed_continue_ack_reconciles_nonterminal_control_before_waiting_for_operator
+        PASS [   5.766s] (72/72) surge-daemon::work_item_route_test killed_continue_owner_after_journal_ack_before_registry_ack_routes_once
+────────────
+     Summary [  30.942s] 72 tests run: 62 passed, 10 failed, 0 skipped
+        FAIL [   1.372s] ( 8/72) surge-daemon::owned_flow_mcp_recovery legacy_global_policy_references_survive_actual_start_and_resume
+        FAIL [   1.237s] ( 9/72) surge-daemon::owned_flow_mcp_recovery optional_whitelists_and_server_override_survive_actual_start_and_resume
+        FAIL [  20.760s] (14/72) surge-daemon::owned_flow_mcp_recovery cold_refusal_reclaims_actual_event_before_ack_without_new_claim_or_effect
+        FAIL [  20.775s] (15/72) surge-daemon::owned_flow_mcp_recovery missing_and_corrupt_private_inputs_refuse_real_cold_writers
+        FAIL [  20.839s] (16/72) surge-daemon::owned_flow_mcp_recovery manifest_binding_refusal_must_persist_attention_after_actual_wake
+        FAIL [  20.904s] (24/72) surge-daemon::owned_flow_mcp_recovery ordinary_accepted_manifest_updates_preserve_exact_first_snapshot
+        FAIL [  20.836s] (26/72) surge-daemon::owned_flow_mcp_recovery populated_cold_valid_twin_keeps_original_transport_and_writer_history
+        FAIL [  20.796s] (27/72) surge-daemon::owned_flow_mcp_recovery populated_initial_transport_is_exact_and_public_snapshot_opaque
+        FAIL [  20.479s] (35/72) surge-daemon::owned_flow_mcp_recovery published_refusal_retains_original_os_lease_without_caller_guard_until_real_delivery
+        FAIL [  20.485s] (37/72) surge-daemon::owned_flow_mcp_recovery transplanted_objects_and_changed_manifest_refuse_real_cold_writers
+error: test run failed

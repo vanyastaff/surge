@@ -1,0 +1,631 @@
+warning[license-not-encountered]: license was not encountered
+   ┌─ /Users/vanyastafford/Develop/surge/deny.toml:29:6
+   │
+29 │     "NCSA",
+   │      ━━━━ unmatched license allowance
+
+warning[wildcard]: found 2 wildcard dependencies for crate 'surge-acp'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-acp/Cargo.toml:15:14
+    │
+ 15 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:150:13
+    │
+150 │ surge-acp = { path = "crates/surge-acp" }
+    │             ───────────────────────────── workspace dependency
+    │
+    ├ surge-acp v0.1.0
+      ├── surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-orchestrator v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   ├── surge-telegram v0.1.0
+      │   │   └── surge-daemon v0.1.0 (*)
+      │   └── surge-ui v0.1.0 (*)
+      ├── (dev) surge-telegram v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:15:27
+   │
+15 │ surge-acp = { workspace = true }
+   │             ──────────────━━━━──
+   │                           │
+   │                           usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:13:28
+   │
+13 │ surge-core = { workspace = true }
+   │              ──────────────━━━━──
+   │                            │
+   │                            usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:35:30
+   │
+35 │ surge-daemon = { workspace = true }
+   │                ──────────────━━━━──
+   │                              │
+   │                              usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:16:27
+   │
+16 │ surge-git = { workspace = true }
+   │             ──────────────━━━━──
+   │                           │
+   │                           usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:20:30
+   │
+20 │ surge-intake = { workspace = true }
+   │                ──────────────━━━━──
+   │                              │
+   │                              usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:14:27
+   │
+14 │ surge-mcp = { workspace = true }
+   │             ──────────────━━━━──
+   │                           │
+   │                           usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:19:30
+   │
+19 │ surge-notify = { workspace = true }
+   │                ──────────────━━━━──
+   │                              │
+   │                              usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:17:36
+   │
+17 │ surge-orchestrator = { workspace = true }
+   │                      ──────────────━━━━──
+   │                                    │
+   │                                    usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:18:35
+   │
+18 │ surge-persistence = { workspace = true }
+   │                     ──────────────━━━━──
+   │                                   │
+   │                                   usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:12:31
+   │
+12 │ surge-process = { workspace = true }
+   │                 ──────────────━━━━──
+   │                               │
+   │                               usage of workspace dependency
+   │
+   ├ surge-cli v0.1.0 (*)
+
+warning[wildcard]: found 10 wildcard dependencies for crate 'surge-cli'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-cli/Cargo.toml:12:17
+   │
+12 │ surge-process = { workspace = true }
+   │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+13 │ surge-core = { workspace = true }
+   │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+14 │ surge-mcp = { workspace = true }
+   │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+15 │ surge-acp = { workspace = true }
+   │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+16 │ surge-git = { workspace = true }
+   │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+17 │ surge-orchestrator = { workspace = true }
+   │                      ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+18 │ surge-persistence = { workspace = true }
+   │                     ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+19 │ surge-notify = { workspace = true }
+   │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+20 │ surge-intake = { workspace = true }
+   │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   ·
+35 │ surge-daemon = { workspace = true }
+   │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   │
+   ├ surge-cli v0.1.0
+
+warning[wildcard]: found 19 wildcard dependencies for crate 'surge-daemon'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-daemon/Cargo.toml:17:17
+    │
+ 17 │ surge-process = { workspace = true }
+    │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    ·
+ 36 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+ 37 │ surge-git.workspace = true
+    │                       ━━━━ wildcard dependency
+ 38 │ surge-orchestrator.workspace = true
+    │                                ━━━━ wildcard dependency
+ 39 │ surge-mcp.workspace = true
+    │                       ━━━━ wildcard dependency
+ 40 │ surge-acp.workspace = true
+    │                       ━━━━ wildcard dependency
+ 41 │ surge-persistence.workspace = true
+    │                               ━━━━ wildcard dependency
+ 42 │ surge-notify.workspace = true
+    │                          ━━━━ wildcard dependency
+ 43 │ notify-rust = { workspace = true }
+ 44 │ surge-intake.workspace = true
+    │                          ━━━━ wildcard dependency
+ 45 │ surge-telegram = { path = "../surge-telegram" }
+    │                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:155:16
+    │
+155 │ surge-daemon = { path = "crates/surge-daemon" }
+    │                ────────────────────────────────
+    │                │
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │                workspace dependency
+    │
+    ├ surge-daemon v0.1.0
+      ├── surge-cli v0.1.0
+      └── surge-ui v0.1.0
+
+warning[wildcard]: found 2 wildcard dependencies for crate 'surge-git'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-git/Cargo.toml:8:14
+    │
+  8 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:151:13
+    │
+151 │ surge-git = { path = "crates/surge-git" }
+    │             ───────────────────────────── workspace dependency
+    │
+    ├ surge-git v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      └── surge-orchestrator v0.1.0
+          ├── surge-cli v0.1.0 (*)
+          ├── (dev) surge-daemon v0.1.0 (*)
+          ├── surge-telegram v0.1.0
+          │   └── surge-daemon v0.1.0 (*)
+          └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-intake'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-intake/Cargo.toml:8:14
+    │
+  8 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+  9 │ surge-persistence = { workspace = true }
+    │                     ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:157:16
+    │
+157 │ surge-intake = { path = "crates/surge-intake" }
+    │                ────────────────────────────────
+    │                │
+    │                workspace dependency
+    │                workspace dependency
+    │
+    ├ surge-intake v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-notify v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── surge-daemon v0.1.0 (*)
+      │   ├── (dev) surge-orchestrator v0.1.0
+      │   │   ├── surge-cli v0.1.0 (*)
+      │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │   ├── surge-telegram v0.1.0
+      │   │   │   └── surge-daemon v0.1.0 (*)
+      │   │   └── surge-ui v0.1.0 (*)
+      │   └── surge-telegram v0.1.0 (*)
+      └── surge-orchestrator v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-mcp'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-mcp/Cargo.toml:10:17
+    │
+ 10 │ surge-process = { workspace = true }
+    │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    ·
+ 23 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:156:13
+    │
+156 │ surge-mcp = { path = "crates/surge-mcp" }
+    │             ─────────────────────────────
+    │             │
+    │             workspace dependency
+    │             workspace dependency
+    │
+    ├ surge-mcp v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-orchestrator v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   ├── surge-telegram v0.1.0
+      │   │   └── surge-daemon v0.1.0 (*)
+      │   └── surge-ui v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-notify'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-notify/Cargo.toml:16:24
+    │
+ 16 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+ 17 │ surge-intake = { workspace = true }
+    │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:154:16
+    │
+154 │ surge-notify = { path = "crates/surge-notify" }
+    │                ────────────────────────────────
+    │                │
+    │                workspace dependency
+    │                workspace dependency
+    │
+    ├ surge-notify v0.1.0
+      ├── surge-cli v0.1.0
+      ├── surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── (dev) surge-orchestrator v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   ├── surge-telegram v0.1.0
+      │   │   └── surge-daemon v0.1.0 (*)
+      │   └── surge-ui v0.1.0 (*)
+      └── surge-telegram v0.1.0 (*)
+
+warning[wildcard]: found 14 wildcard dependencies for crate 'surge-orchestrator'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-orchestrator/Cargo.toml:12:14
+    │
+ 12 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 13 │ surge-acp = { workspace = true }
+    │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 14 │ surge-git = { workspace = true }
+    │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 15 │ surge-notify = { workspace = true }
+    │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 16 │ surge-persistence = { workspace = true }
+    │                     ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 17 │ surge-mcp = { workspace = true }
+    │             ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+ 18 │ surge-intake = { workspace = true }
+    │                ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:153:22
+    │
+153 │ surge-orchestrator = { path = "crates/surge-orchestrator" }
+    │                      ──────────────────────────────────────
+    │                      │
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │                      workspace dependency
+    │
+    ├ surge-orchestrator v0.1.0
+      ├── surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-telegram v0.1.0
+      │   └── surge-daemon v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 4 wildcard dependencies for crate 'surge-persistence'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-persistence/Cargo.toml:8:17
+    │
+  8 │ surge-process = { workspace = true }
+    │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+  9 │ surge-core = { workspace = true }
+    │              ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:152:21
+    │
+152 │ surge-persistence = { path = "crates/surge-persistence" }
+    │                     ─────────────────────────────────────
+    │                     │
+    │                     workspace dependency
+    │                     workspace dependency
+    │
+    ├ surge-persistence v0.1.0
+      ├── surge-cli v0.1.0
+      ├── (dev) surge-daemon v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   └── surge-ui v0.1.0
+      ├── surge-intake v0.1.0
+      │   ├── surge-cli v0.1.0 (*)
+      │   ├── surge-daemon v0.1.0 (*)
+      │   ├── surge-notify v0.1.0
+      │   │   ├── surge-cli v0.1.0 (*)
+      │   │   ├── surge-daemon v0.1.0 (*)
+      │   │   ├── (dev) surge-orchestrator v0.1.0
+      │   │   │   ├── surge-cli v0.1.0 (*)
+      │   │   │   ├── (dev) surge-daemon v0.1.0 (*)
+      │   │   │   ├── surge-telegram v0.1.0
+      │   │   │   │   └── surge-daemon v0.1.0 (*)
+      │   │   │   └── surge-ui v0.1.0 (*)
+      │   │   └── surge-telegram v0.1.0 (*)
+      │   └── surge-orchestrator v0.1.0 (*)
+      ├── surge-orchestrator v0.1.0 (*)
+      ├── surge-telegram v0.1.0 (*)
+      └── surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 8 wildcard dependencies for crate 'surge-telegram'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+    ┌─ /Users/vanyastafford/Develop/surge/crates/surge-telegram/Cargo.toml:22:24
+    │
+ 22 │ surge-core.workspace = true
+    │                        ━━━━ wildcard dependency
+ 23 │ surge-notify.workspace = true
+    │                          ━━━━ wildcard dependency
+ 24 │ surge-persistence.workspace = true
+    │                               ━━━━ wildcard dependency
+ 25 │ surge-orchestrator.workspace = true
+    │                                ━━━━ wildcard dependency
+    │
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.toml:158:18
+    │
+158 │ surge-telegram = { path = "crates/surge-telegram" }
+    │                  ──────────────────────────────────
+    │                  │
+    │                  workspace dependency
+    │                  workspace dependency
+    │                  workspace dependency
+    │                  workspace dependency
+    │
+    ├ surge-telegram v0.1.0
+      └── surge-daemon v0.1.0
+          ├── surge-cli v0.1.0
+          └── surge-ui v0.1.0
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-ui/Cargo.toml:21:23
+   │
+21 │ surge-mcp.workspace = true
+   │                       ━━━━
+   │                       │
+   │                       usage of workspace dependency
+   │
+   ├ surge-ui v0.1.0
+
+bug[unresolved-workspace-dependency]: failed to resolve a workspace dependency
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-ui/Cargo.toml:11:31
+   │
+11 │ surge-process = { workspace = true }
+   │                 ──────────────━━━━──
+   │                               │
+   │                               usage of workspace dependency
+   │
+   ├ surge-ui v0.1.0 (*)
+
+warning[wildcard]: found 7 wildcard dependencies for crate 'surge-ui'. allow-wildcard-paths is enabled, but does not apply to public crates as crates.io disallows path dependencies.
+   ┌─ /Users/vanyastafford/Develop/surge/crates/surge-ui/Cargo.toml:11:17
+   │
+11 │ surge-process = { workspace = true }
+   │                 ━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   ·
+16 │ surge-core = { path = "../surge-core" }
+   │              ━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+17 │ surge-acp = { path = "../surge-acp" }
+   │             ━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+18 │ surge-orchestrator = { path = "../surge-orchestrator" }
+   │                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+19 │ surge-daemon = { path = "../surge-daemon" }
+   │                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+20 │ surge-persistence = { path = "../surge-persistence" }
+   │                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+21 │ surge-mcp.workspace = true
+   │                       ━━━━ wildcard dependency
+   │
+   ├ surge-ui v0.1.0
+
+warning[yanked]: detected yanked crate (try `cargo update -p chacha20`)
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:102:1
+    │
+102 │ chacha20 0.10.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+    │
+    ├ chacha20 v0.10.0
+      └── rand v0.10.1
+          └── uuid v1.22.0
+              ├── accesskit v0.24.1
+              │   ├── accesskit_atspi_common v0.19.1
+              │   │   └── accesskit_unix v0.22.1
+              │   │       └── gpui-pre-linux v0.3.7
+              │   │           └── gpui-pre-platform v0.3.7
+              │   │               └── gpui-kit v0.7.0
+              │   │                   └── (dev) surge-ui v0.1.0
+              │   ├── accesskit_consumer v0.38.0
+              │   │   ├── accesskit_atspi_common v0.19.1 (*)
+              │   │   ├── accesskit_macos v0.26.3
+              │   │   │   └── gpui-pre-macos v0.3.7
+              │   │   │       └── gpui-pre-platform v0.3.7 (*)
+              │   │   └── accesskit_windows v0.34.0
+              │   │       └── gpui-pre-windows v0.3.7
+              │   │           └── gpui-pre-platform v0.3.7 (*)
+              │   ├── accesskit_macos v0.26.3 (*)
+              │   ├── accesskit_unix v0.22.1 (*)
+              │   ├── accesskit_windows v0.34.0 (*)
+              │   ├── gpui-pre v0.3.7
+              │   │   ├── gpui-base v0.7.0
+              │   │   │   ├── gpui-component v0.7.0
+              │   │   │   │   └── gpui-kit v0.7.0 (*)
+              │   │   │   └── gpui-kit v0.7.0 (*)
+              │   │   ├── gpui-component v0.7.0 (*)
+              │   │   ├── gpui-kit v0.7.0 (*)
+              │   │   ├── gpui-kit-assets v0.7.0
+              │   │   │   ├── gpui-component v0.7.0 (*)
+              │   │   │   └── gpui-kit v0.7.0 (*)
+              │   │   ├── gpui-pre-apple v0.3.7
+              │   │   │   └── gpui-pre-macos v0.3.7 (*)
+              │   │   ├── gpui-pre-linux v0.3.7 (*)
+              │   │   ├── gpui-pre-macos v0.3.7 (*)
+              │   │   ├── gpui-pre-platform v0.3.7 (*)
+              │   │   ├── gpui-pre-web v0.3.7
+              │   │   │   ├── gpui-kit v0.7.0 (*)
+              │   │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   │   ├── gpui-pre-wgpu v0.3.7
+              │   │   │   ├── gpui-pre-linux v0.3.7 (*)
+              │   │   │   ├── gpui-pre-platform v0.3.7 (*)
+              │   │   │   └── gpui-pre-web v0.3.7 (*)
+              │   │   ├── gpui-pre-windows v0.3.7 (*)
+              │   │   └── gpui-wry v0.7.0
+              │   │       └── surge-ui v0.1.0 (*)
+              │   ├── gpui-pre-linux v0.3.7 (*)
+              │   ├── gpui-pre-macos v0.3.7 (*)
+              │   └── gpui-pre-windows v0.3.7 (*)
+              ├── agent-client-protocol v2.2.0
+              │   ├── surge-acp v0.1.0
+              │   │   ├── surge-cli v0.1.0
+              │   │   ├── (dev) surge-daemon v0.1.0
+              │   │   │   ├── surge-cli v0.1.0 (*)
+              │   │   │   └── surge-ui v0.1.0 (*)
+              │   │   ├── surge-orchestrator v0.1.0
+              │   │   │   ├── surge-cli v0.1.0 (*)
+              │   │   │   ├── (dev) surge-daemon v0.1.0 (*)
+              │   │   │   ├── surge-telegram v0.1.0
+              │   │   │   │   └── surge-daemon v0.1.0 (*)
+              │   │   │   └── surge-ui v0.1.0 (*)
+              │   │   ├── (dev) surge-telegram v0.1.0 (*)
+              │   │   └── surge-ui v0.1.0 (*)
+              │   ├── surge-cli v0.1.0 (*)
+              │   ├── (dev) surge-daemon v0.1.0 (*)
+              │   ├── surge-orchestrator v0.1.0 (*)
+              │   └── surge-ui v0.1.0 (*)
+              ├── gpui-component v0.7.0 (*)
+              ├── gpui-pre v0.3.7 (*)
+              ├── gpui-pre-linux v0.3.7 (*)
+              ├── gpui-pre-macos v0.3.7 (*)
+              ├── gpui-pre-web v0.3.7 (*)
+              ├── gpui-pre-windows v0.3.7 (*)
+              ├── r2d2_sqlite v0.25.0
+              │   └── surge-persistence v0.1.0
+              │       ├── surge-cli v0.1.0 (*)
+              │       ├── (dev) surge-daemon v0.1.0 (*)
+              │       ├── surge-intake v0.1.0
+              │       │   ├── surge-cli v0.1.0 (*)
+              │       │   ├── surge-daemon v0.1.0 (*)
+              │       │   ├── surge-notify v0.1.0
+              │       │   │   ├── surge-cli v0.1.0 (*)
+              │       │   │   ├── surge-daemon v0.1.0 (*)
+              │       │   │   ├── (dev) surge-orchestrator v0.1.0 (*)
+              │       │   │   └── surge-telegram v0.1.0 (*)
+              │       │   └── surge-orchestrator v0.1.0 (*)
+              │       ├── surge-orchestrator v0.1.0 (*)
+              │       ├── surge-telegram v0.1.0 (*)
+              │       └── surge-ui v0.1.0 (*)
+              ├── teloxide-core v0.11.2
+              │   └── teloxide v0.14.0
+              │       ├── surge-daemon v0.1.0 (*)
+              │       └── surge-telegram v0.1.0 (*)
+              └── zbus v5.14.0
+                  ├── accesskit_unix v0.22.1 (*)
+                  ├── ashpd v0.13.13
+                  │   ├── gpui-base v0.7.0 (*)
+                  │   ├── gpui-pre-linux v0.3.7 (*)
+                  │   └── oo7 v0.6.0
+                  │       └── gpui-pre-linux v0.3.7 (*)
+                  ├── atspi-common v0.13.0
+                  │   ├── accesskit_atspi_common v0.19.1 (*)
+                  │   ├── atspi v0.29.0
+                  │   │   └── accesskit_unix v0.22.1 (*)
+                  │   └── atspi-proxies v0.13.0
+                  │       └── atspi v0.29.0 (*)
+                  ├── atspi-proxies v0.13.0 (*)
+                  ├── notify-rust v4.12.0
+                  │   ├── gpui-pre-linux v0.3.7 (*)
+                  │   ├── surge-daemon v0.1.0 (*)
+                  │   ├── surge-notify v0.1.0 (*)
+                  │   └── surge-ui v0.1.0 (*)
+                  └── oo7 v0.6.0 (*)
+
+warning[yanked]: detected yanked crate (try `cargo update -p spin`)
+    ┌─ /Users/vanyastafford/Develop/surge/Cargo.lock:763:1
+    │
+763 │ spin 0.9.8 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+    │
+    ├ spin v0.9.8
+      ├── flume v0.11.1
+      │   └── lb-wry v0.53.3
+      │       ├── gpui-wry v0.7.0
+      │       │   └── surge-ui v0.1.0
+      │       └── surge-ui v0.1.0 (*)
+      └── flume v0.12.0
+          └── gpui-pre-scheduler v0.3.7
+              ├── gpui-pre v0.3.7
+              │   ├── gpui-base v0.7.0
+              │   │   ├── gpui-component v0.7.0
+              │   │   │   └── gpui-kit v0.7.0
+              │   │   │       └── (dev) surge-ui v0.1.0 (*)
+              │   │   └── gpui-kit v0.7.0 (*)
+              │   ├── gpui-component v0.7.0 (*)
+              │   ├── gpui-kit v0.7.0 (*)
+              │   ├── gpui-kit-assets v0.7.0
+              │   │   ├── gpui-component v0.7.0 (*)
+              │   │   └── gpui-kit v0.7.0 (*)
+              │   ├── gpui-pre-apple v0.3.7
+              │   │   └── gpui-pre-macos v0.3.7
+              │   │       └── gpui-pre-platform v0.3.7
+              │   │           └── gpui-kit v0.7.0 (*)
+              │   ├── gpui-pre-linux v0.3.7
+              │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   ├── gpui-pre-macos v0.3.7 (*)
+              │   ├── gpui-pre-platform v0.3.7 (*)
+              │   ├── gpui-pre-web v0.3.7
+              │   │   ├── gpui-kit v0.7.0 (*)
+              │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   ├── gpui-pre-wgpu v0.3.7
+              │   │   ├── gpui-pre-linux v0.3.7 (*)
+              │   │   ├── gpui-pre-platform v0.3.7 (*)
+              │   │   └── gpui-pre-web v0.3.7 (*)
+              │   ├── gpui-pre-windows v0.3.7
+              │   │   └── gpui-pre-platform v0.3.7 (*)
+              │   └── gpui-wry v0.7.0 (*)
+              └── gpui-pre-web v0.3.7 (*)
+
+advisories ok, bans ok, licenses ok, sources ok

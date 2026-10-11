@@ -1,0 +1,19 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.97s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-8b1eaa767c938271)
+
+running 5 tests
+test socket_security::tests::rejects_symlink_directory_without_changing_target ... ok
+test socket_security::tests::owned_stale_socket_is_removed_and_bound_socket_is_cleaned ... ok
+test socket_security::tests::replaced_directory_refuses_publication ... ok
+test socket_security::tests::publication_is_private_and_cleanup_preserves_replacements ... ok
+test socket_security::tests::extended_acl_grant_refuses_publication ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 0.01s

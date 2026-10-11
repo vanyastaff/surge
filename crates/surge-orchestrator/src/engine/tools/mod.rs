@@ -168,6 +168,10 @@ pub trait ToolDispatcher: Send + Sync {
     /// `crate::guard::LoopGuard::deadline`).
     fn poll_wall_clock_deadline(&self) {}
 
+    /// Record agent activity for loop protection's no-progress check.
+    /// Default no-op (only `RoutingToolDispatcher` tracks activity).
+    fn note_activity(&self) {}
+
     /// Resolve which MCP server (if any) serves `tool`. Returns `None`
     /// for engine-built-in tools — so engine-only dispatchers fall back
     /// to `None` for free. `RoutingToolDispatcher` overrides it from

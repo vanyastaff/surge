@@ -1,0 +1,7 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running unittests src/lib.rs (target/debug/deps/surge_git-b22623ef1d7d59f0)
+
+running 1 test
+test worktree::tests::uncommitted_files_reports_non_utf8_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.07s

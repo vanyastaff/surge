@@ -1,0 +1,2325 @@
+{
+  "candidate": "5f42653",
+  "baseline": "dd8d2b0",
+  "scope": "nextest failures; native standard-user step separate",
+  "candidate_summary": {
+    "run": 3705,
+    "passed": 3516,
+    "failed": 189,
+    "skipped": 48
+  },
+  "baseline_summary": {
+    "run": 3703,
+    "passed": 3505,
+    "failed": 198,
+    "skipped": 47
+  },
+  "families": {
+    "sharing-os32": 138,
+    "mcp-cold-readiness-elapsed": 5,
+    "private-preparation-unsupported": 22,
+    "owner-security-refusal": 17,
+    "missing-provider-container-identity": 4,
+    "suspension-attention-mismatch": 2,
+    "preparation-child-before-lock": 1
+  },
+  "baseline_families": {
+    "acp-drop-pid-cleanup": 1,
+    "lock-os33": 10,
+    "sharing-os32": 137,
+    "mcp-cold-readiness-elapsed": 5,
+    "private-preparation-unsupported": 22,
+    "owner-security-refusal": 17,
+    "missing-provider-container-identity": 4,
+    "registry-contention-deadline": 1,
+    "preparation-child-before-lock": 1
+  },
+  "shared_failed": 187,
+  "newly_failed": [
+    "surge-daemon::work_item_route_test killed_continue_owner_after_journal_ack_before_registry_ack_routes_once",
+    "surge-orchestrator::elevation_blocked resolve_elevation_returns_run_not_found_for_unknown_run"
+  ],
+  "now_passed": [
+    "surge-acp pool::tests::shutdown::test_drop_cleanup",
+    "surge-cli::cli_run_lifecycle daemon_gate_remains_pending_until_explicit_suspension",
+    "surge-cli::cli_run_lifecycle foreground_failure_is_nonzero_and_durable",
+    "surge-cli::cli_run_lifecycle foreground_success_is_durable",
+    "surge-cli::cli_run_lifecycle user_template_executes_to_completion",
+    "surge-cli::cli_run_lifecycle watched_failure_is_nonzero_and_durable",
+    "surge-cli::cli_run_lifecycle watched_success_is_durable",
+    "surge-cli::examples_smoke onboarding_smoke_can_init_describe_and_start_example_run",
+    "surge-cli::fault_injection unclean_exit_mid_run_preserves_and_folds_event_log",
+    "surge-daemon pidfile::windows::tests::guard_blocks_second_owner_then_releases_original_file",
+    "surge-daemon pidfile::windows::tests::terminated_process_with_exit_259_is_stale_even_with_retained_handle"
+  ],
+  "rows": [
+    {
+      "test": "surge-cli::bin/surge commands::bootstrap::tests::followup_failure_reaches_the_command_result",
+      "family": "sharing-os32",
+      "raw_log_line": 1367,
+      "primary_panic": {
+        "site": "crates\\surge-cli\\src\\commands\\bootstrap.rs:914:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-m4zGhI\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-cli::bin/surge commands::bootstrap::tests::resumed_console_answers_only_the_fresh_pending_gate",
+      "family": "sharing-os32",
+      "raw_log_line": 1493,
+      "primary_panic": {
+        "site": "crates\\surge-cli\\src\\commands\\bootstrap.rs:794:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-qwj5Cf\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-cli::persistent_task_cli compiled_task_commands_create_start_replay_and_show_the_same_persistent_item",
+      "family": "sharing-os32",
+      "raw_log_line": 1433,
+      "primary_panic": {
+        "site": "crates\\surge-cli\\tests\\persistent_task_cli.rs:314:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Yvfpz0\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon bootstrap_supervisor::tests::cancellation_after_child_commit_cannot_admit_implementation",
+      "family": "sharing-os32",
+      "raw_log_line": 2639,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\src\\bootstrap_supervisor_tests.rs:262:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-94qN82\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon bootstrap_supervisor::tests::incoming_bootstrap_cannot_bypass_older_durable_queue",
+      "family": "sharing-os32",
+      "raw_log_line": 2703,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\src\\bootstrap_supervisor_tests.rs:262:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-up6tXj\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon bootstrap_supervisor::tests::live_planning_gate_cancel_joins_and_never_launches_child",
+      "family": "sharing-os32",
+      "raw_log_line": 2765,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\src\\bootstrap_supervisor_tests.rs:262:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Rq9xVX\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon bootstrap_supervisor::tests::real_planning_continues_to_child_with_one_admission_slot_and_isolation",
+      "family": "sharing-os32",
+      "raw_log_line": 2841,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\src\\bootstrap_supervisor_tests.rs:262:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-88JcnG\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon bootstrap_supervisor::tests::restart_after_child_commit_uses_committed_artifact_not_newer_parent_version",
+      "family": "sharing-os32",
+      "raw_log_line": 2903,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\src\\bootstrap_supervisor_tests.rs:262:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-rCcY6q\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon bootstrap_supervisor::tests::restart_after_parent_completion_before_child_commit_reuses_parent_evidence",
+      "family": "sharing-os32",
+      "raw_log_line": 2967,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\src\\bootstrap_supervisor_tests.rs:262:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-3dyXSg\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_parity_test parity_terminal_minimal_agent_and_spike_local_vs_daemon",
+      "family": "sharing-os32",
+      "raw_log_line": 3250,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_parity_test.rs:324:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-CJiwkK\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_persisted_gate real_gate_request_and_resolution_arrive_before_terminal_and_slot_release",
+      "family": "sharing-os32",
+      "raw_log_line": 3125,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_persisted_gate.rs:271:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-kdC2TM\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_persisted_gate unreadable_run_stream_fails_waiter_but_another_run_stays_connected",
+      "family": "sharing-os32",
+      "raw_log_line": 3186,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_persisted_gate.rs:421:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-AjZemv\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_resume_stream another_client_discovers_resumed_run_before_it_finishes",
+      "family": "sharing-os32",
+      "raw_log_line": 3374,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_resume_stream.rs:345:27",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-4A3Ikh\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_resume_stream fresh_connection_receives_fast_resume_before_followup_subscribe",
+      "family": "sharing-os32",
+      "raw_log_line": 3498,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_resume_stream.rs:345:27",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-girWYG\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_resume_stream recovered_run_is_announced_before_completion",
+      "family": "sharing-os32",
+      "raw_log_line": 3436,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_resume_stream.rs:345:27",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-q6OpI7\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_resume_stream rejected_resume_removes_preattached_forwarder_and_releases_admission",
+      "family": "sharing-os32",
+      "raw_log_line": 3312,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_resume_stream.rs:345:27",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-ojbFQ6\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::daemon_resume_stream same_connection_park_resume_replaces_finished_forwarder_and_delivers_gate",
+      "family": "sharing-os32",
+      "raw_log_line": 3560,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\daemon_resume_stream.rs:345:27",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-xTFPDg\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::owned_flow_ipc locator_replay_survives_missing_source_and_changed_configuration",
+      "family": "sharing-os32",
+      "raw_log_line": 3669,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\owned_flow_ipc.rs:157:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-5g1yDa\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::owned_flow_mcp_recovery explicit_empty_survives_real_cold_wake_and_changed_global_defaults",
+      "family": "mcp-cold-readiness-elapsed",
+      "raw_log_line": 3804,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\owned_flow_mcp_recovery.rs:864:9",
+        "message": "legacy child readiness failed: cold host exited before readiness: exit code: 101; stderr excerpt:",
+        "next": "2026-10-08T03:30:16.616283Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey(\"end\") } location=Node { id: NodeKey(\"end\") }"
+      },
+      "baseline_failed": true,
+      "baseline_family": "mcp-cold-readiness-elapsed"
+    },
+    {
+      "test": "surge-daemon::owned_flow_mcp_recovery host_default_empty_survives_real_cold_wake_and_changed_global_defaults",
+      "family": "mcp-cold-readiness-elapsed",
+      "raw_log_line": 3733,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\owned_flow_mcp_recovery.rs:864:9",
+        "message": "legacy child readiness failed: cold host exited before readiness: exit code: 101; stderr excerpt:",
+        "next": "2026-10-08T03:30:16.616283Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey(\"end\") } location=Node { id: NodeKey(\"end\") }"
+      },
+      "baseline_failed": true,
+      "baseline_family": "mcp-cold-readiness-elapsed"
+    },
+    {
+      "test": "surge-daemon::owned_flow_mcp_recovery legacy_engine_catalog_enforces_actual_configured_deadline",
+      "family": "mcp-cold-readiness-elapsed",
+      "raw_log_line": 3875,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\owned_flow_mcp_recovery.rs:864:9",
+        "message": "legacy-deadline-positive child readiness failed: cold host exited before readiness: exit code: 101; stderr excerpt:",
+        "next": "2026-10-08T03:30:17.000497Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey(\"end\") } location=Node { id: NodeKey(\"end\") }"
+      },
+      "baseline_failed": true,
+      "baseline_family": "mcp-cold-readiness-elapsed"
+    },
+    {
+      "test": "surge-daemon::owned_flow_mcp_recovery legacy_global_policy_references_survive_actual_start_and_resume",
+      "family": "mcp-cold-readiness-elapsed",
+      "raw_log_line": 3944,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\owned_flow_mcp_recovery.rs:864:9",
+        "message": "legacy-resume-start child readiness failed: cold host exited before readiness: exit code: 101; stderr excerpt:",
+        "next": "2026-10-08T03:30:17.813814Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey(\"end\") } location=Node { id: NodeKey(\"end\") }"
+      },
+      "baseline_failed": true,
+      "baseline_family": "mcp-cold-readiness-elapsed"
+    },
+    {
+      "test": "surge-daemon::owned_flow_mcp_recovery optional_whitelists_and_server_override_survive_actual_start_and_resume",
+      "family": "mcp-cold-readiness-elapsed",
+      "raw_log_line": 6574,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\owned_flow_mcp_recovery.rs:864:9",
+        "message": "legacy-policy-tools-none-start child readiness failed: cold host exited before readiness: exit code: 101; stderr excerpt:",
+        "next": "2026-10-08T03:30:50.701814Z  WARN engine::validate: success terminal `end` is reachable without a verification node (no outcome declares ledger_effect = verified on the path) kind=UnverifiedSuccessPath { terminal: NodeKey(\"end\") } location=Node { id: NodeKey(\"end\") }"
+      },
+      "baseline_failed": true,
+      "baseline_family": "mcp-cold-readiness-elapsed"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test actual_429_after_declared_source_change_is_audit_only_and_primary_is_attempted_again",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4020,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test exhausted_candidates_park_and_scheduler_wakes_the_same_task",
+      "family": "sharing-os32",
+      "raw_log_line": 4231,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:1596:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-F2wkSn\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test normal_task_all_fresh_exhausted_parks_without_opening_any_provider",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4089,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4161,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test normal_task_start_skips_fresh_exhausted_primary_before_any_provider_effect",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4291,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test pinned_exhaustion_from_other_project_cannot_skip_primary",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4431,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test planned_host_budget_positive_cap_completes_without_repeating_warmup",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4363,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4497,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4632,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:2243:13",
+        "message": "first cold host failed: cold host exited before readiness: exit code: 101; stderr excerpt:",
+        "next": "thread 'child_planned_park_restart_probe' (5372) panicked at crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test relative_post_429_source_change_remains_audit_only",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4566,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test relative_selected_source_change_blocks_provider_effect",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4699,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test relative_skipped_source_change_blocks_provider_effect",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4765,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test relative_sources_are_frozen_from_actual_launch_worktree_on_normal_start",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4897,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test selected_route_source_change_after_freeze_prevents_any_provider_effect",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4831,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test skipped_route_source_change_after_freeze_prevents_fallback_effect",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 4963,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test skipped_route_source_change_prevents_stale_all_exhausted_park",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 5030,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::quota_recovery_route_test task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 5096,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\quota_recovery_route_test.rs:819:5",
+        "message": "assertion `left == right` failed: {\"method\":\"error\",\"request_id\":1,\"code\":\"engine_error\",\"message\":\"invalid task input: private preparation unsupported on this platform\"}",
+        "next": "left: String(\"error\")"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart",
+      "family": "sharing-os32",
+      "raw_log_line": 5231,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3556:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-LCML8I\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery",
+      "family": "sharing-os32",
+      "raw_log_line": 5169,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3712:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-JsiVId\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test ambiguous_owned_terminal_history_never_releases_task_ownership",
+      "family": "owner-security-refusal",
+      "raw_log_line": 5291,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test cold_committed_outcome_does_not_repeat_a_real_provider_turn",
+      "family": "missing-provider-container-identity",
+      "raw_log_line": 5357,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2779:10",
+        "message": "called `Option::unwrap()` on a `None` value",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "missing-provider-container-identity"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice",
+      "family": "missing-provider-container-identity",
+      "raw_log_line": 5423,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2779:10",
+        "message": "called `Option::unwrap()` on a `None` value",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "missing-provider-container-identity"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider_dispatch",
+      "family": "missing-provider-container-identity",
+      "raw_log_line": 5489,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2779:10",
+        "message": "called `Option::unwrap()` on a `None` value",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "missing-provider-container-identity"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch",
+      "family": "missing-provider-container-identity",
+      "raw_log_line": 5683,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2779:10",
+        "message": "called `Option::unwrap()` on a `None` value",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "missing-provider-container-identity"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test cold_daemon_keeps_missing_binding_in_attention_and_never_dispatches",
+      "family": "owner-security-refusal",
+      "raw_log_line": 5555,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context",
+      "family": "owner-security-refusal",
+      "raw_log_line": 5619,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test committed_gate_effects_survive_owner_death_before_route_without_repetition",
+      "family": "sharing-os32",
+      "raw_log_line": 5877,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3712:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-jBqxFn\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test completed_gate_route_kind_must_match_accepted_graph",
+      "family": "sharing-os32",
+      "raw_log_line": 5815,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:4132:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-5MGFEf\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test corrupt_owned_startup_graph_payload_cannot_reuse_declared_hash",
+      "family": "owner-security-refusal",
+      "raw_log_line": 5749,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test corrupt_owned_startup_late_binding_after_terminal_keeps_ownership",
+      "family": "owner-security-refusal",
+      "raw_log_line": 5939,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test corrupt_owned_startup_late_binding_before_terminal_is_attention",
+      "family": "owner-security-refusal",
+      "raw_log_line": 6005,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test corrupt_owned_startup_late_prompt_artifact_is_attention",
+      "family": "owner-security-refusal",
+      "raw_log_line": 6071,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test corrupt_owned_startup_late_requirements_artifact_is_attention",
+      "family": "owner-security-refusal",
+      "raw_log_line": 6137,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test daemon_gate_answer_requires_durable_acceptance_before_success",
+      "family": "sharing-os32",
+      "raw_log_line": 6327,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:140:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-jVWV41\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test disconnected_start_caller_does_not_drop_durable_attempt_or_active_run",
+      "family": "sharing-os32",
+      "raw_log_line": 6267,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:1129:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-qTEGgs\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test durable_terminal_settlement_validates_frozen_requirements_before_releasing_ownership",
+      "family": "owner-security-refusal",
+      "raw_log_line": 6203,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test execution_owner_prevents_second_live_host_from_replaying_agent_turn",
+      "family": "sharing-os32",
+      "raw_log_line": 6387,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:1450:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-U5SeQw\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test expired_suspended_gate_answer_cannot_reset_original_deadline",
+      "family": "sharing-os32",
+      "raw_log_line": 6511,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:4132:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-AZ0LSS\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test forged_suspended_human_gate_request_cannot_authorize_cold_continue",
+      "family": "sharing-os32",
+      "raw_log_line": 6447,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:4132:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-5LkEXI\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test killed_continue_ack_reconciles_nonterminal_control_before_waiting_for_operator",
+      "family": "sharing-os32",
+      "raw_log_line": 6889,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2021:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-aQjhKu\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test killed_continue_owner_after_journal_ack_before_registry_ack_routes_once",
+      "family": "sharing-os32",
+      "raw_log_line": 7016,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2021:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-V69LWr\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": false,
+      "baseline_family": null
+    },
+    {
+      "test": "surge-daemon::work_item_route_test killed_continue_owner_after_route_before_journal_ack_routes_once",
+      "family": "sharing-os32",
+      "raw_log_line": 6643,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2021:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-YT3v7p\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers",
+      "family": "sharing-os32",
+      "raw_log_line": 6769,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:2964:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-LTfHAV\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention",
+      "family": "owner-security-refusal",
+      "raw_log_line": 6705,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test live_tracking_error_with_conflicting_terminals_retains_task_ownership",
+      "family": "sharing-os32",
+      "raw_log_line": 6829,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:1755:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-H8ZdWK\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once",
+      "family": "sharing-os32",
+      "raw_log_line": 6956,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:980:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-GVzUTU\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test manual_suspend_supersedes_reserved_continue_and_historical_replay_cannot_dispatch",
+      "family": "sharing-os32",
+      "raw_log_line": 7143,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3163:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-DWpb7O\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test partial_task_startup_missing_initial_prompt_is_attention_without_dispatch",
+      "family": "owner-security-refusal",
+      "raw_log_line": 7079,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:701:10",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test pure_human_gate_suspend_is_not_abort_and_reuses_original_decision",
+      "family": "sharing-os32",
+      "raw_log_line": 7205,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:4132:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-KVwAoY\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test revisited_human_gate_requires_new_occurrence_and_new_decision",
+      "family": "sharing-os32",
+      "raw_log_line": 7269,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:4590:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-jOIMsm\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test suspended_original_gate_answer_is_durable_before_continue",
+      "family": "sharing-os32",
+      "raw_log_line": 7396,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:4132:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-CYIl1i\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test task_continue_without_provider_restore_capability_preserves_attention",
+      "family": "suspension-attention-mismatch",
+      "raw_log_line": 7330,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3240:5",
+        "message": "assertion `left == right` failed: attempt=Some(WorkItemAttempt { item: WorkItemId(Ulid(2165706330710217572896255408366372623)), run: RunId(Ulid(2165706330814540919489538591355270932)), ordinal: 1, binding: WorkItemBinding { item: WorkItemId(Ulid(2165706330710217572896255408366372623)), revision: 1, requirements_hash: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, generation: 1 }, accepted_revision_relation: MatchesCurrent, graph: Graph { schema_version: 1, metadata: GraphMetadata { name: \"flow_minimal_agent\", description: None, template_origin: None, created_at: 2026-05-05T00:00:00Z, author: None, archetype: None }, start: NodeKey(\"impl_1\"), nodes: {NodeKey(\"end\"): Node { id: NodeKey(\"end\"), position: Position { x: 200.0, y: 0.0 }, declared_outcomes: [], config: Terminal(TerminalConfig { kind: Success, message: None }) }, NodeKey(\"impl_1\"): Node { id: NodeKey(\"impl_1\"), position: Position { x: 0.0, y: 0.0 }, declared_outcomes: [OutcomeDecl { id: OutcomeKey(\"done\"), description: \"Implementation complete\", edge_kind_hint: Forward, is_terminal: false, ledger_effect: None }], config: Agent(AgentConfig { profile: ProfileKey(\"implementer@1.0\"), prompt_overrides: None, tool_overrides: None, sandbox_override: None, approvals_override: None, bindings: [Binding { source: InitialPrompt, target: TemplateVar(\"spec\"), optional: false }], rules_overrides: None, limits: NodeLimits { timeout_seconds: 900, max_retries: 3, circuit_breaker: None, max_tokens: 200000 }, hooks: [], custom_fields: {} }) }}, edges: [Edge { id: EdgeKey(\"e_impl_to_end\"), from: PortRef { node: NodeKey(\"impl_1\"), outcome: OutcomeKey(\"done\") }, to: NodeKey(\"end\"), kind: Forward, policy: EdgePolicy { max_traversals: None, on_max_exceeded: Escalate, label: None } }], subgraphs: {} }, config: \"{\\\"quota_recovery\\\":{\\\"stages\\\":[]},\\\"human_input_timeout\\\":\\\"5m\\\",\\\"stage_timeout_override\\\":null,\\\"mcp_servers\\\":[],\\\"initial_prompt\\\":\\\"\\\",\\\"bootstrap_parent\\\":null,\\\"project_context\\\":null,\\\"project_memory\\\":null,\\\"memory_claim_candidates\\\":null,\\\"context_pack\\\":null,\\\"seed_artifacts\\\":[],\\\"bootstrap\\\":{\\\"edit_loop_cap\\\":3},\\\"budget\\\":{\\\"limits\\\":{\\\"usd\\\":null,\\\"tokens\\\":null,\\\"warn_threshold_pct\\\":0},\\\"policy\\\":\\\"abort\\\"},\\\"tool_call_loop_guard\\\":null,\\\"output_spill\\\":null,\\\"memory_store_path\\\":null}\", state: Attention, diagnostic: Some(\"task conflict: storage error: suspended task requires its durable Continue reservation\"), usage_seq: 12, input_tokens: 0, output_tokens: 0, known_cost_usd: 0.0, usage_unknown: false }); journal=RunInspection { registry: Some(RunSummary { id: RunId(Ulid(2165706330814540919489538591355270932)), project_path: \"\\\\\\\\?\\\\C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Myp1mT\\\\state\\\\work-items\\\\workspaces\\\\run-01M4CS1STJFF4Y35MX3RCVCHRK\", pipeline_template: None, status: Bootstrapping, started_at_ms: 1791430289889, ended_at_ms: None, daemon_pid: Some(7928), wake_at_ms: None }), run_directory_present: true, database: Present { events: [ReadEvent { seq: EventSeq(1), timestamp_ms: 1791430290018, kind: \"RunStarted\", payload: VersionedEventPayload { schema_version: 21, payload: RunStarted { pipeline_template: None, project_path: \"\\\\\\\\?\\\\C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Myp1mT\\\\state\\\\work-items\\\\workspaces\\\\run-01M4CS1STJFF4Y35MX3RCVCHRK\", initial_prompt: \"Accepted task requirements (revision 1, hash sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1)\\nCold accepted context\\nAcceptance criteria:\\n1. Same reserved run\", config: RunConfig { bootstrap_edit_loop_cap: Some(3), sandbox_default: WorkspaceWrite, approval_default: OnRequest, auto_pr: false, mcp_servers: [], budget: BudgetGuard { limits: BudgetLimits { usd: None, tokens: None, warn_threshold_pct: 0 }, policy: Abort } } } } }, ReadEvent { seq: EventSeq(2), timestamp_ms: 1791430290018, kind: \"PipelineMaterialized\", payload: VersionedEventPayload { schema_version: 21, payload: PipelineMaterialized { graph: Graph { schema_version: 1, metadata: GraphMetadata { name: \"flow_minimal_agent\", description: None, template_origin: None, created_at: 2026-05-05T00:00:00Z, author: None, archetype: None }, start: NodeKey(\"impl_1\"), nodes: {NodeKey(\"end\"): Node { id: NodeKey(\"end\"), position: Position { x: 200.0, y: 0.0 }, declared_outcomes: [], config: Terminal(TerminalConfig { kind: Success, message: None }) }, NodeKey(\"impl_1\"): Node { id: NodeKey(\"impl_1\"), position: Position { x: 0.0, y: 0.0 }, declared_outcomes: [OutcomeDecl { id: OutcomeKey(\"done\"), description: \"Implementation complete\", edge_kind_hint: Forward, is_terminal: false, ledger_effect: None }], config: Agent(AgentConfig { profile: ProfileKey(\"implementer@1.0\"), prompt_overrides: None, tool_overrides: None, sandbox_override: None, approvals_override: None, bindings: [Binding { source: InitialPrompt, target: TemplateVar(\"spec\"), optional: false }], rules_overrides: None, limits: NodeLimits { timeout_seconds: 900, max_retries: 3, circuit_breaker: None, max_tokens: 200000 }, hooks: [], custom_fields: {} }) }}, edges: [Edge { id: EdgeKey(\"e_impl_to_end\"), from: PortRef { node: NodeKey(\"impl_1\"), outcome: OutcomeKey(\"done\") }, to: NodeKey(\"end\"), kind: Forward, policy: EdgePolicy { max_traversals: None, on_max_exceeded: Escalate, label: None } }], subgraphs: {} }, graph_hash: sha256:e3f3bf7baf064a44e625413d934d8672e6e5cc5b220b849fbcac1f3e6047cf42 } } }, ReadEvent { seq: EventSeq(3), timestamp_ms: 1791430290018, kind: \"ArtifactProduced\", payload: VersionedEventPayload { schema_version: 21, payload: ArtifactProduced { node: NodeKey(\"start_node\"), artifact: sha256:d4d6115b3e044c33372d2fb3fd6e5ecafde15aed204c1fffe01353337f779d70, path: \".surge/user_prompt.txt\", name: \"user_prompt\", source_path: None } } }, ReadEvent { seq: EventSeq(4), timestamp_ms: 1791430290019, kind: \"ArtifactProduced\", payload: VersionedEventPayload { schema_version: 21, payload: ArtifactProduced { node: NodeKey(\"task_requirements\"), artifact: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Myp1mT\\\\state\\\\runs\\\\run-01M4CS1SXN4HBGBTCJR18GYXRM\\\\artifacts\\\\f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1\", name: \"accepted_requirements\", source_path: None } } }, ReadEvent { seq: EventSeq(5), timestamp_ms: 1791430290019, kind: \"WorkItemAttemptBound\", payload: VersionedEventPayload { schema_version: 21, payload: WorkItemAttemptBound { context: WorkItemContext { binding: WorkItemBinding { item: WorkItemId(Ulid(2165706330710217572896255408366372623)), revision: 1, requirements_hash: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, generation: 1 }, origin: Requirements(WorkItemRequirements { text: \"Cold accepted context\", criteria: [\"Same reserved run\"] }) } } } }, ReadEvent { seq: EventSeq(6), timestamp_ms: 1791430290118, kind: \"StageEntered\", payload: VersionedEventPayload { schema_version: 21, payload: StageEntered { node: NodeKey(\"impl_1\"), attempt: 1 } } }, ReadEvent { seq: EventSeq(7), timestamp_ms: 1791430290160, kind: \"StageInputsResolved\", payload: VersionedEventPayload { schema_version: 21, payload: StageInputsResolved { node: NodeKey(\"impl_1\"), attempt: 1, bindings: {\"spec\": sha256:d4d6115b3e044c33372d2fb3fd6e5ecafde15aed204c1fffe01353337f779d70}, memory_receipt: None } } }, ReadEvent { seq: EventSeq(8), timestamp_ms: 1791430290160, kind: \"execution_writer_intent\", payload: VersionedEventPayload { schema_version: 21, payload: ExecutionWriterIntent { intent: ExecutionWriterIntent { writer: ExecutionWriterId(Ulid(2165706331814027291719105614871402818)), invocation: StageInvocationId(Ulid(2165706331813033890319301586102584767)), kind: Provider, owner: None, local_effects: true } } } }, ReadEvent { seq: EventSeq(9), timestamp_ms: 1791430290161, kind: \"SessionEstablishmentRequested\", payload: VersionedEventPayload { schema_version: 21, payload: SessionEstablishmentRequested { node: NodeKey(\"impl_1\"), invocation: StageInvocationId(Ulid(2165706331813033890319301586102584767)), restore: false, authority: Some(StageToolContext { run: RunId(Ulid(2165706330814540919489538591355270932)), node: NodeKey(\"impl_1\"), session: SessionId(Ulid(2165706331815345644083298468352368387)), generation: StageGenerationId(Ulid(2165706331814745005865239303092122473)) }) } } }, ReadEvent { seq: EventSeq(10), timestamp_ms: 1791430290255, kind: \"SessionOpened\", payload: VersionedEventPayload { schema_version: 21, payload: SessionOpened { handoff: None, opened: Some(OpenedSession { execution_writer: Some(ExecutionWriterObservation { writer: ExecutionWriterId(Ulid(2165706331814027291719105614871402818)), container: None }), session: SessionId(Ulid(2165706331815345644083298468352368387)), descriptor: ProviderSessionDescriptor { provider_session_id: ProviderSessionId(\"mock-provider-run-01M4CS1TTCFFPTJ64TKN314DQ3\"), invocation: StageInvocationId(Ulid(2165706331813033890319301586102584767)), runtime: \"wire-fixture\", launch_hash: sha256:52feac1e050ec3f6188f2364389b6e55e3b8e1a7a309c4609a7048735eb9661a, cwd: \"\\\\\\\\?\\\\C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Myp1mT\\\\state\\\\work-items\\\\workspaces\\\\run-01M4CS1STJFF4Y35MX3RCVCHRK\", capabilities: SessionRestoreCapabilities { resume: true, load: true } }, mode: New }), node: NodeKey(\"impl_1\"), session: SessionId(Ulid(2165706331815345644083298468352368387)), agent: \"implementer@1.0\", agent_id: Some(\"wire-fixture\") } } }, ReadEvent { seq: EventSeq(11), timestamp_ms: 1791430290336, kind: \"SessionClosed\", payload: VersionedEventPayload { schema_version: 21, payload: SessionClosed { session: SessionId(Ulid(2165706331815345644083298468352368387)), disposition: ForcedClose } } }, ReadEvent { seq: EventSeq(12), timestamp_ms: 1791430290433, kind: \"RunSuspended\", payload: VersionedEventPayload { schema_version: 21, payload: RunSuspended { fence: SuspensionFence { control_generation: 1, snapshot_seq: 11, pending_stage: Interrupted { node: NodeKey(\"impl_1\"), invocation: StageInvocationId(Ulid(2165706331813033890319301586102584767)) }, cleanup_confirmed: true, reason: Manual } } } }] } }",
+        "next": "left: Attention"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test task_created_over_daemon_survives_restart_and_runs_pinned_requirements",
+      "family": "sharing-os32",
+      "raw_log_line": 7460,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:254:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-OCBSNR\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test task_provider_identity_is_durable_before_first_real_acp_prompt",
+      "family": "sharing-os32",
+      "raw_log_line": 7523,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3032:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-3SSXDY\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-daemon::work_item_route_test task_suspend_continue_uses_saved_provider_on_real_acp_wire",
+      "family": "suspension-attention-mismatch",
+      "raw_log_line": 7591,
+      "primary_panic": {
+        "site": "crates\\surge-daemon\\tests\\work_item_route_test.rs:3240:5",
+        "message": "assertion `left == right` failed: attempt=Some(WorkItemAttempt { item: WorkItemId(Ulid(2165706334469921528561688579766917412)), run: RunId(Ulid(2165706334528871888815353917679738330)), ordinal: 1, binding: WorkItemBinding { item: WorkItemId(Ulid(2165706334469921528561688579766917412)), revision: 1, requirements_hash: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, generation: 1 }, accepted_revision_relation: MatchesCurrent, graph: Graph { schema_version: 1, metadata: GraphMetadata { name: \"flow_minimal_agent\", description: None, template_origin: None, created_at: 2026-05-05T00:00:00Z, author: None, archetype: None }, start: NodeKey(\"impl_1\"), nodes: {NodeKey(\"end\"): Node { id: NodeKey(\"end\"), position: Position { x: 200.0, y: 0.0 }, declared_outcomes: [], config: Terminal(TerminalConfig { kind: Success, message: None }) }, NodeKey(\"impl_1\"): Node { id: NodeKey(\"impl_1\"), position: Position { x: 0.0, y: 0.0 }, declared_outcomes: [OutcomeDecl { id: OutcomeKey(\"done\"), description: \"Implementation complete\", edge_kind_hint: Forward, is_terminal: false, ledger_effect: None }], config: Agent(AgentConfig { profile: ProfileKey(\"implementer@1.0\"), prompt_overrides: None, tool_overrides: None, sandbox_override: None, approvals_override: None, bindings: [Binding { source: InitialPrompt, target: TemplateVar(\"spec\"), optional: false }], rules_overrides: None, limits: NodeLimits { timeout_seconds: 900, max_retries: 3, circuit_breaker: None, max_tokens: 200000 }, hooks: [], custom_fields: {} }) }}, edges: [Edge { id: EdgeKey(\"e_impl_to_end\"), from: PortRef { node: NodeKey(\"impl_1\"), outcome: OutcomeKey(\"done\") }, to: NodeKey(\"end\"), kind: Forward, policy: EdgePolicy { max_traversals: None, on_max_exceeded: Escalate, label: None } }], subgraphs: {} }, config: \"{\\\"quota_recovery\\\":{\\\"stages\\\":[]},\\\"human_input_timeout\\\":\\\"5m\\\",\\\"stage_timeout_override\\\":null,\\\"mcp_servers\\\":[],\\\"initial_prompt\\\":\\\"\\\",\\\"bootstrap_parent\\\":null,\\\"project_context\\\":null,\\\"project_memory\\\":null,\\\"memory_claim_candidates\\\":null,\\\"context_pack\\\":null,\\\"seed_artifacts\\\":[],\\\"bootstrap\\\":{\\\"edit_loop_cap\\\":3},\\\"budget\\\":{\\\"limits\\\":{\\\"usd\\\":null,\\\"tokens\\\":null,\\\"warn_threshold_pct\\\":0},\\\"policy\\\":\\\"abort\\\"},\\\"tool_call_loop_guard\\\":null,\\\"output_spill\\\":null,\\\"memory_store_path\\\":null}\", state: Attention, diagnostic: Some(\"task conflict: storage error: suspended task requires its durable Continue reservation\"), usage_seq: 12, input_tokens: 0, output_tokens: 0, known_cost_usd: 0.0, usage_unknown: false }); journal=RunInspection { registry: Some(RunSummary { id: RunId(Ulid(2165706334528871888815353917679738330)), project_path: \"\\\\\\\\?\\\\C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8qgMbS\\\\state\\\\work-items\\\\workspaces\\\\run-01M4CS1WVKENS6PA3NZJDSP6YM\", pipeline_template: None, status: Bootstrapping, started_at_ms: 1791430292854, ended_at_ms: None, daemon_pid: Some(2552), wake_at_ms: None }), run_directory_present: true, database: Present { events: [ReadEvent { seq: EventSeq(1), timestamp_ms: 1791430292964, kind: \"RunStarted\", payload: VersionedEventPayload { schema_version: 21, payload: RunStarted { pipeline_template: None, project_path: \"\\\\\\\\?\\\\C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8qgMbS\\\\state\\\\work-items\\\\workspaces\\\\run-01M4CS1WVKENS6PA3NZJDSP6YM\", initial_prompt: \"Accepted task requirements (revision 1, hash sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1)\\nCold accepted context\\nAcceptance criteria:\\n1. Same reserved run\", config: RunConfig { bootstrap_edit_loop_cap: Some(3), sandbox_default: WorkspaceWrite, approval_default: OnRequest, auto_pr: false, mcp_servers: [], budget: BudgetGuard { limits: BudgetLimits { usd: None, tokens: None, warn_threshold_pct: 0 }, policy: Abort } } } } }, ReadEvent { seq: EventSeq(2), timestamp_ms: 1791430292965, kind: \"PipelineMaterialized\", payload: VersionedEventPayload { schema_version: 21, payload: PipelineMaterialized { graph: Graph { schema_version: 1, metadata: GraphMetadata { name: \"flow_minimal_agent\", description: None, template_origin: None, created_at: 2026-05-05T00:00:00Z, author: None, archetype: None }, start: NodeKey(\"impl_1\"), nodes: {NodeKey(\"end\"): Node { id: NodeKey(\"end\"), position: Position { x: 200.0, y: 0.0 }, declared_outcomes: [], config: Terminal(TerminalConfig { kind: Success, message: None }) }, NodeKey(\"impl_1\"): Node { id: NodeKey(\"impl_1\"), position: Position { x: 0.0, y: 0.0 }, declared_outcomes: [OutcomeDecl { id: OutcomeKey(\"done\"), description: \"Implementation complete\", edge_kind_hint: Forward, is_terminal: false, ledger_effect: None }], config: Agent(AgentConfig { profile: ProfileKey(\"implementer@1.0\"), prompt_overrides: None, tool_overrides: None, sandbox_override: None, approvals_override: None, bindings: [Binding { source: InitialPrompt, target: TemplateVar(\"spec\"), optional: false }], rules_overrides: None, limits: NodeLimits { timeout_seconds: 900, max_retries: 3, circuit_breaker: None, max_tokens: 200000 }, hooks: [], custom_fields: {} }) }}, edges: [Edge { id: EdgeKey(\"e_impl_to_end\"), from: PortRef { node: NodeKey(\"impl_1\"), outcome: OutcomeKey(\"done\") }, to: NodeKey(\"end\"), kind: Forward, policy: EdgePolicy { max_traversals: None, on_max_exceeded: Escalate, label: None } }], subgraphs: {} }, graph_hash: sha256:e3f3bf7baf064a44e625413d934d8672e6e5cc5b220b849fbcac1f3e6047cf42 } } }, ReadEvent { seq: EventSeq(3), timestamp_ms: 1791430292965, kind: \"ArtifactProduced\", payload: VersionedEventPayload { schema_version: 21, payload: ArtifactProduced { node: NodeKey(\"start_node\"), artifact: sha256:d4d6115b3e044c33372d2fb3fd6e5ecafde15aed204c1fffe01353337f779d70, path: \".surge/user_prompt.txt\", name: \"user_prompt\", source_path: None } } }, ReadEvent { seq: EventSeq(4), timestamp_ms: 1791430292966, kind: \"ArtifactProduced\", payload: VersionedEventPayload { schema_version: 21, payload: ArtifactProduced { node: NodeKey(\"task_requirements\"), artifact: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8qgMbS\\\\state\\\\runs\\\\run-01M4CS1WXNJ225CDDRKZ5CC7ET\\\\artifacts\\\\f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1\", name: \"accepted_requirements\", source_path: None } } }, ReadEvent { seq: EventSeq(5), timestamp_ms: 1791430292966, kind: \"WorkItemAttemptBound\", payload: VersionedEventPayload { schema_version: 21, payload: WorkItemAttemptBound { context: WorkItemContext { binding: WorkItemBinding { item: WorkItemId(Ulid(2165706334469921528561688579766917412)), revision: 1, requirements_hash: sha256:f5e4468eccb90509bf4f409a6640bfdbf9eac64977437db8992afa48a165e0c1, generation: 1 }, origin: Requirements(WorkItemRequirements { text: \"Cold accepted context\", criteria: [\"Same reserved run\"] }) } } } }, ReadEvent { seq: EventSeq(6), timestamp_ms: 1791430293019, kind: \"StageEntered\", payload: VersionedEventPayload { schema_version: 21, payload: StageEntered { node: NodeKey(\"impl_1\"), attempt: 1 } } }, ReadEvent { seq: EventSeq(7), timestamp_ms: 1791430293062, kind: \"StageInputsResolved\", payload: VersionedEventPayload { schema_version: 21, payload: StageInputsResolved { node: NodeKey(\"impl_1\"), attempt: 1, bindings: {\"spec\": sha256:d4d6115b3e044c33372d2fb3fd6e5ecafde15aed204c1fffe01353337f779d70}, memory_receipt: None } } }, ReadEvent { seq: EventSeq(8), timestamp_ms: 1791430293063, kind: \"execution_writer_intent\", payload: VersionedEventPayload { schema_version: 21, payload: ExecutionWriterIntent { intent: ExecutionWriterIntent { writer: ExecutionWriterId(Ulid(2165706335322934849954782746534390738)), invocation: StageInvocationId(Ulid(2165706335322781249356512905640492647)), kind: Provider, owner: None, local_effects: true } } } }, ReadEvent { seq: EventSeq(9), timestamp_ms: 1791430293063, kind: \"SessionEstablishmentRequested\", payload: VersionedEventPayload { schema_version: 21, payload: SessionEstablishmentRequested { node: NodeKey(\"impl_1\"), invocation: StageInvocationId(Ulid(2165706335322781249356512905640492647)), restore: false, authority: Some(StageToolContext { run: RunId(Ulid(2165706334528871888815353917679738330)), node: NodeKey(\"impl_1\"), session: SessionId(Ulid(2165706335323947622572545820740845137)), generation: StageGenerationId(Ulid(2165706335324314458602093028881677083)) }) } } }, ReadEvent { seq: EventSeq(10), timestamp_ms: 1791430293148, kind: \"SessionOpened\", payload: VersionedEventPayload { schema_version: 21, payload: SessionOpened { handoff: None, opened: Some(OpenedSession { execution_writer: Some(ExecutionWriterObservation { writer: ExecutionWriterId(Ulid(2165706335322934849954782746534390738)), container: None }), session: SessionId(Ulid(2165706335323947622572545820740845137)), descriptor: ProviderSessionDescriptor { provider_session_id: ProviderSessionId(\"mock-provider-run-01M4CS1XMSTSJ1JVXMSM0XKMRS\"), invocation: StageInvocationId(Ulid(2165706335322781249356512905640492647)), runtime: \"wire-fixture\", launch_hash: sha256:6c5f05039da931fba9a2c9b9460d2153bd7c0642a8e19bc67389e7257fd3b381, cwd: \"\\\\\\\\?\\\\C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8qgMbS\\\\state\\\\work-items\\\\workspaces\\\\run-01M4CS1WVKENS6PA3NZJDSP6YM\", capabilities: SessionRestoreCapabilities { resume: true, load: true } }, mode: New }), node: NodeKey(\"impl_1\"), session: SessionId(Ulid(2165706335323947622572545820740845137)), agent: \"implementer@1.0\", agent_id: Some(\"wire-fixture\") } } }, ReadEvent { seq: EventSeq(11), timestamp_ms: 1791430293239, kind: \"SessionClosed\", payload: VersionedEventPayload { schema_version: 21, payload: SessionClosed { session: SessionId(Ulid(2165706335323947622572545820740845137)), disposition: ForcedClose } } }, ReadEvent { seq: EventSeq(12), timestamp_ms: 1791430293360, kind: \"RunSuspended\", payload: VersionedEventPayload { schema_version: 21, payload: RunSuspended { fence: SuspensionFence { control_generation: 1, snapshot_seq: 11, pending_stage: Interrupted { node: NodeKey(\"impl_1\"), invocation: StageInvocationId(Ulid(2165706335322781249356512905640492647)) }, cleanup_confirmed: true, reason: Manual } } } }] } }",
+        "next": "left: Attention"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::archetypes_mock_test all_archetypes_complete_against_deterministic_mock_bridge",
+      "family": "sharing-os32",
+      "raw_log_line": 8333,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\archetypes_mock_test.rs:288:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Nye3gB\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::bootstrap_archetypes_test bootstrap_materializes_bug_fix_refactor_and_spike_archetypes",
+      "family": "sharing-os32",
+      "raw_log_line": 8400,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\bootstrap.rs:105:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-kDBw0z\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::bootstrap_driver_e2e run_bootstrap_materializes_followup_graph",
+      "family": "sharing-os32",
+      "raw_log_line": 8462,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\bootstrap_driver_e2e.rs:238:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-03nJLh\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::bootstrap_edit_cap_test repeated_description_edits_fail_after_configured_cap",
+      "family": "sharing-os32",
+      "raw_log_line": 8600,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\bootstrap.rs:105:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-40tmVr\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::bootstrap_linear_3_test bootstrap_linear_3_materializes_valid_followup_graph",
+      "family": "sharing-os32",
+      "raw_log_line": 8532,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\bootstrap.rs:105:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-R0q0O2\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::bootstrap_multi_milestone_test bootstrap_multi_milestone_materializes_outer_and_inner_loops",
+      "family": "sharing-os32",
+      "raw_log_line": 8739,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\bootstrap.rs:105:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-5QQ88N\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::bootstrap_validation_retry_test flow_generator_invalid_twice_then_valid_materializes_after_two_edits",
+      "family": "sharing-os32",
+      "raw_log_line": 8801,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\bootstrap.rs:105:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-le3Tf1\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::elevation_blocked resolve_elevation_returns_run_not_found_for_unknown_run",
+      "family": "sharing-os32",
+      "raw_log_line": 8679,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\elevation_blocked.rs:57:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-GMQKAQ\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": false,
+      "baseline_family": null
+    },
+    {
+      "test": "surge-orchestrator::engine_acp_permission mcp_session_ignores_injected_legacy_broadcast_authority",
+      "family": "sharing-os32",
+      "raw_log_line": 8875,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_acp_permission.rs:990:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-uiZKeb\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_agent_rotation_test a_rate_limited_stage_moves_to_the_fallback_agent_and_finishes",
+      "family": "sharing-os32",
+      "raw_log_line": 8954,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_agent_rotation_test.rs:262:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-t2zkco\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_agent_rotation_test a_rotation_onto_the_partner_agent_is_flagged",
+      "family": "sharing-os32",
+      "raw_log_line": 9014,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_agent_rotation_test.rs:453:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-RQvXBU\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_agent_rotation_test with_every_fallback_exhausted_the_run_parks_and_wakes",
+      "family": "sharing-os32",
+      "raw_log_line": 9074,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_agent_rotation_test.rs:339:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-WLiZci\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_bootstrap_parent_artifacts_test a_roadmap_planner_alias_is_inherited_as_roadmap",
+      "family": "sharing-os32",
+      "raw_log_line": 9156,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_bootstrap_parent_artifacts_test.rs:341:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-PikrvT\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_bootstrap_parent_artifacts_test start_run_with_bootstrap_parent_seeds_parent_artifacts",
+      "family": "sharing-os32",
+      "raw_log_line": 9216,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_bootstrap_parent_artifacts_test.rs:191:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-bGOvvB\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_budget_test run_aborts_when_token_budget_exceeded",
+      "family": "sharing-os32",
+      "raw_log_line": 9276,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_budget_test.rs:325:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-5YBTu4\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_budget_test run_completes_within_budget",
+      "family": "sharing-os32",
+      "raw_log_line": 9336,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_budget_test.rs:373:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-PcJ8xo\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_budget_test warn_only_records_breach_but_completes",
+      "family": "sharing-os32",
+      "raw_log_line": 9396,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_budget_test.rs:438:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-XOGgpm\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test binding_failure_before_provider_open_preserves_exhaustion",
+      "family": "sharing-os32",
+      "raw_log_line": 9461,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:1381:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-MV6TBD\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test configured_blind_backoff_reaches_the_park_decision_not_the_hardcoded_default",
+      "family": "sharing-os32",
+      "raw_log_line": 9521,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:383:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-BmuP1I\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test estimate_none_and_never_observed_does_not_block_dispatch",
+      "family": "sharing-os32",
+      "raw_log_line": 9581,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:285:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-odYJV6\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test rate_limited_agent_parks_after_confirmed_forced_cleanup",
+      "family": "sharing-os32",
+      "raw_log_line": 9641,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:604:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-KPCajX\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test rate_limited_agent_parks_instead_of_dispatching_a_second_node_on_the_same_runtime",
+      "family": "sharing-os32",
+      "raw_log_line": 9763,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:604:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-byOydl\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test registry_contention_does_not_delay_route_commit_behind_capacity_clear",
+      "family": "sharing-os32",
+      "raw_log_line": 9703,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:1513:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-AJ9V7K\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "registry-contention-deadline"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_store",
+      "family": "sharing-os32",
+      "raw_log_line": 9825,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:1304:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-M0cB7v\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test resuming_a_parked_run_makes_one_real_attempt_and_clears_the_stale_row",
+      "family": "sharing-os32",
+      "raw_log_line": 9886,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:1000:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-mTS9EE\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test resuming_a_parked_run_re_arms_its_frozen_token_budget",
+      "family": "sharing-os32",
+      "raw_log_line": 9956,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:1156:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-sddPO3\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_capacity_park_test surge_toml_blind_backoff_reaches_the_park_decision_through_surge_config_discover",
+      "family": "sharing-os32",
+      "raw_log_line": 10020,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_capacity_park_test.rs:809:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-yV8D7I\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_concurrent_unit three_concurrent_runs_complete_independently",
+      "family": "sharing-os32",
+      "raw_log_line": 10081,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_concurrent_unit.rs:88:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-syBpxy\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_escalation_gate_test a_restarted_host_reissues_the_escalation_gate_and_honours_stop",
+      "family": "sharing-os32",
+      "raw_log_line": 10203,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_escalation_gate_test.rs:298:21",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-irtG5i\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_escalation_gate_test accept_as_is_continues_on_the_success_path_and_records_a_human_acceptance",
+      "family": "sharing-os32",
+      "raw_log_line": 10141,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_escalation_gate_test.rs:791:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-WO3z5F\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_escalation_gate_test an_exhausted_task_is_split_and_its_subtasks_run_in_its_place",
+      "family": "sharing-os32",
+      "raw_log_line": 10272,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_escalation_gate_test.rs:717:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-XhMO9v\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_escalation_gate_test exhausted_loop_asks_then_retries_with_findings_then_stops",
+      "family": "sharing-os32",
+      "raw_log_line": 10337,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_escalation_gate_test.rs:456:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-tISIie\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_escalation_gate_test revise_requirement_reruns_the_stage_against_the_revision",
+      "family": "sharing-os32",
+      "raw_log_line": 10522,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_escalation_gate_test.rs:791:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-4v9Tft\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_gate_cancellation stop_pending_gate_is_durably_aborted_without_a_decision",
+      "family": "sharing-os32",
+      "raw_log_line": 10402,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_gate_cancellation.rs:158:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-RtsDFO\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_gate_cancellation stop_racing_a_real_decision_preserves_a_complete_event_sequence",
+      "family": "sharing-os32",
+      "raw_log_line": 10462,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_gate_cancellation.rs:270:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-BB2DQm\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_gate_identity old_card_cannot_resolve_a_new_visit_to_the_same_gate",
+      "family": "sharing-os32",
+      "raw_log_line": 10707,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_gate_identity.rs:174:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-pU4MOS\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_gate_identity reopening_after_owner_loss_reissues_an_unanswered_gate_with_fresh_identity",
+      "family": "sharing-os32",
+      "raw_log_line": 10772,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_gate_identity.rs:264:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-W8kImQ\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_guard_spill_harness_test configured_repeat_threshold_is_honored_not_the_default",
+      "family": "sharing-os32",
+      "raw_log_line": 10644,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_guard_spill_harness_test.rs:273:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-x6p9Bd\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_guard_spill_harness_test configured_spill_cap_is_honored_and_lands_in_the_runs_own_artifact_store",
+      "family": "sharing-os32",
+      "raw_log_line": 10584,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_guard_spill_harness_test.rs:495:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-62tps8\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_guard_spill_harness_test node_wall_clock_deadline_trips_without_any_tool_call",
+      "family": "sharing-os32",
+      "raw_log_line": 10858,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_guard_spill_harness_test.rs:386:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-BYPC14\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_initial_prompt_test start_run_seeds_user_prompt_artifact_from_initial_prompt",
+      "family": "sharing-os32",
+      "raw_log_line": 10924,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_initial_prompt_test.rs:196:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8nXAHr\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_initial_prompt_test start_run_with_empty_prompt_skips_seeding",
+      "family": "sharing-os32",
+      "raw_log_line": 10988,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_initial_prompt_test.rs:248:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-A5kH25\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_loop_protection_test an_idle_attempt_counts_as_failed_and_retries",
+      "family": "sharing-os32",
+      "raw_log_line": 11238,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_loop_protection_test.rs:215:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8paneb\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_loop_protection_test repeated_identical_calls_end_the_attempt_and_retry",
+      "family": "sharing-os32",
+      "raw_log_line": 11049,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_loop_protection_test.rs:215:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-RvImWc\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_loop_protection_test the_tool_call_cap_ends_the_attempt_and_retries",
+      "family": "sharing-os32",
+      "raw_log_line": 11111,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_loop_protection_test.rs:215:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-zdJl2C\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_loop_protection_test wall_clock_trips_climb_the_ladder_to_the_human_gate",
+      "family": "sharing-os32",
+      "raw_log_line": 11177,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_loop_protection_test.rs:393:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-H251xC\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_max_traversals loop_max_iterations_2_runs_at_most_2_body_executions",
+      "family": "sharing-os32",
+      "raw_log_line": 11367,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_loop_max_traversals.rs:200:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-lLkQGh\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_retry abort_policy_stops_at_first_failed_item",
+      "family": "sharing-os32",
+      "raw_log_line": 11305,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:54:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-UcbgrI\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_retry every_item_receives_its_own_retry_budget",
+      "family": "sharing-os32",
+      "raw_log_line": 11427,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:195:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-VFTQQG\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_retry loop_body_retries_up_to_max_then_succeeds",
+      "family": "sharing-os32",
+      "raw_log_line": 11489,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:195:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-YPwqog\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_retry loop_failure_retries_exactly_to_cap_then_fails",
+      "family": "sharing-os32",
+      "raw_log_line": 11551,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:54:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-A8eACa\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_retry zero_retry_budget_still_attempts_the_item_once",
+      "family": "sharing-os32",
+      "raw_log_line": 11618,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:54:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-g82RPx\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_skip_failure loop_body_failure_with_skip_policy_continues_loop",
+      "family": "sharing-os32",
+      "raw_log_line": 11753,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:195:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-CCy27d\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_loop_skip_failure loop_failure_with_skip_continues_through_all_items",
+      "family": "sharing-os32",
+      "raw_log_line": 11691,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\fixtures\\loop_failure.rs:54:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-OzV7KI\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_notify_webhook notify_webhook_posts_body_containing_run_id",
+      "family": "sharing-os32",
+      "raw_log_line": 11880,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_notify_webhook.rs:169:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-EhK6R8\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_static_loop approved_run_artifact_drives_loop_without_planner",
+      "family": "sharing-os32",
+      "raw_log_line": 11820,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_static_loop.rs:411:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-jcybNT\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_static_loop empty_loop_completion_has_no_pushed_frame_and_remains_trusted",
+      "family": "sharing-os32",
+      "raw_log_line": 11940,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_static_loop.rs:84:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-cbWj4A\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_static_loop fork_inside_loop_keeps_iteration_position_and_remaining_items",
+      "family": "sharing-os32",
+      "raw_log_line": 12140,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_static_loop.rs:541:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-It6Wjx\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_static_loop nested_subgraph_loop_retains_counter_and_declared_synthetic_route",
+      "family": "sharing-os32",
+      "raw_log_line": 12073,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_static_loop.rs:84:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-L06oJ6\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_static_loop three_iteration_static_loop_completes",
+      "family": "sharing-os32",
+      "raw_log_line": 12007,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_static_loop.rs:276:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-S77i5D\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_m6_subgraph_simple subgraph_emits_entered_and_exited_then_completes",
+      "family": "sharing-os32",
+      "raw_log_line": 12200,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_m6_subgraph_simple.rs:188:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-AWSk7E\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_profile_catalog_seed_test start_run_seeds_nothing_and_still_starts_without_profile_registry",
+      "family": "sharing-os32",
+      "raw_log_line": 12271,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_profile_catalog_seed_test.rs:176:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-sATCIY\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_profile_catalog_seed_test start_run_seeds_profile_catalog_artifact_when_registry_wired",
+      "family": "sharing-os32",
+      "raw_log_line": 12331,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_profile_catalog_seed_test.rs:135:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-eLzQ3L\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_project_context_seed_test start_run_seeds_configured_run_artifacts",
+      "family": "sharing-os32",
+      "raw_log_line": 12396,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_project_context_seed_test.rs:199:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-BrcNs5\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_project_context_seed_test start_run_seeds_project_context_artifact",
+      "family": "sharing-os32",
+      "raw_log_line": 12456,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_project_context_seed_test.rs:121:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-cuoIwD\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_skill_binding_test approved_skill_completion_does_not_leave_a_human_gate_recovery_record",
+      "family": "sharing-os32",
+      "raw_log_line": 12521,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_skill_binding_test.rs:840:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8HSYqa\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_skill_binding_test approved_skill_gate_does_not_leak_into_legitimate_stage_revisit",
+      "family": "sharing-os32",
+      "raw_log_line": 12583,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_skill_binding_test.rs:840:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-QynWPO\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_skill_binding_test pinned_skill_binds_and_instructions_reach_the_agent_prompt",
+      "family": "sharing-os32",
+      "raw_log_line": 12650,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_skill_binding_test.rs:590:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-fketvF\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_skill_binding_test plugin_packaged_skill_binds_via_dot_claude_plugins_root",
+      "family": "sharing-os32",
+      "raw_log_line": 12710,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_skill_binding_test.rs:671:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-kvGtRV\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_skill_binding_test unpinned_skill_unanswered_rejects_before_any_session_opens",
+      "family": "sharing-os32",
+      "raw_log_line": 12770,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_skill_binding_test.rs:481:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Lk3wEy\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_snapshot_unit resume_after_completion_is_idempotent",
+      "family": "sharing-os32",
+      "raw_log_line": 12895,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_snapshot_unit.rs:359:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-tHiRCt\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_snapshot_unit single_terminal_run_has_no_stage_boundary_snapshots",
+      "family": "sharing-os32",
+      "raw_log_line": 12835,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_snapshot_unit.rs:84:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-uqabhO\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_snapshot_unit three_node_branch_run_writes_two_snapshots",
+      "family": "sharing-os32",
+      "raw_log_line": 12955,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_snapshot_unit.rs:292:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-1E4lYD\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_stage_commit_test rejected_stage_snapshot_rolls_back_routing_events",
+      "family": "sharing-os32",
+      "raw_log_line": 13016,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_stage_commit_test.rs:93:18",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-JLkj6Z\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::engine_start_run_smoke start_run_smoke_completes_terminal_node",
+      "family": "sharing-os32",
+      "raw_log_line": 13095,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\engine_start_run_smoke.rs:82:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-C4m6YO\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::integration test_cost_accumulation",
+      "family": "owner-security-refusal",
+      "raw_log_line": 13188,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\integration.rs:263:39",
+        "message": "Failed to create store: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-orchestrator::integration test_cost_calculation_preservation",
+      "family": "owner-security-refusal",
+      "raw_log_line": 13271,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\integration.rs:395:39",
+        "message": "Failed to create store: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-orchestrator::integration test_session_without_subtask",
+      "family": "owner-security-refusal",
+      "raw_log_line": 13440,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\integration.rs:160:39",
+        "message": "Failed to create store: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-orchestrator::integration test_token_tracking_end_to_end",
+      "family": "owner-security-refusal",
+      "raw_log_line": 13360,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\integration.rs:30:39",
+        "message": "Failed to create store: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-orchestrator::memory_writeback_test a_verified_claim_covering_the_same_node_is_left_untouched",
+      "family": "sharing-os32",
+      "raw_log_line": 13527,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\memory_writeback_test.rs:626:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-HFoFDC\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::memory_writeback_test clean_run_writes_no_memory_claim",
+      "family": "sharing-os32",
+      "raw_log_line": 13587,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\memory_writeback_test.rs:338:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-tzfIJo\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::memory_writeback_test failing_run_records_a_claim_visible_to_the_audit",
+      "family": "sharing-os32",
+      "raw_log_line": 13647,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\memory_writeback_test.rs:431:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Kz7tk7\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::memory_writeback_test records_the_first_rejecting_hook_not_the_last_one",
+      "family": "sharing-os32",
+      "raw_log_line": 13720,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\memory_writeback_test.rs:497:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-rxx7Fo\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::memory_writeback_test second_failure_of_the_same_node_updates_the_claim_in_place",
+      "family": "sharing-os32",
+      "raw_log_line": 13780,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\memory_writeback_test.rs:528:21",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-8MdFX5\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::on_error_suppress_test on_error_suppresses_failure_into_declared_outcome",
+      "family": "sharing-os32",
+      "raw_log_line": 13944,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\on_error_suppress_test.rs:224:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-mOxlMR\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::on_error_suppress_test undeclared_suppression_falls_through_to_stage_failed",
+      "family": "sharing-os32",
+      "raw_log_line": 14006,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\on_error_suppress_test.rs:224:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-FSITN8\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::on_error_suppress_test without_on_error_hook_crash_records_stage_failed",
+      "family": "sharing-os32",
+      "raw_log_line": 13847,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\on_error_suppress_test.rs:224:17",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-37vU8O\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::verification_revision_test on_error_shell_mutation_fences_old_proof_even_after_restore",
+      "family": "sharing-os32",
+      "raw_log_line": 14115,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\verification_revision_test.rs:834:25",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-4NzQGx\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-orchestrator::verification_revision_test superseded_accepted_requirements_cannot_reuse_a_still_current_historical_run_proof",
+      "family": "sharing-os32",
+      "raw_log_line": 14175,
+      "primary_panic": {
+        "site": "crates\\surge-orchestrator\\tests\\verification_revision_test.rs:48:23",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-qS8LwL\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-persistence work_items::tests::live_start_preparation_refuses_generic_reservation",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 14745,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1349:66",
+        "message": "called `Result::unwrap()` on an `Err` value: Invalid(\"private preparation unsupported on this platform\")",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_concurrent_exact_operation_has_one_attempt_and_receipt",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 14873,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1800:31",
+        "message": "invalid task input: private preparation unsupported on this platform",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_consumes_once_and_replay_does_no_filesystem_work",
+      "family": "owner-security-refusal",
+      "raw_log_line": 14809,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1318:62",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_dead_row_is_reclaimed_by_lifecycle_under_the_lock",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 14981,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1526:58",
+        "message": "called `Result::unwrap()` on an `Err` value: Invalid(\"private preparation unsupported on this platform\")",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_does_not_hold_registry_lock_while_external_work_is_blocked",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 15041,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1677:71",
+        "message": "called `Result::unwrap()` on an `Err` value: Invalid(\"private preparation unsupported on this platform\")",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_killed_owner_can_be_reclaimed_without_provider_authority",
+      "family": "preparation-child-before-lock",
+      "raw_log_line": 15180,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1607:17",
+        "message": "child exited before holding lock",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "preparation-child-before-lock"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_lifecycle_busy_discussion_drift_and_drop_release",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 15240,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1424:65",
+        "message": "called `Result::unwrap()` on an `Err` value: Invalid(\"private preparation unsupported on this platform\")",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_relocated_live_lock_never_proves_dead_ownership",
+      "family": "owner-security-refusal",
+      "raw_log_line": 15116,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1318:62",
+        "message": "called `Result::unwrap()` on an `Err` value: StateHome { category: \"security refusal\", message: \"native security validation refused: object owner is not trusted\" }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "owner-security-refusal"
+    },
+    {
+      "test": "surge-persistence work_items::tests::start_preparation_snapshot_drift_never_creates_an_attempt",
+      "family": "private-preparation-unsupported",
+      "raw_log_line": 15301,
+      "primary_panic": {
+        "site": "crates\\surge-persistence\\src\\work_items.rs:1499:69",
+        "message": "called `Result::unwrap()` on an `Err` value: Invalid(\"private preparation unsupported on this platform\")",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "private-preparation-unsupported"
+    },
+    {
+      "test": "surge-telegram::production_callbacks accepted_callback_with_failed_card_close_never_says_decision_failed",
+      "family": "sharing-os32",
+      "raw_log_line": 15513,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-6U2XpH\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks accepted_edit_with_failed_card_close_never_says_decision_failed",
+      "family": "sharing-os32",
+      "raw_log_line": 15575,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-TBP7R4\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks bot_api_failure_does_not_roll_back_accepted_engine_decision",
+      "family": "sharing-os32",
+      "raw_log_line": 16266,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-1pfOMr\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks force_reply_correlation_survives_reopened_storage_and_routes",
+      "family": "sharing-os32",
+      "raw_log_line": 15637,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-oAVdtO\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks force_reply_send_failure_grants_no_reply_authority",
+      "family": "sharing-os32",
+      "raw_log_line": 16010,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-tiinok\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks force_reply_sent_but_not_persisted_grants_no_reply_authority",
+      "family": "sharing-os32",
+      "raw_log_line": 15700,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-4rxPRS\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks forced_reply_requires_exact_chat_prompt_and_card",
+      "family": "sharing-os32",
+      "raw_log_line": 15762,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-4Flnb8\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks old_open_card_cannot_approve_new_gate_and_reports_stale",
+      "family": "sharing-os32",
+      "raw_log_line": 15824,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-AJQxLQ\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks production_approve_acknowledges_and_resolves_exact_gate",
+      "family": "sharing-os32",
+      "raw_log_line": 15886,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-Dfd2mQ\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks recovery_closes_exact_resolved_card_while_next_gate_stays_open",
+      "family": "sharing-os32",
+      "raw_log_line": 15948,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-z2Dq06\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks reject_terminates_real_gate_after_foreign_paired_chat_is_denied",
+      "family": "sharing-os32",
+      "raw_log_line": 16072,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-m5RZcP\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks resolver_failure_still_acknowledges_and_never_claims_success",
+      "family": "sharing-os32",
+      "raw_log_line": 16134,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-tlzo0w\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    },
+    {
+      "test": "surge-telegram::production_callbacks sole_update_stream_routes_inbox_and_correlated_feedback",
+      "family": "sharing-os32",
+      "raw_log_line": 16196,
+      "primary_panic": {
+        "site": "crates\\surge-telegram\\tests\\production_callbacks.rs:299:22",
+        "message": "called `Result::unwrap()` on an `Err` value: Custom { kind: Uncategorized, error: PathError { path: \"C:\\\\Users\\\\runneradmin\\\\surge-runtime-fixture-jYkDUK\", err: Os { code: 32, kind: Uncategorized, message: \"The process cannot access the file because it is being used by another process.\" } } }",
+        "next": "stack backtrace:"
+      },
+      "baseline_failed": true,
+      "baseline_family": "sharing-os32"
+    }
+  ]
+}

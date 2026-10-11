@@ -343,15 +343,14 @@ impl crate::runs::Storage {
 mod tests {
     use super::*;
     use crate::runs::Storage;
+    use crate::runtime_home_fixture::FixtureHome;
     use surge_core::{EventPayload as E, VersionedEventPayload as V};
 
     async fn storage_wake_fixture() -> (
-        tempfile::TempDir,
-        Arc<Storage>,
-        OwnedFlowReceipt,
-        std::path::PathBuf,
+        FixtureHome,
+        (Arc<Storage>, OwnedFlowReceipt, std::path::PathBuf),
     ) {
-        let home = tempfile::tempdir().unwrap();
+        let home = FixtureHome::new().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let store = storage.work_items();
         let (receipt, claim) = super::super::tests::accepted(
@@ -474,69 +473,75 @@ mod tests {
             .unwrap();
         storage.set_run_parked(&receipt.run, 100).await.unwrap();
         drop(claim);
-        (home, storage, receipt, artifact_path)
+        (home, (storage, receipt, artifact_path))
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn production_entry_waits_ready_before_transaction_then_observes_real_newer_stop() {
-        let (_home, storage, receipt, _artifact) = storage_wake_fixture().await;
-        let store = storage.work_items();
-        let allowed = store.claim_owned_flow_quota_wake(receipt.run, 100).unwrap();
-        assert!(matches!(allowed, OwnedFlowWakeAdmission::Ready(_)));
-        drop(allowed);
-        let before = store
-            .pool
-            .get()
-            .unwrap()
-            .query_row(
-                "SELECT claim_token FROM work_item_attempts WHERE run=?",
-                [receipt.run.to_string()],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap();
-        let gate = super::super::refusal_owner::ready_gate(receipt.run);
-        let waking_store = store.clone();
-        let waking =
-            std::thread::spawn(move || waking_store.claim_owned_flow_quota_wake(receipt.run, 100));
-        gate.wait_entered();
-        let command = WorkItemCommand::Suspend {
-            operation_id: surge_core::id::WorkItemOperationId::new(),
-            item: receipt.item,
-            expected_version: store.show(receipt.item).unwrap().item.version,
-        };
-        // Production operator operation on a second pooled connection commits while the real entry waits Ready.
-        store
-            .mutate(&command, None, None, "newer-real-stop", 200)
-            .unwrap();
-        let newest = store.execution_control(receipt.run).unwrap().unwrap();
-        gate.release();
-        let result = waking.join().unwrap().unwrap();
-        assert!(matches!(result, OwnedFlowWakeAdmission::Obsolete));
-        assert_eq!(
-            store.execution_control(receipt.run).unwrap().unwrap(),
-            newest
-        );
-        let conn = store.pool.get().unwrap();
-        let token: String = conn
-            .query_row(
-                "SELECT claim_token FROM work_item_attempts WHERE run=?",
-                [receipt.run.to_string()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let receipts: u64 = conn
-            .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(token, before);
-        assert_eq!(receipts, 0);
-        assert_eq!(newest.state, ControlState::SuspendRequested);
+        let (home, owners) = storage_wake_fixture().await;
+        {
+            let (storage, receipt, _artifact) = owners;
+            let store = storage.work_items();
+            let allowed = store.claim_owned_flow_quota_wake(receipt.run, 100).unwrap();
+            assert!(matches!(allowed, OwnedFlowWakeAdmission::Ready(_)));
+            drop(allowed);
+            let before = store
+                .pool
+                .get()
+                .unwrap()
+                .query_row(
+                    "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                    [receipt.run.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap();
+            let gate = super::super::refusal_owner::ready_gate(receipt.run);
+            let waking_store = store.clone();
+            let waking = std::thread::spawn(move || {
+                waking_store.claim_owned_flow_quota_wake(receipt.run, 100)
+            });
+            gate.wait_entered();
+            let command = WorkItemCommand::Suspend {
+                operation_id: surge_core::id::WorkItemOperationId::new(),
+                item: receipt.item,
+                expected_version: store.show(receipt.item).unwrap().item.version,
+            };
+            // Production operator operation on a second pooled connection commits while the real entry waits Ready.
+            store
+                .mutate(&command, None, None, "newer-real-stop", 200)
+                .unwrap();
+            let newest = store.execution_control(receipt.run).unwrap().unwrap();
+            gate.release();
+            let result = waking.join().unwrap().unwrap();
+            assert!(matches!(result, OwnedFlowWakeAdmission::Obsolete));
+            assert_eq!(
+                store.execution_control(receipt.run).unwrap().unwrap(),
+                newest
+            );
+            let conn = store.pool.get().unwrap();
+            let token: String = conn
+                .query_row(
+                    "SELECT claim_token FROM work_item_attempts WHERE run=?",
+                    [receipt.run.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let receipts: u64 = conn
+                .query_row("SELECT COUNT(*) FROM owned_flow_wake_refusals", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(token, before);
+            assert_eq!(receipts, 0);
+            assert_eq!(newest.state, ControlState::SuspendRequested);
+        }
+        home.close().expect("close runtime home");
     }
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn production_startup_artifact_io_cannot_hold_registry_transaction_against_newer_stop() {
         use std::{io::Write, os::unix::fs::OpenOptionsExt};
-        let (_home, storage, receipt, artifact) = storage_wake_fixture().await;
+        let (home, owners) = storage_wake_fixture().await;
+        let (storage, receipt, artifact) = owners;
         let store = storage.work_items();
         let allowed = store.claim_owned_flow_quota_wake(receipt.run, 100).unwrap();
         assert!(matches!(allowed, OwnedFlowWakeAdmission::Ready(_)));
@@ -632,5 +637,9 @@ mod tests {
             store.execution_control(receipt.run).unwrap().unwrap().state,
             ControlState::SuspendRequested
         );
+        drop(admission);
+        drop(store);
+        drop(storage);
+        home.close().expect("close runtime home");
     }
 }

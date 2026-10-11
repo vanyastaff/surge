@@ -1,0 +1,30 @@
+{
+  "files": {
+    "crates/surge-persistence/src/state_home.rs": "c7bf9544831ac8b38dfc608bef2a018fb09f73445a804366aa4f662ce8608236",
+    "crates/surge-persistence/src/state_home/test_security.rs": "0315a6a096d63d4947c846d96472c3db12ca7cd95b87738714159791c0adcd24",
+    "crates/surge-persistence/src/state_home/windows/mod.rs": "bfff7ae0ab168b52f9537a07f5c536be687419e545a1a90150fb5fcf88f00499",
+    "crates/surge-persistence/src/state_home/windows/namespace.rs": "09cff4fa921efb1579a75c35b19ca8636b6a02295e7ce9eaa45384e9be2ab848",
+    "crates/surge-persistence/src/state_home/windows/creation_observation.rs": "7c06bccbb8d27ad393632b6249bae5fc342f9f9589e0bce5e5f560117316b4f1",
+    "crates/surge-persistence/src/state_home/creation_security_tests.rs": "2d58418202c559383def045b0d8a33a85985c25c5b76be3c8096a57d59d6ba80",
+    "crates/surge-persistence/src/state_home/creation_security_tests/observation.rs": "f1e04fad79abc7a4c638bd25c47b114c39fb05074d59ae9d5822c095f6019781",
+    "scripts/windows-native-probe.ps1": "7c3081c1a0f69cdc8167930ee7c0269bcd79cc9ddee9a6710ca8c6cc83e99126"
+  },
+  "filter": "state_home::creation_security_tests::first_observable_creation_has_private_security",
+  "receipt": "stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS",
+  "gates": {
+    "cross_clippy_command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/surge-security-policy-actual-module/target CLIPPY_CONF_DIR=/Users/vanyastafford/Develop/surge cargo +1.99.0 clippy --locked --offline --manifest-path /tmp/surge-creation-observation-actual-module/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings",
+    "cross_clippy_exit": 0,
+    "cross_clippy_log": "/tmp/surge-creation-observation-cross-clippy.log",
+    "scope": "actual native.rs, security.rs, namespace.rs hook, creation_observation.rs, test_security.rs and observation protocol; production+cfg(test) compile/lint; tiny wrapper allows dead_code only for unconsumed module items",
+    "not_in_harness": "Outer Storage integration creation_security_tests.rs (actual crate native compiler gate pending)",
+    "rustfmt_check": "PASS for seven changed Rust files, +1.99.0 edition2024 skip_children=true",
+    "git_diff_check": "PASS",
+    "msrv_atomic_method_command": "rustc +1.96.0 --edition 2024 --emit=metadata /tmp/surge-fixture3-msrv-atomic.rs -o /tmp/surge-fixture3-msrv-atomic.rmeta",
+    "msrv_atomic_method_exit": 0,
+    "msrv_atomic_method_log": "/tmp/surge-fixture3-msrv-atomic.log",
+    "msrv_scope": "Actual Rust1.96 AtomicU64::try_update method compile only; complete Windows module MSRV gate not claimed"
+  },
+  "native_execution": "PENDING; no first-observable behavior RED or GREEN executed on macOS",
+  "compile_failure_log": "/tmp/surge-creation-observation-first-compile-red.log",
+  "scope_exclusion": "Existing untracked privileged_fixture_tests.rs remains untouched and unwired. Stage1 fixtures1+2 and privileged launcher remain open."
+}

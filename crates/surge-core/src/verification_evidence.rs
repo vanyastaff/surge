@@ -246,9 +246,11 @@ pub(crate) fn bind_fixture(events: &[crate::RunEvent]) -> Vec<crate::RunEvent> {
             ..
         } = &mut event.payload
         {
+            let worktree = std::env::temp_dir().join("surge-verification-fixture-repo");
+            assert!(worktree.is_absolute());
             let subject = VerificationSubject {
-                repository: "/fixture/repo/.git".into(),
-                worktree: "/fixture/repo".into(),
+                repository: worktree.join(".git"),
+                worktree,
                 tree: "a".repeat(40),
                 checkpoint: "b".repeat(40),
             };

@@ -1,3 +1,7 @@
+#[path = "fixtures/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::path::Path;
 
 use surge_core::keys::NodeKey;
@@ -51,7 +55,7 @@ async fn create_run_with_artifacts(
         }))
         .await
         .unwrap();
-    writer.flush().await.unwrap();
+    writer.close().await.unwrap();
 
     let conn = storage.acquire_registry_conn().unwrap();
     let status = status.as_str().to_owned();
@@ -66,148 +70,169 @@ async fn create_run_with_artifacts(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_project_target_reads_project_roadmap() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(project.join(".ai-factory")).unwrap();
-    std::fs::write(
-        project.join(".ai-factory").join("ROADMAP.md"),
-        "# Roadmap\n",
-    )
-    .unwrap();
-    let storage = Storage::open(tmp.path().join("home")).await.unwrap();
-
-    let resolver =
-        RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
-    let candidate = resolver
-        .resolve(RoadmapTargetSelector::ProjectFile)
-        .await
+    let home = FixtureHome::new().unwrap();
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".ai-factory")).unwrap();
+        std::fs::write(
+            project.join(".ai-factory").join("ROADMAP.md"),
+            "# Roadmap\n",
+        )
         .unwrap();
+        let storage = Storage::open(home.path().to_path_buf()).await.unwrap();
 
-    assert_eq!(candidate.run_id, None);
-    assert_eq!(
-        candidate.amendment_point,
-        RoadmapAmendmentPoint::ProjectFile
-    );
-    assert_eq!(candidate.active_pickup, ActivePickupPolicy::FollowUpOnly);
-    assert!(candidate.roadmap_hash.is_some());
-    assert!(matches!(
-        candidate.target,
-        RoadmapPatchTarget::ProjectRoadmap { .. }
-    ));
+        let resolver =
+            RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
+        let candidate = resolver
+            .resolve(RoadmapTargetSelector::ProjectFile)
+            .await
+            .unwrap();
+
+        assert_eq!(candidate.run_id, None);
+        assert_eq!(
+            candidate.amendment_point,
+            RoadmapAmendmentPoint::ProjectFile
+        );
+        assert_eq!(candidate.active_pickup, ActivePickupPolicy::FollowUpOnly);
+        assert!(candidate.roadmap_hash.is_some());
+        assert!(matches!(
+            candidate.target,
+            RoadmapPatchTarget::ProjectRoadmap { .. }
+        ));
+    }
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn absolute_project_roadmap_outside_project_root_is_rejected() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().join("project");
-    let outside = tmp.path().join("outside").join("ROADMAP.md");
-    std::fs::create_dir_all(&project).unwrap();
-    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
-    std::fs::write(&outside, "# Roadmap\n").unwrap();
-    let storage = Storage::open(tmp.path().join("home")).await.unwrap();
+    let home = FixtureHome::new().unwrap();
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let outside = tmp.path().join("outside").join("ROADMAP.md");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        std::fs::write(&outside, "# Roadmap\n").unwrap();
+        let storage = Storage::open(home.path().to_path_buf()).await.unwrap();
 
-    let resolver = RoadmapTargetResolver::new(storage, &project, &outside);
-    let err = resolver
-        .resolve(RoadmapTargetSelector::ProjectFile)
-        .await
-        .unwrap_err();
+        let resolver = RoadmapTargetResolver::new(storage, &project, &outside);
+        let err = resolver
+            .resolve(RoadmapTargetSelector::ProjectFile)
+            .await
+            .unwrap_err();
 
-    match err {
-        RoadmapTargetError::ProjectRoadmapOutsideProject {
-            project_path,
-            roadmap_path,
-        } => {
-            assert_eq!(project_path, project);
-            assert_eq!(roadmap_path, outside);
-        },
-        other => panic!("expected outside-project error, got {other:?}"),
+        match err {
+            RoadmapTargetError::ProjectRoadmapOutsideProject {
+                project_path,
+                roadmap_path,
+            } => {
+                assert_eq!(project_path, project);
+                assert_eq!(roadmap_path, outside);
+            },
+            other => panic!("expected outside-project error, got {other:?}"),
+        }
     }
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_run_target_returns_artifacts_and_active_pickup() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    let storage_home = tmp.path().join("home");
-    let storage = Storage::open(&storage_home).await.unwrap();
-    let (run_id, roadmap_hash, flow_hash) =
-        create_run_with_artifacts(&storage, &storage_home, &project, RunStatus::Running).await;
+    let home = FixtureHome::new().unwrap();
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let storage_home = home.path().to_path_buf();
+        let storage = Storage::open(&storage_home).await.unwrap();
+        let (run_id, roadmap_hash, flow_hash) =
+            create_run_with_artifacts(&storage, &storage_home, &project, RunStatus::Running).await;
 
-    let resolver =
-        RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
-    let candidate = resolver
-        .resolve(RoadmapTargetSelector::Run { run_id })
-        .await
-        .unwrap();
+        let resolver =
+            RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
+        let candidate = resolver
+            .resolve(RoadmapTargetSelector::Run { run_id })
+            .await
+            .unwrap();
 
-    assert_eq!(candidate.run_id, Some(run_id));
-    assert_eq!(candidate.run_status, Some(RunStatus::Running));
-    assert_eq!(candidate.roadmap_hash, Some(roadmap_hash));
-    assert_eq!(candidate.flow_hash, Some(flow_hash));
-    assert_eq!(candidate.active_pickup, ActivePickupPolicy::Allowed);
-    assert_eq!(
-        candidate.amendment_point,
-        RoadmapAmendmentPoint::ActiveRunBoundary
-    );
-    assert!(matches!(
-        candidate.target,
-        RoadmapPatchTarget::RunRoadmap {
-            active_pickup: ActivePickupPolicy::Allowed,
-            ..
-        }
-    ));
+        assert_eq!(candidate.run_id, Some(run_id));
+        assert_eq!(candidate.run_status, Some(RunStatus::Running));
+        assert_eq!(candidate.roadmap_hash, Some(roadmap_hash));
+        assert_eq!(candidate.flow_hash, Some(flow_hash));
+        assert_eq!(candidate.active_pickup, ActivePickupPolicy::Allowed);
+        assert_eq!(
+            candidate.amendment_point,
+            RoadmapAmendmentPoint::ActiveRunBoundary
+        );
+        assert!(matches!(
+            candidate.target,
+            RoadmapPatchTarget::RunRoadmap {
+                active_pickup: ActivePickupPolicy::Allowed,
+                ..
+            }
+        ));
+    }
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn completed_run_auto_target_uses_follow_up_policy() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    let storage_home = tmp.path().join("home");
-    let storage = Storage::open(&storage_home).await.unwrap();
-    let (run_id, _, _) =
-        create_run_with_artifacts(&storage, &storage_home, &project, RunStatus::Completed).await;
+    let home = FixtureHome::new().unwrap();
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let storage_home = home.path().to_path_buf();
+        let storage = Storage::open(&storage_home).await.unwrap();
+        let (run_id, _, _) =
+            create_run_with_artifacts(&storage, &storage_home, &project, RunStatus::Completed)
+                .await;
 
-    let resolver =
-        RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
-    let candidate = resolver.resolve(RoadmapTargetSelector::Auto).await.unwrap();
+        let resolver =
+            RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
+        let candidate = resolver.resolve(RoadmapTargetSelector::Auto).await.unwrap();
 
-    assert_eq!(candidate.run_id, Some(run_id));
-    assert_eq!(candidate.run_status, Some(RunStatus::Completed));
-    assert_eq!(candidate.active_pickup, ActivePickupPolicy::FollowUpOnly);
-    assert_eq!(
-        candidate.amendment_point,
-        RoadmapAmendmentPoint::FollowUpRun
-    );
+        assert_eq!(candidate.run_id, Some(run_id));
+        assert_eq!(candidate.run_status, Some(RunStatus::Completed));
+        assert_eq!(candidate.active_pickup, ActivePickupPolicy::FollowUpOnly);
+        assert_eq!(
+            candidate.amendment_point,
+            RoadmapAmendmentPoint::FollowUpRun
+        );
+    }
+    home.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_target_is_ambiguous_when_project_and_run_candidates_exist() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(project.join(".ai-factory")).unwrap();
-    std::fs::write(
-        project.join(".ai-factory").join("ROADMAP.md"),
-        "# Roadmap\n",
-    )
-    .unwrap();
-    let storage_home = tmp.path().join("home");
-    let storage = Storage::open(&storage_home).await.unwrap();
-    create_run_with_artifacts(&storage, &storage_home, &project, RunStatus::Running).await;
+    let home = FixtureHome::new().unwrap();
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".ai-factory")).unwrap();
+        std::fs::write(
+            project.join(".ai-factory").join("ROADMAP.md"),
+            "# Roadmap\n",
+        )
+        .unwrap();
+        let storage_home = home.path().to_path_buf();
+        let storage = Storage::open(&storage_home).await.unwrap();
+        create_run_with_artifacts(&storage, &storage_home, &project, RunStatus::Running).await;
 
-    let resolver =
-        RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
-    let err = resolver
-        .resolve(RoadmapTargetSelector::Auto)
-        .await
-        .unwrap_err();
+        let resolver =
+            RoadmapTargetResolver::new(storage, &project, Path::new(".ai-factory/ROADMAP.md"));
+        let err = resolver
+            .resolve(RoadmapTargetSelector::Auto)
+            .await
+            .unwrap_err();
 
-    match err {
-        RoadmapTargetError::Ambiguous { count, candidates } => {
-            assert_eq!(count, 2);
-            assert_eq!(candidates.len(), 2);
-        },
-        other => panic!("expected ambiguous target, got {other:?}"),
+        match err {
+            RoadmapTargetError::Ambiguous { count, candidates } => {
+                assert_eq!(count, 2);
+                assert_eq!(candidates.len(), 2);
+            },
+            other => panic!("expected ambiguous target, got {other:?}"),
+        }
     }
+    home.close().unwrap();
 }

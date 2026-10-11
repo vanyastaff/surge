@@ -41,7 +41,7 @@ pub struct HostBudgetBridge {
     charged: Mutex<HashSet<SessionId>>,
     events: broadcast::Sender<BridgeEvent>,
     cancel: CancellationToken,
-    relay: tokio::task::JoinHandle<()>,
+    relay: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 impl HostBudgetBridge {
     pub fn new(
@@ -87,9 +87,17 @@ impl HostBudgetBridge {
             charged: Mutex::new(HashSet::new()),
             events,
             cancel,
-            relay,
+            relay: Mutex::new(Some(relay)),
         })
     }
+    /// Settle the relay after all prompt and run owners have stopped.
+    pub async fn shutdown(&self) {
+        self.cancel.cancel();
+        if let Some(relay) = self.relay.lock().await.take() {
+            relay.await.unwrap();
+        }
+    }
+
     /// Arm only an explicit current task attempt and retained workspace before launch.
     pub async fn designate(
         &self,
@@ -133,7 +141,9 @@ fn oracle_error(message: &str) -> SendMessageError {
 impl Drop for HostBudgetBridge {
     fn drop(&mut self) {
         self.cancel.cancel();
-        self.relay.abort();
+        if let Some(relay) = self.relay.get_mut().take() {
+            relay.abort();
+        }
     }
 }
 #[async_trait::async_trait]
@@ -314,12 +324,12 @@ mod tests {
         }
     }
     async fn fixture() -> (
-        tempfile::TempDir,
         Arc<Storage>,
         Arc<Peer>,
         Arc<HostBudgetBridge>,
+        crate::runtime_home_fixture::FixtureHome,
     ) {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(home.path()).await.unwrap();
         let (events, _) = broadcast::channel(16);
         let peer = Arc::new(Peer {
@@ -327,11 +337,11 @@ mod tests {
             prompts: AtomicUsize::new(0),
         });
         let bridge = HostBudgetBridge::new(peer.clone(), storage.clone(), CancellationToken::new());
-        (home, storage, peer, bridge)
+        (storage, peer, bridge, home)
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn charge_requires_same_session_durable_ack_before_actual_prompt_and_is_once() {
-        let (home, storage, peer, bridge) = fixture().await;
+        let (storage, peer, bridge, home) = fixture().await;
         let run = RunId::new();
         let writer = storage.create_run(run, home.path(), None).await.unwrap();
         let session = SessionId::new();
@@ -423,10 +433,15 @@ mod tests {
                 .is_err(),
             "unassociated run must not be designated"
         );
+        writer.close().await.unwrap();
+        bridge.shutdown().await;
+        drop(bridge);
+        drop(storage);
+        home.close().unwrap();
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn real_events_are_relayed_and_close_cancels_unacknowledged_charge() {
-        let (home, storage, peer, bridge) = fixture().await;
+        let (storage, peer, bridge, home) = fixture().await;
         let run = RunId::new();
         let _writer = storage.create_run(run, home.path(), None).await.unwrap();
         let session = SessionId::new();
@@ -471,5 +486,10 @@ mod tests {
         assert!(
             matches!(events.recv().await.unwrap(), BridgeEvent::SessionEnded { session: closed, .. } if closed == session)
         );
+        _writer.close().await.unwrap();
+        bridge.shutdown().await;
+        drop(bridge);
+        drop(storage);
+        home.close().unwrap();
     }
 }

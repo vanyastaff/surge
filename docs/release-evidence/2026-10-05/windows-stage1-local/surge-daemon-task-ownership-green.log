@@ -1,0 +1,38 @@
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+   Compiling surge-notify v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-notify)
+   Compiling surge-orchestrator v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-orchestrator)
+   Compiling surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.82s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID faa7e519-ddc4-41aa-a70d-6924025f9fc0 with nextest profile: default
+    Starting 24 tests across 3 binaries (122 tests skipped)
+        PASS [   0.180s] ( 1/24) surge-daemon inbox::state_sync::tests::closed_events_still_wait_for_actual_completion
+        PASS [   0.027s] ( 2/24) surge-daemon server::tests::global_forwarder_reports_lag_and_closes
+        PASS [   0.216s] ( 3/24) surge-daemon inbox::state_sync::tests::successful_completion_settles_with_event_sender_still_open
+        PASS [   0.217s] ( 4/24) surge-daemon inbox::state_sync::tests::on_terminal_completed_still_transitions_as_before
+        PASS [   0.219s] ( 5/24) surge-daemon inbox::state_sync::tests::on_terminal_parked_leaves_ticket_state_untouched_and_posts_a_pause_comment
+        PASS [   0.220s] ( 6/24) surge-daemon inbox::state_sync::tests::lagged_subscriber_continues_to_a_terminal_event
+        PASS [   0.221s] ( 7/24) surge-daemon inbox::state_sync::tests::completed_ticket_cannot_be_reactivated_or_announced_as_parked
+        PASS [   0.224s] ( 8/24) surge-daemon inbox::state_sync::tests::failed_completion_settles_with_event_sender_still_open
+        PASS [   0.032s] ( 9/24) surge-daemon server::tests::per_run_subscriber_lag_reports_unconfirmed_and_ends_only_that_stream
+        PASS [   0.243s] (10/24) surge-daemon inbox::state_sync::tests::stale_handle_cannot_promote_or_complete_reassigned_ticket
+        PASS [   0.220s] (11/24) surge-daemon server::tests::shutdown_return_settles_maintenance_owners
+        PASS [   0.219s] (12/24) surge-daemon server::tests::startup_error_retains_no_maintenance_owner
+        PASS [   0.222s] (13/24) surge-daemon::inbox_callback_e2e cancellation_precedes_ready_first_tick
+        PASS [   0.286s] (14/24) surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt
+        PASS [   0.287s] (15/24) surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower
+        PASS [   0.288s] (16/24) surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt
+        PASS [   0.019s] (17/24) surge-daemon::bin/surge-daemon daemon_task_exit_tests::expected_shutdown_preserves_completion_value
+        PASS [   0.022s] (18/24) surge-daemon::bin/surge-daemon daemon_task_exit_tests::abort_before_first_poll_cancels_shutdown
+        PASS [   0.019s] (19/24) surge-daemon::bin/surge-daemon daemon_task_exit_tests::unexpected_return_and_panic_cancel_shutdown
+        PASS [   0.283s] (20/24) surge-daemon::inbox_callback_e2e scenario_c_skip_sets_label_and_state
+        PASS [   0.389s] (21/24) surge-daemon::inbox_callback_e2e scenario_e_engine_failure_keeps_state_inbox_notified
+        PASS [   0.620s] (22/24) surge-daemon::inbox_callback_e2e scenario_b_snooze_then_re_emit
+        PASS [   0.918s] (23/24) surge-daemon::inbox_callback_e2e scenario_a_start_happy_path
+        PASS [   0.797s] (24/24) surge-daemon::inbox_callback_e2e scenario_d_idempotent_double_start
+────────────
+     Summary [   1.235s] 24 tests run: 24 passed, 122 skipped

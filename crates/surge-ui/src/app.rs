@@ -536,9 +536,12 @@ impl SurgeApp {
     }
 
     fn save_bootstrap_index(entries: &[BootstrapIndexEntry]) -> anyhow::Result<()> {
-        let Some(path) = Self::bootstrap_index_path() else {
+        let Some(home) = surge_core::home::surge_home_dir() else {
             anyhow::bail!("Surge home is unavailable");
         };
+        #[cfg(windows)]
+        let _runtime_home = surge_persistence::RuntimeHomeOwner::prepare(&home)?;
+        let path = home.join("desktop").join("bootstrap-operations.json");
         Self::save_bootstrap_index_at(path, entries)
     }
 
@@ -1051,6 +1054,9 @@ impl SurgeApp {
             G::RunFinished { run_id, outcome } => {
                 let short = run_id.short();
                 match outcome {
+                    RunOutcome::SettlementFailed { .. } => {
+                        Some(SurgeNotification::run_unconfirmed(&short))
+                    },
                     RunOutcome::Completed { .. } => Some(SurgeNotification::run_completed(&short)),
                     RunOutcome::Failed { error } => {
                         Some(SurgeNotification::run_failed(&short, error))

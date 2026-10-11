@@ -1,0 +1,19 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.12s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/surge_daemon-68c76af9f173803a)
+
+running 9 tests
+test work_items::reconciliation_tests::mock_bridge::tests::last_prompt_reflects_last_send_message ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::records_reply_to_tool ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::records_open_session ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::pumps_scripted_event ... ok
+test work_items::reconciliation_tests::mock_bridge::tests::admission_rejects_changed_descriptor_closes_and_never_prompts ... ok
+test work_items::reconciliation_tests::stale_reconciliation_page_preserves_attention_and_reason ... ok
+test work_items::reconciliation_tests::stale_reconciliation_page_preserves_confirmed_suspension ... ok
+test work_items::reconciliation_tests::current_reconciliation_reports_authentic_startup_refusal ... ok
+test work_items::reconciliation_tests::suspension_after_eligibility_survives_inner_dispatch_refusal ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 133 filtered out; finished in 0.32s
+

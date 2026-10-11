@@ -4,6 +4,10 @@
 //! engine, asserting `ticket_index` state transitions and tracker comments
 //! for each of Start / Snooze / Skip plus idempotency.
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -24,14 +28,13 @@ use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome, 
 use surge_persistence::inbox_queue::{self, InboxActionKind};
 use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
 use surge_persistence::runs::storage::Storage;
-use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 // ===== Helpers ==========================================================
 
-async fn build_storage() -> (Arc<Storage>, TempDir) {
-    let tmp = TempDir::new().unwrap();
+async fn build_storage() -> (Arc<Storage>, FixtureHome) {
+    let tmp = FixtureHome::new().unwrap();
     let storage = Storage::open(tmp.path()).await.unwrap();
     (storage, tmp)
 }
@@ -85,9 +88,13 @@ fn make_task_details(task_id: &str) -> TaskDetails {
 
 // ===== Mock engine ======================================================
 
+type CompletionReleases = Arc<StdMutex<Vec<tokio::sync::oneshot::Sender<()>>>>;
+
 #[derive(Debug, Clone)]
 enum EngineBehavior {
     SucceedsThenCompletes,
+    CompletesBeforeSettlement(CompletionReleases),
+    CancelsDuringLaunch(CancellationToken, CompletionReleases),
     Errors,
 }
 
@@ -130,7 +137,7 @@ impl EngineFacade for MockEngineFacade {
 
         // Insert a fake `runs` row so that the `ticket_index.run_id` FK
         // constraint is satisfied when `handle_start` calls `set_run_id`.
-        if matches!(behavior, EngineBehavior::SucceedsThenCompletes) {
+        if !matches!(behavior, EngineBehavior::Errors) {
             let conn = self
                 .storage
                 .acquire_registry_conn()
@@ -143,7 +150,22 @@ impl EngineFacade for MockEngineFacade {
             .map_err(|e| EngineError::Internal(e.to_string()))?;
         }
         match behavior {
-            EngineBehavior::SucceedsThenCompletes => {
+            EngineBehavior::SucceedsThenCompletes
+            | EngineBehavior::CompletesBeforeSettlement(_)
+            | EngineBehavior::CancelsDuringLaunch(_, _) => {
+                let (settlement, cancel) = match behavior {
+                    EngineBehavior::CompletesBeforeSettlement(gate) => (Some(gate), None),
+                    EngineBehavior::CancelsDuringLaunch(token, gate) => (Some(gate), Some(token)),
+                    _ => (None, None),
+                };
+                // The receiver exists before terminal publication. Sending its
+                // release stores a value even if the task has not polled it.
+                let settlement = settlement.map(|releases| {
+                    let (release, pending) = tokio::sync::oneshot::channel();
+                    releases.lock().unwrap().push(release);
+                    pending
+                });
+                let storage_owner = self.storage.clone();
                 let (tx, rx) = broadcast::channel(8);
                 let tx_for_task = tx.clone();
                 let completion = tokio::spawn(async move {
@@ -164,8 +186,15 @@ impl EngineFacade for MockEngineFacade {
                     let _ = tx_for_task.send(EngineRunEvent::Terminal {
                         outcome: outcome.clone(),
                     });
+                    if let Some(pending) = settlement {
+                        pending.await.expect("test must release completion owner");
+                    }
+                    drop(storage_owner);
                     outcome
                 });
+                if let Some(cancel) = cancel {
+                    cancel.cancel();
+                }
                 Ok(RunHandle {
                     run_id,
                     events: rx,
@@ -266,7 +295,7 @@ async fn scenario_a_start_happy_path() {
     // Persisted + Terminal events.
     tokio::time::sleep(Duration::from_millis(700)).await;
     shutdown.cancel();
-    let _ = consumer_handle.await;
+    consumer_handle.await.unwrap();
 
     // 1. engine.start_run was called.
     assert_eq!(engine_state.start_calls.lock().unwrap().len(), 1);
@@ -305,6 +334,10 @@ async fn scenario_a_start_happy_path() {
     let conn = storage.acquire_registry_conn().unwrap();
     let row = IntakeRepo::new(&conn).fetch("mock:t#1").unwrap().unwrap();
     assert_eq!(row.callback_token, None);
+    drop(conn);
+    drop(engine);
+    drop(storage);
+    _tmp.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -344,7 +377,7 @@ async fn scenario_b_snooze_then_re_emit() {
     assert_eq!(fetch_state(&storage, "mock:t#2"), TicketState::Snoozed);
 
     shutdown.cancel();
-    let _ = consumer_handle.await;
+    consumer_handle.await.unwrap();
 
     // Run the SnoozeScheduler manually.
     use surge_daemon::inbox::snooze_scheduler::SnoozeScheduler;
@@ -356,7 +389,7 @@ async fn scenario_b_snooze_then_re_emit() {
     let sched_handle = tokio::spawn(scheduler.run(sched_shutdown.clone()));
     tokio::time::sleep(Duration::from_millis(200)).await;
     sched_shutdown.cancel();
-    let _ = sched_handle.await;
+    sched_handle.await.unwrap();
 
     // After re-emit: state back to InboxNotified, callback_token regenerated.
     let conn = storage.acquire_registry_conn().unwrap();
@@ -368,6 +401,9 @@ async fn scenario_b_snooze_then_re_emit() {
     let deliveries = inbox_queue::list_pending_telegram_deliveries(&conn).unwrap();
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].task_id, "mock:t#2");
+    drop(conn);
+    drop(storage);
+    _tmp.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -402,7 +438,7 @@ async fn scenario_c_skip_sets_label_and_state() {
     let h = tokio::spawn(consumer.run(shutdown.clone()));
     tokio::time::sleep(Duration::from_millis(200)).await;
     shutdown.cancel();
-    let _ = h.await;
+    h.await.unwrap();
 
     assert_eq!(fetch_state(&storage, "mock:t#3"), TicketState::Skipped);
     let labels = mock.recorded_labels().await;
@@ -412,6 +448,8 @@ async fn scenario_c_skip_sets_label_and_state() {
             .any(|(_, label, present)| label == "surge:skipped" && *present),
         "expected surge:skipped label set; got {labels:?}"
     );
+    drop(storage);
+    _tmp.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -458,10 +496,13 @@ async fn scenario_d_idempotent_double_start() {
     let h = tokio::spawn(consumer.run(shutdown.clone()));
     tokio::time::sleep(Duration::from_millis(700)).await;
     shutdown.cancel();
-    let _ = h.await;
+    h.await.unwrap();
 
     // Engine.start_run called exactly once.
     assert_eq!(engine_state.start_calls.lock().unwrap().len(), 1);
+    drop(engine);
+    drop(storage);
+    _tmp.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -497,7 +538,7 @@ async fn scenario_e_engine_failure_keeps_state_inbox_notified() {
     let h = tokio::spawn(consumer.run(shutdown.clone()));
     tokio::time::sleep(Duration::from_millis(300)).await;
     shutdown.cancel();
-    let _ = h.await;
+    h.await.unwrap();
 
     // Engine called once.
     assert_eq!(engine_state.start_calls.lock().unwrap().len(), 1);
@@ -506,4 +547,147 @@ async fn scenario_e_engine_failure_keeps_state_inbox_notified() {
         fetch_state(&storage, "mock:t#5"),
         TicketState::InboxNotified
     );
+    drop(engine);
+    drop(storage);
+    _tmp.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn consumer_shutdown_waits_for_joined_execution_after_terminal_receipt() {
+    assert_consumer_settles(1, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn consumer_shutdown_joins_every_accepted_follower() {
+    assert_consumer_settles(2, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancellation_during_launch_preserves_handoff_and_processed_receipt() {
+    assert_consumer_settles(1, true).await;
+}
+
+async fn assert_consumer_settles(count: usize, cancel_in_launch: bool) {
+    let (storage, home) = build_storage().await;
+    let source = Arc::new(MockTaskSource::new("mock:t", "mock"));
+    for index in 0..count {
+        let id = format!("mock:t#settle{index}");
+        insert_ticket(&storage, &id, &format!("settle_token{index}"));
+        source.put_task(make_task_details(&id)).await;
+    }
+    let gate: CompletionReleases = Arc::new(StdMutex::new(Vec::new()));
+    let shutdown = CancellationToken::new();
+    let behavior = if cancel_in_launch {
+        EngineBehavior::CancelsDuringLaunch(shutdown.clone(), gate.clone())
+    } else {
+        EngineBehavior::CompletesBeforeSettlement(gate.clone())
+    };
+    let (engine, _) = MockEngineFacade::new(behavior, storage.clone());
+    let consumer = make_consumer(storage.clone(), engine.clone(), source.clone());
+    {
+        let conn = storage.acquire_registry_conn().unwrap();
+        for index in 0..count {
+            inbox_queue::append_action(
+                &conn,
+                InboxActionKind::Start,
+                &format!("mock:t#settle{index}"),
+                &format!("settle_token{index}"),
+                "test",
+                None,
+                None,
+            )
+            .unwrap();
+        }
+    }
+    let mut consumer = Box::pin(consumer.run(shutdown.clone()));
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        std::future::poll_fn(|cx| {
+            assert!(
+                consumer.as_mut().poll(cx).is_pending(),
+                "consumer exited before cancellation"
+            );
+            let conn = storage.acquire_registry_conn().unwrap();
+            let processed = inbox_queue::list_pending_actions(&conn).unwrap().is_empty();
+            if processed
+                && (0..count).all(|index| {
+                    fetch_state(&storage, &format!("mock:t#settle{index}"))
+                        == TicketState::Completed
+                })
+            {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    shutdown.cancel();
+    let waiting = futures::poll!(consumer.as_mut()).is_pending();
+    // Always release the real completion task, including on the RED path.
+    let releases = std::mem::take(&mut *gate.lock().unwrap());
+    assert_eq!(
+        releases.len(),
+        count,
+        "each accepted execution owns its release receiver"
+    );
+    for release in releases {
+        release.send(()).unwrap();
+    }
+    if waiting {
+        tokio::time::timeout(Duration::from_secs(5), consumer.as_mut())
+            .await
+            .unwrap();
+    }
+    drop(consumer);
+    assert!(
+        waiting,
+        "consumer returned before accepted execution completion was joined"
+    );
+    assert_eq!(
+        Arc::strong_count(&storage),
+        2,
+        "all accepted execution and follower owners must be released"
+    );
+    drop(engine);
+    drop(source);
+    drop(storage);
+    home.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancellation_precedes_ready_first_tick() {
+    let (storage, home) = build_storage().await;
+    insert_ticket(&storage, "mock:t#cancel", "cancel_token");
+    let source = Arc::new(MockTaskSource::new("mock:t", "mock"));
+    source.put_task(make_task_details("mock:t#cancel")).await;
+    let (engine, state) =
+        MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, storage.clone());
+    let consumer = make_consumer(storage.clone(), engine.clone(), source.clone());
+    {
+        let conn = storage.acquire_registry_conn().unwrap();
+        inbox_queue::append_action(
+            &conn,
+            InboxActionKind::Start,
+            "mock:t#cancel",
+            "cancel_token",
+            "test",
+            None,
+            None,
+        )
+        .unwrap();
+    }
+    let shutdown = CancellationToken::new();
+    shutdown.cancel();
+    consumer.run(shutdown).await;
+    assert!(state.start_calls.lock().unwrap().is_empty());
+    {
+        let conn = storage.acquire_registry_conn().unwrap();
+        assert_eq!(inbox_queue::list_pending_actions(&conn).unwrap().len(), 1);
+    }
+    drop(engine);
+    drop(source);
+    drop(storage);
+    home.close().unwrap();
 }

@@ -1,0 +1,78 @@
+    Checking surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+   Compiling gpui-pre-apple v0.3.7
+    Checking triomphe v0.1.15
+    Checking objc2-core-location v0.3.2
+    Checking dispatch2 v0.3.1
+    Checking async-net v2.0.0
+    Checking async-fs v2.2.0
+    Checking async-executor v1.14.0
+   Compiling cookie v0.18.2
+   Compiling serde_repr v0.1.20
+    Checking unicode-id v0.3.6
+    Checking str_indices v0.4.4
+    Checking base62 v2.2.4
+   Compiling io-extras v0.18.4
+    Checking markdown v1.0.0
+    Checking ropey v2.0.0-beta.1
+    Checking rust-i18n-support v4.2.3
+    Checking objc2-screen-capture-kit v0.3.2
+    Checking lsp-types v0.97.0
+    Checking smol v2.0.2
+    Checking objc2-user-notifications v0.3.2
+    Checking markup5ever_rcdom v0.3.0
+    Checking accesskit_macos v0.26.3
+   Compiling rust-i18n v4.2.3
+    Checking rust-embed v8.11.0
+   Compiling rust-i18n-macro v4.2.3
+    Checking notify-types v1.0.1
+    Checking tokio-test v0.4.5
+    Checking itertools v0.13.0
+    Checking dirs-sys v0.5.0
+   Compiling enum-iterator-derive v1.5.0
+    Checking fsevent-sys v4.1.0
+    Checking filetime v0.2.27
+    Checking mach2 v0.5.0
+    Checking unicode-segmentation v1.12.0
+   Compiling lb-wry v0.53.3
+   Compiling gpui-component v0.7.0
+   Compiling cap-primitives v3.4.6
+    Checking enum-iterator v2.3.0
+    Checking gpui-pre-macos v0.3.7
+    Checking notify v7.0.0
+    Checking dirs v6.0.0
+    Checking gpui-kit-assets v0.7.0
+    Checking fs-set-times v0.20.3
+    Checking objc2-web-kit v0.3.2
+   Compiling gpui-component-macros v0.7.0
+   Compiling cap-std v3.4.6
+   Compiling pulldown-cmark v0.12.2
+    Checking unicode-width v0.2.2
+    Checking dpi v0.1.2
+    Checking ambient-authority v0.0.2
+    Checking maybe-owned v0.3.4
+    Checking getopts v0.2.24
+    Checking gpui-pre-platform v0.3.7
+    Checking pulldown-cmark-escape v0.11.0
+    Checking surge-intake v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-intake)
+    Checking gpui-wry v0.7.0
+    Checking surge-telegram v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-telegram)
+    Checking surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Checking surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+    Checking surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Checking surge-cli v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-cli)
+    Checking gpui-base v0.7.0
+error: this could be rewritten as `let...else`
+   --> crates/surge-daemon/src/socket_security.rs:245:9
+    |
+245 | /         let error = match SocketDirectory::prepare(&root.path().join("daemon.sock")) {
+246 | |             Ok(_) => panic!("extended grant ACL must refuse socket publication"),
+247 | |             Err(error) => error,
+248 | |         };
+    | |__________^ help: consider writing: `let Err(error) = SocketDirectory::prepare(&root.path().join("daemon.sock")) else { panic!("extended grant ACL must refuse socket publication") };`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_let_else
+    = note: `-D clippy::manual-let-else` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+
+error: could not compile `surge-daemon` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

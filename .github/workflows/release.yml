@@ -18,6 +18,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  validation:
+    name: Validate release revision
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   metadata:
     runs-on: ubuntu-24.04
     outputs:
@@ -36,7 +42,7 @@ jobs:
 
   build-release:
     name: Build ${{ matrix.target }}
-    needs: metadata
+    needs: [metadata, validation]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,44 +62,71 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
-      - name: Build both release binaries
-        run: cargo build --locked --release --target ${{ matrix.target }} --package surge-cli --package surge-daemon
-      - name: Strip Unix binaries
+      - name: Configure self-contained macOS OpenSSL linkage
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo 'OPENSSL_STATIC=1' >> "$GITHUB_ENV"
+          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+      - name: Resolve locked production license graph
+        run: python scripts/release_notices.py --target ${{ matrix.target }} --output-dir target/release-proof --graph-only
+      - name: Build both release binaries with provenance capture
+        run: python scripts/release_native.py build --target ${{ matrix.target }} --output target/release-proof/build-messages.jsonl --metadata target/release-proof/production-metadata.json --dependency-ids target/release-proof/production-dependency-ids.json
+      - name: Reject external macOS runtime libraries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for binary in surge surge-daemon; do
+            dependencies=$(otool -L "target/${{ matrix.target }}/release/$binary")
+            printf '%s\n' "$dependencies"
+            unexpected=$(printf '%s\n' "$dependencies" | tail -n +2 | awk '{print $1}' | awk '!/^\/usr\/lib\// && !/^\/System\/Library\//')
+            if [ -n "$unexpected" ]; then
+              printf 'Unbundled runtime libraries in %s:\n%s\n' "$binary" "$unexpected" >&2
+              exit 1
+            fi
+          done
+      # The producer performs stripping itself and records pre/post hashes.
+      - name: Capture Unix native provenance and strip
         if: runner.os != 'Windows'
-        run: strip target/${{ matrix.target }}/release/surge target/${{ matrix.target }}/release/surge-daemon
+        run: python scripts/release_native.py produce --target ${{ matrix.target }} --metadata target/release-proof/production-metadata.json --dependency-ids target/release-proof/production-dependency-ids.json --build-messages target/release-proof/build-messages.jsonl --bin-dir target/${{ matrix.target }}/release --output target/release-proof/native-provenance.json --strip-tool strip
+      - name: Capture Windows native provenance
+        if: runner.os == 'Windows'
+        run: python scripts/release_native.py produce --target ${{ matrix.target }} --metadata target/release-proof/production-metadata.json --dependency-ids target/release-proof/production-dependency-ids.json --build-messages target/release-proof/build-messages.jsonl --bin-dir target/${{ matrix.target }}/release --output target/release-proof/native-provenance.json
+      - name: Verify complete third-party license evidence
+        run: python scripts/release_notices.py --target ${{ matrix.target }} --output-dir target/release-proof/notices --native-provenance target/release-proof/native-provenance.json
       - name: Package both binaries and licenses
-        run: python scripts/release.py package --target ${{ matrix.target }} --bin-dir target/${{ matrix.target }}/release --output dist
+        run: python scripts/release.py package --target ${{ matrix.target }} --bin-dir target/${{ matrix.target }}/release --notices-dir target/release-proof/notices --output target/release-dist
       - name: Extract and smoke-test Unix archive
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          mkdir smoke
-          tar -xzf dist/surge-${{ matrix.target }}.tar.gz -C smoke
-          ./smoke/surge --version
-          ./smoke/surge-daemon --version
+          mkdir -p target/release-smoke
+          tar -xzf target/release-dist/surge-${{ matrix.target }}.tar.gz -C target/release-smoke
+          ./target/release-smoke/surge --version
+          ./target/release-smoke/surge-daemon --version
       - name: Extract and smoke-test Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Expand-Archive dist/surge-${{ matrix.target }}.zip smoke
-          & ./smoke/surge.exe --version
+          Expand-Archive target/release-dist/surge-${{ matrix.target }}.zip target/release-smoke
+          & ./target/release-smoke/surge.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./smoke/surge-daemon.exe --version
+          & ./target/release-smoke/surge-daemon.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: surge-${{ matrix.target }}
-          path: dist/*
+          path: target/release-dist/*
           if-no-files-found: error
 
   collect:
-    name: Verify release set and checksums
+    name: Verify four archives, paired provenance and checksums
     needs: build-release
     runs-on: ubuntu-24.04
     steps:
@@ -101,20 +134,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - name: Fetch locked dependencies for authoritative graph validation
+        run: cargo fetch --locked
       - uses: actions/download-artifact@v4
         with:
           pattern: surge-*
-          path: artifacts
-      - run: python scripts/release.py collect --input artifacts --output release-assets
+          path: target/release-artifacts
+      - run: python scripts/release.py collect --input target/release-artifacts --output target/release-assets
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets
-          path: release-assets/*
+          path: target/release-assets/*
           if-no-files-found: error
 
   publish:
     name: Publish validated tag
-    needs: [metadata, collect]
+    needs: [metadata, validation, collect]
     if: startsWith(github.ref, 'refs/tags/') && needs.metadata.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -123,10 +159,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: release-assets
-          path: release-assets
+          path: target/release-assets
       - uses: softprops/action-gh-release@v2
         with:
-          files: release-assets/*
+          files: target/release-assets/*
           draft: false
           prerelease: ${{ needs.metadata.outputs.prerelease == 'true' }}
           generate_release_notes: true

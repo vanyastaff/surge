@@ -6,6 +6,8 @@
 //!   end (Terminal::Success)
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -116,50 +118,53 @@ async fn notify_webhook_posts_body_containing_run_id() {
     });
 
     let run_id = RunId::new();
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
-    let notifier =
-        Arc::new(MultiplexingNotifier::new().with_webhook(Arc::new(WebhookDeliverer::new())));
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
+        let notifier =
+            Arc::new(MultiplexingNotifier::new().with_webhook(Arc::new(WebhookDeliverer::new())));
 
-    let engine = Engine::new_with_notifier(
-        bridge,
-        storage,
-        dispatcher,
-        notifier,
-        EngineConfig::default(),
-    );
+        let engine = Engine::new_with_notifier(
+            bridge,
+            storage,
+            dispatcher,
+            notifier,
+            EngineConfig::default(),
+        );
 
-    let handle = engine
-        .start_run(
-            run_id,
-            build_notify_webhook_graph(url),
-            dir.path().to_path_buf(),
-            EngineRunConfig::default(),
-        )
-        .await
-        .expect("start_run");
+        let handle = engine
+            .start_run(
+                run_id,
+                build_notify_webhook_graph(url),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .expect("start_run");
 
-    let outcome = handle.await_completion().await.expect("await_completion");
-    match outcome {
-        RunOutcome::Completed { .. } => {},
-        other => panic!("expected Completed, got {other:?}"),
+        let outcome = handle.await_completion().await.expect("await_completion");
+        match outcome {
+            RunOutcome::Completed { .. } => {},
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // Give the background thread time to process the request.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let bodies = captured_bodies.lock().unwrap().clone();
+        assert!(
+            !bodies.is_empty(),
+            "expected at least one captured POST body"
+        );
+
+        let run_id_str = run_id.to_string();
+        assert!(
+            bodies[0].contains(&run_id_str),
+            "captured body should contain run_id '{run_id_str}', got: {}",
+            bodies[0]
+        );
     }
-
-    // Give the background thread time to process the request.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    let bodies = captured_bodies.lock().unwrap().clone();
-    assert!(
-        !bodies.is_empty(),
-        "expected at least one captured POST body"
-    );
-
-    let run_id_str = run_id.to_string();
-    assert!(
-        bodies[0].contains(&run_id_str),
-        "captured body should contain run_id '{run_id_str}', got: {}",
-        bodies[0]
-    );
+    dir.close().unwrap();
 }

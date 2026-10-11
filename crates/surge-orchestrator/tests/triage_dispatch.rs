@@ -2,6 +2,7 @@
 
 #[path = "fixtures/mod.rs"]
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use chrono::Utc;
 use std::str::FromStr;

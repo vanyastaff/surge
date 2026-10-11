@@ -489,7 +489,7 @@ mod tests {
         };
         let snap = EngineSnapshot::new(&cursor, 42, 41);
         assert_eq!(snap.schema_version, 2);
-        assert!(snap.frames.is_empty());
+        assert_eq!(snap.frames.len(), 0);
         assert!(snap.root_traversal_counts.is_empty());
 
         let json = serde_json::to_vec(&snap).unwrap();
@@ -541,7 +541,7 @@ mod tests {
         }"#;
         let snap = EngineSnapshot::deserialize(v1_json.as_bytes()).expect("v1 reader works");
         assert_eq!(snap.schema_version, 2);
-        assert!(snap.frames.is_empty());
+        assert_eq!(snap.frames.len(), 0);
         assert!(snap.root_traversal_counts.is_empty());
         assert_eq!(snap.cursor.node, "plan_1");
     }
@@ -705,7 +705,7 @@ mod tests {
         let snap = EngineSnapshot::deserialize(v1_json.as_bytes())
             .expect("v1 with pending_human_input deserialises");
         assert_eq!(snap.schema_version, 2);
-        assert!(snap.frames.is_empty());
+        assert_eq!(snap.frames.len(), 0);
         let pending = snap
             .pending_human_input
             .expect("pending_human_input preserved");

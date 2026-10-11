@@ -50,6 +50,8 @@ pub mod predicates;
 pub mod replay;
 pub mod replay_view;
 pub mod routing;
+mod run_execution;
+mod run_forwarder;
 pub mod run_task;
 pub mod sandbox_factory;
 pub mod snapshot;
@@ -60,7 +62,7 @@ pub mod validate;
 pub mod version_probe;
 pub(crate) mod writer_coverage;
 
-pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
+pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy, escalation_config};
 pub use daemon_facade::{DaemonClient, DaemonEngineFacade};
 pub use engine::Engine;
 pub use engine::MEMORY_CLAIM_CANDIDATES_ARTIFACT_NAME;
@@ -78,3 +80,7 @@ pub use replay_view::{
 };
 
 mod work_items;
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support;

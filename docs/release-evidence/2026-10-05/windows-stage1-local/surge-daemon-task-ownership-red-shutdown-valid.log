@@ -1,0 +1,35 @@
+   Compiling surge-daemon v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.45s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 2d1789ba-742f-497b-97cc-a04a29812407 with nextest profile: default
+    Starting 1 test across 1 binary (130 tests skipped)
+        FAIL [   0.083s] (1/1) surge-daemon server::tests::shutdown_return_settles_maintenance_owners
+  stdout ───
+
+    running 1 test
+    test server::tests::shutdown_return_settles_maintenance_owners ... FAILED
+
+    failures:
+
+    failures:
+        server::tests::shutdown_return_settles_maintenance_owners
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.06s
+
+  stderr ───
+
+    thread 'tokio-rt-worker' (39905657) panicked at crates/surge-daemon/src/server.rs:1671:9:
+    assertion `left == right` failed: server returned while maintenance retained Storage
+      left: 4
+     right: 2
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    thread 'server::tests::shutdown_return_settles_maintenance_owners' (39905656) panicked at crates/surge-daemon/src/server.rs:1698:14:
+    called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(2), "assertion `left == right` failed: server returned while maintenance retained Storage\n  left: 4\n right: 2", ...)
+
+────────────
+     Summary [   0.084s] 1 test run: 0 passed, 1 failed, 130 skipped
+        FAIL [   0.083s] (1/1) surge-daemon server::tests::shutdown_return_settles_maintenance_owners
+error: test run failed

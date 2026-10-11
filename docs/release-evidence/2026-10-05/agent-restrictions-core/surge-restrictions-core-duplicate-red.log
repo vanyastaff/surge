@@ -1,0 +1,22 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.88s
+     Running unittests src/lib.rs (target/debug/deps/surge_core-bf6f14784d2b9d1e)
+
+running 1 test
+test agent_restrictions::tests::duplicate_route_declarations_are_rejected ... FAILED
+
+failures:
+
+---- agent_restrictions::tests::duplicate_route_declarations_are_rejected stdout ----
+
+thread 'agent_restrictions::tests::duplicate_route_declarations_are_rejected' (39294300) panicked at crates/surge-core/src/agent_restrictions.rs:492:9:
+assertion failed: serde_json::from_str::<AgentRestrictionPolicy>(r#"{"agents":{"route":{"allowed_models":[]},"route":{}}}"#).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    agent_restrictions::tests::duplicate_route_declarations_are_rejected
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 863 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p surge-core --lib`

@@ -433,7 +433,7 @@ mod tests {
         use surge_core::run_event::{EventPayload, VersionedEventPayload};
         use surge_core::{NodeKey, RunStatus};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         for (name, archetype, cost) in [
             ("hist_a", ArchetypeName::Spike, 0.001),
@@ -529,6 +529,8 @@ mod tests {
             median_u64(&samples.iter().filter_map(|s| s.1).collect::<Vec<_>>()),
             3000
         );
+        drop(history);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -542,7 +544,7 @@ mod tests {
         // Before this delivery that mismatch was only a `debug_assert!`
         // (compiled out in release, and would have aborted this very test
         // in debug); now it is the write path's actual behavior.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let ledger = PersistentCapacityLedger::new(storage.clone());
 
@@ -575,6 +577,9 @@ mod tests {
             CapacityStatus::NeverObserved,
             "window.runtime() must never reach the durable key"
         );
+        drop(ledger);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -582,7 +587,7 @@ mod tests {
         // Acceptance criterion D's producer half: the common case (a
         // node's first dispatch ever) must read back `None`, not a
         // fabricated zero.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
         let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
@@ -590,6 +595,10 @@ mod tests {
         let estimator = RunHistoryWorkEstimator::new(writer.reader());
         let node = NodeKey::try_from("impl_1").unwrap();
         assert_eq!(estimator.estimate(&node).await, None);
+        writer.close().await.unwrap();
+        drop(estimator);
+        drop(storage);
+        dir.close().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -598,7 +607,7 @@ mod tests {
         use surge_core::run_event::{EventPayload, VersionedEventPayload};
         use surge_persistence::runs::clock::MockClock;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let clock = Arc::new(MockClock::new(1_000));
         let storage = Storage::open_with(dir.path(), clock.clone()).await.unwrap();
         let run_id = surge_core::id::RunId::new();
@@ -675,5 +684,9 @@ mod tests {
             None,
             "same-run node history must not masquerade as an archetype estimate"
         );
+        writer.close().await.unwrap();
+        drop(estimator);
+        drop(storage);
+        dir.close().unwrap();
     }
 }

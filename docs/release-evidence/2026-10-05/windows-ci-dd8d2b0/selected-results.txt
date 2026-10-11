@@ -1,0 +1,22 @@
+2026-10-08T03:11:21.1451520Z      Summary [ 519.662s] 3703 tests run: 3505 passed (1 slow), 198 failed, 47 skipped
+2026-10-08T03:13:32.6333882Z native probe: non-elevated=true filesystem=NTFS file=PASS directory=PASS readonly-error=PASS
+2026-10-08T03:13:33.9939273Z test runs::storage::windows_ownership_tests::new_state_home_has_protected_current_user_acl_after_open ... stage1 profile selected: user=S-1-5-21-1643835476-1616584234-1346609752-1003 profile=C:\Users\surgeprobe4a72bfa5 owner=S-1-5-18 fixed-NTFS=true reparse=false owner-trusted=true
+2026-10-08T03:13:33.9958754Z stage1 profile fixture: owner-user=true status=ready
+2026-10-08T03:13:33.9960473Z stage1 route object: path=C:\Users\surgeprobe4a72bfa5\surge-ownership-3NY7qV owner=S-1-5-21-1643835476-1616584234-1346609752-1003 control=0x8004 sddl=O:S-1-5-21-1643835476-1616584234-1346609752-1003D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;S-1-5-21-1643835476-1616584234-1346609752-1003)
+2026-10-08T03:13:33.9963315Z stage1 route object: path=C:\Users\surgeprobe4a72bfa5 owner=S-1-5-18 control=0x9004 sddl=O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-21-1643835476-1616584234-1346609752-1003)(A;;0x100020;;;S-1-15-3-65536-599108337-2355189375-1353122160-3480128286-3345335107-485756383-4087318168-230526575)
+2026-10-08T03:13:33.9966047Z stage1 route object: path=C:\Users owner=S-1-5-18 control=0x9404 sddl=O:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)(A;;0x1200a9;;;WD)(A;OICIIO;GXGR;;;WD)(A;;0x100021;;;S-1-15-3-65536-4045685566-1323397456-4055816110-285687253-194181-4019357623-1925838800-191844675)
+2026-10-08T03:13:33.9969010Z stage1 route object: path=C:\ owner=S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464 control=0x8404 sddl=O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:AI(A;;0x1000a1;;;S-1-15-3-65536-1888954469-739942743-1668119174-2468466756-4239452838-1296943325-355587736-700089176)(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)
+2026-10-08T03:13:33.9970946Z stage1 new-home protected-user-only=PASS
+2026-10-08T03:13:35.0890839Z test runs::storage::windows_ownership_tests::derived_pool_retains_original_database_until_every_owner_drops ... stage1 profile selected: user=S-1-5-21-1643835476-1616584234-1346609752-1003 profile=C:\Users\surgeprobe4a72bfa5 owner=S-1-5-18 fixed-NTFS=true reparse=false owner-trusted=true
+2026-10-08T03:13:35.0896524Z stage1 profile fixture: owner-user=true status=ready
+2026-10-08T03:13:35.0923817Z stage1 derived-pool ownership-and-settlement=PASS
+2026-10-08T03:13:35.5873821Z test runs::storage::windows_ownership_tests::unsafe_existing_home_refuses_without_acl_or_byte_repair ... stage1 unsafe-home unchanged-refusal=PASS
+2026-10-08T03:13:36.5768472Z test state_home::tests::control_creation_fact_survives_empty_reopen_and_owns_removal ... stage1 control creation-fact/exclusive-read/removal=PASS
+2026-10-08T03:13:37.8454052Z test state_home::tests::run_reservation_is_exclusive_retains_both_directories_and_creates_no_sql ... stage1 exclusive directory-only reservation and retained artifacts=PASS
+2026-10-08T03:13:39.4901195Z test runs::connection::windows_tests::connection_owners_outlive_manager_and_close_wal_normally ... stage1 checked SQLite manager/connection lifetime and WAL close=PASS
+2026-10-08T03:13:41.6250143Z test runs::connection::windows_tests::failed_real_initializer_closes_before_releasing_namespace ... stage1 checked SQLite initializer failure settlement=PASS
+2026-10-08T03:13:43.9041639Z stage1 actual SQLITE_BUSY returns ownership and fatal Drop settles process=PASS
+2026-10-08T03:13:45.2877191Z test state_home::security_tests::unsafe_home_dacls_are_refused_without_mutating_existing_objects ... stage1 actual null/unprotected/widened/inherited ACL unchanged refusal=PASS
+2026-10-08T03:13:45.7647588Z test state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal ... stage1 unsafe WAL and hardlinked database unchanged refusal=PASS
+2026-10-08T03:13:46.1171316Z test state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target ... stage1 native pathname alias and ADS unchanged refusal=PASS
+2026-10-08T03:13:47.2290676Z test state_home::creation_security_tests::first_observable_creation_has_private_security ... stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS

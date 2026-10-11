@@ -11,6 +11,10 @@
 //! channel) and publishes synthetic `RunFinished` events.
 //! No daemon binary is spawned.
 
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,11 +83,11 @@ struct Setup {
     tx: broadcast::Sender<GlobalDaemonEvent>,
     rx: broadcast::Receiver<GlobalDaemonEvent>,
     storage: Arc<surge_persistence::runs::Storage>,
-    _dir: tempfile::TempDir,
+    _dir: FixtureHome,
 }
 
 async fn make_setup() -> Setup {
-    let _dir = tempfile::tempdir().unwrap();
+    let _dir = FixtureHome::new().unwrap();
     let storage = surge_persistence::runs::Storage::open(_dir.path())
         .await
         .unwrap();
@@ -194,6 +198,9 @@ async fn run_completed_posts_success_comment_and_transitions_state() {
         "expected terminal node in body, got: {}",
         comments[0].1
     );
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -237,6 +244,9 @@ async fn run_failed_posts_failure_comment_and_transitions_state() {
         comments[0].1
     );
     assert!(comments[0].1.contains("graph validation error"));
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -276,6 +286,9 @@ async fn run_aborted_posts_abort_comment_and_transitions_state() {
     assert_eq!(comments.len(), 1);
     assert!(comments[0].1.starts_with("Run aborted:"));
     assert!(comments[0].1.contains("user pressed Stop"));
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 /// Task 12 M3: a parked run must post an accurate "paused" comment and
@@ -347,6 +360,9 @@ async fn run_parked_posts_pause_comment_and_leaves_ticket_state_untouched() {
         TicketState::Active,
         "a parked run must not transition the ticket FSM — it is not finished"
     );
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -404,6 +420,9 @@ async fn run_finished_with_no_matching_ticket_is_a_no_op() {
         "exactly one comment expected: only the sentinel matched"
     );
     assert_eq!(comments[0].0.as_str(), "mock:test#sentinel");
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -444,6 +463,9 @@ async fn post_comment_failure_still_transitions_state() {
 
     // post_comment was armed to fail → MockTaskSource records nothing.
     assert!(src.posted_comments().await.is_empty());
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 /// A row whose stored `task_id` string fails `TaskId::try_new` (e.g., a
@@ -510,6 +532,9 @@ async fn invalid_task_id_string_skips_comment_but_transitions_state() {
     // No comment posted: the bad task_id couldn't be parsed for the
     // TaskSource API, so the cosmetic note was skipped.
     assert!(src.posted_comments().await.is_empty());
+    drop(tx);
+    _handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -538,6 +563,7 @@ async fn repeated_terminal_event_posts_only_one_comment() {
     drop(tx);
     handle.await.unwrap();
     assert_eq!(src.posted_comments().await.len(), 1);
+    _dir.close().unwrap();
 }
 
 async fn journal(
@@ -683,6 +709,8 @@ async fn startup_reconciles_lost_terminal_events_and_preserves_nonterminal_ticke
         std::fs::read(corrupt_path).unwrap(),
         b"invalid sqlite journal"
     );
+    drop(storage);
+    _dir.close().unwrap();
 }
 
 struct HangingCommentSource(MockTaskSource, tokio::sync::Notify);
@@ -803,6 +831,7 @@ async fn hanging_comment_does_not_block_local_state_or_later_ticket_forever() {
     );
     drop(guard);
     assert_eq!(source.0.posted_comments().await.len(), 1);
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -856,6 +885,7 @@ async fn failed_terminal_comment_is_retried_after_restart_for_terminal_ticket() 
     drop(tx);
     second.await.unwrap();
     assert_eq!(comments.unwrap().len(), 1);
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -909,6 +939,7 @@ async fn completion_ingestion_progresses_while_delivery_is_hung() {
     );
     drop(tx);
     handle.await.unwrap();
+    _dir.close().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -945,4 +976,5 @@ async fn missing_source_retains_diagnostic_and_durable_terminal_intent() {
     assert_eq!(state, "Aborted");
     assert!(error.contains("restore source configuration"));
     assert_eq!(delivered, None);
+    _dir.close().unwrap();
 }

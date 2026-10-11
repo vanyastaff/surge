@@ -1092,7 +1092,7 @@ mod tests {
         }
         let mut output = Vec::new();
         let error = write_frame(&mut output, &Reject).await.unwrap_err();
-        assert!(output.is_empty());
+        assert_eq!(output.len(), 0);
         let FramingError::Json(safe) = &error else {
             panic!("expected JSON failure");
         };

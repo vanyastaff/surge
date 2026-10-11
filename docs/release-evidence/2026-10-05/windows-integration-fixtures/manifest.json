@@ -1,0 +1,19 @@
+{
+  "base": "5e209e5",
+  "source_sha256": {
+    "crates/surge-daemon/tests/daemon_persisted_gate.rs": "efed8eebec94e842b3a081ddf1fec090abb4a8f22e34ff3bf2186922ed82ea20",
+    "crates/surge-daemon/tests/work_item_route_test.rs": "d527b93b5b46bb8b7e98bd4f5a3a01ffe6b68eb063ff82d99a9abfa1ac2c3e73",
+    "crates/surge-orchestrator/tests/engine_snapshot_unit.rs": "d490e8684a82a1c750c68f46ab36171230e2823b91c0c06672d38ac76f6c4864"
+  },
+  "receipt_sha256": {
+    "snapshot-clippy.log.gz": "e6214596795ee51a8f17af5d4772f7e8196da4914d2d7d323cbeee5eeb29d7dd",
+    "daemon-clippy.log.gz": "8a8570f2e4461abe66505ca9bb8822c608c639ce810ffe3f76c15a69008bafdb",
+    "gate-clippy-green.log.gz": "7e7f30abd205cc1c1eaeb859445929cbda2316672b9123a0977b733660ea14c6",
+    "route.log.gz": "8ceee4c05211d355660d3292805a291107349f5fd050ce8378502a2bd8a4374f",
+    "daemon.log.gz": "e114c24edabdd06e004ebcde6d223715175c84cf4619b69fd211f8476296b043",
+    "gate-green.log.gz": "3d9140920c631ea27d05fae42ab816183f610ca99c89deafa20db8b3cbb52a59",
+    "snapshot.log.gz": "b5ff180a31f1c50a5a2983a834157beb7f8022f929240f8680e89c5ffa9c0a4f"
+  },
+  "native_windows_execution": "pending",
+  "reviews": "revised pre-code ACCEPTABLE; spec/quality/security COMPLETE"
+}

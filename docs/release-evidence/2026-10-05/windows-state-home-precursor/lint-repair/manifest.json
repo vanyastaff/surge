@@ -1,0 +1,9 @@
+{
+  "native_red_source": "965ac42d21975ab1f094ca1e145e88333667964e",
+  "run": 37687504548,
+  "clippy_job": 113018996978,
+  "raw_log_sha256": "eaa54cd97407fb1831f6d7a6e0cb66ca7749e684ad9ab1f72a4176dfe601c651",
+  "repaired_test_sha256": "84a7197ae85c1469956f84d0745fd82e4d3e848cda43a74c9a48d24cb6e8fcbe",
+  "native_behavior": "pending",
+  "native_repaired_clippy": "pending"
+}

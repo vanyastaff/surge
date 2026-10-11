@@ -1,0 +1,22 @@
+# Productive MCP recovery: truthful implementation boundary
+
+Read-only review, 2026-10-05. No Rust edits or Cargo.
+
+## Existing authority cannot close the original MCP writer
+`engine/writer_coverage.rs` emits `local_effects=false` and GroupOnly. `process_evidence::probe` deliberately returns Unknown for an empty GroupOnly group. The MCP child owner reaps only the direct leader; a server can setsid/double-fork, use remote APIs, or hand work to another local service. The tools-only MCP 2024-11-05 fixture offers no authenticated settle receipt. Request completion/EOF/service cancellation is not that receipt. No production CoveredDomain issuer/backend exists. R32 independently confirms this boundary.
+
+ADR0014 decision4 delegates arbitrary MCP OS enforcement to the ACP runtime, but current direct host stdio spawn is outside that runtime. Existing `docs/superplane-improvements.md`1150–1205 already identifies this unresolved architecture choice. This is a missing implementation contract, not a callback omission.
+
+## Minimum truthful design
+1. Choose a supported backend and host owner that establishes a non-escaping process domain BEFORE any server instruction executes. Persist domain creation intent, immutable platform/boot/instance identity, generation and actual enforced policy. Failure to journal establishment must terminate the contained child without initialization. Do not reinterpret an existing GroupOnly record as covered.
+2. Define effect authority separately: local-only enforced launch must deny network, outside services/IPC, uncontrolled subprocess migration, and arbitrary external writable resources; otherwise server effects require host-mediated generation-fenced operations with durable idempotent settlement receipts. A server/tool declaration or trustworthy Python fixture is not authority. Even an empty VM/cgroup does not settle a submitted remote job.
+3. Teardown revokes new dispatch, waits host-owned operations, terminates and independently verifies the entire immutable domain empty plus no unresolved effects. Only then the observer can append ExecutionWriterClosed for that exact writer. Per-respawn writer IDs stay distinct. Crash recovery reopens actual backend identity and probes; Unknown remains Attention.
+4. Same fresh journal guard continues before seal and resume. Positive evidence must exercise actual escaping descendants, pending remote effect refusal, killed-host cold refusal, clean same-session automatic resume, wrong/reused domain identity and dropped receipt. Original productive test and transport identity oracle remain intact.
+
+## Concrete backend decisions
+Linux delegated cgroup-v2 with placement before exec and migration/control permissions unavailable to child; Windows suspended launch in non-breakaway Job; macOS requires a proven supported domain backend. Current host has sandbox-exec, but no implemented profile/contract establishing these guarantees. A narrowly enforced no-descendant/no-network/no-external-IPC native MCP mode may support the original single-process Python fixture without rewriting its executable/args/cwd, but needs a platform policy prototype and adversarial escape/effect tests before CoveredDomain authority. It intentionally cannot support arbitrary subprocess/network MCP in the same contract. Existing sandbox declarations are insufficient.
+
+A managed VM/container alternative requires provisioned runtime plus volume/authentication contract. Current docker command is a dangling symlink (ENOENT), not an available backend. Linux OCI also cannot execute the original macOS host interpreter and preserve current exact executable/cwd oracle by inference. A backend running the same platform or an explicit accepted launch-contract migration is required; silently modifying the original transport is forbidden.
+
+## Maintainer decision needed before production design
+Select (A) a native restricted local-only MCP execution contract, accepting unsupported subprocess/network servers as Unknown, or (B) a concrete provisioned managed domain with authenticated host effect tools/receipts. Specify default/opt-in behavior and whether ADR0014 delegation is replaced for host-owned MCP. Remote-capable arbitrary MCP remains unconfirmed until settlement capability exists. No existing evidence is sufficient to make current unrestricted original positive tests honestly green. Backend implementation is a cross-crate feature, not a closure-event patch; release productive recovery remains open.

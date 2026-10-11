@@ -1,0 +1,274 @@
+   Compiling log v0.4.29
+   Compiling tokio v1.50.0
+   Compiling regex-automata v0.4.14
+   Compiling num_cpus v1.17.0
+   Compiling deadpool-runtime v0.1.4
+   Compiling assert-json-diff v2.0.2
+   Compiling tracing v0.1.44
+   Compiling rustls v0.23.45
+   Compiling r2d2 v0.8.10
+   Compiling git2 v0.21.0
+   Compiling handlebars v6.4.0
+   Compiling r2d2_sqlite v0.25.0
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling agent-client-protocol-schema v1.9.1
+   Compiling regex v1.12.3
+   Compiling tokio-util v0.7.18
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-stream v0.1.18
+   Compiling process-wrap v9.1.0
+   Compiling deadpool v0.12.3
+   Compiling lettre v0.11.22
+   Compiling interprocess v2.4.2
+   Compiling h2 v0.4.16
+   Compiling tower v0.5.3
+   Compiling rmcp v1.6.0
+   Compiling tower-http v0.6.8
+   Compiling hyper v1.8.1
+   Compiling agent-client-protocol v2.2.0
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-timeout v0.5.2
+   Compiling wiremock v0.6.5
+   Compiling reqwest v0.12.28
+   Compiling octocrab v0.42.1
+   Compiling lineark-sdk v3.0.1
+   Compiling teloxide-core v0.11.2
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+   Compiling surge-git v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-git)
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+   Compiling surge-acp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-acp)
+error[E0599]: no method named `ok_or_else` found for enum `Result<T, E>` in the current scope
+  --> crates/surge-git/src/fingerprint.rs:65:14
+   |
+63 |           let name = entry
+   |  ____________________-
+64 | |             .name()
+65 | |             .ok_or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+   | |_____________-^^^^^^^^^^
+   |
+help: there is a method `or_else` with a similar name
+   |
+65 -             .ok_or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+65 +             .or_else(|| git2::Error::from_str("non-UTF8 tracked path"))?;
+   |
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/run_worktree.rs:337:47
+    |
+337 |                         && entry.message() == Some(message.as_str())
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<&str>, Error>`, found `Option<&str>`
+    |
+    = note: expected enum `Result<std::option::Option<&_>, git2::Error>`
+               found enum `std::option::Option<&_>`
+help: try wrapping the expression in `Ok`
+    |
+337 |                         && entry.message() == Ok(Some(message.as_str()))
+    |                                               +++                      +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/run_worktree.rs:429:25
+    |
+429 |     if linked.name() != Some(spec.run_id.short().as_str()) {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<&str>, Error>`, found `Option<&str>`
+    |
+    = note: expected enum `Result<std::option::Option<&_>, git2::Error>`
+               found enum `std::option::Option<&_>`
+help: try wrapping the expression in `Ok`
+    |
+429 |     if linked.name() != Ok(Some(spec.run_id.short().as_str())) {
+    |                         +++                                  +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/run_worktree.rs:447:34
+    |
+447 |     if head.symbolic_target() != Some(format!("refs/heads/{}", spec.branch()).as_str()) {
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<&str>, Error>`, found `Option<&str>`
+    |
+    = note: expected enum `Result<std::option::Option<&_>, git2::Error>`
+               found enum `std::option::Option<&_>`
+help: try wrapping the expression in `Ok`
+    |
+447 |     if head.symbolic_target() != Ok(Some(format!("refs/heads/{}", spec.branch()).as_str())) {
+    |                                  +++                                                      +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:182:29
+    |
+182 |             .filter_map(|s| s.path().map(PathBuf::from))
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<_>`, found `Result<PathBuf, Error>`
+    |
+    = note: expected enum `std::option::Option<_>`
+               found enum `Result<PathBuf, git2::Error>`
+help: try wrapping the expression in `Some`
+    |
+182 |             .filter_map(|s| Some(s.path().map(PathBuf::from)))
+    |                             +++++                           +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:209:24
+    |
+209 |             if name == spec_id {
+    |                        ^^^^^^^ expected `Option<&str>`, found `&str`
+    |
+    = note:   expected enum `std::option::Option<&str>`
+            found reference `&str`
+help: try wrapping the expression in `Some`
+    |
+209 |             if name == Some(spec_id) {
+    |                        +++++       +
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:254:17
+    |
+254 |             let Some(name) = name else { continue };
+    |                 ^^^^^^^^^^   ---- this expression has type `Result<std::option::Option<&str>, git2::Error>`
+    |                 |
+    |                 expected `Result<Option<&str>, Error>`, found `Option<_>`
+    |
+    = note: expected enum `Result<std::option::Option<&str>, git2::Error>`
+               found enum `std::option::Option<_>`
+help: try wrapping the pattern in `Ok`
+    |
+254 |             let Ok(Some(name)) = name else { continue };
+    |                 +++          +
+
+error[E0599]: no method named `ok_or_else` found for enum `Result<T, E>` in the current scope
+   --> crates/surge-git/src/worktree.rs:461:18
+    |
+460 | /             head.name()
+461 | |                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    | |_________________-^^^^^^^^^^
+    |
+help: there is a method `or_else` with a similar name
+    |
+461 -                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+461 +                 .or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    |
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/worktree.rs:605:24
+    |
+605 |             if name == short {
+    |                        ^^^^^ expected `Option<&str>`, found `String`
+    |
+    = note: expected enum `std::option::Option<&str>`
+             found struct `std::string::String`
+
+error[E0599]: no method named `ok_or_else` found for enum `Result<T, E>` in the current scope
+   --> crates/surge-git/src/worktree.rs:774:18
+    |
+773 | /             head.name()
+774 | |                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    | |_________________-^^^^^^^^^^
+    |
+help: there is a method `or_else` with a similar name
+    |
+774 -                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+774 +                 .or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+    |
+
+error[E0308]: mismatched types
+    --> crates/surge-git/src/worktree.rs:863:47
+     |
+ 863 |             let wt = match repo.find_worktree(name) {
+     |                                 ------------- ^^^^ expected `&str`, found `Option<&str>`
+     |                                 |
+     |                                 arguments to this method are incorrect
+     |
+     = note: expected reference `&str`
+                     found enum `std::option::Option<&str>`
+note: method defined here
+    --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/git2-0.21.0/src/repo.rs:3370:12
+     |
+3370 |     pub fn find_worktree(&self, name: &str) -> Result<Worktree, Error> {
+     |            ^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `std::option::Option<&str>` value, panicking if the value is an `Option::None`
+     |
+ 863 |             let wt = match repo.find_worktree(name.expect("REASON")) {
+     |                                                   +++++++++++++++++
+
+error[E0599]: the method `to_string` exists for enum `std::option::Option<&str>`, but its trait bounds were not satisfied
+    --> crates/surge-git/src/worktree.rs:870:32
+     |
+ 870 |                     name: name.to_string(),
+     |                                ^^^^^^^^^ method cannot be called on `std::option::Option<&str>` due to unsatisfied trait bounds
+     |
+    ::: /Users/vanyastafford/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:598:1
+     |
+ 598 | pub enum Option<T> {
+     | ------------------ doesn't satisfy `std::option::Option<&str>: ToString` or `std::option::Option<&str>: std::fmt::Display`
+     |
+     = note: the following trait bounds were not satisfied:
+             `std::option::Option<&str>: std::fmt::Display`
+             which is required by `std::option::Option<&str>: ToString`
+note: the method `to_string` exists on the type `&str`
+    --> /Users/vanyastafford/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/string.rs:2907:5
+     |
+2907 |     fn to_string(&self) -> String;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `&str` value, panicking if the value is an `Option::None`
+     |
+ 870 |                     name: name.expect("REASON").to_string(),
+     |                               +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/task_workspace.rs:99:45
+    |
+ 99 |         let remote = repository.find_remote(name)?;
+    |                                 ----------- ^^^^ expected `&str`, found `Option<&str>`
+    |                                 |
+    |                                 arguments to this method are incorrect
+    |
+    = note: expected reference `&str`
+                    found enum `std::option::Option<&str>`
+note: method defined here
+   --> /Users/vanyastafford/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/git2-0.21.0/src/repo.rs:611:12
+    |
+611 |     pub fn find_remote(&self, name: &str) -> Result<Remote<'_>, Error> {
+    |            ^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `std::option::Option<&str>` value, panicking if the value is an `Option::None`
+    |
+ 99 |         let remote = repository.find_remote(name.expect("REASON"))?;
+    |                                                 +++++++++++++++++
+
+error[E0271]: expected `github_remote_identity` to return `Result<_, Error>`, but it returns `Option<String>`
+    --> crates/surge-git/src/task_workspace.rs:100:55
+     |
+ 100 |         if let Some(identity) = remote.url().and_then(github_remote_identity) {
+     |                                              -------- ^^^^^^^^^^^^^^^^^^^^^^ expected `Result<_, Error>`, found `Option<String>`
+     |                                              |
+     |                                              required by a bound introduced by this call
+     |
+     = note: expected enum `Result<_, git2::Error>`
+                found enum `std::option::Option<std::string::String>`
+note: required by a bound in `Result::<T, E>::and_then`
+    --> /Users/vanyastafford/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/result.rs:1488:33
+     |
+1486 |     pub const fn and_then<U, F>(self, op: F) -> Result<U, E>
+     |                  -------- required by a bound in this associated function
+1487 |     where
+1488 |         F: [const] FnOnce(T) -> Result<U, E> + [const] Destruct,
+     |                                 ^^^^^^^^^^^^ required by this bound in `Result::<T, E>::and_then`
+
+error[E0308]: mismatched types
+   --> crates/surge-git/src/task_workspace.rs:100:16
+    |
+100 |         if let Some(identity) = remote.url().and_then(github_remote_identity) {
+    |                ^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `Result<_, git2::Error>`
+    |                |
+    |                expected `Result<_, Error>`, found `Option<_>`
+    |
+    = note: expected enum `Result<_, git2::Error>`
+               found enum `std::option::Option<_>`
+help: try wrapping the pattern in `Ok`
+    |
+100 |         if let Ok(Some(identity)) = remote.url().and_then(github_remote_identity) {
+    |                +++              +
+
+Some errors have detailed explanations: E0271, E0308, E0599.
+For more information about an error, try `rustc --explain E0271`.
+error: could not compile `surge-git` (lib) due to 15 previous errors
+warning: build failed, waiting for other jobs to finish...

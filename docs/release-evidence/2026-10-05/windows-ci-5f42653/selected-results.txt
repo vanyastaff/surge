@@ -1,0 +1,14 @@
+2026-10-08T03:35:15.3538920Z      Summary [ 417.336s] 3705 tests run: 3516 passed, 189 failed, 48 skipped
+2026-10-08T03:37:09.8712069Z stage1 new-home protected-user-only=PASS
+2026-10-08T03:37:10.3224765Z stage1 derived-pool ownership-and-settlement=PASS
+2026-10-08T03:37:10.5615006Z test runs::storage::windows_ownership_tests::unsafe_existing_home_refuses_without_acl_or_byte_repair ... stage1 unsafe-home unchanged-refusal=PASS
+2026-10-08T03:37:10.8426925Z test state_home::tests::control_creation_fact_survives_empty_reopen_and_owns_removal ... stage1 control creation-fact/exclusive-read/removal=PASS
+2026-10-08T03:37:11.1361139Z test state_home::tests::run_reservation_is_exclusive_retains_both_directories_and_creates_no_sql ... stage1 exclusive directory-only reservation and retained artifacts=PASS
+2026-10-08T03:37:11.4488518Z test runs::connection::windows_tests::connection_owners_outlive_manager_and_close_wal_normally ... stage1 checked SQLite manager/connection lifetime and WAL close=PASS
+2026-10-08T03:37:11.6944365Z test runs::connection::windows_tests::failed_real_initializer_closes_before_releasing_namespace ... stage1 checked SQLite initializer failure settlement=PASS
+2026-10-08T03:37:12.7268293Z stage1 actual SQLITE_BUSY returns ownership and fatal Drop settles process=PASS
+2026-10-08T03:37:13.0199149Z test state_home::security_tests::unsafe_home_dacls_are_refused_without_mutating_existing_objects ... stage1 actual null/unprotected/widened/inherited ACL unchanged refusal=PASS
+2026-10-08T03:37:13.2486819Z test state_home::security_tests::unsafe_sidefile_and_hardlinked_database_are_unchanged_after_refusal ... stage1 unsafe WAL and hardlinked database unchanged refusal=PASS
+2026-10-08T03:37:13.5075251Z test state_home::security_tests::pathname_aliases_refuse_without_touching_the_existing_target ... stage1 native pathname alias and ADS unchanged refusal=PASS
+2026-10-08T03:37:13.9386184Z test state_home::creation_security_tests::first_observable_creation_has_private_security ... stage1 first-observable home/database private ACL zero-byte DB identity and settlement=PASS
+2026-10-08T03:37:14.2194053Z test state_home::control_lock_tests::standard_user_control_lock_and_payload_compatibility ... stage1 non-elevated control readable payload exclusive writer and legacy lock compatibility=PASS

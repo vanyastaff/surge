@@ -1,0 +1,49 @@
+{
+  "status": "persistence source frozen for engine integration; strict and native gates pending",
+  "sources": {
+    "crates/surge-persistence/src/runs/writer.rs": "971060f9b4dd8d5d211678bc46f0e0e50c53b60e1c409ac9c7ecbf863cd225ae",
+    "crates/surge-persistence/src/runs/run_writer.rs": "3ae1c66d01fd6e976a591b0dea308bf59c31696738dd61117372c8602fd9d9b7",
+    "crates/surge-persistence/src/runs/reader.rs": "b081f406e900b31243fe05dcb231ef200efcd278cddacde88c7ddf5424552d36",
+    "crates/surge-persistence/src/runs/subscribe.rs": "8f5e22785fad8497cdf6fbca03c70760c776e2b982ea99258bd98e82a8e898b9",
+    "crates/surge-persistence/src/runs/error.rs": "406aea211d8228644a41f6bb040d1e067f407aa28c309278bd05ee35848576ba",
+    "crates/surge-persistence/src/runs/mod.rs": "19b71ea81507fdc4775beb294f3e5b5ef77d5d00c8a898e3dcbcdb40869d3ce8",
+    "crates/surge-persistence/src/runs/storage.rs": "b9afe57288752cb31554a180661f36c643f41ae1b5778183506ed662bd1e1a72",
+    "crates/surge-persistence/src/runs/run_writer/settlement_tests.rs": "069c0a14cf1ef89ae7d57c5f7a7627c345edecf9ef6fbe6505ce1dd2704254f1",
+    "crates/surge-persistence/tests/writer_actor_lease.rs": "3f76a9a49e6ecc597e52c28543ddcc706c80b80cf3423c9343f477816384c0d1"
+  },
+  "shared_file_note": "storage.rs hash includes caller-owned actual manager witness; this builder changed only writer constructor hunk",
+  "api_contract_sha256": "475133bd6d32f0618a611681cb2c75fd75f3112a7fec3f7982c8f053bc903be9",
+  "checks": [
+    {
+      "filter": "runs::run_writer::settlement_tests",
+      "target": "--lib",
+      "passed": 6,
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-persistence --lib runs::run_writer::settlement_tests -- --nocapture",
+      "exit_code": 0,
+      "log": "persistence-feed-settlement-tests.log"
+    },
+    {
+      "filter": "",
+      "target": "--test writer_actor_lease",
+      "passed": 3,
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-persistence --test writer_actor_lease  -- --nocapture",
+      "exit_code": 0,
+      "log": "persistence-writer-priority-lease-tests.log"
+    },
+    {
+      "filter": "subscribe_outlives_storage_handle",
+      "target": "--test runs",
+      "passed": 1,
+      "command": "CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p surge-persistence --test runs subscribe_outlives_storage_handle -- --nocapture",
+      "exit_code": 0,
+      "log": "persistence-public-subscription-control.log"
+    }
+  ],
+  "not_claimed": [
+    "strict persistence Clippy",
+    "original engine baseline GREEN",
+    "whole accepted plan completion",
+    "Windows runtime/native acceptance"
+  ],
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01), aarch64-apple-darwin"
+}

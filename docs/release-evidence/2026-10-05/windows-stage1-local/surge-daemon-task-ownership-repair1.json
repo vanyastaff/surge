@@ -1,0 +1,15 @@
+{
+  "dispatch": 1,
+  "finding": "Notify release can be lost between Terminal publication and waiter registration",
+  "change": "One stored oneshot release per accepted completion; receiver allocated before spawn/Terminal",
+  "file": "crates/surge-daemon/tests/inbox_callback_e2e.rs",
+  "sha256": "3b07ee8b7ad1db07e1a2ee0fa6a42c3f9b8f51741094c0368009dcf2f93f9e46",
+  "checks": {
+    "rustfmt": "PASS",
+    "git_diff_check": "PASS",
+    "affected_runtime_tests": "PASS 3/3; 6 filtered skips"
+  },
+  "original_red_and_green_receipts": "preserved unchanged",
+  "runtime_log": "/tmp/surge-daemon-task-ownership-repair1-green.log",
+  "runtime_log_sha256": "de9d193d6686248eb78297e2292527aadba8a69aa499865d3d6166f96fc31f10"
+}

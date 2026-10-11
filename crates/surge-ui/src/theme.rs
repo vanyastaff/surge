@@ -271,16 +271,20 @@ fn load_appearance() -> Option<Appearance> {
 }
 
 fn save_appearance(appearance: Appearance) {
-    let Some(path) = appearance_path() else {
+    let Some(home) = surge_core::home::surge_home_dir() else {
         return;
     };
-    let result = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            let text = serde_json::to_string_pretty(&appearance).map_err(std::io::Error::other)?;
-            std::fs::write(&path, text)
-        });
+    let path = home.join("ui").join("appearance.json");
+    let result = (|| {
+        #[cfg(windows)]
+        let _runtime_home =
+            surge_persistence::RuntimeHomeOwner::prepare(&home).map_err(std::io::Error::other)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_json::to_string_pretty(&appearance).map_err(std::io::Error::other)?;
+        std::fs::write(&path, text)
+    })();
     if let Err(error) = result {
         tracing::warn!(%error, path = %path.display(), "could not persist appearance");
     }

@@ -636,6 +636,9 @@ impl BootstrapSupervisor {
                     terminal,
                 }
             },
+            CancellationEvidence::Terminal(RunOutcome::SettlementFailed { .. }) => {
+                return Err(Attention::StorageUnconfirmed);
+            },
             CancellationEvidence::Terminal(_) => return Err(Attention::StorageUnconfirmed),
             CancellationEvidence::Active => {
                 let _ = self

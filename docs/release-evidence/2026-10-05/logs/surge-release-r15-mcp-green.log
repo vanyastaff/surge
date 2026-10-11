@@ -1,0 +1,42 @@
+   Compiling serde v1.0.228
+   Compiling futures-channel v0.3.34
+   Compiling serde_core v1.0.228
+   Compiling darling_core v0.23.0
+   Compiling num-traits v0.2.19
+   Compiling serde_json v1.0.151
+   Compiling regex-syntax v0.8.10
+   Compiling futures-util v0.3.34
+   Compiling memchr v2.8.0
+   Compiling toml_datetime v0.6.11
+   Compiling chrono v0.4.44
+   Compiling serde_spanned v0.6.9
+   Compiling rmcp v1.6.0
+   Compiling toml_edit v0.22.27
+   Compiling humantime-serde v1.1.1
+   Compiling regex-automata v0.4.14
+   Compiling tempfile v3.27.0
+   Compiling ulid v1.2.1
+   Compiling schemars v1.2.1
+   Compiling tokio-util v0.7.18
+   Compiling async-trait v0.1.89
+   Compiling futures-executor v0.3.34
+   Compiling darling_macro v0.23.0
+   Compiling toml v0.8.23
+   Compiling futures v0.3.34
+   Compiling process-wrap v9.1.0
+   Compiling darling v0.23.0
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling rmcp-macros v1.6.0
+   Compiling surge-mcp v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.03s
+     Running unittests src/lib.rs (target/debug/deps/surge_mcp-a7ad46db2c64b630)
+
+running 4 tests
+test connection::stderr_capture::tests::capture_rejects_runtime_ancestor_symlink ... ok
+test connection::stderr_capture::tests::capture_creates_owner_only_file_and_directory ... ok
+test connection::stderr_capture::tests::capture_keeps_descriptor_after_path_replacement ... ok
+test connection::stderr_capture::tests::capture_rejects_leaf_and_directory_links_without_touching_victim ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.00s

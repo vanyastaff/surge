@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — agent switching on usage limits
+
+- `[capacity].fallback_agents` in `surge.toml` (registry ids, in order): when a
+  stage's agent hits its usage limit, the stage moves to the first fallback
+  that is configured, launchable and has capacity left, preferring an agent
+  that differs from the stage's verifier/implementer partner (flagged when
+  only the partner's agent fits), instead of parking. With no fallback
+  available the run parks and wakes as before. The move is recorded as
+  `StageRuntimeRotated` before the next session opens, survives a restart and
+  bounds ping-pong between exhausted agents. **Event payload schema v21.**
+  Task-owned runs keep their frozen quota plan.
+
+### Changed — loop protection ends an attempt instead of the run
+
+- A stage attempt with no activity for `idle_limit_secs` (new, default 900),
+  more than `max_tool_calls` tool calls (new, default 1000), the same tool call
+  past `max_repeat_tool_calls`, or past `node_wall_clock_limit_secs` now ends
+  as a failed attempt. When the stage has a capped retry outcome (an
+  implementer's `partial`, a verifier's `failed`), the engine routes it there
+  with the reason as feedback, so it counts against the same budget and climbs
+  the rejection ladder; otherwise the run fails as before. Repeated identical
+  calls used to be refused without ending the attempt, and a wall-clock trip
+  used to fail the run outright.
+- `[tool_call_loop_guard]` in `surge.toml` gains `idle_limit_secs` and
+  `max_tool_calls` (`0` disables either). **Event payload schema v20** adds the
+  `loop_guard_no_progress` and `loop_guard_tool_call_cap` escalation causes.
+
+### Added — accept as is, or revise the requirement, on an exhausted ladder
+
+- The default escalation gate now offers **Accept as is** and **Revise
+  requirement** next to Retry and Stop. Accepting continues on the stage's
+  success path and records `TaskAcceptedByHuman`: the task is completed but
+  never verified, the verifier's latest findings stay attached, and the run is
+  not reported as a proven success. Revising records the comment as
+  `RequirementRevised` and runs the stage again; later stages of the task see
+  the revision in their prompt, and a later verification is reported as
+  "against a revised requirement".
+- The run report, the fold ledger, the per-run `task_ledger` view, the registry
+  index and `surge ledger` ("by human", "yes·rev") tell the three outcomes
+  apart. **Event payload schema v19**; SQLite migrations per-run 0009 and
+  registry 0031 add the `accepted_by_human` and `requirement_revised` columns.
+
+### Added — exhausted roadmap tasks are split in place
+
+- In a task loop, a task that keeps failing verification after its retries
+  and the extra attempt now reaches a split planner (`task-splitter@1.0`). It
+  replaces the task with smaller tasks (`discovered-tasks.toml`, now with
+  optional `acceptance_criteria`) that run right after it in the same run; the
+  replaced iteration ends without failure. If the task cannot be split, the
+  human gate follows. Recorded as the new `TaskSplit` event.
+- **Event payload schema v18**: v17 readers reject v18 logs with
+  `SchemaTooNew`.
+
+### Fixed — retry budgets inside loops are per task
+
+- `max_traversals` counters in a loop body were shared by every item, so a
+  task could inherit another task's spent retries. They now reset at each
+  iteration, in the engine and in the journal inspector.
+
+### Added — an automatic extra attempt before asking a human
+
+- An exhausted retry loop whose target is an agent stage now gets one extra
+  automatic attempt, with the latest findings, before the default human gate.
+  It runs on `[escalation] retry_agent` (optional `retry_model`) from
+  `surge.toml` when set, otherwise on the stage's own agent. Unknown agent ids
+  are ignored with a warning; stages under a frozen quota plan keep their
+  runtime. The extra attempt is recognised from the run log, so it survives a
+  daemon restart. No schema change.
+
+### Changed — an exhausted retry loop asks instead of failing
+
+- When a capped retry loop (for example verifier `failed` back to the
+  implementer) runs out of attempts and the flow declares no
+  `max_traversals_exceeded` edge, the run now stops at a default human gate
+  instead of failing: **Retry once more** gives the loop one more attempt with
+  the verifier's findings, **Stop** ends the run (inside a loop, fails the
+  iteration so `on_iteration_failure` applies). The gate waits without a
+  practical deadline and survives a daemon restart. It is derived at run time
+  (`surge_core::escalation`); persisted graphs and their hashes are unchanged,
+  and there is no schema change. Shipped `linear-3`, `bug-fix`, `refactor` and
+  `multi-milestone` flows get it automatically.
+
+### Added — verifier findings reach the re-entered stage
+
+- A stage re-entered through a backtrack edge (for example an implementer
+  sent back by its verifier) now opens with a "Feedback from the previous
+  attempt" section: the sending stage's outcome and summary, plus the checks
+  that did not pass in the `verification-report` it sealed. Previously the
+  retry ran without the verifier's findings. Fields are clipped and the check
+  list is capped so feedback cannot crowd out the stage prompt. Works for
+  shipped and user flows without new bindings (`RunMemory.backtrack_feedback`).
+
+### Changed — MCP cold recovery by group cleanup and restart (ADR-0021)
+
+- Resuming a run with a prior host-launched MCP server no longer refuses when
+  that server's process group is gone. On recovery the daemon stops a group
+  whose recorded leader still runs (SIGTERM, grace, SIGKILL; never a group
+  whose leader identity does not match), accepts an empty group as
+  best-effort cleanup, records it as the new `ExecutionWriterGroupStopped`
+  event when the run resumes, and restarts the server from the frozen
+  manifest. An occupied group (for example an escaped descendant), conflicting
+  ownership or a missing identity still refuses with attention. Coverage stays
+  `GroupOnly`; the record never means confirmed closure.
+- **Event payload schema v17**: v16 readers reject v17 logs with
+  `SchemaTooNew` instead of misreading best-effort cleanup as closure.
+- An MCP tool call cut off by a crash is never replayed. `ToolCalled` is now
+  recorded before dispatch, and the first stage after an interruption opens
+  with an "Interrupted tool calls" notice naming each call whose outcome is
+  unknown, so the agent checks before retrying.
+
+### Changed — MCP startup deadline and selected-catalog escalation
+
+- `McpServerRef::startup_timeout` (optional) bounds child spawn plus the MCP
+  `initialize` handshake. `call_timeout` now bounds only RPCs. Unset resolves
+  to max(30s, `call_timeout`), which is never shorter than before. A missed
+  handshake is the new `McpError::StartupTimeout`. Unset values are omitted
+  from the owned-flow manifest, so existing snapshots and their HMACs are
+  unchanged. Older binaries reject a manifest that sets the field.
+- A stage's selected MCP server whose catalog fails at session open no longer
+  silently drops all MCP tools. Other selected servers keep their tools, and
+  the engine appends `EscalationRequested` with the new cause
+  `mcp_selected_catalog_unavailable`. **Event payload schema v16**: v15
+  readers reject v16 logs with `SchemaTooNew`. See ADR-0014 decisions 7–8.
+
 ### Added — roadmap release stages, priority and parallel groups
 
 - `RoadmapArtifact::stages` (`RoadmapStage`, `StageKind` mvp/beta/prod): an

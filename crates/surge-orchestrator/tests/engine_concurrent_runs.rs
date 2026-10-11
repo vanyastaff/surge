@@ -6,6 +6,8 @@
 //!   `cargo test -p surge-orchestrator --test engine_concurrent_runs -- --ignored`
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -137,104 +139,107 @@ fn three_concurrent_real_runs_complete_independently() {
         .expect("build multi_thread tokio runtime");
 
     rt.block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        // Keep a typed Arc<AcpBridge> so we can call shutdown() after the engine
-        // drops its clone. Dropping AcpBridge from within an async context blocks
-        // the tokio thread (Drop::join on the bridge OS thread); calling shutdown()
-        // explicitly avoids that.
-        let bridge_owned = Arc::new(AcpBridge::with_defaults().unwrap());
-        let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
-        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
-            as Arc<dyn ToolDispatcher>;
+            // Keep a typed Arc<AcpBridge> so we can call shutdown() after the engine
+            // drops its clone. Dropping AcpBridge from within an async context blocks
+            // the tokio thread (Drop::join on the bridge OS thread); calling shutdown()
+            // explicitly avoids that.
+            let bridge_owned = Arc::new(AcpBridge::with_defaults().unwrap());
+            let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
+            let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+                as Arc<dyn ToolDispatcher>;
 
-        let engine = Arc::new(Engine::new(
-            bridge,
-            storage.clone(),
-            dispatcher,
-            EngineConfig::default(),
-        ));
+            let engine = Arc::new(Engine::new(
+                bridge,
+                storage.clone(),
+                dispatcher,
+                EngineConfig::default(),
+            ));
 
-        let mut handles = vec![];
-        for i in 0..3usize {
-            let eng = engine.clone();
-            let dir_path = dir.path().to_path_buf();
-            handles.push(tokio::spawn(async move {
-                // Single-stage agent + terminal — keeps the test fast.
-                let agent_id = format!("agent_{i}");
-                let agent_key = NodeKey::try_from(agent_id.as_str()).unwrap();
-                let end = NodeKey::try_from("end").unwrap();
+            let mut handles = vec![];
+            for i in 0..3usize {
+                let eng = engine.clone();
+                let dir_path = dir.path().to_path_buf();
+                handles.push(tokio::spawn(async move {
+                    // Single-stage agent + terminal — keeps the test fast.
+                    let agent_id = format!("agent_{i}");
+                    let agent_key = NodeKey::try_from(agent_id.as_str()).unwrap();
+                    let end = NodeKey::try_from("end").unwrap();
 
-                let mut nodes = BTreeMap::new();
-                nodes.insert(agent_key.clone(), agent_node(&agent_id));
-                nodes.insert(
-                    end.clone(),
-                    Node {
-                        id: end.clone(),
-                        position: Position::default(),
-                        declared_outcomes: vec![],
-                        config: NodeConfig::Terminal(TerminalConfig {
-                            kind: TerminalKind::Success,
-                            message: None,
-                        }),
-                    },
+                    let mut nodes = BTreeMap::new();
+                    nodes.insert(agent_key.clone(), agent_node(&agent_id));
+                    nodes.insert(
+                        end.clone(),
+                        Node {
+                            id: end.clone(),
+                            position: Position::default(),
+                            declared_outcomes: vec![],
+                            config: NodeConfig::Terminal(TerminalConfig {
+                                kind: TerminalKind::Success,
+                                message: None,
+                            }),
+                        },
+                    );
+
+                    let edges = vec![Edge {
+                        id: EdgeKey::try_from(format!("e_{i}").as_str()).unwrap(),
+                        from: PortRef {
+                            node: agent_key.clone(),
+                            outcome: OutcomeKey::try_from("done").unwrap(),
+                        },
+                        to: end.clone(),
+                        kind: EdgeKind::Forward,
+                        policy: EdgePolicy::default(),
+                    }];
+
+                    let graph = Graph {
+                        schema_version: SCHEMA_VERSION,
+                        metadata: GraphMetadata {
+                            name: format!("run-{i}"),
+                            description: None,
+                            template_origin: None,
+                            created_at: chrono::Utc::now(),
+                            author: None,
+                            archetype: None,
+                        },
+                        start: agent_key,
+                        nodes,
+                        edges,
+                        subgraphs: BTreeMap::new(),
+                    };
+
+                    let h = eng
+                        .start_run(RunId::new(), graph, dir_path, EngineRunConfig::default())
+                        .await
+                        .unwrap();
+                    tokio::time::timeout(Duration::from_secs(60), h.await_completion())
+                        .await
+                        .expect("run timed out after 60s")
+                        .unwrap()
+                }));
+            }
+
+            for h in handles {
+                let outcome = h.await.unwrap();
+                assert!(
+                    matches!(outcome, RunOutcome::Completed { .. }),
+                    "expected Completed, got {outcome:?}"
                 );
+            }
 
-                let edges = vec![Edge {
-                    id: EdgeKey::try_from(format!("e_{i}").as_str()).unwrap(),
-                    from: PortRef {
-                        node: agent_key.clone(),
-                        outcome: OutcomeKey::try_from("done").unwrap(),
-                    },
-                    to: end.clone(),
-                    kind: EdgeKind::Forward,
-                    policy: EdgePolicy::default(),
-                }];
+            // Drop the engine Arc so the bridge's refcount can reach 1 (only bridge_owned).
+            drop(engine);
 
-                let graph = Graph {
-                    schema_version: SCHEMA_VERSION,
-                    metadata: GraphMetadata {
-                        name: format!("run-{i}"),
-                        description: None,
-                        template_origin: None,
-                        created_at: chrono::Utc::now(),
-                        author: None,
-                        archetype: None,
-                    },
-                    start: agent_key,
-                    nodes,
-                    edges,
-                    subgraphs: BTreeMap::new(),
-                };
-
-                let h = eng
-                    .start_run(RunId::new(), graph, dir_path, EngineRunConfig::default())
-                    .await
-                    .unwrap();
-                tokio::time::timeout(Duration::from_secs(60), h.await_completion())
-                    .await
-                    .expect("run timed out after 60s")
-                    .unwrap()
-            }));
+            // Explicitly shut down the bridge via the async path so the OS thread
+            // exits cleanly without blocking a tokio worker thread in Drop::join.
+            // Arc::into_inner returns Some because the engine (last other holder) is dropped.
+            if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
+                let _ = bridge_for_shutdown.shutdown().await;
+            }
         }
-
-        for h in handles {
-            let outcome = h.await.unwrap();
-            assert!(
-                matches!(outcome, RunOutcome::Completed { .. }),
-                "expected Completed, got {outcome:?}"
-            );
-        }
-
-        // Drop the engine Arc so the bridge's refcount can reach 1 (only bridge_owned).
-        drop(engine);
-
-        // Explicitly shut down the bridge via the async path so the OS thread
-        // exits cleanly without blocking a tokio worker thread in Drop::join.
-        // Arc::into_inner returns Some because the engine (last other holder) is dropped.
-        if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
-            let _ = bridge_for_shutdown.shutdown().await;
-        }
+        dir.close().unwrap();
     });
 }

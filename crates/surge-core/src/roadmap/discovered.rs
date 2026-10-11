@@ -87,4 +87,8 @@ pub struct DiscoveredTaskEntry {
     /// Optional short description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional acceptance criteria. A split planner fills them so each
+    /// replacement task can be verified on its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance_criteria: Vec<String>,
 }

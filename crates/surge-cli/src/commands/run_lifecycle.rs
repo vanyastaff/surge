@@ -57,8 +57,17 @@ where
     let outcome = stop_and_join(&mut completion, stop(error.to_string()))
         .await
         .with_context(|| error.to_string())?;
-    if let RunOutcome::Failed { error: failure } = outcome {
-        return Err(anyhow!("run {run_id} failed while cancelling: {failure}")).context(error);
+    match outcome {
+        RunOutcome::Failed { error: failure } => {
+            return Err(anyhow!("run {run_id} failed while cancelling: {failure}")).context(error);
+        },
+        RunOutcome::SettlementFailed { failures, .. } => {
+            return Err(anyhow!(
+                "run {run_id} resource settlement failed while cancelling: {failures:?}"
+            ))
+            .context(error);
+        },
+        _ => {},
     }
     Err(error)
 }
@@ -84,26 +93,34 @@ async fn next_event(
     events.recv().await
 }
 
-/// Settle the owned task even when cancellation itself fails. A timeout is an
-/// explicit interruption, never an implicit detached run or successful exit.
+/// Join the owned task even when cancellation fails. Forced task interruption
+/// does not confirm writer or SQL settlement.
 pub(super) async fn stop_and_join<T>(
     completion: &mut JoinHandle<T>,
     stop: impl Future<Output = Result<(), EngineError>>,
 ) -> Result<T> {
+    stop_and_join_with_deadline(completion, stop, Duration::from_secs(10)).await
+}
+
+async fn stop_and_join_with_deadline<T>(
+    completion: &mut JoinHandle<T>,
+    stop: impl Future<Output = Result<(), EngineError>>,
+    deadline: Duration,
+) -> Result<T> {
     let stop_result = stop.await;
-    let joined = tokio::time::timeout(Duration::from_secs(10), &mut *completion).await;
+    let joined = tokio::time::timeout(deadline, &mut *completion).await;
     if joined.is_err() {
         completion.abort();
         let _ = completion.await;
         return Err(anyhow!(
-            "run did not settle after cancellation; task interrupted, durable cancellation is unconfirmed (stop result: {stop_result:?})"
+            "run task interrupted after cancellation deadline; writer/SQL settlement UNKNOWN, durable cancellation unconfirmed (stop result: {stop_result:?})"
         ));
     }
     // RunNotFound is a possible completion race, but must not erase the
     // original foreground error. Other cancellation errors remain visible.
     match stop_result {
         Ok(()) | Err(EngineError::RunNotFound(_)) => {},
-        Err(error) => return Err(error).context("could not cancel run; task has settled"),
+        Err(error) => return Err(error).context("could not cancel run; task returned"),
     }
     joined
         .context("cancellation wait elapsed")?
@@ -113,6 +130,9 @@ pub(super) async fn stop_and_join<T>(
 pub(super) fn require_completed(run_id: RunId, outcome: RunOutcome) -> Result<()> {
     match outcome {
         RunOutcome::Completed { .. } => Ok(()),
+        RunOutcome::SettlementFailed { failures, .. } => Err(anyhow!(
+            "run {run_id} resource settlement failed; completion is unconfirmed: {failures:?}"
+        )),
         RunOutcome::Failed { error } => Err(anyhow!("run {run_id} failed: {error}")),
         RunOutcome::Aborted { reason } => Err(anyhow!("run {run_id} aborted: {reason}")),
         RunOutcome::Parked { wake_at } => Err(anyhow!(
@@ -139,6 +159,32 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), task)
             .await
             .expect("waiter hung")
+    }
+
+    #[tokio::test]
+    async fn forced_interruption_never_confirms_writer_or_sql_settlement() {
+        let mut completion = tokio::spawn(std::future::pending::<RunOutcome>());
+        let error = stop_and_join_with_deadline(&mut completion, async { Ok(()) }, Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(completion.is_finished());
+        assert!(error.to_string().contains("writer/SQL settlement UNKNOWN"));
+        assert!(
+            error
+                .to_string()
+                .contains("durable cancellation unconfirmed")
+        );
+    }
+
+    #[test]
+    fn settlement_failure_never_unwraps_a_completed_result() {
+        let outcome = RunOutcome::SettlementFailed {
+            original: Box::new(success()),
+            failures: vec![surge_orchestrator::engine::handle::RunSettlementFailure::ForwarderRead],
+        };
+        let error = require_completed(RunId::new(), outcome).unwrap_err();
+        assert!(error.to_string().contains("completion is unconfirmed"));
+        assert!(error.to_string().contains("ForwarderRead"));
     }
 
     #[tokio::test]

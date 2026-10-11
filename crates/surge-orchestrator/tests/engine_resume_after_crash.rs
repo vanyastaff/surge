@@ -6,6 +6,8 @@
 //!   `cargo test -p surge-orchestrator --test engine_resume_after_crash -- --ignored`
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -150,126 +152,129 @@ fn resume_after_partial_progress() {
         .expect("build multi_thread tokio runtime");
 
     rt.block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path()).await.unwrap();
+        let dir = FixtureHome::new().unwrap();
+        {
+            let storage = Storage::open(dir.path()).await.unwrap();
 
-        // Keep a typed Arc<AcpBridge> so we can call shutdown() after the engine
-        // drops its clone. Dropping AcpBridge from within an async context blocks
-        // the tokio thread (Drop::join on the bridge OS thread); calling shutdown()
-        // explicitly avoids that.
-        let bridge_owned = Arc::new(AcpBridge::with_defaults().unwrap());
-        let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
-        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
-            as Arc<dyn ToolDispatcher>;
+            // Keep a typed Arc<AcpBridge> so we can call shutdown() after the engine
+            // drops its clone. Dropping AcpBridge from within an async context blocks
+            // the tokio thread (Drop::join on the bridge OS thread); calling shutdown()
+            // explicitly avoids that.
+            let bridge_owned = Arc::new(AcpBridge::with_defaults().unwrap());
+            let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
+            let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+                as Arc<dyn ToolDispatcher>;
 
-        let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+            let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-        // 5-stage linear pipeline.
-        let s1 = NodeKey::try_from("s1").unwrap();
-        let s2 = NodeKey::try_from("s2").unwrap();
-        let s3 = NodeKey::try_from("s3").unwrap();
-        let s4 = NodeKey::try_from("s4").unwrap();
-        let s5 = NodeKey::try_from("s5").unwrap();
-        let end = NodeKey::try_from("end").unwrap();
+            // 5-stage linear pipeline.
+            let s1 = NodeKey::try_from("s1").unwrap();
+            let s2 = NodeKey::try_from("s2").unwrap();
+            let s3 = NodeKey::try_from("s3").unwrap();
+            let s4 = NodeKey::try_from("s4").unwrap();
+            let s5 = NodeKey::try_from("s5").unwrap();
+            let end = NodeKey::try_from("end").unwrap();
 
-        let mut nodes = BTreeMap::new();
-        for key in [&s1, &s2, &s3, &s4, &s5] {
-            let id_str = key.as_ref();
-            nodes.insert((*key).clone(), agent_node(id_str));
+            let mut nodes = BTreeMap::new();
+            for key in [&s1, &s2, &s3, &s4, &s5] {
+                let id_str = key.as_ref();
+                nodes.insert((*key).clone(), agent_node(id_str));
+            }
+            nodes.insert(
+                end.clone(),
+                Node {
+                    id: end.clone(),
+                    position: Position::default(),
+                    declared_outcomes: vec![],
+                    config: NodeConfig::Terminal(TerminalConfig {
+                        kind: TerminalKind::Success,
+                        message: None,
+                    }),
+                },
+            );
+
+            let edges = vec![
+                edge_done("e12", &s1, &s2),
+                edge_done("e23", &s2, &s3),
+                edge_done("e34", &s3, &s4),
+                edge_done("e45", &s4, &s5),
+                edge_done("e5end", &s5, &end),
+            ];
+
+            let graph = Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata {
+                    name: "5-stage".into(),
+                    description: None,
+                    template_origin: None,
+                    created_at: chrono::Utc::now(),
+                    author: None,
+                    archetype: None,
+                },
+                start: s1,
+                nodes,
+                edges,
+                subgraphs: BTreeMap::new(),
+            };
+
+            let run_id = RunId::new();
+
+            // Start the run.
+            let h = engine
+                .start_run(
+                    run_id,
+                    graph,
+                    dir.path().to_path_buf(),
+                    EngineRunConfig::default(),
+                )
+                .await
+                .unwrap();
+
+            // Wait briefly for some stages to complete, then stop to simulate crash.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _ = engine.stop_run(run_id, "simulated crash".into()).await;
+            let outcome1 = h.await_completion().await.unwrap();
+            assert!(
+                matches!(
+                    outcome1,
+                    RunOutcome::Aborted { .. } | RunOutcome::Completed { .. }
+                ),
+                "unexpected first-run outcome: {outcome1:?}"
+            );
+
+            // If the run already completed (mock too fast), nothing to resume —
+            // accept either outcome since the test is exercising the resume code
+            // path more than enforcing a specific cursor position.
+
+            // Resume.
+            let h2 = engine
+                .resume_run(run_id, dir.path().to_path_buf())
+                .await
+                .unwrap();
+            let outcome2 = tokio::time::timeout(Duration::from_secs(60), h2.await_completion())
+                .await
+                .expect("resumed run timed out after 60s")
+                .unwrap();
+
+            // Resume should reach Completed eventually (even if first attempt already did).
+            assert!(
+                matches!(
+                    outcome2,
+                    RunOutcome::Completed { .. } | RunOutcome::Aborted { .. }
+                ),
+                "unexpected resumed-run outcome: {outcome2:?}"
+            );
+
+            // Drop the engine so the bridge's refcount can reach 1 (only bridge_owned).
+            drop(engine);
+
+            // Explicitly shut down the bridge via the async path so the OS thread
+            // exits cleanly without blocking a tokio worker thread in Drop::join.
+            // Arc::into_inner returns Some because the engine (last other holder) is dropped.
+            if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
+                let _ = bridge_for_shutdown.shutdown().await;
+            }
         }
-        nodes.insert(
-            end.clone(),
-            Node {
-                id: end.clone(),
-                position: Position::default(),
-                declared_outcomes: vec![],
-                config: NodeConfig::Terminal(TerminalConfig {
-                    kind: TerminalKind::Success,
-                    message: None,
-                }),
-            },
-        );
-
-        let edges = vec![
-            edge_done("e12", &s1, &s2),
-            edge_done("e23", &s2, &s3),
-            edge_done("e34", &s3, &s4),
-            edge_done("e45", &s4, &s5),
-            edge_done("e5end", &s5, &end),
-        ];
-
-        let graph = Graph {
-            schema_version: SCHEMA_VERSION,
-            metadata: GraphMetadata {
-                name: "5-stage".into(),
-                description: None,
-                template_origin: None,
-                created_at: chrono::Utc::now(),
-                author: None,
-                archetype: None,
-            },
-            start: s1,
-            nodes,
-            edges,
-            subgraphs: BTreeMap::new(),
-        };
-
-        let run_id = RunId::new();
-
-        // Start the run.
-        let h = engine
-            .start_run(
-                run_id,
-                graph,
-                dir.path().to_path_buf(),
-                EngineRunConfig::default(),
-            )
-            .await
-            .unwrap();
-
-        // Wait briefly for some stages to complete, then stop to simulate crash.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let _ = engine.stop_run(run_id, "simulated crash".into()).await;
-        let outcome1 = h.await_completion().await.unwrap();
-        assert!(
-            matches!(
-                outcome1,
-                RunOutcome::Aborted { .. } | RunOutcome::Completed { .. }
-            ),
-            "unexpected first-run outcome: {outcome1:?}"
-        );
-
-        // If the run already completed (mock too fast), nothing to resume —
-        // accept either outcome since the test is exercising the resume code
-        // path more than enforcing a specific cursor position.
-
-        // Resume.
-        let h2 = engine
-            .resume_run(run_id, dir.path().to_path_buf())
-            .await
-            .unwrap();
-        let outcome2 = tokio::time::timeout(Duration::from_secs(60), h2.await_completion())
-            .await
-            .expect("resumed run timed out after 60s")
-            .unwrap();
-
-        // Resume should reach Completed eventually (even if first attempt already did).
-        assert!(
-            matches!(
-                outcome2,
-                RunOutcome::Completed { .. } | RunOutcome::Aborted { .. }
-            ),
-            "unexpected resumed-run outcome: {outcome2:?}"
-        );
-
-        // Drop the engine so the bridge's refcount can reach 1 (only bridge_owned).
-        drop(engine);
-
-        // Explicitly shut down the bridge via the async path so the OS thread
-        // exits cleanly without blocking a tokio worker thread in Drop::join.
-        // Arc::into_inner returns Some because the engine (last other holder) is dropped.
-        if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
-            let _ = bridge_for_shutdown.shutdown().await;
-        }
+        dir.close().unwrap();
     });
 }

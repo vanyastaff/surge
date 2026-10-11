@@ -519,7 +519,7 @@ impl WorkItemStore {
             .join("events.sqlite");
         let history = crate::runs::inspection::read_folded_events(&path, claim.run)
             .map_err(|error| WorkItemError::Invalid(error.to_string()))?;
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let conn = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let (version, bytes): (u32, Vec<u8>) = conn.query_row(
             "SELECT schema_version,payload FROM events WHERE seq=?",
             [source.opening_seq],
@@ -576,7 +576,7 @@ impl WorkItemStore {
             .join("runs")
             .join(claim.run.to_string())
             .join("events.sqlite");
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let conn = crate::runs::connection::RetainedConnection::read_only(&path)?;
         let actual: u64 = conn.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |row| {
             row.get(0)
         })?;

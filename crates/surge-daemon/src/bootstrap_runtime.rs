@@ -108,7 +108,7 @@ impl BootstrapRuntime {
         })?;
         let runtime = self.for_project(base.repository())?;
         let planning_run = RunId::new();
-        let implementation_run = RunId::new();
+        let implementation_run = distinct_run_id(planning_run, RunId::new);
         let planning = surge_git::run_worktree::RunWorktreeSpec::new(
             planning_run,
             base.clone(),
@@ -340,6 +340,22 @@ fn supported(config: &SurgeConfig) -> Result<(), BootstrapRuntimeError> {
     Ok(())
 }
 
+/// A run id whose short form differs from `planning`'s.
+///
+/// Run branches and worktree names use `RunId::short()`, the first 12 ULID
+/// characters: 10 of timestamp plus 2 random. Two ids minted back to back
+/// share their short form about once in a thousand, which made the planning
+/// and implementation branches equal and a valid capture fail its isolation
+/// check as a spurious configuration error.
+fn distinct_run_id(planning: RunId, mut next: impl FnMut() -> RunId) -> RunId {
+    loop {
+        let candidate = next();
+        if candidate.short() != planning.short() {
+            return candidate;
+        }
+    }
+}
+
 fn digest(value: &impl serde::Serialize) -> Result<ContentHash, BootstrapRuntimeError> {
     let canonical =
         serde_json::to_value(value).map_err(|_| BootstrapRuntimeError::Configuration)?;
@@ -385,6 +401,26 @@ mod tests {
     use super::*;
     use surge_core::budget::BudgetGuard;
     use surge_orchestrator::profile_loader::DiskProfileSet;
+
+    #[test]
+    fn implementation_run_never_shares_the_planning_runs_short_form() {
+        let planning = RunId::new();
+        // A colliding id: same 12-character prefix, different tail.
+        let text = planning.as_ulid().to_string();
+        let colliding: RunId = format!("{}{}", &text[..12], "0".repeat(14))
+            .parse()
+            .expect("a ULID with the same prefix");
+        assert_ne!(colliding, planning);
+        assert_eq!(colliding.short(), planning.short());
+        let distinct = RunId::new();
+        let mut queue = vec![distinct, colliding, colliding]
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
+        let chosen = distinct_run_id(planning, || queue.pop().expect("a candidate"));
+        // The colliding candidates are skipped, never returned.
+        assert_ne!(chosen.short(), planning.short());
+    }
 
     fn git(root: &Path, args: &[&str]) {
         let output = std::process::Command::new("git")

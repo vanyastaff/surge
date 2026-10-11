@@ -1,0 +1,516 @@
+   Compiling surge-core v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-core)
+   Compiling surge-persistence v0.1.0 (/Users/vanyastafford/Develop/surge/crates/surge-persistence)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.70s
+────────────
+ Nextest run ID 5f0a1e69-b7d9-4571-82f7-27430d092f0a with nextest profile: default
+    Starting 508 tests across 1 binary
+        PASS [   0.025s] (  1/508) surge-persistence aggregator::tests::test_cost_calculation
+        PASS [   0.025s] (  2/508) surge-persistence aggregator::tests::test_session_without_subtask
+        PASS [   0.025s] (  3/508) surge-persistence aggregator::tests::test_handle_tokens_consumed_event
+        PASS [   0.025s] (  4/508) surge-persistence aggregator::tests::test_handle_non_tokens_consumed_event
+        PASS [   0.026s] (  5/508) surge-persistence aggregator::tests::test_handle_multiple_sessions
+        PASS [   0.026s] (  6/508) surge-persistence aggregator::tests::test_register_and_unregister_session
+        PASS [   0.026s] (  7/508) surge-persistence aggregator::tests::test_handle_unknown_session
+        PASS [   0.020s] (  8/508) surge-persistence artifacts::tests::open_ref_rejects_parent_dir_fallback_escape
+        PASS [   0.022s] (  9/508) surge-persistence artifacts::tests::open_ref_falls_back_to_legacy_relative_path_without_index
+        PASS [   0.023s] ( 10/508) surge-persistence artifacts::tests::open_ref_does_not_hide_corruption_with_valid_fallback
+        PASS [   0.023s] ( 11/508) surge-persistence artifacts::tests::identical_content_is_idempotent
+        PASS [   0.025s] ( 12/508) surge-persistence artifacts::tests::open_ref_rejects_absolute_fallback_outside_allowed_roots
+        PASS [   0.027s] ( 13/508) surge-persistence artifacts::tests::bounded_open_enforces_limit_and_hash
+        PASS [   0.034s] ( 14/508) surge-persistence artifacts::tests::default_path_respects_isolated_surge_home
+        PASS [   0.018s] ( 15/508) surge-persistence budget::tests::test_budget_status_exceeded
+        PASS [   0.019s] ( 16/508) surge-persistence artifacts::tests::put_rejects_corrupt_existing_blob_before_updating_index
+        PASS [   0.022s] ( 17/508) surge-persistence artifacts::tests::open_rejects_corrupt_content_addressed_bytes
+        PASS [   0.023s] ( 18/508) surge-persistence artifacts::tests::put_then_open_roundtrip
+        PASS [   0.020s] ( 19/508) surge-persistence budget::tests::test_budget_status_ok
+        PASS [   0.015s] ( 20/508) surge-persistence budget::tests::test_budget_tracker_with_thresholds
+        PASS [   0.024s] ( 21/508) surge-persistence budget::tests::test_budget_tracker_new
+        PASS [   0.012s] ( 22/508) surge-persistence budget::tests::test_calculate_budget_status_critical
+        PASS [   0.013s] ( 23/508) surge-persistence budget::tests::test_calculate_budget_status_ok
+        PASS [   0.013s] ( 24/508) surge-persistence budget::tests::test_check_budget_exceeds_warning
+        PASS [   0.014s] ( 25/508) surge-persistence budget::tests::test_check_budget_time_range_filtering
+        PASS [   0.020s] ( 26/508) surge-persistence budget::tests::test_calculate_budget_status_warning
+        PASS [   0.014s] ( 27/508) surge-persistence budget::tests::test_check_budget_with_no_spending
+        PASS [   0.019s] ( 28/508) surge-persistence budget::tests::test_check_budget_exceeds_critical
+        PASS [   0.013s] ( 29/508) surge-persistence budget::tests::test_get_current_day_range
+        PASS [   0.017s] ( 30/508) surge-persistence budget::tests::test_check_budget_with_spending
+        PASS [   0.014s] ( 31/508) surge-persistence budget::tests::test_get_current_week_range
+        PASS [   0.015s] ( 32/508) surge-persistence intake::fsm_proptests::happy_path_is_valid
+        PASS [   0.016s] ( 33/508) surge-persistence intake::fsm_proptests::cannot_skip_bootstrap_states
+        PASS [   0.016s] ( 34/508) surge-persistence intake::fsm_proptests::snoozed_can_transition_to_run_started
+        PASS [   0.015s] ( 35/508) surge-persistence intake::fsm_proptests::terminals_are_sticky
+        PASS [   0.013s] ( 36/508) surge-persistence intake::repo_tests::callback_token_set_clear_lookup
+        PASS [   0.017s] ( 37/508) surge-persistence intake::repo_tests::active_promotion_is_correlated_and_cannot_resurrect_terminal
+        PASS [   0.015s] ( 38/508) surge-persistence intake::repo_tests::clear_callback_token_errors_when_row_missing
+        PASS [   0.019s] ( 39/508) surge-persistence intake::repo_tests::callback_token_uniqueness
+        PASS [   0.130s] ( 40/508) surge-persistence aggregator::tests::test_start_listening
+        PASS [   0.014s] ( 41/508) surge-persistence intake::repo_tests::insert_then_fetch_roundtrip
+        PASS [   0.020s] ( 42/508) surge-persistence intake::repo_tests::fetch_due_snoozed_returns_only_due_rows
+        PASS [   0.017s] ( 43/508) surge-persistence intake::repo_tests::list_all_filters_by_source
+        PASS [   0.012s] ( 44/508) surge-persistence intake::repo_tests::list_all_returns_rows_in_descending_last_seen_order
+        PASS [   0.059s] ( 45/508) surge-persistence intake::fsm_proptests::as_str_round_trips_for_all_variants
+        PASS [   0.057s] ( 46/508) surge-persistence intake::fsm_proptests::self_transition_always_valid
+        PASS [   0.015s] ( 47/508) surge-persistence intake::repo_tests::lookup_active_run_excludes_completed
+        PASS [   0.024s] ( 48/508) surge-persistence intake::repo_tests::list_all_respects_limit
+        PASS [   0.017s] ( 49/508) surge-persistence intake::repo_tests::lookup_active_run_returns_none_when_no_run_id
+        PASS [   0.015s] ( 50/508) surge-persistence intake::repo_tests::lookup_ticket_by_run_id_skips_rows_without_run_id
+        PASS [   0.022s] ( 51/508) surge-persistence intake::repo_tests::lookup_active_run_returns_run_id_when_active
+        PASS [   0.025s] ( 52/508) surge-persistence intake::repo_tests::lookup_ticket_by_run_id_returns_none_when_absent
+        PASS [   0.021s] ( 53/508) surge-persistence intake::repo_tests::lookup_ticket_by_run_id_returns_row
+        PASS [   0.018s] ( 54/508) surge-persistence intake::repo_tests::set_run_id_errors_when_row_missing
+        PASS [   0.022s] ( 55/508) surge-persistence intake::repo_tests::set_callback_token_errors_when_row_missing
+        PASS [   0.019s] ( 56/508) surge-persistence intake::repo_tests::set_run_id_persists
+        PASS [   0.016s] ( 57/508) surge-persistence intake::repo_tests::set_tg_message_ref_errors_when_row_missing
+        PASS [   0.016s] ( 58/508) surge-persistence intake::repo_tests::snooze_until_set_clear_round_trip
+        PASS [   0.021s] ( 59/508) surge-persistence intake::repo_tests::tg_message_ref_round_trip
+        PASS [   0.024s] ( 60/508) surge-persistence intake::repo_tests::snooze_until_setters_error_when_row_missing
+        PASS [   0.021s] ( 61/508) surge-persistence intake::repo_tests::update_state_changes_row
+        PASS [   0.021s] ( 62/508) surge-persistence intake::repo_tests::update_state_validated_accepts_valid_transition
+        PASS [   0.019s] ( 63/508) surge-persistence intake::repo_tests::update_state_validated_errors_when_row_missing
+        PASS [   0.022s] ( 64/508) surge-persistence intake::repo_tests::update_state_validated_rejects_invalid_transition
+        PASS [   0.023s] ( 65/508) surge-persistence intake::repo_tests::update_state_validated_snoozed_to_run_started
+        PASS [   0.017s] ( 66/508) surge-persistence intake::tests::ticket_state_all_variants_have_distinct_strings
+        PASS [   0.020s] ( 67/508) surge-persistence intake::tests::ticket_state_unknown_errors
+        PASS [   0.021s] ( 68/508) surge-persistence intake::tests::ticket_state_round_trip
+        PASS [   0.020s] ( 69/508) surge-persistence intake_emit_log::tests::different_runs_are_separate_rows
+        PASS [   0.021s] ( 70/508) surge-persistence intake_emit_log::tests::different_kinds_are_separate_rows
+        PASS [   0.015s] ( 71/508) surge-persistence intake_emit_log::tests::event_kind_serde_round_trip
+        PASS [   0.018s] ( 72/508) surge-persistence intake_emit_log::tests::fetch_returns_none_for_missing
+        PASS [   0.016s] ( 73/508) surge-persistence intake_emit_log::tests::has_returns_false_for_empty_table
+        PASS [   0.021s] ( 74/508) surge-persistence intake_emit_log::tests::fetch_returns_row_with_kind_round_trip
+        PASS [   0.015s] ( 75/508) surge-persistence intake_emit_log::tests::record_then_has_round_trip
+        PASS [   0.021s] ( 76/508) surge-persistence intake_emit_log::tests::record_is_idempotent
+        PASS [   0.022s] ( 77/508) surge-persistence intake_outbox::tests::enqueue_failure_rolls_back_ticket_and_identity_is_immutable
+        PASS [   0.020s] ( 78/508) surge-persistence intake_outbox::tests::malformed_due_row_is_retained_without_starving_the_next_job
+        PASS [   0.030s] ( 79/508) surge-persistence intake_outbox::tests::concurrent_claims_and_reopen_preserve_one_payload
+        PASS [   0.021s] ( 80/508) surge-persistence intake_outbox::tests::prior_ack_repairs_active_state_without_enqueue_and_ack_is_idempotent
+        PASS [   0.020s] ( 81/508) surge-persistence intake_outbox::tests::retry_backoff_expiry_and_stale_owners_are_fenced
+        PASS [   0.021s] ( 82/508) surge-persistence intake_outbox::tests::shared_connection_entry_preserves_nested_transaction_refusal
+        PASS [   0.021s] ( 83/508) surge-persistence memory::audit::tests::ambiguous_colon_prefixed_path_that_exists_is_treated_as_a_file_not_a_url
+        PASS [   0.017s] ( 84/508) surge-persistence memory::audit::tests::ambiguous_colon_prefixed_relative_path_that_does_not_exist_is_reported_not_silently_dropped
+        PASS [   0.020s] ( 85/508) surge-persistence memory::audit::tests::failed_run_correlated_claims_ignores_a_run_that_is_merely_running_and_never_escalated
+        PASS [   0.016s] ( 86/508) surge-persistence memory::audit::tests::failed_run_correlated_claims_matches_a_transcript_sourced_claim
+        PASS [   0.019s] ( 87/508) surge-persistence memory::audit::tests::failed_run_correlated_claims_includes_a_loop_guard_stopped_run_even_when_its_status_is_not_failed
+        PASS [   0.016s] ( 88/508) surge-persistence memory::audit::tests::file_uri_with_percent_encoding_is_reported_unverifiable_not_falsely_missing
+        PASS [   0.020s] ( 89/508) surge-persistence memory::audit::tests::file_uri_source_is_expanded_to_a_path_and_checked_for_content_drift
+        PASS [   0.050s] ( 90/508) surge-persistence intake_outbox::tests::migration_upgrades_existing_ack_and_ticket_without_backfill
+        PASS [   0.019s] ( 91/508) surge-persistence memory::audit::tests::stale_claims_flags_a_source_that_no_longer_exists
+        PASS [   0.020s] ( 92/508) surge-persistence memory::audit::tests::stale_claims_flags_content_that_changed_since_capture
+        PASS [   0.017s] ( 93/508) surge-persistence memory::audit::tests::stale_claims_leaves_unchanged_content_alone
+        PASS [   0.017s] ( 94/508) surge-persistence memory::audit::tests::stale_claims_reports_an_unreadable_source_as_unverifiable_not_silently
+        PASS [   0.020s] ( 95/508) surge-persistence memory::audit::tests::stale_claims_reports_a_url_source_as_unverifiable_not_stale
+        PASS [   0.019s] ( 96/508) surge-persistence memory::audit::tests::stale_claims_skips_non_file_locators
+        PASS [   0.025s] ( 97/508) surge-persistence memory::audit::tests::windows_drive_letter_path_is_classified_as_a_file_not_a_url
+        PASS [   0.026s] ( 98/508) surge-persistence memory::store::fts_regression_tests::v2_repair_failure_rolls_back_triggers_indexes_and_schema_version
+        PASS [   0.029s] ( 99/508) surge-persistence memory::store::fts_regression_tests::all_external_content_indexes_follow_updates_and_deletes
+        PASS [   0.105s] (100/508) surge-persistence memory::audit::tests::run_audit_caveats_order_is_deterministic_across_repeated_calls
+        PASS [   0.029s] (101/508) surge-persistence memory::store::tests::add_claim_fails_on_duplicate_id
+        PASS [   0.031s] (102/508) surge-persistence memory::store::tests::add_claim_then_get_claim_roundtrips_every_field
+        PASS [   0.114s] (103/508) surge-persistence memory::audit::tests::run_audit_flags_a_stale_claim_leaves_a_fresh_one_alone_and_deletes_neither
+        PASS [   0.027s] (104/508) surge-persistence memory::store::tests::backfill_legacy_claims_is_a_noop_when_run_again_over_the_same_rows
+        PASS [   0.028s] (105/508) surge-persistence memory::store::tests::delete_claim_removes_only_the_named_claim_and_leaves_others_intact
+        PASS [   0.027s] (106/508) surge-persistence memory::store::tests::delete_claim_returns_false_for_an_unknown_id
+        PASS [   0.025s] (107/508) surge-persistence memory::store::tests::filtered_search_limit_counts_matching_rows_not_fetched_ones
+        PASS [   0.077s] (108/508) surge-persistence memory::store::fts_regression_tests::v2_upgrade_repairs_stale_and_orphan_postings_and_reopens
+        PASS [   0.152s] (109/508) surge-persistence memory::audit::tests::run_audit_correlates_a_claim_with_a_loop_guard_stopped_run_even_when_the_registry_reads_crashed
+        PASS [   0.151s] (110/508) surge-persistence memory::audit::tests::run_audit_never_mutates_the_registry_and_never_scans_a_run_no_claim_names
+        PASS [   0.027s] (111/508) surge-persistence memory::store::tests::get_claim_returns_none_for_unknown_id
+        PASS [   0.021s] (112/508) surge-persistence memory::store::tests::list_claims_includes_every_added_claim
+        PASS [   0.031s] (113/508) surge-persistence memory::store::tests::insert_claim_with_ignore_policy_silently_keeps_the_first_write_on_conflict
+        PASS [   0.026s] (114/508) surge-persistence memory::store::tests::list_recent_breaks_created_at_ties_by_insertion_order
+        PASS [   0.021s] (115/508) surge-persistence memory::store::tests::list_recent_orders_newest_created_at_first
+        PASS [   0.023s] (116/508) surge-persistence memory::store::tests::list_recent_returns_rows_of_every_kind_without_a_query
+        PASS [   0.023s] (117/508) surge-persistence memory::store::tests::list_recent_returns_empty_for_empty_store
+        PASS [   0.028s] (118/508) surge-persistence memory::store::tests::list_recent_honors_limit_per_category
+        PASS [   0.019s] (119/508) surge-persistence memory::store::tests::migration_v1_to_v2_reuses_legacy_ulid_and_records_legacy_source
+        PASS [   0.032s] (120/508) surge-persistence memory::store::tests::migration_v1_to_v2_backfills_all_four_legacy_tables_with_and_without_optional_fields
+        PASS [   0.025s] (121/508) surge-persistence memory::store::tests::migration_v1_to_v2_disambiguates_a_cross_table_ulid_collision_without_losing_text
+        PASS [   0.019s] (122/508) surge-persistence memory::store::tests::migration_v1_to_v2_step_rolls_back_atomically_when_backfill_fails_partway
+        PASS [   0.022s] (123/508) surge-persistence memory::store::tests::test_add_discovery
+        PASS [   0.022s] (124/508) surge-persistence memory::store::tests::test_add_file_context
+        PASS [   0.027s] (125/508) surge-persistence memory::store::tests::test_add_gotcha
+        PASS [   0.024s] (126/508) surge-persistence memory::store::tests::test_add_pattern
+        PASS [   0.025s] (127/508) surge-persistence memory::store::tests::test_multiple_entries
+        PASS [   0.025s] (128/508) surge-persistence memory::store::tests::test_open_in_memory
+        PASS [   0.021s] (129/508) surge-persistence memory::store::tests::test_search_all_empty
+        PASS [   0.028s] (130/508) surge-persistence memory::store::tests::test_schema_initialization
+        PASS [   0.025s] (131/508) surge-persistence memory::store::tests::test_search_by_category_discoveries
+        PASS [   0.023s] (132/508) surge-persistence memory::store::tests::test_search_by_category_patterns
+        PASS [   0.022s] (133/508) surge-persistence memory::store::tests::test_search_discoveries
+        PASS [   0.021s] (134/508) surge-persistence memory::store::tests::test_search_gotchas
+        PASS [   0.026s] (135/508) surge-persistence memory::store::tests::test_search_file_contexts
+        PASS [   0.022s] (136/508) surge-persistence memory::store::tests::test_search_multiple_categories
+        PASS [   0.023s] (137/508) surge-persistence memory::store::tests::test_search_patterns
+        PASS [   0.029s] (138/508) surge-persistence memory::store::tests::test_search_limit
+        PASS [   0.023s] (139/508) surge-persistence memory::store::tests::test_search_phrase_query
+        PASS [   0.021s] (140/508) surge-persistence memory::store::tests::update_unverified_claim_never_overwrites_a_verified_row
+        PASS [   0.022s] (141/508) surge-persistence memory::store::tests::update_unverified_claim_refreshes_in_place_and_preserves_identity
+        PASS [   0.020s] (142/508) surge-persistence models::tests::test_models_are_serializable
+        PASS [   0.020s] (143/508) surge-persistence models::tests::test_session_usage_total_tokens
+        PASS [   0.017s] (144/508) surge-persistence models::tests::test_session_usage_total_tokens_without_thought
+        PASS [   0.015s] (145/508) surge-persistence models::tests::test_spec_usage_add_subtask
+        PASS [   0.017s] (146/508) surge-persistence models::tests::test_spec_usage_from_session
+        PASS [   0.023s] (147/508) surge-persistence models::tests::test_spec_usage_add_session
+        PASS [   0.016s] (148/508) surge-persistence models::tests::test_spec_usage_total_tokens
+        PASS [   0.013s] (149/508) surge-persistence models::tests::test_subtask_usage_total_tokens
+        PASS [   0.020s] (150/508) surge-persistence models::tests::test_spec_usage_from_subtask
+        PASS [   0.014s] (151/508) surge-persistence models::tests::test_subtask_usage_from_session
+        PASS [   0.018s] (152/508) surge-persistence models::tests::test_subtask_usage_add_session
+        PASS [   0.016s] (153/508) surge-persistence pricing::cost_calculation_tests::test_all_token_types_combined
+        PASS [   0.014s] (154/508) surge-persistence pricing::cost_calculation_tests::test_cache_read_tokens_fallback_to_input_pricing
+        PASS [   0.020s] (155/508) surge-persistence pricing::cost_calculation_tests::test_cache_read_tokens_with_specific_pricing
+        PASS [   0.018s] (156/508) surge-persistence pricing::cost_calculation_tests::test_cache_write_tokens_fallback_to_input_pricing
+        PASS [   0.022s] (157/508) surge-persistence pricing::cost_calculation_tests::test_claude_opus_high_volume
+        PASS [   0.020s] (158/508) surge-persistence pricing::cost_calculation_tests::test_claude_sonnet_35_realistic_session
+        PASS [   0.022s] (159/508) surge-persistence pricing::cost_calculation_tests::test_cache_write_tokens_with_specific_pricing
+        PASS [   0.019s] (160/508) surge-persistence pricing::cost_calculation_tests::test_cost_calculation_with_zero_pricing
+        PASS [   0.019s] (161/508) surge-persistence pricing::cost_calculation_tests::test_cost_precision_with_fractional_tokens
+        PASS [   0.015s] (162/508) surge-persistence pricing::cost_calculation_tests::test_gemini_pro_15_batch_processing
+        PASS [   0.015s] (163/508) surge-persistence pricing::cost_calculation_tests::test_gpt4_turbo_typical_usage
+        PASS [   0.017s] (164/508) surge-persistence pricing::cost_calculation_tests::test_input_tokens_only
+        PASS [   0.017s] (165/508) surge-persistence pricing::cost_calculation_tests::test_gpt4o_efficient_usage
+        PASS [   0.019s] (166/508) surge-persistence pricing::cost_calculation_tests::test_large_token_amounts
+        PASS [   0.015s] (167/508) surge-persistence pricing::cost_calculation_tests::test_none_optional_tokens_dont_contribute
+        PASS [   0.015s] (168/508) surge-persistence pricing::cost_calculation_tests::test_output_tokens_only
+        PASS [   0.014s] (169/508) surge-persistence pricing::cost_calculation_tests::test_small_token_amounts
+        PASS [   0.017s] (170/508) surge-persistence pricing::cost_calculation_tests::test_some_zero_tokens_dont_contribute
+        PASS [   0.017s] (171/508) surge-persistence pricing::cost_calculation_tests::test_thought_tokens_fallback_to_output_pricing
+        PASS [   0.016s] (172/508) surge-persistence pricing::cost_calculation_tests::test_zero_tokens_zero_cost
+        PASS [   0.017s] (173/508) surge-persistence pricing::tests::test_claude_opus_pricing
+        PASS [   0.018s] (174/508) surge-persistence pricing::tests::test_claude_sonnet_35_pricing
+        PASS [   0.021s] (175/508) surge-persistence pricing::cost_calculation_tests::test_thought_tokens_with_specific_pricing
+        PASS [   0.015s] (176/508) surge-persistence pricing::tests::test_gemini_pro_15_pricing
+        PASS [   0.013s] (177/508) surge-persistence pricing::tests::test_gemini_pro_pricing
+        PASS [   0.016s] (178/508) surge-persistence pricing::tests::test_get_model_pricing_gemini
+        PASS [   0.017s] (179/508) surge-persistence pricing::tests::test_get_model_pricing_claude
+        PASS [   0.016s] (180/508) surge-persistence pricing::tests::test_gpt4_turbo_pricing
+        PASS [   0.016s] (181/508) surge-persistence pricing::tests::test_get_model_pricing_unknown
+        PASS [   0.019s] (182/508) surge-persistence pricing::tests::test_gpt4o_pricing
+        PASS [   0.021s] (183/508) surge-persistence pricing::tests::test_get_model_pricing_gpt
+        PASS [   0.020s] (184/508) surge-persistence pricing::tests::test_pricing_model_calculate_cost_basic
+        PASS [   0.016s] (185/508) surge-persistence pricing::tests::test_pricing_model_calculate_cost_with_cache
+        PASS [   0.020s] (186/508) surge-persistence pricing::tests::test_pricing_model_calculate_cost_with_thought_tokens
+        PASS [   0.019s] (187/508) surge-persistence pricing::tests::test_pricing_model_validate_empty_id
+        PASS [   0.021s] (188/508) surge-persistence pricing::tests::test_pricing_model_serialization
+        PASS [   0.017s] (189/508) surge-persistence pricing::tests::test_pricing_model_validate_negative_output_price
+        PASS [   0.018s] (190/508) surge-persistence pricing::tests::test_pricing_model_validate_success
+        PASS [   0.020s] (191/508) surge-persistence pricing::tests::test_pricing_model_validate_negative_input_price
+        PASS [   0.014s] (192/508) surge-persistence pricing::tests::test_provider_default_pricing
+        PASS [   0.016s] (193/508) surge-persistence pricing::tests::test_provider_serialization
+        PASS [   0.016s] (194/508) surge-persistence pricing::tests::test_realistic_claude_cost_calculation
+        PASS [   0.103s] (195/508) surge-persistence roadmap_patches::tests::list_filters_by_status_and_reject_is_idempotent
+        PASS [   0.117s] (196/508) surge-persistence roadmap_patches::tests::duplicate_content_hash_keeps_existing_patch_id
+        PASS [   0.127s] (197/508) surge-persistence runs::bootstrap_operations::tests::attention_requires_explicit_retry_with_original_pins
+        PASS [   0.127s] (198/508) surge-persistence runs::bootstrap_operations::tests::cancellation_is_monotonic_and_claim_is_compare_and_swap
+        PASS [   0.140s] (199/508) surge-persistence runs::bootstrap_operations::tests::attention_cannot_point_at_an_unrelated_run
+        PASS [   0.155s] (200/508) surge-persistence runs::bootstrap_operations::tests::accepted_identity_payload_and_queue_survive_reopen
+        PASS [   0.144s] (201/508) surge-persistence runs::bootstrap_operations::tests::cancellation_attention_preserves_stop_intent_and_cannot_retry
+        PASS [   0.108s] (202/508) surge-persistence runs::bootstrap_operations::tests::cancelling_terminal_record_does_not_relabel_or_increment_it
+        PASS [   0.120s] (203/508) surge-persistence runs::bootstrap_operations::tests::competing_insert_and_claim_cannot_duplicate_identity
+        PASS [   0.112s] (204/508) surge-persistence runs::bootstrap_operations::tests::failed_cancel_transaction_never_reports_acknowledgement
+        PASS [   0.113s] (205/508) surge-persistence runs::bootstrap_operations::tests::corrupt_supported_payload_stops_queue_enumeration
+        PASS [   0.106s] (206/508) surge-persistence runs::bootstrap_operations::tests::incoherent_state_is_rejected_before_scheduling
+        PASS [   0.106s] (207/508) surge-persistence runs::bootstrap_operations::tests::read_only_capture_inspection_preserves_absence_and_rejects_future_payload
+        PASS [   0.159s] (208/508) surge-persistence runs::bootstrap_operations::tests::child_launch_commit_survives_reopen_and_cancel_fences_continuation
+        PASS [   0.020s] (209/508) surge-persistence runs::busy::tests::handler_on_current_thread_runtime_does_not_hand_off
+        PASS [   0.018s] (210/508) surge-persistence runs::busy::tests::handler_outside_runtime_sleeps_without_panicking
+        PASS [   0.021s] (211/508) surge-persistence runs::busy::tests::schedule_matches_sqlite_default_budget
+        PASS [   0.102s] (212/508) surge-persistence runs::bootstrap_operations::tests::read_only_capture_inspection_uses_run_identity_and_checks_integrity
+        PASS [   0.119s] (213/508) surge-persistence runs::bootstrap_operations::tests::tampered_fingerprint_is_not_accepted_as_existing_intent
+        PASS [   0.131s] (214/508) surge-persistence runs::bootstrap_operations::tests::terminal_intent_conflict_cannot_overwrite_the_original_record
+        PASS [   0.131s] (215/508) surge-persistence runs::bootstrap_operations::tests::unknown_versions_are_inspectable_but_not_claimable
+        PASS [   0.134s] (216/508) surge-persistence runs::capacity::tests::absurdly_large_window_duration_writes_null_not_a_wrapped_value
+        PASS [   1.000s] (217/508) surge-persistence intake::fsm_proptests::walk_terminates_in_a_valid_state
+        PASS [   0.156s] (218/508) surge-persistence runs::capacity::tests::clear_on_a_runtime_with_no_row_is_a_harmless_no_op
+        PASS [   0.149s] (219/508) surge-persistence runs::capacity::tests::clear_removes_the_row_and_status_reads_never_observed_again
+        PASS [   0.099s] (220/508) surge-persistence runs::capacity::tests::nan_written_to_remaining_is_stored_as_null_by_sqlite_itself
+        PASS [   0.115s] (221/508) surge-persistence runs::capacity::tests::fractional_remaining_and_acp_usage_source_round_trip
+        PASS [   0.105s] (222/508) surge-persistence runs::capacity::tests::non_numeric_remaining_column_reads_as_unclassified
+        PASS [   0.092s] (223/508) surge-persistence runs::capacity::tests::observe_then_status_round_trips_a_known_window
+        PASS [   0.092s] (224/508) surge-persistence runs::capacity::tests::out_of_range_remaining_column_reads_as_unclassified_not_never_observed
+        PASS [   0.111s] (225/508) surge-persistence runs::capacity::tests::observe_upserts_in_place_not_a_history
+        PASS [   0.019s] (226/508) surge-persistence runs::clock::tests::mock_clock_advances
+        PASS [   0.142s] (227/508) surge-persistence runs::capacity::tests::observation_survives_a_new_storage_open_of_the_same_home
+        PASS [   0.017s] (228/508) surge-persistence runs::clock::tests::system_clock_returns_recent_time
+        PASS [   0.019s] (229/508) surge-persistence runs::config::tests::parses_present_overrides
+        PASS [   0.020s] (230/508) surge-persistence runs::config::tests::defaults_when_file_absent
+        PASS [   0.110s] (231/508) surge-persistence runs::capacity::tests::status_is_never_observed_for_a_fresh_runtime
+        PASS [   0.112s] (232/508) surge-persistence runs::capacity::tests::repeated_observation_of_the_same_canonical_runtime_stays_one_row
+        PASS [   0.019s] (233/508) surge-persistence runs::error::tests::writer_already_held_displays_run_id
+        PASS [   0.116s] (234/508) surge-persistence runs::capacity::tests::unnormalized_aliases_are_not_collapsed_by_this_store_alone
+        PASS [   0.019s] (235/508) surge-persistence runs::escalations::tests::attributes_the_escalation_to_the_most_recently_entered_node
+        PASS [   0.020s] (236/508) surge-persistence runs::escalations::tests::does_not_misclassify_mcp_or_bootstrap_causes_as_loop_guard
+        PASS [   0.017s] (237/508) surge-persistence runs::escalations::tests::no_escalation_yields_empty
+        PASS [   0.019s] (238/508) surge-persistence runs::file_lock::tests::existing_only_refuses_missing_without_creating_anything
+        PASS [   0.019s] (239/508) surge-persistence runs::file_lock::tests::lock_probe
+        PASS [   0.018s] (240/508) surge-persistence runs::file_lock::tests::release_after_drop_allows_reacquire
+        PASS [   0.102s] (241/508) surge-persistence runs::capacity::tests::unrecognized_source_label_reads_as_unclassified
+        PASS [   0.045s] (242/508) surge-persistence runs::file_lock::tests::actual_second_process_exclusion_and_death_release
+        PASS [   0.021s] (243/508) surge-persistence runs::file_lock::tests::second_acquire_in_same_process_fails
+        PASS [   0.018s] (244/508) surge-persistence runs::inbox_queue::tests::append_cockpit_snooze_then_list_due_round_trips
+        PASS [   0.021s] (245/508) surge-persistence runs::inbox_queue::tests::append_then_list_then_mark_processed
+        PASS [   0.025s] (246/508) surge-persistence runs::inbox_queue::tests::delivery_legs_independent
+        PASS [   0.021s] (247/508) surge-persistence runs::inbox_queue::tests::idempotent_marking
+        PASS [   0.023s] (248/508) surge-persistence runs::inbox_queue::tests::list_due_cockpit_snoozes_filters_other_subject_kinds
+        PASS [   0.023s] (249/508) surge-persistence runs::inbox_queue::tests::policy_hint_defaults_to_null_when_absent
+        PASS [   0.020s] (250/508) surge-persistence runs::inbox_queue::tests::policy_hint_round_trips_for_l2_start
+        PASS [   0.026s] (251/508) surge-persistence runs::inbox_queue::tests::snooze_action_carries_until_timestamp
+        PASS [   0.119s] (252/508) surge-persistence runs::escalations::tests::read_escalations_uses_the_kind_index_and_attributes_the_node
+        PASS [   0.152s] (253/508) surge-persistence runs::escalations::tests::list_loop_guard_stopped_runs_skips_an_unreadable_run_instead_of_failing_the_scan
+        PASS [   0.106s] (254/508) surge-persistence runs::inspection::tests::absent_and_empty_database_are_not_created_or_migrated
+        PASS [   0.223s] (255/508) surge-persistence runs::escalations::tests::list_loop_guard_stopped_runs_finds_only_the_guard_tripped_run
+        PASS [   0.106s] (256/508) surge-persistence runs::inspection::tests::database_without_registry_is_present_not_absent
+        PASS [   0.021s] (257/508) surge-persistence runs::inspection::tests::exact_summary_inspection_reports_invalid_database
+        PASS [   0.155s] (258/508) surge-persistence runs::inspection::paged_owned_history_tests::input_manifest_repeat_after_startup_closes_is_rejected
+        PASS [   0.146s] (259/508) surge-persistence runs::inspection::tests::exact_summary_inspection_preserves_custom_path_and_handles_absence
+        PASS [   0.021s] (260/508) surge-persistence runs::inspection::tests::readonly_open_cannot_recreate_a_database_that_disappeared
+        PASS [   0.020s] (261/508) surge-persistence runs::inspection::tests::summary_inspection_does_not_create_missing_home
+        PASS [   0.132s] (262/508) surge-persistence runs::inspection::tests::folded_history_rejects_orphan_stage_route
+        PASS [   0.101s] (263/508) surge-persistence runs::inspection::tests::malformed_event_is_an_error_not_an_empty_log
+        PASS [   0.128s] (264/508) surge-persistence runs::inspection::tests::incremental_snapshot_limits_rows_and_does_not_decode_old_payloads
+        PASS [   0.727s] (265/508) surge-persistence runs::busy::tests::contended_registry_write_in_task_keeps_single_worker_running
+        PASS [   0.029s] (266/508) surge-persistence runs::migrations::tests::append_only_trigger_blocks_delete_on_events
+        PASS [   0.306s] (267/508) surge-persistence runs::inspection::paged_owned_history_tests::folded_history_rejects_forged_stage_effects_digest
+        PASS [   0.026s] (268/508) surge-persistence runs::migrations::tests::append_only_trigger_blocks_update_on_events
+        PASS [   0.023s] (269/508) surge-persistence runs::migrations::tests::apply_per_run_to_fresh_db
+        PASS [   0.029s] (270/508) surge-persistence runs::migrations::tests::stage_usage_migrations_preserve_existing_attempt_rows
+        PASS [   0.115s] (271/508) surge-persistence runs::inspection::tests::summary_inspection_reads_existing_rows_with_limit
+        PASS [   0.106s] (272/508) surge-persistence runs::inspection::tests::wal_events_are_read_without_repairing_registry_status
+        PASS [   0.051s] (273/508) surge-persistence runs::migrations::tests::apply_registry_to_fresh_db
+        PASS [   0.115s] (274/508) surge-persistence runs::inspection::tests::symlink_database_is_rejected_without_touching_target
+        PASS [   0.085s] (275/508) surge-persistence runs::migrations::tests::apply_is_idempotent
+        PASS [   0.021s] (276/508) surge-persistence runs::pragmas::tests::memory_store_pragmas_carry_wal_and_a_busy_timeout
+        PASS [   0.027s] (277/508) surge-persistence runs::pragmas::tests::pragmas_apply_to_in_memory_db
+        PASS [   0.265s] (278/508) surge-persistence runs::inspection::tests::full_snapshot_rejects_nonpositive_rows_before_valid_history
+        PASS [   0.020s] (279/508) surge-persistence runs::pragmas::tests::registry_pragmas_apply
+        PASS [   0.054s] (280/508) surge-persistence runs::migrations::work_item_upgrade_tests::adding_persistent_tasks_preserves_existing_registry_rows_without_association
+        PASS [   0.060s] (281/508) surge-persistence runs::migrations::verification_upgrade_tests::upgrade_downgrades_old_registry_proof_without_any_new_run_event
+        PASS [   0.019s] (282/508) surge-persistence runs::query::tests::a_fresh_streak_after_reset_counts_from_zero_and_can_escalate_again
+        PASS [   0.022s] (283/508) surge-persistence runs::query::tests::a_second_park_after_a_wake_records_its_own_worktree
+        PASS [   0.021s] (284/508) surge-persistence runs::query::tests::blind_park_limit_escalated_flag_is_set_by_the_escalation_event
+        PASS [   0.035s] (285/508) surge-persistence runs::process::tests::zero_or_negative_pid_is_not_alive
+        PASS [   0.052s] (286/508) surge-persistence runs::process::tests::current_process_is_alive
+        PASS [   0.018s] (287/508) surge-persistence runs::query::tests::consecutive_blind_parks_counts_policy_backoff_parks
+        PASS [   0.049s] (288/508) surge-persistence runs::process::tests::impossibly_high_pid_is_not_alive
+        PASS [   0.020s] (289/508) surge-persistence runs::query::tests::display_rejects_non_start_origin_even_if_a_later_start_or_terminal_folds
+        PASS [   0.019s] (290/508) surge-persistence runs::query::tests::display_requires_valid_prefix_and_terminal_overrides_crash
+        PASS [   0.020s] (291/508) surge-persistence runs::query::tests::empty_event_list_yields_empty_snapshot
+        PASS [   0.021s] (292/508) surge-persistence runs::query::tests::outcome_reported_updates_last_outcome
+        PASS [   0.021s] (293/508) surge-persistence runs::query::tests::observed_reset_park_does_not_increment_the_blind_streak
+        PASS [   0.021s] (294/508) surge-persistence runs::query::tests::run_aborted_marks_terminal_not_failed_consistent_with_display
+        PASS [   0.022s] (295/508) surge-persistence runs::query::tests::run_failed_marks_terminal_and_failed
+        PASS [   0.023s] (296/508) surge-persistence runs::query::tests::run_completed_marks_terminal_not_failed
+        PASS [   0.020s] (297/508) surge-persistence runs::query::tests::run_parked_records_the_worktree
+        PASS [   0.022s] (298/508) surge-persistence runs::query::tests::run_woke_from_park_clears_the_recorded_worktree
+        PASS [   0.024s] (299/508) surge-persistence runs::query::tests::stage_completed_resets_the_blind_streak_and_the_escalation_flag
+        PASS [   0.023s] (300/508) surge-persistence runs::query::tests::stage_entered_updates_active_node_and_attempt
+        PASS [   0.022s] (301/508) surge-persistence runs::query::tests::started_event_populates_start_time_only
+        PASS [   0.099s] (302/508) surge-persistence runs::registry::tests::clear_parked_transitions_status_and_nulls_wake_at
+        PASS [   0.114s] (303/508) surge-persistence runs::registry::tests::clear_parked_run_is_no_longer_returned_by_due_parked
+        PASS [   0.108s] (304/508) surge-persistence runs::registry::tests::due_parked_orders_by_wake_at_ascending
+        PASS [   0.111s] (305/508) surge-persistence runs::registry::tests::due_parked_excludes_parked_row_with_null_wake_at
+        PASS [   0.104s] (306/508) surge-persistence runs::registry::tests::insert_get_list_delete_roundtrip
+        PASS [   0.117s] (307/508) surge-persistence runs::registry::tests::due_parked_requires_both_parked_status_and_elapsed_wake_at
+        PASS [   0.084s] (308/508) surge-persistence runs::registry::tests::list_filter_by_status
+        PASS [   0.018s] (309/508) surge-persistence runs::registry_exec::tests::caller_drop_before_commit_decision_abandons
+        PASS [   0.077s] (310/508) surge-persistence runs::registry_exec::tests::caller_drop_after_commit_decision_waits_for_settlement
+        PASS [   0.110s] (311/508) surge-persistence runs::registry::tests::set_run_parked_transitions_status_and_records_wake_at
+        PASS [   0.101s] (312/508) surge-persistence runs::registry::tests::stale_crash_rewrite_requires_same_owner_and_active_status
+        PASS [   0.101s] (313/508) surge-persistence runs::registry::tests::update_status_transitions
+        PASS [   0.017s] (314/508) surge-persistence runs::seq::tests::ordering_works_as_u64
+        PASS [   0.120s] (315/508) surge-persistence runs::registry::tests::suffix_lookup_matches_the_tail_literally_and_sees_every_run
+        PASS [   0.024s] (316/508) surge-persistence runs::seq::tests::zero_is_initial
+        PASS [   0.098s] (317/508) surge-persistence runs::storage::capacity_door_tests::clear_capacity_without_row_does_not_wait_on_registry_lock
+        PASS [   0.104s] (318/508) surge-persistence runs::storage::existing_run_upgrade_tests::writer_missing_run_does_not_create_events_database
+        PASS [   0.119s] (319/508) surge-persistence runs::storage::capacity_door_tests::observe_capacity_then_capacity_status_round_trips_through_storage
+        PASS [   0.152s] (320/508) surge-persistence runs::registry_exec::tests::write_waiting_on_lock_leaves_async_worker_free
+        PASS [   0.139s] (321/508) surge-persistence runs::storage::capacity_door_tests::set_run_parked_transitions_status_and_records_wake_at_ms
+        PASS [   0.116s] (322/508) surge-persistence runs::storage::existing_run_upgrade_tests::writer_refuses_unknown_schema_without_upgrade_and_releases_ownership
+        PASS [   0.032s] (323/508) surge-persistence runs::views::tests::approval_requested_inserts_pending_row
+        PASS [   0.096s] (324/508) surge-persistence runs::storage::snapshot_active_runs_tests::snapshot_returns_active_runs_only
+        PASS [   0.124s] (325/508) surge-persistence runs::storage::parked_survives_stale_pid_tests::parked_run_with_dead_pid_stays_parked
+        PASS [   0.125s] (326/508) surge-persistence runs::storage::set_run_status_tests::set_run_status_updates_registry
+        PASS [   0.026s] (327/508) surge-persistence runs::views::tests::approval_requested_then_decided_clears_row
+        PASS [   0.019s] (328/508) surge-persistence runs::views::tests::duplicate_task_discovered_is_ignored_in_view
+        PASS [   0.028s] (329/508) surge-persistence runs::views::tests::artifact_produced_does_not_overwrite_existing_row
+        PASS [   0.026s] (330/508) surge-persistence runs::views::tests::artifact_produced_inserts_row
+        PASS [   0.158s] (331/508) surge-persistence runs::storage::existing_run_upgrade_tests::writer_upgrades_legacy_run_before_current_reads_and_preserves_history
+        PASS [   0.628s] (332/508) surge-persistence runs::pool::tests::reader_pool_churn_releases_actual_maintenance_workers_promptly
+        PASS [   0.023s] (333/508) surge-persistence runs::views::tests::no_op_variant_does_not_touch_views
+        PASS [   0.025s] (334/508) surge-persistence runs::views::tests::roadmap_patch_draft_and_pending_clear_stale_lifecycle_fields
+        PASS [   0.025s] (335/508) surge-persistence runs::views::tests::roadmap_patch_lifecycle_updates_view
+        PASS [   0.024s] (336/508) surge-persistence runs::views::tests::stage_completed_targets_max_attempt
+        PASS [   0.336s] (337/508) surge-persistence runs::registry_exec::tests::write_abandoned_while_busy_never_commits
+        PASS [   0.030s] (338/508) surge-persistence runs::views::tests::run_parked_and_woke_are_a_deliberate_no_op_for_views
+        PASS [   0.026s] (339/508) surge-persistence runs::views::tests::stage_entered_inserts_row
+        PASS [   0.022s] (340/508) surge-persistence runs::views::tests::stage_entered_then_completed_updates_row
+        PASS [   0.024s] (341/508) surge-persistence runs::views::tests::stage_failed_clears_outcome_on_max_attempt
+        PASS [   0.029s] (342/508) surge-persistence runs::views::tests::stage_tool_receipt_does_not_complete_materialized_stage
+        PASS [   0.027s] (343/508) surge-persistence runs::views::tests::task_ledger_events_maintain_view
+        PASS [   0.018s] (344/508) surge-persistence runs::writer_slot::tests::is_held_reflects_state
+        PASS [   0.023s] (345/508) surge-persistence runs::views::tests::tokens_consumed_skips_cost_when_none
+        PASS [   0.026s] (346/508) surge-persistence runs::views::tests::tokens_consumed_accumulates
+        PASS [   0.023s] (347/508) surge-persistence runs::writer_slot::tests::different_run_ids_independent
+        PASS [   0.021s] (348/508) surge-persistence runs::writer_slot::tests::second_acquire_fails_while_first_held
+        PASS [   0.025s] (349/508) surge-persistence secrets::tests::telegram_token_key_is_stable
+        PASS [   0.043s] (350/508) surge-persistence secrets::tests::delete_missing_key_is_a_noop
+        PASS [   0.043s] (351/508) surge-persistence secrets::tests::has_secret_reflects_presence
+        PASS [   0.047s] (352/508) surge-persistence secrets::tests::delete_removes_secret
+        PASS [   0.050s] (353/508) surge-persistence secrets::tests::round_trip_set_then_get
+        PASS [   0.056s] (354/508) surge-persistence secrets::tests::get_missing_key_returns_none
+        PASS [   0.058s] (355/508) surge-persistence secrets::tests::set_overwrites_existing_value
+        PASS [   0.020s] (356/508) surge-persistence store::tests::test_checkpoint_and_resume_task_state
+        PASS [   0.027s] (357/508) surge-persistence store::tests::default_path_respects_isolated_surge_home
+        PASS [   0.022s] (358/508) surge-persistence store::tests::test_checkpoint_replaces_existing_state
+        PASS [   0.022s] (359/508) surge-persistence store::tests::test_checkpoint_various_task_states
+        PASS [   0.020s] (360/508) surge-persistence store::tests::test_circuit_breaker_state_methods
+        PASS [   0.025s] (361/508) surge-persistence store::tests::test_delete_circuit_breaker_state
+        PASS [   0.022s] (362/508) surge-persistence store::tests::test_get_nonexistent_session_returns_none
+        PASS [   0.021s] (363/508) surge-persistence store::tests::test_get_nonexistent_subtask_returns_none
+        PASS [   0.024s] (364/508) surge-persistence store::tests::test_get_nonexistent_spec_returns_none
+        PASS [   0.026s] (365/508) surge-persistence store::tests::test_insert_and_get_session
+        PASS [   0.020s] (366/508) surge-persistence store::tests::test_list_all_specs
+        PASS [   0.024s] (367/508) surge-persistence store::tests::test_insert_duplicate_session_replaces
+        PASS [   0.019s] (368/508) surge-persistence store::tests::test_list_sessions_by_spec
+        PASS [   0.022s] (369/508) surge-persistence store::tests::test_list_circuit_breaker_states_by_task
+        PASS [   0.022s] (370/508) surge-persistence store::tests::test_list_sessions_by_subtask
+        PASS [   0.021s] (371/508) surge-persistence store::tests::test_list_subtasks_by_spec
+        PASS [   0.019s] (372/508) surge-persistence store::tests::test_list_task_states_by_spec
+        PASS [   0.019s] (373/508) surge-persistence store::tests::test_resume_nonexistent_task_returns_none
+        PASS [   0.023s] (374/508) surge-persistence store::tests::test_load_nonexistent_circuit_breaker_returns_none
+        PASS [   0.021s] (375/508) surge-persistence store::tests::test_save_and_load_circuit_breaker_state
+        PASS [   0.020s] (376/508) surge-persistence store::tests::test_save_circuit_breaker_replaces_existing
+        PASS [   0.019s] (377/508) surge-persistence store::tests::test_time_range_get_cost_by_agent_in_range
+        PASS [   0.021s] (378/508) surge-persistence store::tests::test_store_in_memory
+        PASS [   0.023s] (379/508) surge-persistence store::tests::test_time_range_get_cost_in_time_range
+        PASS [   0.023s] (380/508) surge-persistence store::tests::test_time_range_get_sessions_by_time_range
+        PASS [   0.022s] (381/508) surge-persistence store::tests::test_time_range_get_top_n_specs_by_cost
+        PASS [   0.016s] (382/508) surge-persistence store::tests::test_total_session_count
+        PASS [   0.023s] (383/508) surge-persistence store::tests::test_total_estimated_cost
+        PASS [   0.022s] (384/508) surge-persistence store::tests::test_upsert_and_get_subtask
+        PASS [   0.025s] (385/508) surge-persistence store::tests::test_upsert_and_get_spec
+        PASS [   0.021s] (386/508) surge-persistence store::tests::test_upsert_subtask_updates_existing
+        PASS [   0.026s] (387/508) surge-persistence store::tests::test_upsert_spec_updates_existing
+        PASS [   0.057s] (388/508) surge-persistence telegram::cards::tests::close_is_idempotent
+        PASS [   0.110s] (389/508) surge-persistence task_ledger::tests::discovered_from_is_preserved_across_later_status_upserts
+        PASS [   0.107s] (390/508) surge-persistence task_ledger::tests::is_evidence_backed_requires_current_completed_and_verified
+        PASS [   0.104s] (391/508) surge-persistence task_ledger::tests::upsert_is_idempotent_on_run_task_key
+        PASS [   0.115s] (392/508) surge-persistence task_ledger::tests::list_filters_by_status_and_discovered
+        PASS [   0.105s] (393/508) surge-persistence task_ledger::tests::with_verified_normalized_matches_the_table_on_the_boundary_case
+        PASS [   0.111s] (394/508) surge-persistence task_ledger::tests::upsert_then_get_roundtrips
+        PASS [   0.051s] (395/508) surge-persistence telegram::cards::tests::close_marks_closed_at_and_excludes_from_find_open
+        PASS [   0.045s] (396/508) surge-persistence telegram::cards::tests::find_open_returns_oldest_first
+        PASS [   0.050s] (397/508) surge-persistence telegram::cards::tests::mark_message_sent_records_message_id
+        PASS [   0.050s] (398/508) surge-persistence telegram::cards::tests::update_content_hash_returns_true_on_change
+        PASS [   0.048s] (399/508) surge-persistence telegram::cards::tests::upsert_creates_row_with_null_message_id
+        PASS [   0.053s] (400/508) surge-persistence telegram::cards::tests::update_content_hash_returns_false_on_no_op
+        PASS [   0.063s] (401/508) surge-persistence telegram::cards::tests::mark_message_sent_unknown_card_returns_not_found
+        PASS [   0.061s] (402/508) surge-persistence telegram::cards::tests::upsert_is_idempotent_on_same_triple
+        PASS [   0.051s] (403/508) surge-persistence telegram::cards::tests::upsert_separates_attempts_with_distinct_card_ids
+        PASS [   0.052s] (404/508) surge-persistence telegram::pairing::tests::consume_rejects_expired_token
+        PASS [   0.051s] (405/508) surge-persistence telegram::pairing::tests::consume_returns_label_and_marks_consumed
+        PASS [   0.062s] (406/508) surge-persistence telegram::pairing::tests::double_mint_with_same_label_produces_distinct_tokens
+        PASS [   0.070s] (407/508) surge-persistence telegram::pairing::tests::consume_rejects_unknown_token
+        PASS [   0.065s] (408/508) surge-persistence telegram::pairing::tests::failed_allowlist_insert_rolls_back_consumption
+        PASS [   0.059s] (409/508) surge-persistence telegram::pairing::tests::legacy_unbound_code_cannot_admit_a_chat
+        PASS [   0.125s] (410/508) surge-persistence telegram::pairing::tests::concurrent_pair_code_consumption_has_exactly_one_winner
+        PASS [   0.061s] (411/508) surge-persistence telegram::pairing::tests::mint_creates_unique_token
+        PASS [   0.060s] (412/508) surge-persistence telegram::pairing::tests::wrong_chat_does_not_consume_code_and_expiry_is_inclusive
+        PASS [   0.046s] (413/508) surge-persistence telegram::pairings::tests::list_active_orders_by_paired_at_ascending
+        PASS [   0.055s] (414/508) surge-persistence telegram::pairings::tests::double_pair_same_chat_updates_label
+        PASS [   0.050s] (415/508) surge-persistence telegram::pairings::tests::re_pair_replaces_label_and_clears_revoked_at
+        PASS [   0.060s] (416/508) surge-persistence telegram::pairings::tests::paired_chat_is_admitted
+        PASS [   0.051s] (417/508) surge-persistence telegram::pairings::tests::unpaired_chat_is_not_admitted
+        PASS [   0.051s] (418/508) surge-persistence telegram::pairings::tests::revoked_chat_is_not_admitted
+        PASS [   0.039s] (419/508) surge-persistence work_items::owned_flow::private_inputs::tests::empty_snapshots_never_open_private_namespace_and_keep_selection
+        PASS [   0.165s] (420/508) surge-persistence work_items::owned_flow::private_files::tests::private_namespace_and_objects_reject_symlinks_hardlinks_and_replacement
+        PASS [   0.012s] (421/508) surge-persistence work_items::owned_flow::refusal_owner::tests::lifecycle_probe
+        PASS [   0.179s] (422/508) surge-persistence work_items::owned_flow::private_files::tests::repeated_empty_checks_and_immutable_publication_use_real_fixed_names
+        PASS [   0.033s] (423/508) surge-persistence work_items::owned_flow::source_snapshot::tests::captured_graph_is_original_and_replacement_invalidates_held_name
+        PASS [   0.046s] (424/508) surge-persistence work_items::owned_flow::source_snapshot::tests::source_capture_rejects_escape_symlinks_fifo_and_oversize_without_following
+        PASS [   0.280s] (425/508) surge-persistence work_items::owned_flow::private_inputs::tests::partial_list_and_object_transplants_fail_whole_envelope_authentication
+        PASS [   0.329s] (426/508) surge-persistence work_items::owned_flow::private_inputs::tests::private_inputs_keep_actual_policy_and_transport_but_public_projection_is_opaque
+        PASS [   0.236s] (427/508) surge-persistence work_items::owned_flow::refusal_owner::tests::ready_wait_is_outside_registry_transaction_and_newer_stop_wins
+        PASS [   0.180s] (428/508) surge-persistence work_items::owned_flow::tests::abandoned_first_body_ids_and_source_are_retained_without_an_accepted_item
+        PASS [   0.160s] (429/508) surge-persistence work_items::owned_flow::tests::atomic_acceptance_retains_launch_arc_and_receipt_replay_conveys_no_authority
+        PASS [   0.022s] (430/508) surge-persistence work_items::owned_flow::tests::owned_launch_child
+        PASS [   0.423s] (431/508) surge-persistence work_items::owned_flow::refusal::tests::production_entry_waits_ready_before_transaction_then_observes_real_newer_stop
+        PASS [   0.423s] (432/508) surge-persistence work_items::owned_flow::refusal::tests::production_startup_artifact_io_cannot_hold_registry_transaction_against_newer_stop
+        PASS [   0.129s] (433/508) surge-persistence work_items::owned_flow::tests::canceled_caller_leaves_the_real_blocking_worker_as_preparation_owner
+        PASS [   0.140s] (434/508) surge-persistence work_items::owned_flow::tests::queued_stop_without_any_memory_queue_cancels_the_real_intent
+        PASS [   0.208s] (435/508) surge-persistence work_items::owned_flow::tests::launch_owner_handoff_excludes_a_real_process_and_death_reacquires_original_object
+        PASS [   0.153s] (436/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::authenticated_same_node_reentry_retains_a_newer_unadmitted_plan
+        PASS [   0.186s] (437/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::alternate_origin_replay_preserves_newer_available_without_open_authority
+        PASS [   0.187s] (438/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::automatic_wake_atomically_reserves_continue_candidate_and_handoff
+        PASS [   0.122s] (439/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::automatic_wake_requires_current_confirmed_capacity_control_without_partial_writes
+        PASS [   0.145s] (440/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::exact_resume_epoch_preserves_provider_and_confirms_fresh_internal_session_idempotently
+        PASS [   0.168s] (441/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::automatic_wake_subscriber_ack_before_prompt_keeps_exact_authority
+        PASS [   0.162s] (442/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_is_reservation_and_recipe_scoped_after_reopen
+        PASS [   0.211s] (443/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::fresh_skip_and_actual_exhaustion_park_with_the_real_provider_origin
+        PASS [   0.158s] (444/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::generic_false_probe_has_no_typed_origin_and_cannot_authorize_cleanup_stop
+        PASS [   0.309s] (445/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_original_ttl_and_reset_each_bound_latest_probe
+        PASS [   0.678s] (446/508) surge-persistence work_items::owned_flow::tests::started_effect_authority_follows_the_real_latest_control_and_assignment
+        PASS [   0.138s] (447/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::historical_exhaustion_without_admission_is_not_actionable
+        PASS [   0.399s] (448/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_unknown_probes_never_extend_typed_ttl_or_create_origin
+        PASS [   0.197s] (449/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::host_origin_reopens_and_replays_without_replacing_later_available_probe
+        PASS [   0.164s] (450/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::newer_opening_without_quota_supersedes_exact_exhaustion
+        PASS [   0.165s] (451/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::next_frozen_candidate_requires_typed_origin_and_is_reserved_once_in_policy_order
+        PASS [   0.274s] (452/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::late_old_origin_is_audit_only_and_unrelated_recipes_do_not_supersede
+        PASS [   0.685s] (453/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_rejects_corrupted_original_or_latest_bounds
+        PASS [   0.188s] (454/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::one_opening_cannot_attach_a_conflicting_exhaustion_origin
+        PASS [   0.188s] (455/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::planned_binding_retains_real_occurrence_and_first_open_is_one_shot
+        PASS [   1.532s] (456/508) surge-persistence work_items::owned_flow::refusal_owner::tests::actual_shutdown_and_creation_barriers_in_isolated_processes
+        PASS [   0.164s] (457/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::production_reservation_creates_one_opening_epoch_and_replay_cannot_spend_twice
+        PASS [   0.153s] (458/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::resume_store_admission_is_spent_once_without_an_rpc
+        PASS [   0.147s] (459/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::terminal_journal_cannot_spend_reserved_opening_admission
+        PASS [   0.314s] (460/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::stopped_source_and_later_closed_cycle_cannot_create_a_typed_origin
+        PASS [   0.182s] (461/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::two_store_restore_epochs_retain_provider_invocation_and_distinct_internal_sessions
+        PASS [   0.022s] (462/508) surge-persistence work_items::recovery_cycles::handoffs::tests::deserialized_restore_cannot_infer_missing_saved_identity
+        PASS [   1.191s] (463/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::fresh_typed_exhaustion_requires_original_and_latest_false_windows
+        PASS [   0.028s] (464/508) surge-persistence work_items::recovery_cycles::policy::tests::frozen_candidates_reject_known_account_aliases_and_disabled_fallback
+        PASS [   0.202s] (465/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::typed_origin_survives_unknown_probe_and_closed_source_for_nonwake_cleanup_stop
+        PASS [   0.138s] (466/508) surge-persistence work_items::recovery_cycles::tests::bare_and_prefixed_invocation_share_one_cycle_namespace
+        PASS [   0.198s] (467/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::unexecuted_cancellation_never_erases_historical_provider_uncertainty
+        PASS [   0.170s] (468/508) surge-persistence work_items::recovery_cycles::tests::bounded_policy_checks_continue_after_sixteen_cycles
+        PASS [   0.025s] (469/508) surge-persistence work_items::recovery_cycles::tests::deserialization_enforces_private_constructor_invariants
+        PASS [   0.119s] (470/508) surge-persistence work_items::recovery_cycles::tests::cancelled_schedule_cannot_consume_retained_wake_audit
+        PASS [   0.122s] (471/508) surge-persistence work_items::recovery_cycles::tests::concurrent_wake_consumption_creates_one_next_cycle
+        PASS [   0.851s] (472/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::other_epoch_reused_internal_session_wrong_stage_and_stale_control_never_establish
+        PASS [   0.023s] (473/508) surge-persistence work_items::recovery_cycles::tests::placeholder_upgrade_preserves_nonactionable_audit_and_reapply
+        PASS [   0.102s] (474/508) surge-persistence work_items::recovery_cycles::tests::known_accounts_deduplicate_and_unknown_accounts_do_not_guess_merges
+        PASS [   0.113s] (475/508) surge-persistence work_items::recovery_cycles::tests::newer_available_and_unknown_preserve_observation_order
+        PASS [   0.096s] (476/508) surge-persistence work_items::recovery_cycles::tests::stale_revision_claim_and_manual_control_reject_mutations
+        PASS [   0.240s] (477/508) surge-persistence work_items::recovery_cycles::tests::confirmed_capacity_rebind_preserves_receipts_but_manual_fence_rejects
+        PASS [   0.023s] (478/508) surge-persistence work_items::start_preparation::secure_lock::tests::arc_retains_real_exclusion_until_last_effect_owner_exits
+        PASS [   0.034s] (479/508) surge-persistence work_items::start_preparation::secure_lock::tests::preparation_lock_rejects_extended_acl_grants
+        PASS [   0.023s] (480/508) surge-persistence work_items::start_preparation::secure_lock::tests::preparation_lock_rejects_foreign_or_writable_ancestry_and_unsafe_home_alias
+        PASS [   0.118s] (481/508) surge-persistence work_items::recovery_cycles::tests::unknown_or_expired_evidence_cannot_arm_observed_reset
+        PASS [   0.162s] (482/508) surge-persistence work_items::recovery_cycles::tests::reservation_and_unknown_evidence_survive_reopen_without_redispatch
+        PASS [   1.254s] (483/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::malformed_or_advanced_plans_never_create_a_binding
+        PASS [   0.023s] (484/508) surge-persistence work_items::start_preparation::secure_lock::tests::typed_namespaces_hold_the_original_object_and_reject_replacement_after_death
+        PASS [   0.029s] (485/508) surge-persistence work_items::start_preparation::secure_lock::tests::preparation_lock_rejects_symlink_fifo_links_permissions_and_parent_replacement
+        PASS [   0.018s] (486/508) surge-persistence work_items::tests::cross_process_claim_probe
+        PASS [   0.164s] (487/508) surge-persistence work_items::recovery_cycles::tests::unknown_policy_wake_rolls_once_and_retains_history_across_reopen
+        PASS [   0.128s] (488/508) surge-persistence work_items::tests::accepted_revision_is_immutable_and_replay_precedes_stale_cas
+        PASS [   0.125s] (489/508) surge-persistence work_items::tests::active_attempt_blocks_acceptance_and_archive_but_allows_discussion
+        PASS [   0.114s] (490/508) surge-persistence work_items::tests::live_start_preparation_refuses_generic_reservation
+        PASS [   0.021s] (491/508) surge-persistence work_items::tests::preparation_owner_child
+        PASS [   0.114s] (492/508) surge-persistence work_items::tests::lock_fences_second_host_and_reacquire_invalidates_old_sql_claim
+        PASS [   0.219s] (493/508) surge-persistence work_items::tests::interprocess_launch_lock_blocks_other_host_and_releases_on_exit
+        PASS [   0.125s] (494/508) surge-persistence work_items::tests::old_terminal_settlement_cannot_release_new_attempt_and_workspace_is_retained
+        PASS [   0.130s] (495/508) surge-persistence work_items::tests::shared_launch_owner_keeps_os_lock_until_last_clone_drops
+        PASS [   0.127s] (496/508) surge-persistence work_items::tests::start_preparation_concurrent_exact_operation_has_one_attempt_and_receipt
+        PASS [   0.107s] (497/508) surge-persistence work_items::tests::start_preparation_consumes_once_and_replay_does_no_filesystem_work
+        PASS [   0.170s] (498/508) surge-persistence work_items::tests::start_preparation_dead_row_is_reclaimed_by_lifecycle_under_the_lock
+        PASS [   0.404s] (499/508) surge-persistence work_items::tests::histories_have_stable_bounded_cursors_and_no_guess_backfill
+        PASS [   0.202s] (500/508) surge-persistence work_items::tests::start_preparation_does_not_hold_registry_lock_while_external_work_is_blocked
+        PASS [   0.180s] (501/508) surge-persistence work_items::tests::start_preparation_lifecycle_busy_discussion_drift_and_drop_release
+        PASS [   0.156s] (502/508) surge-persistence work_items::tests::start_preparation_relocated_live_lock_never_proves_dead_ownership
+        PASS [   0.263s] (503/508) surge-persistence work_items::tests::start_preparation_killed_owner_can_be_reclaimed_without_provider_authority
+        PASS [   1.513s] (504/508) surge-persistence work_items::recovery_cycles::handoffs::opening::tests::planned_park_rejects_advanced_journal_without_mutating_capacity_authority
+        PASS [   0.140s] (505/508) surge-persistence work_items::tests::suspension_intent_does_not_authorize_continue_without_confirmed_journal_fence
+        PASS [   0.168s] (506/508) surge-persistence work_items::usage_tests::durable_usage_pages_are_charged_once_and_unknown_pricing_stays_unknown
+        PASS [   0.325s] (507/508) surge-persistence work_items::tests::start_preparation_snapshot_drift_never_creates_an_attempt
+        PASS [   5.207s] (508/508) surge-persistence runs::inspection::paged_owned_history_tests::owned_history_folds_beyond_ten_thousand_events_and_checks_late_gaps
+────────────
+     Summary [   6.551s] 508 tests run: 508 passed, 0 skipped

@@ -1,6 +1,7 @@
 //! Task 22 — bootstrap materializes a roadmap-driven multi-milestone flow.
 
 mod fixtures;
+use fixtures::runtime_home as runtime_home_fixture;
 
 use surge_core::loop_config::IterableSource;
 use surge_core::node::NodeConfig;
@@ -49,6 +50,7 @@ async fn bootstrap_multi_milestone_materializes_outer_and_inner_loops() {
     assert!(has_current_milestone_task_loop(
         &materialized.materialized_graph
     ));
+    harness.close();
 }
 
 fn has_roadmap_milestone_outer_loop(graph: &surge_core::graph::Graph) -> bool {

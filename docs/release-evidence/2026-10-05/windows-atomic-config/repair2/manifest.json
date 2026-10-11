@@ -1,0 +1,16 @@
+{
+  "source_sha256": {
+    "crates/surge-core/src/config/io/windows_atomic.rs": "9df388d18783ce24cca3b428e277038bebc7126e20a762f259d42675ac18a3a8",
+    "crates/surge-core/src/config/io.rs": "1105f60a518fc5404b06c9a56adc1a9d44795ed87d877a140363bff0a10932cc"
+  },
+  "raw_log_sha256": {
+    "surge-windows-c-repair2-cross-clippy.log": "5462d86b2e56f7f707359b14385767de737ee0e194612d94ea07d8b5f2fb3dc9",
+    "surge-windows-c-repair2-fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "surge-windows-c-repair2-mac-tests.log": "267e2a83886cbcf228252229cbba66b2c584656d759b77fdac21f726aa89e25f",
+    "surge-windows-c-repair2-msrv-cross.log": "6172f3eb84b77e0ae3b1e34e5588185d70c04fd02f84cc93cd0cbad0126b9c68",
+    "surge-windows-c-repair2-cross-clippy-final.log": "ab4ee455a7ade5a8a756962cb63076d245ac08f2ade8eedb4d2d362309ea36d9",
+    "surge-windows-c-repair2-mac-clippy.log": "f9460b605eb17cc9a2fa7f07f34ad842766d0094d6f580f68de6e0a44e5c467c",
+    "surge-windows-c-repair2-fmt-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "surge-windows-c-repair2-mac-tests-final.log": "1d13937f1485b2fa2dc9c20ea965bb3f030c76a25c1c418ef8b20c143dd74f4d"
+  }
+}

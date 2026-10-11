@@ -1,0 +1,62 @@
+[
+  {
+    "file": "surge-release-final-ignored-acp.log",
+    "bytes": 1082,
+    "sha256": "5db1e389da4428d81adcc0e8ffbf8348b19040ef50988f14f20f3e224234eed3"
+  },
+  {
+    "file": "surge-release-final-ignored-binaries-build.log",
+    "bytes": 1297,
+    "sha256": "1612e949cd70cf67ec0dbf1f2b3dbfeeeaf4534aa0dcf9d9b8f1ed82792f1c35"
+  },
+  {
+    "file": "surge-release-final-ignored-daemon.log",
+    "bytes": 1234,
+    "sha256": "c248df193d181c11bfb5a77fde32873128168c40ed9238ab62507721492ca7bb"
+  },
+  {
+    "file": "surge-release-final-ignored-engine.log",
+    "bytes": 982,
+    "sha256": "11f1c0cea757283449de9b969e694612e95eba36b522302eea80d059e32aef98"
+  },
+  {
+    "file": "surge-release-final-ignored-mcp-build.log",
+    "bytes": 1124,
+    "sha256": "8b7e6b974cca4381ca1be63449d661d038eeac0bde02fd7ce01e1cbcd62fd3e1"
+  },
+  {
+    "file": "surge-release-final-ignored-mcp.log",
+    "bytes": 502,
+    "sha256": "c55dac3b00c86349c997daea4682f52c51fa98213362751c85107edbec6e9247"
+  },
+  {
+    "file": "surge-release-final-ignored-mock-build.log",
+    "bytes": 1168,
+    "sha256": "534f1a3097a1dddea0e42bf04d5065a14cd1f2cef2137b9c78d7a533f8b051a9"
+  },
+  {
+    "file": "surge-release-final-ignored-restart.log",
+    "bytes": 840,
+    "sha256": "a665503afd7ae5fac89c333786b76f612d2fdaaf8366f5e30fc2e309ad586d4b"
+  },
+  {
+    "file": "surge-release-final-native-rollback-first.log",
+    "bytes": 458,
+    "sha256": "36f7a248853fb5b94fb8cb2b0218131f435aae7e8ef3a1007d4c56d8949014a9"
+  },
+  {
+    "file": "surge-release-final-native-rollback.log",
+    "bytes": 902,
+    "sha256": "3721d580fb3d6577cb423a223433123896d051b523b1cd6d0c5570c62d6f6fba"
+  },
+  {
+    "file": "rollback-first-commands.log",
+    "bytes": 4217,
+    "sha256": "b5601223a5d700bf3b6f9eb57aa30c5050eceb1b44aa34338ff7aa75d4b13346"
+  },
+  {
+    "file": "rollback-commands.log",
+    "bytes": 9566,
+    "sha256": "fab73f521f868a5f500c7e1805f425eed74a894f332729894d0e59f68f926679"
+  }
+]

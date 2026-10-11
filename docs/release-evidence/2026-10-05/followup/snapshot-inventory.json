@@ -1,0 +1,517 @@
+{
+  "bin": [
+    "directory",
+    493
+  ],
+  "bin/surge": [
+    "file",
+    493,
+    "0a6be79ac90f2577a014a26814e180b491438b5f811ad5b51cedd97a45b01268"
+  ],
+  "bin/surge-daemon": [
+    "file",
+    493,
+    "54db4abc0949803925f21bfeeb786314d8c74a4584999f4ce41e7aa38babd7f6"
+  ],
+  "home": [
+    "directory",
+    493
+  ],
+  "home/daemon": [
+    "directory",
+    448
+  ],
+  "home/daemon/daemon.log": [
+    "file",
+    420,
+    "36fdc7c46e1ae606bdc24406313300c1d102f580390cc92b962813773d9bc020"
+  ],
+  "home/daemon/version": [
+    "file",
+    420,
+    "6ad9613a455798d6d92e5f5f390ab4baa70596bc869ed6b17f5cdd2b28635f06"
+  ],
+  "home/db": [
+    "directory",
+    493
+  ],
+  "home/db/registry.sqlite": [
+    "file",
+    420,
+    "52b37702edc77f2d997c817502aa7817c22f22d5671988e20ceb9edc885a5b61"
+  ],
+  "home/runs": [
+    "directory",
+    493
+  ],
+  "home/runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ": [
+    "directory",
+    493
+  ],
+  "home/runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ/artifacts": [
+    "directory",
+    493
+  ],
+  "home/runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ/artifacts/5f49e434b38947617d276908088b20e57f38d2c8f151ef28c7379ca2fa8d6d02": [
+    "file",
+    420,
+    "5f49e434b38947617d276908088b20e57f38d2c8f151ef28c7379ca2fa8d6d02"
+  ],
+  "home/runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ/artifacts/index.json": [
+    "file",
+    420,
+    "ac384097ecb8eeae8335b7a08ea8dd80df97eac275e9897fd28222ffe7ab802e"
+  ],
+  "home/runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ/events.sqlite": [
+    "file",
+    420,
+    "f20bb8a1b620bb08e8aafc72abaab9412d96eed0c4589c3808d670716af7ff7c"
+  ],
+  "home/runs/run-01M46EP9NYW3C2AZG8EY2ZTRXQ/events.sqlite.lock": [
+    "file",
+    420,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "home/runs/run-01M46EP9WYGAJ6G0DB5KNMD70P": [
+    "directory",
+    493
+  ],
+  "home/runs/run-01M46EP9WYGAJ6G0DB5KNMD70P/artifacts": [
+    "directory",
+    493
+  ],
+  "home/runs/run-01M46EP9WYGAJ6G0DB5KNMD70P/artifacts/5f49e434b38947617d276908088b20e57f38d2c8f151ef28c7379ca2fa8d6d02": [
+    "file",
+    420,
+    "5f49e434b38947617d276908088b20e57f38d2c8f151ef28c7379ca2fa8d6d02"
+  ],
+  "home/runs/run-01M46EP9WYGAJ6G0DB5KNMD70P/artifacts/index.json": [
+    "file",
+    420,
+    "ac384097ecb8eeae8335b7a08ea8dd80df97eac275e9897fd28222ffe7ab802e"
+  ],
+  "home/runs/run-01M46EP9WYGAJ6G0DB5KNMD70P/events.sqlite": [
+    "file",
+    420,
+    "6cbabed6cca37d7a9e77d8c7e6d1c3c56936b566241728fb30a47f3f659b6c44"
+  ],
+  "home/runs/run-01M46EP9WYGAJ6G0DB5KNMD70P/events.sqlite.lock": [
+    "file",
+    420,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "home/work-items": [
+    "directory",
+    448
+  ],
+  "home/work-items/preparation-locks": [
+    "directory",
+    448
+  ],
+  "home/work-items/preparation-locks/flow-launch-v1-work-item-op-01M46EP92HFSZK89DNQSNA4P62-run-01M46EP9NYW3C2AZG8EY2ZTRXQ.lock": [
+    "file",
+    384,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "home/work-items/preparation-locks/flow-launch-v1-work-item-op-01M46EP9WQB5P005ESHANF7JQV-run-01M46EP9WYGAJ6G0DB5KNMD70P.lock": [
+    "file",
+    384,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "home/work-items/preparation-locks/flow-operation-v1-work-item-op-01M46EP92HFSZK89DNQSNA4P62.lock": [
+    "file",
+    384,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "home/work-items/preparation-locks/flow-operation-v1-work-item-op-01M46EP9WQB5P005ESHANF7JQV.lock": [
+    "file",
+    384,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "home/work-items/workspaces": [
+    "directory",
+    493
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ": [
+    "directory",
+    493
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ/.git": [
+    "file",
+    420,
+    "c2bdef031a405ac3abff8f5f5da1e2dd2cfeddc1fd2aed98856bab910ca8e1fd"
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ/.gitignore": [
+    "file",
+    420,
+    "eba8f9f896041def9e1287819c147b53af40594b856bba9810cd73c33c993cf9"
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ/.surge": [
+    "directory",
+    493
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ/.surge/profile_catalog.md": [
+    "file",
+    420,
+    "1b7ae809a214c7258431aeab05fdaca134c3a97bcbfbc12974ac13ab0c09a079"
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ/README.md": [
+    "file",
+    420,
+    "079bbeb89cd592ba65b49c9f69119153f32ea610672b12e46cc02b8fb5ef81cf"
+  ],
+  "home/work-items/workspaces/run-01M46EP9NYZPCC8FN9ZZCFRGCZ/flow.toml": [
+    "file",
+    420,
+    "da57d1368fda6ca8827b49ca6e1e8336ab44368037727339a544a6939f6529ef"
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG": [
+    "directory",
+    493
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG/.git": [
+    "file",
+    420,
+    "0f7c983c15b91380a7f6a16889ed7aea364d18a34e47ad4cad71b2edd4f30748"
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG/.gitignore": [
+    "file",
+    420,
+    "eba8f9f896041def9e1287819c147b53af40594b856bba9810cd73c33c993cf9"
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG/.surge": [
+    "directory",
+    493
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG/.surge/profile_catalog.md": [
+    "file",
+    420,
+    "1b7ae809a214c7258431aeab05fdaca134c3a97bcbfbc12974ac13ab0c09a079"
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG/README.md": [
+    "file",
+    420,
+    "079bbeb89cd592ba65b49c9f69119153f32ea610672b12e46cc02b8fb5ef81cf"
+  ],
+  "home/work-items/workspaces/run-01M46EP9WYC2CN6GXBYG44S2KG/flow.toml": [
+    "file",
+    420,
+    "da57d1368fda6ca8827b49ca6e1e8336ab44368037727339a544a6939f6529ef"
+  ],
+  "home/worktrees": [
+    "directory",
+    493
+  ],
+  "project": [
+    "directory",
+    493
+  ],
+  "project/.git": [
+    "directory",
+    493
+  ],
+  "project/.git/COMMIT_EDITMSG": [
+    "file",
+    420,
+    "081d933888f686681027092b1a80b106ad7ddac6137d935985665812820bc656"
+  ],
+  "project/.git/HEAD": [
+    "file",
+    420,
+    "f6f2b945f6c411b02ba3da9c7ace88dcf71b6af65ba2e0d89aa82900042b5a10"
+  ],
+  "project/.git/config": [
+    "file",
+    420,
+    "cae33efdb02cf774435c1ff9cb16bcc1014606908530c6e1dc727615fe3e8cda"
+  ],
+  "project/.git/description": [
+    "file",
+    420,
+    "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+  ],
+  "project/.git/hooks": [
+    "directory",
+    493
+  ],
+  "project/.git/hooks/applypatch-msg.sample": [
+    "file",
+    493,
+    "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+  ],
+  "project/.git/hooks/commit-msg.sample": [
+    "file",
+    493,
+    "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b"
+  ],
+  "project/.git/hooks/fsmonitor-watchman.sample": [
+    "file",
+    493,
+    "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0"
+  ],
+  "project/.git/hooks/post-update.sample": [
+    "file",
+    493,
+    "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+  ],
+  "project/.git/hooks/pre-applypatch.sample": [
+    "file",
+    493,
+    "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+  ],
+  "project/.git/hooks/pre-commit.sample": [
+    "file",
+    493,
+    "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b"
+  ],
+  "project/.git/hooks/pre-merge-commit.sample": [
+    "file",
+    493,
+    "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+  ],
+  "project/.git/hooks/pre-push.sample": [
+    "file",
+    493,
+    "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+  ],
+  "project/.git/hooks/pre-rebase.sample": [
+    "file",
+    493,
+    "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+  ],
+  "project/.git/hooks/pre-receive.sample": [
+    "file",
+    493,
+    "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+  ],
+  "project/.git/hooks/prepare-commit-msg.sample": [
+    "file",
+    493,
+    "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+  ],
+  "project/.git/hooks/push-to-checkout.sample": [
+    "file",
+    493,
+    "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+  ],
+  "project/.git/hooks/sendemail-validate.sample": [
+    "file",
+    493,
+    "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+  ],
+  "project/.git/hooks/update.sample": [
+    "file",
+    493,
+    "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+  ],
+  "project/.git/index": [
+    "file",
+    420,
+    "49d4948e2a78344e4534fe6ebfe80448b66415c79b546613ca6f461d73319df1"
+  ],
+  "project/.git/info": [
+    "directory",
+    493
+  ],
+  "project/.git/info/exclude": [
+    "file",
+    420,
+    "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+  ],
+  "project/.git/logs": [
+    "directory",
+    493
+  ],
+  "project/.git/logs/HEAD": [
+    "file",
+    420,
+    "ad095c5d7e325c550b0e1344baf6df3eb2ff9b25cd13e8c7ac1ee4312024fc02"
+  ],
+  "project/.git/logs/refs": [
+    "directory",
+    493
+  ],
+  "project/.git/logs/refs/heads": [
+    "directory",
+    493
+  ],
+  "project/.git/logs/refs/heads/master": [
+    "file",
+    420,
+    "ad095c5d7e325c550b0e1344baf6df3eb2ff9b25cd13e8c7ac1ee4312024fc02"
+  ],
+  "project/.git/logs/refs/heads/surge": [
+    "directory",
+    493
+  ],
+  "project/.git/logs/refs/heads/surge/run-01M46EP9NYZP": [
+    "file",
+    420,
+    "1151a6f4bda5fbcf49c58cbfddde1441d14807974e30c45fad9ddb411219b47a"
+  ],
+  "project/.git/logs/refs/heads/surge/run-01M46EP9WYC2": [
+    "file",
+    420,
+    "a1e91e44db6213288ace14ff665e4cba165573709eb45475acee5734c44a6a65"
+  ],
+  "project/.git/objects": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/46": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/46/5ae411b1eff9cb7befdec337cdb82ad88188f0": [
+    "file",
+    292,
+    "4cad99a9056996a2f0a38d51d4349a85ffe211fe879d985c6facc6af022298dc"
+  ],
+  "project/.git/objects/69": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/69/aae1f202fb504323d6436947ac26056f7dd584": [
+    "file",
+    292,
+    "099728541745e3e522b751169947b4eed550c6ccc285ade5f03e519a1376ace5"
+  ],
+  "project/.git/objects/93": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/93/b1c78ed92f5fad87778529d48881f8d56fba5d": [
+    "file",
+    292,
+    "b3498ca27ccc62d0edaf3e4628daa27c237e6f019e616f0f701610f8e160863e"
+  ],
+  "project/.git/objects/d2": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/d2/0913214440371cebc1e310d7c6655532983138": [
+    "file",
+    292,
+    "110722ed7ef994f48141985ea5de06864b289209c693f080be3985607a627ec9"
+  ],
+  "project/.git/objects/e3": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/e3/e638d1d138c7bf22826def73dced8ceb7ee33e": [
+    "file",
+    292,
+    "03993728480b1d3c34cdff710926013591f75fdb2430d107c1d38179db58026c"
+  ],
+  "project/.git/objects/info": [
+    "directory",
+    493
+  ],
+  "project/.git/objects/pack": [
+    "directory",
+    493
+  ],
+  "project/.git/refs": [
+    "directory",
+    493
+  ],
+  "project/.git/refs/heads": [
+    "directory",
+    493
+  ],
+  "project/.git/refs/heads/master": [
+    "file",
+    420,
+    "8e67089c45d7eb26332c79dabbd938dc6c4f4aea54ab3a72430c117217d2d287"
+  ],
+  "project/.git/refs/heads/surge": [
+    "directory",
+    493
+  ],
+  "project/.git/refs/heads/surge/run-01M46EP9NYZP": [
+    "file",
+    420,
+    "8e67089c45d7eb26332c79dabbd938dc6c4f4aea54ab3a72430c117217d2d287"
+  ],
+  "project/.git/refs/heads/surge/run-01M46EP9WYC2": [
+    "file",
+    420,
+    "8e67089c45d7eb26332c79dabbd938dc6c4f4aea54ab3a72430c117217d2d287"
+  ],
+  "project/.git/refs/tags": [
+    "directory",
+    493
+  ],
+  "project/.git/worktrees": [
+    "directory",
+    493
+  ],
+  "project/.git/worktrees/01M46EP9NYZP": [
+    "directory",
+    493
+  ],
+  "project/.git/worktrees/01M46EP9NYZP/HEAD": [
+    "file",
+    420,
+    "5d33632cc2a75ee16448dafe656ed44da2700862d86e1fe8d8b957eddfee9413"
+  ],
+  "project/.git/worktrees/01M46EP9NYZP/commondir": [
+    "file",
+    420,
+    "ff701b2ae9b3617685228d540372f5ed63fefe6e79525c72e71e02fb2a8b96d9"
+  ],
+  "project/.git/worktrees/01M46EP9NYZP/gitdir": [
+    "file",
+    420,
+    "2a8acf6c708e235e3f1123904fda922f02931eedd372d24afd620a70321ce7ea"
+  ],
+  "project/.git/worktrees/01M46EP9NYZP/index": [
+    "file",
+    420,
+    "96835c0b61a116fe1d219139760f832a06536592a0932ab638e6fa69d3d44954"
+  ],
+  "project/.git/worktrees/01M46EP9WYC2": [
+    "directory",
+    493
+  ],
+  "project/.git/worktrees/01M46EP9WYC2/HEAD": [
+    "file",
+    420,
+    "e9516ffaff068c71efabd8cad29b4efb0279e91c1528dd44b519d25325d742c2"
+  ],
+  "project/.git/worktrees/01M46EP9WYC2/commondir": [
+    "file",
+    420,
+    "ff701b2ae9b3617685228d540372f5ed63fefe6e79525c72e71e02fb2a8b96d9"
+  ],
+  "project/.git/worktrees/01M46EP9WYC2/gitdir": [
+    "file",
+    420,
+    "650ca7397ac2347dea9ff6fb814e911a9524c2cf37d08f2634448502989a38e5"
+  ],
+  "project/.git/worktrees/01M46EP9WYC2/index": [
+    "file",
+    420,
+    "eb9d64e26c4bf836225646eb5852cde6539626c0a4b6903cba2055fbc0c4d100"
+  ],
+  "project/.gitignore": [
+    "file",
+    420,
+    "eba8f9f896041def9e1287819c147b53af40594b856bba9810cd73c33c993cf9"
+  ],
+  "project/README.md": [
+    "file",
+    420,
+    "079bbeb89cd592ba65b49c9f69119153f32ea610672b12e46cc02b8fb5ef81cf"
+  ],
+  "project/flow.toml": [
+    "file",
+    420,
+    "da57d1368fda6ca8827b49ca6e1e8336ab44368037727339a544a6939f6529ef"
+  ],
+  "project/surge.toml": [
+    "file",
+    384,
+    "7bfe4ebe29e3add8450db005f75885125d445fd8e4006c046a6b58e100ec312b"
+  ]
+}

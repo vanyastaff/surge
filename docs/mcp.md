@@ -20,6 +20,7 @@ name = "filesystem"
 transport = { kind = "stdio", command = "npx", args = ["-y", "@modelcontextprotocol/server-filesystem", "/work"] }
 allowed_tools = ["read_text_file", "list_directory"]   # omit ⇒ all advertised tools
 call_timeout = "60s"                                    # default 60s
+startup_timeout = "45s"                                 # optional; default max(30s, call_timeout)
 restart_on_crash = true                                 # default true
 sandbox = "workspace-write"                             # optional per-server override (see Sandbox)
 ```
@@ -29,7 +30,8 @@ sandbox = "workspace-write"                             # optional per-server ov
 | `name` | required | Identifier referenced in `tool_overrides.mcp_add` |
 | `transport` | required | Only `stdio` is supported |
 | `allowed_tools` | all | Per-server tool whitelist |
-| `call_timeout` | `60s` | Max time for one `tools/call` and for the handshake |
+| `call_timeout` | `60s` | Max time for one RPC: a `tools/call`, or the whole paginated `tools/list` |
+| `startup_timeout` | max(`30s`, `call_timeout`) | Max time from child spawn to a completed MCP `initialize` handshake |
 | `restart_on_crash` | `true` | Reconnect after a transport-class failure |
 | `sandbox` | inherit run | Per-server [`SandboxMode`](#sandbox) override |
 
@@ -47,6 +49,16 @@ Disconnected → Connecting → Running ──(transport-dead)──▶ Crashed
                                                          Exhausted
 ```
 
+- **Deadlines**: `startup_timeout` bounds spawn plus the `initialize`
+  handshake, which includes the child's interpreter or package startup
+  (`npx`, `uvx`, Python imports). `call_timeout` bounds each RPC after the
+  connection is `Running`: one `tools/call`, or one deadline across all
+  `tools/list` pages. A caller budget (the per-server timeout the engine
+  passes for tool calls) never truncates a (re)connect. A missed startup
+  deadline is `McpError::StartupTimeout` and counts as a failed attempt for
+  the restart policy. When `startup_timeout` is unset the deadline is the
+  larger of 30 s and `call_timeout`, so no existing configuration gets a
+  shorter handshake than it had when both shared `call_timeout`.
 - **Crash detection** is structural — `rmcp::ServiceError::{TransportClosed,
   TransportSend}` mark the connection crashed; service-level errors leave it
   alive. (No display-string heuristic.)
@@ -57,6 +69,15 @@ Disconnected → Connecting → Running ──(transport-dead)──▶ Crashed
   ERROR on `mcp::supervisor`, and the orchestrator appends a replay-safe
   `EscalationRequested` event — which the Telegram cockpit renders as an
   Escalation card. AFK operators see permanent MCP failure.
+- **Selected catalog failure**: at session open an agent stage lists tools
+  from each server it selected (`tool_overrides.mcp_add`, minus servers the
+  sandbox policy denies), per server. A server whose catalog fails (startup
+  timeout, `tools/list` timeout, spawn or transport failure) is left out;
+  the other selected servers keep their tools, the stage proceeds, and the
+  engine appends `EscalationRequested` with cause
+  `mcp_selected_catalog_unavailable`, naming the stage, server and opaque
+  error. One escalation per failing server per stage start. It is never
+  silent: the event reaches the cockpit and `surge run report`.
 - **Health monitor**: a per-connection task probes every **60s** (≥ backoff
   cap, so it can't hot-loop) via `is_closed()` then a single-page
   `tools/list`. **3** consecutive transport-class failures mark the

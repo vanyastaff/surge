@@ -1,4 +1,8 @@
 //! Park/resume is a new live stream generation, including on the same connection.
+#[path = "support/runtime_home.rs"]
+mod runtime_home_fixture;
+use runtime_home_fixture::FixtureHome;
+
 use std::{
     path::PathBuf,
     sync::{
@@ -204,7 +208,6 @@ impl BridgeFacade for ParkOnce {
 }
 
 struct Fixture {
-    root: tempfile::TempDir,
     client: DaemonEngineFacade,
     admission: Arc<AdmissionController>,
     shutdown: CancellationToken,
@@ -213,6 +216,8 @@ struct Fixture {
     facade: Arc<dyn EngineFacade>,
     tracking: TrackingContext,
     registry: Arc<BroadcastRegistry>,
+    root: tempfile::TempDir,
+    home: FixtureHome,
 }
 
 impl Fixture {
@@ -243,7 +248,8 @@ system = "test"
 "#,
         )
         .unwrap();
-        let storage = Storage::open(root.path()).await.unwrap();
+        let home = FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
         let bridge = Arc::new(ParkOnce {
             sent: AtomicBool::new(false),
             events: broadcast::channel(32).0,
@@ -288,7 +294,6 @@ system = "test"
         .await
         .unwrap();
         Self {
-            root,
             client,
             admission,
             shutdown,
@@ -297,6 +302,8 @@ system = "test"
             facade,
             tracking,
             registry,
+            root,
+            home,
         }
     }
     async fn park(&self, gate: bool) -> RunId {
@@ -332,6 +339,10 @@ system = "test"
     async fn close(self) {
         self.shutdown.cancel();
         self.server.await.unwrap().unwrap();
+        drop(self.client);
+        drop(self.facade);
+        drop(self.tracking);
+        self.home.close().unwrap();
     }
 }
 

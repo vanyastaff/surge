@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use crate::SqliteConnectionManager;
 use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -441,11 +441,11 @@ mod tests {
     use crate::runs::clock::MockClock;
     use crate::runs::registry::open_registry_pool;
 
-    fn store() -> RoadmapPatchStore {
-        let tmp = tempfile::tempdir().unwrap();
+    fn store() -> (crate::runtime_home_fixture::FixtureHome, RoadmapPatchStore) {
+        let tmp = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let clock = MockClock::new(1_700_000_000_000);
         let pool = open_registry_pool(tmp.path(), &clock).unwrap();
-        RoadmapPatchStore::new(pool)
+        (tmp, RoadmapPatchStore::new(pool))
     }
 
     fn upsert(id: &str, content: &[u8], status: RoadmapPatchStatus) -> RoadmapPatchIndexUpsert {
@@ -470,92 +470,100 @@ mod tests {
 
     #[test]
     fn duplicate_content_hash_keeps_existing_patch_id() {
-        let store = store();
-        let first = store
-            .upsert(&upsert(
-                "rpatch-one",
-                b"same patch",
-                RoadmapPatchStatus::Drafted,
-            ))
-            .unwrap();
-        let second = store
-            .upsert(&upsert(
-                "rpatch-two",
-                b"same patch",
-                RoadmapPatchStatus::PendingApproval,
-            ))
-            .unwrap();
+        let (home, store) = store();
+        {
+            let first = store
+                .upsert(&upsert(
+                    "rpatch-one",
+                    b"same patch",
+                    RoadmapPatchStatus::Drafted,
+                ))
+                .unwrap();
+            let second = store
+                .upsert(&upsert(
+                    "rpatch-two",
+                    b"same patch",
+                    RoadmapPatchStatus::PendingApproval,
+                ))
+                .unwrap();
 
-        assert_eq!(second.patch_id, first.patch_id);
-        assert_eq!(second.status, RoadmapPatchStatus::PendingApproval);
-        assert!(
-            store
-                .get(&RoadmapPatchId::new("rpatch-two").unwrap())
-                .unwrap()
-                .is_none()
-        );
+            assert_eq!(second.patch_id, first.patch_id);
+            assert_eq!(second.status, RoadmapPatchStatus::PendingApproval);
+            assert!(
+                store
+                    .get(&RoadmapPatchId::new("rpatch-two").unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        drop(store);
+        home.close().unwrap();
     }
 
     #[test]
     fn list_filters_by_status_and_reject_is_idempotent() {
-        let store = store();
-        let pending = store
-            .upsert(&upsert(
-                "rpatch-pending",
-                b"pending patch",
-                RoadmapPatchStatus::PendingApproval,
-            ))
-            .unwrap();
-        let applied = store
-            .upsert(&upsert(
-                "rpatch-applied",
-                b"applied patch",
-                RoadmapPatchStatus::Applied,
-            ))
-            .unwrap();
+        let (home, store) = store();
+        {
+            let pending = store
+                .upsert(&upsert(
+                    "rpatch-pending",
+                    b"pending patch",
+                    RoadmapPatchStatus::PendingApproval,
+                ))
+                .unwrap();
+            let applied = store
+                .upsert(&upsert(
+                    "rpatch-applied",
+                    b"applied patch",
+                    RoadmapPatchStatus::Applied,
+                ))
+                .unwrap();
 
-        let listed = store
-            .list(&RoadmapPatchIndexFilter {
-                status: Some(RoadmapPatchStatus::PendingApproval),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].patch_id, pending.patch_id);
+            let listed = store
+                .list(&RoadmapPatchIndexFilter {
+                    status: Some(RoadmapPatchStatus::PendingApproval),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].patch_id, pending.patch_id);
 
-        let rejected = store
-            .reject(
-                &pending.patch_id,
-                Some("no longer needed"),
-                Some(OperatorConflictChoice::RejectPatch),
-                1_700_000_000_500,
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(rejected.status, RoadmapPatchStatus::Rejected);
-        assert_eq!(
-            rejected.decision,
-            Some(RoadmapPatchApprovalDecision::Reject)
-        );
-        assert_eq!(
-            rejected.decision_comment.as_deref(),
-            Some("no longer needed")
-        );
-        assert_eq!(
-            rejected.conflict_choice,
-            Some(OperatorConflictChoice::RejectPatch)
-        );
+            let rejected = store
+                .reject(
+                    &pending.patch_id,
+                    Some("no longer needed"),
+                    Some(OperatorConflictChoice::RejectPatch),
+                    1_700_000_000_500,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(rejected.status, RoadmapPatchStatus::Rejected);
+            assert_eq!(
+                rejected.decision,
+                Some(RoadmapPatchApprovalDecision::Reject)
+            );
+            assert_eq!(
+                rejected.decision_comment.as_deref(),
+                Some("no longer needed")
+            );
+            assert_eq!(
+                rejected.conflict_choice,
+                Some(OperatorConflictChoice::RejectPatch)
+            );
 
-        let still_applied = store
-            .reject(
-                &applied.patch_id,
-                Some("too late"),
-                Some(OperatorConflictChoice::RejectPatch),
-                1_700_000_000_600,
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(still_applied.status, RoadmapPatchStatus::Applied);
-        assert_eq!(still_applied.decision_comment, None);
+            let still_applied = store
+                .reject(
+                    &applied.patch_id,
+                    Some("too late"),
+                    Some(OperatorConflictChoice::RejectPatch),
+                    1_700_000_000_600,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(still_applied.status, RoadmapPatchStatus::Applied);
+            assert_eq!(still_applied.decision_comment, None);
+        }
+        drop(store);
+        home.close().unwrap();
     }
 }
