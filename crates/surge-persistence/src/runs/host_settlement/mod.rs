@@ -173,9 +173,11 @@ fn existing_parts(
     #[cfg(unix)]
     let route = {
         let run_path = home.join("runs").join(run.to_string());
+        let database_path = run_path.join("events.sqlite");
         Arc::new(match root.run(run, false) {
             Err(OpenError::Io(error))
-                if error.kind() == std::io::ErrorKind::NotFound && !run_path.exists() =>
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && (!run_path.exists() || !database_path.exists()) =>
             {
                 return Err(OpenError::RunNotFound(run));
             },
