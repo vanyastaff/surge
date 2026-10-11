@@ -171,6 +171,13 @@ fn existing_parts(
     let token = token(writers, run)?;
     let root = RunRoot::existing(home)?;
     let run_path = home.join("runs").join(run.to_string());
+    let lock = match FileLock::try_acquire_existing(&run_path.join("events.sqlite.lock"), run) {
+        Ok(lock) => lock,
+        Err(OpenError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OpenError::RunNotFound(run));
+        },
+        Err(error) => return Err(error),
+    };
     let database_path = run_path.join("events.sqlite");
     if !database_path.exists() {
         return Err(OpenError::RunNotFound(run));
@@ -189,13 +196,6 @@ fn existing_parts(
     };
     #[cfg(windows)]
     let route = Arc::new(root.run(run, false).map_err(OpenError::from)?);
-    let lock = FileLock::try_acquire_existing(
-        &home
-            .join("runs")
-            .join(run.to_string())
-            .join("events.sqlite.lock"),
-        run,
-    )?;
     let database = route.database(false)?;
     Ok((token, lock, route, database))
 }
