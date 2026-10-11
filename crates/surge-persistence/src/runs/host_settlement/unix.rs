@@ -153,7 +153,7 @@ impl RunRoot {
                 Mode::S_IRWXU,
             ) {
                 Ok(()) => {},
-                Err(error) if error == Errno::EEXIST => {},
+                Err(Errno::EEXIST) => {},
                 Err(error) => return Err(io(error)),
             }
         }
@@ -163,7 +163,7 @@ impl RunRoot {
             verify(&self.runs, OsStr::new(&component), &directory, true)?;
             match mkdirat(Some(directory.as_raw_fd()), "artifacts", Mode::S_IRWXU) {
                 Ok(()) => {},
-                Err(error) if error == Errno::EEXIST => {},
+                Err(Errno::EEXIST) => {},
                 Err(error) => return Err(io(error)),
             }
         }
