@@ -1306,6 +1306,7 @@ mod tests {
     }
 
     // Namespace adversarial tests retain their original raw directory setup.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn namespace_fixture() -> (
         tempfile::TempDir,
         std::sync::Arc<crate::runs::Storage>,
@@ -1795,6 +1796,7 @@ mod tests {
                 .is_none()
         );
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn concurrent_start_result(store: &WorkItemStore, command: &WorkItemCommand) -> WorkItemResult {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
