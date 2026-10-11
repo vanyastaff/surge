@@ -5,6 +5,7 @@ use crate::intake_completion::{
     durable_outcome, format_completion, post_comment_bounded, terminal_kind,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -40,13 +41,20 @@ impl TicketStateSync {
         info!(task_id = %self.task_id, run_id = %handle.run_id, "TicketStateSync started");
         let mut went_active = false;
         let mut observed = None;
+        let mut projected = false;
         let mut events_open = true;
         loop {
             tokio::select! {
                 biased;
                 joined = &mut handle.completion => {
-                    self.on_completion(handle.run_id, joined, observed).await;
+                    self.on_completion(handle.run_id, joined, observed, projected).await;
                     return;
+                },
+                () = tokio::time::sleep(Duration::from_millis(1)), if observed.is_some() && !projected => {
+                    if let Some(outcome) = observed.as_ref() {
+                        self.on_terminal(&handle.run_id, outcome).await;
+                        projected = true;
+                    }
                 },
                 event = handle.events.recv(), if events_open && observed.is_none() => match event {
                     Ok(EngineRunEvent::Persisted { .. }) if !went_active => {
@@ -81,6 +89,7 @@ impl TicketStateSync {
         run_id: surge_core::RunId,
         joined: Result<RunOutcome, tokio::task::JoinError>,
         observed: Option<RunOutcome>,
+        projected: bool,
     ) {
         match joined {
             Ok(RunOutcome::SettlementFailed { failures, .. }) => {
@@ -90,6 +99,7 @@ impl TicketStateSync {
                 Some(previous) if previous != outcome => {
                     warn!(%run_id, ?previous, ?outcome, "ticket event disagrees with joined completion");
                 },
+                Some(_) if projected => {},
                 Some(_) | None => self.on_terminal(&run_id, &outcome).await,
             },
             Err(error) => {

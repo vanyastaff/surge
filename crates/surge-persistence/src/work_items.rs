@@ -1343,6 +1343,7 @@ mod tests {
         };
         (storage, *detail)
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_start_preparation_refuses_generic_reservation() {
         let (home, owners) = fixture().await;
@@ -1381,6 +1382,7 @@ mod tests {
         }
         home.close().expect("close runtime home");
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_consumes_once_and_replay_does_no_filesystem_work() {
         let (home, storage, detail) = namespace_fixture().await;
@@ -1418,6 +1420,7 @@ mod tests {
             Err(WorkItemError::Conflict(_))
         ));
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_lifecycle_busy_discussion_drift_and_drop_release() {
         let (home, owners) = fixture().await;
@@ -1486,6 +1489,7 @@ mod tests {
         }
         home.close().expect("close runtime home");
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_snapshot_drift_never_creates_an_attempt() {
         for sql in [
@@ -1520,6 +1524,7 @@ mod tests {
             home.close().expect("close runtime home");
         }
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_dead_row_is_reclaimed_by_lifecycle_under_the_lock() {
         let (home, owners) = fixture().await;
@@ -1576,6 +1581,7 @@ mod tests {
         std::fs::write(std::path::Path::new(&home).join("owner.ready"), "held").unwrap();
         std::future::pending::<()>().await;
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_killed_owner_can_be_reclaimed_without_provider_authority() {
         struct OwnedChild(std::process::Child);
@@ -1655,6 +1661,7 @@ mod tests {
         drop(storage);
         home.close().expect("close runtime home");
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_does_not_hold_registry_lock_while_external_work_is_blocked() {
         let (home, owners) = fixture().await;
@@ -1711,6 +1718,7 @@ mod tests {
         }
         home.close().expect("close runtime home");
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_concurrent_exact_operation_has_one_attempt_and_receipt() {
         let (home, owners) = fixture().await;
@@ -1754,6 +1762,7 @@ mod tests {
         drop(storage);
         home.close().expect("close runtime home");
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_preparation_relocated_live_lock_never_proves_dead_ownership() {
         let (home, storage, detail) = namespace_fixture().await;
