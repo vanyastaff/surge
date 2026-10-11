@@ -171,12 +171,17 @@ fn existing_parts(
     let token = token(writers, run)?;
     let root = RunRoot::existing(home)?;
     #[cfg(unix)]
-    let route = Arc::new(root.run(run, false).map_err(|error| match error {
-        OpenError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound => {
-            OpenError::RunNotFound(run)
-        },
-        other => other,
-    })?);
+    let route = {
+        let run_path = home.join("runs").join(run.to_string());
+        Arc::new(match root.run(run, false) {
+            Err(OpenError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound && !run_path.exists() =>
+            {
+                return Err(OpenError::RunNotFound(run));
+            },
+            result => result?,
+        })
+    };
     #[cfg(windows)]
     let route = Arc::new(root.run(run, false).map_err(OpenError::from)?);
     let lock = FileLock::try_acquire_existing(
