@@ -56,6 +56,12 @@ impl TicketStateSync {
                         went_active = true;
                     },
                     Ok(EngineRunEvent::Terminal { outcome }) => {
+                        // Publish the terminal ticket projection as soon as the
+                        // engine emits its terminal event. The completion task
+                        // may still be settling retained resources; waiting for
+                        // that task before projecting would deadlock shutdown
+                        // when settlement itself is held behind the projection.
+                        self.on_terminal(&handle.run_id, &outcome).await;
                         observed = Some(outcome);
                     },
                     Ok(_) => {},
