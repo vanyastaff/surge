@@ -24,8 +24,11 @@ use std::{
 };
 use surge_core::RunId;
 
-pub(crate) fn storage_error(error: OpenError) -> StorageError {
-    StorageError::OperationRejected(error.to_string())
+pub(crate) fn storage_error<E>(error: E) -> StorageError
+where
+    E: Into<OpenError>,
+{
+    StorageError::OperationRejected(error.into().to_string())
 }
 fn opening_error(error: StorageError) -> OpenError {
     OpenError::Authority(error.to_string())
