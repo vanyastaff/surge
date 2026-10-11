@@ -43,7 +43,6 @@ pub fn spawn(
     tokio::spawn(run(rx, source_map, conn, storage))
 }
 
-
 async fn run(
     mut rx: broadcast::Receiver<GlobalDaemonEvent>,
     source_map: Arc<HashMap<String, Arc<dyn TaskSource>>>,

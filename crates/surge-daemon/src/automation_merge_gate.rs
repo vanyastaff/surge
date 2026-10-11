@@ -61,7 +61,6 @@ pub mod labels {
     pub const MERGED: &str = "surge:merged";
 }
 
-
 /// Spawn the merge gate. The returned handle can be aborted on
 /// shutdown; the gate also exits cleanly when the broadcast channel
 /// closes.

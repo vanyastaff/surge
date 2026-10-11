@@ -282,7 +282,8 @@ impl Storage {
     ) -> Result<RunWriter, OpenError> {
         let project_path = project_path.as_ref().to_path_buf();
         let (run_id, lease) = self.bind_reserved(reservation).await?;
-        self.prepare_opened_database(run_id, lease.clone(), true).await?;
+        self.prepare_opened_database(run_id, lease.clone(), true)
+            .await?;
         let summary = RunSummary {
             id: run_id,
             project_path,
@@ -370,7 +371,8 @@ impl Storage {
     /// Fails with `OpenError::WriterAlreadyHeld` if another writer holds the slot.
     pub async fn open_run_writer(self: &Arc<Self>, run_id: RunId) -> Result<RunWriter, OpenError> {
         let lease = self.acquire_opening(run_id).await?;
-        self.prepare_opened_database(run_id, lease.clone(), false).await?;
+        self.prepare_opened_database(run_id, lease.clone(), false)
+            .await?;
         self.start_opened_writer(run_id, lease).await
     }
 
@@ -385,7 +387,11 @@ impl Storage {
             lease.verify()?;
             storage.upgrade_existing_run(&storage.events_db_path(&run_id))?;
             if freshly_created {
-                super::host_settlement::verify_empty_initialized(run_id, &storage.events_db_path(&run_id), &lease)?;
+                super::host_settlement::verify_empty_initialized(
+                    run_id,
+                    &storage.events_db_path(&run_id),
+                    &lease,
+                )?;
             }
             lease.verify()
         })

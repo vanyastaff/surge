@@ -297,14 +297,23 @@ impl Storage {
     }
 }
 
-pub(crate) fn verify_empty_initialized(run: RunId, path: &Path, lease: &WriterLease) -> Result<(), OpenError> {
+pub(crate) fn verify_empty_initialized(
+    run: RunId,
+    path: &Path,
+    lease: &WriterLease,
+) -> Result<(), OpenError> {
     lease.verify()?;
     let mut identity = route_identity(&lease.authority.route, &lease.file_lock)?;
     identity.extend(lease.authority.database.identity()?);
     #[cfg(windows)]
-    let mut connection = super::connection::RetainedConnection::open_owned(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY, lease.namespace.clone())?;
+    let mut connection = super::connection::RetainedConnection::open_owned(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        lease.namespace.clone(),
+    )?;
     #[cfg(not(windows))]
-    let mut connection = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     framing::snapshot(&mut connection, run, &identity, 0).map_err(opening_error)?;
     drop(connection);
     lease.verify()

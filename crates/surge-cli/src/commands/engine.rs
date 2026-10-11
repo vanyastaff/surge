@@ -16,7 +16,6 @@ pub enum OutputFormat {
     Json,
 }
 
-
 /// Subcommands under `surge engine`.
 #[derive(Subcommand, Debug)]
 pub enum EngineCommands {
