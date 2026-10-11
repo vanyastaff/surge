@@ -174,6 +174,9 @@ fn existing_parts(
     let lock = match FileLock::try_acquire_existing(&run_path.join("events.sqlite.lock"), run) {
         Ok(lock) => lock,
         Err(OpenError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            if run_path.exists() {
+                return Err(OpenError::Io(error));
+            }
             return Err(OpenError::RunNotFound(run));
         },
         Err(error) => return Err(error),
