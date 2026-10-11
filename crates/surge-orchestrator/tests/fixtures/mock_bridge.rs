@@ -54,7 +54,7 @@ pub struct MockBridge {
     subscribe_count: AtomicUsize,
     /// Broadcast channel.
     tx: broadcast::Sender<BridgeEvent>,
-    /// Queue of SessionIds to return from `open_session` calls.
+    /// Queue of `SessionIds` to return from `open_session` calls.
     /// When empty, `open_session` generates a fresh `SessionId::new()`.
     pinned_session_ids: Mutex<VecDeque<SessionId>>,
     /// Text of the most recent `send_message` (for prompt-injection assertions).
@@ -205,6 +205,7 @@ impl BridgeFacade for MockBridge {
         &self,
         config: SessionConfig,
     ) -> Result<surge_core::execution_recovery::OpenedSession, OpenSessionError> {
+        use surge_core::execution_recovery::*;
         self.recorded_calls
             .lock()
             .await
@@ -215,7 +216,6 @@ impl BridgeFacade for MockBridge {
             .await
             .pop_front()
             .unwrap_or_else(SessionId::new);
-        use surge_core::execution_recovery::*;
         let writer = config.writer_id;
         let launch_hash =
             surge_core::ContentHash::compute(format!("{:?}", config.agent_kind).as_bytes());
@@ -250,7 +250,7 @@ impl BridgeFacade for MockBridge {
     ) -> Result<(), SendMessageError> {
         let text = match content {
             MessageContent::Text(text) => text,
-            other => format!("{other:?}"),
+            MessageContent::Blocks(blocks) => format!("{blocks:?}"),
         };
         *self.last_prompt.lock().await = Some(text);
         self.recorded_calls
@@ -289,7 +289,6 @@ impl BridgeFacade for MockBridge {
         use agent_client_protocol::schema::v1::RequestPermissionOutcome;
         let option_id = match response.outcome {
             RequestPermissionOutcome::Selected(sel) => Some(sel.option_id.0.as_ref().to_string()),
-            RequestPermissionOutcome::Cancelled => None,
             // RequestPermissionOutcome is `#[non_exhaustive]` in the SDK;
             // future variants record as `Cancelled` (None) until the test
             // fixture handles them explicitly.
@@ -356,7 +355,7 @@ mod tests {
             writer_id: surge_core::id::ExecutionWriterId::new(),
             invocation: surge_core::id::StageInvocationId::new(),
             runtime: "fixture".into(),
-            opening: Default::default(),
+            opening: surge_core::execution_recovery::SessionOpening::default(),
             config_selections: Vec::new(),
             stage_mcp: None,
             agent_kind: AgentKind::Mock { args: vec![] },
@@ -368,7 +367,7 @@ mod tests {
             sandbox: Box::new(AlwaysAllowSandbox),
             permission_policy: PermissionPolicy::default(),
             bindings: BTreeMap::new(),
-            env: Default::default(),
+            env: BTreeMap::default(),
         }
     }
 

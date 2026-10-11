@@ -10,6 +10,7 @@ enum ProjectionFailure {
     StorageError,
 }
 
+#[allow(clippy::too_many_lines)]
 async fn accepted_terminal_run_is_supervised(failure: ProjectionFailure) {
     let home = FixtureHome::new().unwrap();
     let project = tempfile::tempdir().unwrap();

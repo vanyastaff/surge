@@ -192,7 +192,6 @@ pub(crate) fn terminal_kind(outcome: &RunOutcome) -> Option<TerminalCommentKind>
         RunOutcome::Completed { .. } => Some(TerminalCommentKind::Completed),
         RunOutcome::Failed { .. } => Some(TerminalCommentKind::Failed),
         RunOutcome::Aborted { .. } => Some(TerminalCommentKind::Aborted),
-        RunOutcome::SettlementFailed { .. } => None,
         _ => None,
     }
 }

@@ -162,6 +162,7 @@ async fn exhaust_prior_recipe(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn stale_reconciliation_page_preserves_planned_capacity_and_exact_wake() {
     let home = FixtureHome::new().unwrap();
     let project = tempfile::tempdir().unwrap();

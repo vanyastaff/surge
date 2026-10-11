@@ -94,7 +94,6 @@ impl Fixture {
 
 pub(crate) fn close_registry(conn: Arc<Mutex<Connection>>) {
     Arc::try_unwrap(conn)
-        .ok()
         .expect("reconciliation released registry owners")
         .into_inner()
         .close()

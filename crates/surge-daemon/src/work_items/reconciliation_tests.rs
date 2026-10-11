@@ -146,7 +146,7 @@ async fn write_startup(
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,
                 mcp_servers: vec![],
-                budget: Default::default(),
+                budget: surge_core::budget::BudgetGuard::default(),
             },
         },
         E::PipelineMaterialized {

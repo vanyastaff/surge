@@ -512,7 +512,6 @@ impl BootstrapSupervisor {
         let record = self.record(id).map_err(|_| Attention::StorageUnconfirmed)?;
         let run_id = launch_id(&record);
         let result = match outcome {
-            RunOutcome::SettlementFailed { .. } => return Err(Attention::StorageUnconfirmed),
             RunOutcome::Completed { terminal } if record.child.is_some() => {
                 BootstrapTerminal::Completed { run_id, terminal }
             },
