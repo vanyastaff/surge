@@ -36,6 +36,116 @@ impl Default for BridgeTimeouts {
     }
 }
 
+/// Named configuration for an ACP bridge worker.
+///
+/// Defaults buffer 64 commands and 1024 events, with [`BridgeTimeouts::default`].
+/// Command capacity also bounds concurrent session openings. Command producers
+/// wait for available capacity; event subscribers receive best-effort broadcasts.
+///
+/// ```no_run
+/// use surge_acp::bridge::BridgeConfig;
+/// # async fn example() -> Result<(), surge_acp::bridge::BridgeError> {
+/// let bridge = BridgeConfig::new().cmd_capacity(32).event_capacity(2048).spawn()?;
+/// bridge.shutdown().await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeConfig {
+    cmd_capacity: usize,
+    event_capacity: usize,
+    timeouts: BridgeTimeouts,
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self {
+            cmd_capacity: 64,
+            event_capacity: 1024,
+            timeouts: BridgeTimeouts::default(),
+        }
+    }
+}
+
+impl BridgeConfig {
+    /// Start with the default capacities and deadlines.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the command queue capacity and concurrent session-opening limit.
+    /// Producers wait when the command queue is full.
+    #[must_use]
+    pub fn cmd_capacity(mut self, capacity: usize) -> Self {
+        self.cmd_capacity = capacity;
+        self
+    }
+
+    /// Set the requested broadcast retention capacity.
+    /// Tokio may round this up. Lagging subscribers lose oldest events and
+    /// receive `RecvError::Lagged`; broadcasts do not backpressure the worker.
+    #[must_use]
+    pub fn event_capacity(mut self, capacity: usize) -> Self {
+        self.event_capacity = capacity;
+        self
+    }
+
+    /// Set session-setup and verified-shutdown deadlines; prompts stay unbounded.
+    #[must_use]
+    pub fn timeouts(mut self, timeouts: BridgeTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
+    }
+
+    /// Validate configuration and spawn the owned worker thread.
+    ///
+    /// # Errors
+    /// Returns [`BridgeError::InvalidConfig`] for any zero capacity or deadline,
+    /// before starting a worker. Returns [`BridgeError::WorkerDead`] if the OS
+    /// cannot spawn the worker.
+    pub fn spawn(self) -> Result<AcpBridge, BridgeError> {
+        let Self {
+            cmd_capacity,
+            event_capacity,
+            timeouts,
+        } = self;
+        if cmd_capacity == 0
+            || event_capacity == 0
+            || timeouts.handshake.is_zero()
+            || timeouts.shutdown.is_zero()
+        {
+            return Err(BridgeError::InvalidConfig);
+        }
+        let (cmd_tx, cmd_rx) = mpsc::channel(cmd_capacity);
+        let (event_tx, _) = broadcast::channel(event_capacity);
+        let events = event_tx.clone();
+        let shutdown = CancellationToken::new();
+        let signal = shutdown.clone();
+        let worker = std::thread::Builder::new()
+            .name("surge-acp-bridge".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| BridgeError::WorkerDead)?;
+                tokio::task::LocalSet::new().block_on(
+                    &runtime,
+                    super::lifecycle::run(cmd_rx, events, signal, timeouts),
+                )
+            })
+            .map_err(|_| BridgeError::WorkerDead)?;
+        Ok(AcpBridge {
+            cmd_tx,
+            event_tx,
+            worker: Some(worker),
+            shutdown,
+            timeouts,
+            open_slots: Arc::new(tokio::sync::Semaphore::new(cmd_capacity)),
+        })
+    }
+}
+
 /// Public handle to the ACP bridge worker thread.
 ///
 /// Spawn one per process (see spec §11.6); methods can be called from any
@@ -62,10 +172,13 @@ impl AcpBridge {
     ///
     /// `cmd_capacity` bounds the mpsc command channel; producers block on
     /// `send().await` if the worker can't drain fast enough. `event_capacity`
-    /// bounds the broadcast channel; subscribers that lag past this silently
-    /// drop oldest events (see spec §11.8 for the durable-consumer pattern).
+    /// requests broadcast retention (Tokio may round up); lagging subscribers
+    /// lose oldest events and receive `RecvError::Lagged` (see spec §11.8 for the durable-consumer pattern).
     pub fn spawn(cmd_capacity: usize, event_capacity: usize) -> Result<Self, BridgeError> {
-        Self::spawn_with_timeouts(cmd_capacity, event_capacity, BridgeTimeouts::default())
+        BridgeConfig::new()
+            .cmd_capacity(cmd_capacity)
+            .event_capacity(event_capacity)
+            .spawn()
     }
 
     /// Spawn with explicit setup and cleanup deadlines.
@@ -74,52 +187,24 @@ impl AcpBridge {
         event_capacity: usize,
         timeouts: BridgeTimeouts,
     ) -> Result<Self, BridgeError> {
-        if cmd_capacity == 0
-            || event_capacity == 0
-            || timeouts.handshake.is_zero()
-            || timeouts.shutdown.is_zero()
-        {
-            return Err(BridgeError::InvalidConfig);
-        }
-        let (cmd_tx, cmd_rx) = mpsc::channel(cmd_capacity);
-        let (event_tx, _) = broadcast::channel(event_capacity);
-        let events = event_tx.clone();
-        let shutdown = CancellationToken::new();
-        let signal = shutdown.clone();
-        let worker = std::thread::Builder::new()
-            .name("surge-acp-bridge".into())
-            .spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| BridgeError::WorkerDead)?;
-                tokio::task::LocalSet::new().block_on(
-                    &runtime,
-                    super::lifecycle::run(cmd_rx, events, signal, timeouts),
-                )
-            })
-            .map_err(|_| BridgeError::WorkerDead)?;
-        Ok(Self {
-            cmd_tx,
-            event_tx,
-            worker: Some(worker),
-            shutdown,
-            timeouts,
-            open_slots: Arc::new(tokio::sync::Semaphore::new(cmd_capacity)),
-        })
+        BridgeConfig::new()
+            .cmd_capacity(cmd_capacity)
+            .event_capacity(event_capacity)
+            .timeouts(timeouts)
+            .spawn()
     }
 
     /// Spawn with sane default capacities (64 commands queued, 1024 events buffered).
     /// Defaults chosen per spec §5.1 — high enough to absorb burst traffic from
     /// open_session bootstrapping, low enough to surface backpressure quickly.
     pub fn with_defaults() -> Result<Self, BridgeError> {
-        Self::spawn(64, 1024)
+        BridgeConfig::default().spawn()
     }
 
     /// Subscribe to the bridge's event stream.
     ///
     /// **Important:** broadcast is best-effort observability. Lagging
-    /// subscribers silently drop the oldest events. Consumers that need
+    /// subscribers lose oldest events and receive `RecvError::Lagged`. Consumers that need
     /// durable delivery (M5 engine event-log persistence) MUST add their own
     /// backpressure. See spec §11.8.
     pub fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {

@@ -140,6 +140,18 @@ engine ──BridgeCommand──▶ bridge ──spawn_local──▶ ACP sessio
 engine ◀───BridgeEvent── bridge ◀── observer ◀───────────────────
 ```
 
+Callers can spawn the worker through `bridge::BridgeConfig`, using named
+`cmd_capacity`, `event_capacity`, and `timeouts` setters. Defaults remain 64
+queued commands, 1024 buffered events, a 120-second handshake deadline, and an
+8-second shutdown deadline. Command capacity also limits concurrent session
+openings. Existing `AcpBridge` constructors remain supported and delegate to the
+same configuration validation and worker construction.
+
+Command producers wait for queue capacity. Event broadcasts do not backpressure
+the worker: Tokio may round up the requested retention capacity, and subscribers
+that fall behind lose oldest events and receive `RecvError::Lagged`. Durable
+consumers must provide their own persistence and backpressure.
+
 Commands: `OpenSession`, `SendMessage`, `CloseSession`. Events: `SessionEstablished`, `ToolCall`, `ToolResult`, `PermissionRequest`, `AgentMessageChunk`, `TokensConsumed`, `SessionEnded`.
 
 ### Injected tools
