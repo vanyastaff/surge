@@ -1,6 +1,7 @@
 //! Retained Unix objects; cooperative exclusion does not defend against a malicious same-user actor.
 use super::super::error::OpenError;
 use nix::{
+    errno::Errno,
     fcntl::{AtFlags, OFlag, openat},
     sys::stat::{Mode, fstatat, mkdirat},
 };
@@ -146,18 +147,25 @@ impl RunRoot {
         self.verify()?;
         let component = run.to_string();
         if create {
-            mkdirat(
+            match mkdirat(
                 Some(self.runs.as_raw_fd()),
                 component.as_str(),
                 Mode::S_IRWXU,
-            )
-            .map_err(io)?;
+            ) {
+                Ok(()) => {},
+                Err(error) if error == Errno::EEXIST => {},
+                Err(error) => return Err(io(error)),
+            }
         }
         let directory = open(&self.runs, OsStr::new(&component), true, false)?;
         if create {
             self.verify()?;
             verify(&self.runs, OsStr::new(&component), &directory, true)?;
-            mkdirat(Some(directory.as_raw_fd()), "artifacts", Mode::S_IRWXU).map_err(io)?;
+            match mkdirat(Some(directory.as_raw_fd()), "artifacts", Mode::S_IRWXU) {
+                Ok(()) => {},
+                Err(error) if error == Errno::EEXIST => {},
+                Err(error) => return Err(io(error)),
+            }
         }
         let artifacts = open(&directory, OsStr::new("artifacts"), true, false)?;
         let result = RunRoute {
@@ -212,7 +220,17 @@ impl RunRoute {
     }
     pub(super) fn database(&self, create: bool) -> Result<Database, OpenError> {
         self.verify()?;
-        let file = open(&self.directory, OsStr::new("events.sqlite"), false, create)?;
+        let file = if create {
+            match open(&self.directory, OsStr::new("events.sqlite"), false, true) {
+                Ok(file) => file,
+                Err(OpenError::Io(error)) if error.raw_os_error() == Some(Errno::EEXIST as i32) => {
+                    open(&self.directory, OsStr::new("events.sqlite"), false, false)?
+                },
+                Err(error) => return Err(error),
+            }
+        } else {
+            open(&self.directory, OsStr::new("events.sqlite"), false, false)?
+        };
         if create {
             file.sync_all()?;
             self.directory.sync_all()?;

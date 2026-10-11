@@ -17,6 +17,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
+use windows::Win32::Foundation::STATUS_OBJECT_NAME_COLLISION;
 
 /// The original state-home namespace, held throughout every derived capability.
 pub(crate) struct StateHomeOwner {
@@ -113,12 +114,24 @@ impl RunRoot {
         self.verify()?;
         let component = run.to_string();
         let namespace = if create {
-            self.runs.child_exclusive(OsStr::new(&component), true)?
+            match self.runs.child_exclusive(OsStr::new(&component), true) {
+                Ok(namespace) => namespace,
+                Err(NativeError::Open(STATUS_OBJECT_NAME_COLLISION)) => {
+                    self.runs.child(OsStr::new(&component), true)?
+                },
+                Err(error) => return Err(error),
+            }
         } else {
             self.runs.existing_child(OsStr::new(&component), true)?
         };
         let artifacts = if create {
-            namespace.child_exclusive(OsStr::new("artifacts"), true)?
+            match namespace.child_exclusive(OsStr::new("artifacts"), true) {
+                Ok(artifacts) => artifacts,
+                Err(NativeError::Open(STATUS_OBJECT_NAME_COLLISION)) => {
+                    namespace.child(OsStr::new("artifacts"), true)?
+                },
+                Err(error) => return Err(error),
+            }
         } else {
             namespace.existing_child(OsStr::new("artifacts"), true)?
         };
