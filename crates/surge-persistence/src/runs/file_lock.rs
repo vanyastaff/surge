@@ -2,6 +2,8 @@
 
 #[cfg(not(windows))]
 use std::fs::{File, OpenOptions};
+#[cfg(not(windows))]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use crate::runs::error::OpenError;
@@ -37,7 +39,6 @@ impl FileLock {
         }
         #[cfg(not(windows))]
         {
-            use std::os::unix::fs::MetadataExt;
             let held = self.file.metadata()?;
             let linked = std::fs::symlink_metadata(&self.path)?;
             if !held.is_file()
@@ -100,7 +101,6 @@ impl FileLock {
             if create && let Some(parent) = lock_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            use std::os::unix::fs::OpenOptionsExt;
             let file = OpenOptions::new()
                 .create(create)
                 .read(true)

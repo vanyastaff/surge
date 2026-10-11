@@ -218,8 +218,8 @@ impl Storage {
         // The actual fenced worker owns token and route even when its caller is dropped.
         let (token, route) = registry_exec::write(&self.registry_pool, move |tx| {
             admit(tx, run)?;
-            root.verify().map_err(|e| storage_error(e.into()))?;
-            let route = root.run(run, true).map_err(|e| storage_error(e.into()))?;
+            root.verify().map_err(storage_error)?;
+            let route = root.run(run, true).map_err(storage_error)?;
             Ok((token, Arc::new(route)))
         })
         .await
@@ -227,7 +227,7 @@ impl Storage {
         let lock = FileLock::try_acquire_existing(&self.lock_path(&run), run)?;
         let identity = route_identity(&route, &lock)?;
         let prepared = registry_exec::write(&self.registry_pool, move |tx| {
-            route.verify().map_err(|e| storage_error(e.into()))?;
+            route.verify().map_err(storage_error)?;
             lock.identity().map_err(storage_error)?;
             let opening = record(tx, run, identity, None)?;
             Ok(PreparedOpening {
@@ -258,7 +258,7 @@ impl Storage {
         let identity = route_identity(&route, &lock)?;
         let db_identity = database.identity()?;
         registry_exec::write(&self.registry_pool, move |tx| {
-            route.verify().map_err(|e| storage_error(e.into()))?;
+            route.verify().map_err(storage_error)?;
             lock.identity().map_err(storage_error)?;
             verify_database(&route, &database).map_err(storage_error)?;
             let opening = record(tx, run, identity, Some(db_identity))?;
@@ -288,8 +288,8 @@ impl Storage {
             prepared.verify().map_err(storage_error)?;
             let latest:Option<String>=tx.query_row("SELECT opening_id FROM run_host_openings WHERE run_id=? ORDER BY epoch DESC LIMIT 1",[run.to_string()],|row|row.get(0)).optional()?;
             if latest.as_deref()!=Some(prepared.opening.id.as_str()){return Err(StorageError::OperationRejected("reserved opening superseded".into()));}
-            let database=prepared.route.database(true).map_err(|e|storage_error(e.into()))?;
-            let identity=database.identity().map_err(|e|storage_error(e.into()))?;
+            let database=prepared.route.database(true).map_err(storage_error)?;
+            let identity=database.identity().map_err(storage_error)?;
             let changed=tx.execute("UPDATE run_host_openings SET database_identity=? WHERE opening_id=? AND epoch=? AND database_identity IS NULL AND state='Opening'",params![identity,prepared.opening.id,prepared.opening.epoch])?;
             if changed!=1 {return Err(StorageError::OperationRejected("reserved database identity already bound".into()));}
             Ok((run,prepared.bind(database)))
