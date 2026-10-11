@@ -54,6 +54,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 ├── docs/                            # Project documentation
 │   ├── ARCHITECTURE.md              # Canonical architecture document
 │   ├── conventions/                 # Generated artifact contracts, examples, validator guidance
+│   ├── agents/                      # Engineering skill tracker, triage labels and domain-doc rules
 │   └── README.md
 │
 ├── .ai-factory/                     # AI Factory context (this run)

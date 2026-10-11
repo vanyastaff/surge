@@ -60,3 +60,21 @@ frozen manifest; there is no managed VM or effect broker (ADR-0020 is superseded
 See [ADR-0021](docs/adr/0021-mcp-restart-recovery.md). Group cleanup is
 best-effort: never record or display it as confirmed writer closure, and never
 replay an interrupted tool call.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues in `vanyastaff/surge`.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, and `wontfix`.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` and shared `docs/adr/`.
+See `docs/agents/domain.md`.
