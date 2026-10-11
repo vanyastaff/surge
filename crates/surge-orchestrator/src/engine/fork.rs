@@ -113,6 +113,16 @@ pub struct ForkOutcome {
 /// pre-fork edit targets an unknown or non-Agent node, or persistence fails.
 pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcome, EngineError> {
     reject_task_fork(storage, &req)?;
+    if storage
+        .home()
+        .join("runs")
+        .join(req.new_run.to_string())
+        .exists()
+    {
+        return Err(EngineError::ForkInvalid(
+            "destination run already exists".into(),
+        ));
+    }
     let reader = storage
         .open_run_reader(req.parent)
         .await
