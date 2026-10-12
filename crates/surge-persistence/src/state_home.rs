@@ -462,3 +462,42 @@ mod control_lock_tests;
 #[cfg(test)]
 #[path = "state_home/privileged_fixture_tests.rs"]
 mod privileged_fixture_tests;
+
+/// Immutable private files in an existing, protected local Windows runtime root.
+///
+/// The owner retains and verifies the native namespace through each operation.
+/// Names are single components supplied by trusted host code. No handles or
+/// path-based write authority escape this capability.
+pub struct RuntimeImmutableFiles {
+    inner: WindowsPrivateFiles,
+}
+impl RuntimeImmutableFiles {
+    /// Open the existing protected current-user NTFS root without repairing it.
+    ///
+    /// # Errors
+    /// Refuses unsafe ownership, ACLs, reparse points and failed durability barriers.
+    pub fn open_existing_root(home: &Path) -> Result<Self, PersistenceError> {
+        Ok(Self {
+            inner: WindowsPrivateFiles::open_root(home)?,
+        })
+    }
+    /// Read an immutable file, completing its own file and parent durability barriers.
+    /// Returns `None` only for a genuinely missing final name.
+    ///
+    /// # Errors
+    /// Refuses unsafe, substituted or oversized (over 8 MiB) files and incomplete barriers.
+    pub fn read(&self, name: &str) -> Result<Option<Vec<u8>>, PersistenceError> {
+        self.inner
+            .read_optional(name)
+            .map_err(PersistenceError::from)
+    }
+    /// Publish without replacing an existing name. `false` means the caller must read the winner.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe files, substitutions and incomplete durability barriers.
+    pub fn publish(&self, name: &str, bytes: &[u8]) -> Result<bool, PersistenceError> {
+        self.inner
+            .publish(name, bytes)
+            .map_err(PersistenceError::from)
+    }
+}

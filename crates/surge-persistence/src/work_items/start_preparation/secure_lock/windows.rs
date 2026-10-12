@@ -31,12 +31,12 @@ use windows::{
         Foundation::{HANDLE, NTSTATUS, STATUS_PENDING, STATUS_SUCCESS, UNICODE_STRING},
         Storage::FileSystem::{
             FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-            FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK,
-            FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS,
-            GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW, SYNCHRONIZE,
-            VOLUME_NAME_DOS,
+            FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_GENERIC_READ, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE, FILE_TYPE_DISK,
+            FileAttributeTagInfo, FileBasicInfo, FileIdInfo, FileStandardInfo,
+            GETFINALPATHNAMEBYHANDLE_FLAGS, GetFileInformationByHandleEx, GetFileType,
+            GetFinalPathNameByHandleW, SYNCHRONIZE, VOLUME_NAME_DOS,
         },
         System::{
             IO::IO_STATUS_BLOCK,
@@ -91,6 +91,20 @@ fn standard(file: &File) -> Result<FILE_STANDARD_INFO> {
     }
     .map_err(|_| invalid())?;
     Ok(output)
+}
+fn change_time(file: &File) -> Result<i64> {
+    let mut output = FILE_BASIC_INFO::default();
+    // SAFETY: live handle and matching initialized SDK class/output structure.
+    unsafe {
+        GetFileInformationByHandleEx(
+            handle(file),
+            FileBasicInfo,
+            (&raw mut output).cast(),
+            size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    }
+    .map_err(|_| invalid())?;
+    Ok(output.ChangeTime)
 }
 fn file_identity(file: &File) -> Result<Identity> {
     let mut output = FILE_ID_INFO::default();
@@ -468,9 +482,17 @@ pub(in crate::work_items) struct Source {
     identity: Identity,
     size: u64,
     modified: std::time::SystemTime,
+    change_time: i64,
 }
 impl Source {
     pub(in crate::work_items) fn capture(base: &Path, locator: &Path) -> Result<(PathBuf, Self)> {
+        Self::capture_bounded(base, locator, 8 * 1024 * 1024)
+    }
+    pub(in crate::work_items) fn capture_bounded(
+        base: &Path,
+        locator: &Path,
+        limit: u64,
+    ) -> Result<(PathBuf, Self)> {
         if locator.as_os_str().is_empty()
             || locator
                 .components()
@@ -491,9 +513,10 @@ impl Source {
         let file = opened(chain.files.last().ok_or_else(invalid)?, &name, Kind::Source)?;
         let identity = check(&file, Kind::Source)?;
         let metadata = file.metadata()?;
-        if metadata.len() > 8 * 1024 * 1024 {
+        if metadata.len() > limit {
             return Err(invalid());
         }
+        let changed = change_time(&file)?;
         let result = Self {
             base: canonical.clone(),
             base_index,
@@ -503,6 +526,7 @@ impl Source {
             identity,
             size: metadata.len(),
             modified: metadata.modified()?,
+            change_time: changed,
         };
         result.verify()?;
         Ok((canonical, result))
@@ -523,6 +547,8 @@ impl Source {
             || check(&named, Kind::Source)? != self.identity
             || metadata.len() != self.size
             || metadata.modified()? != self.modified
+            || change_time(&self.file)? != self.change_time
+            || change_time(&named)? != self.change_time
         {
             return Err(invalid());
         }

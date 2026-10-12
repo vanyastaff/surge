@@ -2631,3 +2631,71 @@ pub fn close_owned_flow_refusal_admission() {
 pub fn join_owned_flow_refusal_owners() {
     owned_flow::refusal_owner::join_all();
 }
+
+/// Failure to capture a stable declared source without private-storage ACL requirements.
+#[cfg(windows)]
+#[derive(Debug, thiserror::Error)]
+pub enum DeclaredSourceError {
+    /// Native opening or source type was refused.
+    #[error("declared source unavailable")]
+    Unavailable,
+    /// Source exceeds the caller's bounded input contract.
+    #[error("declared source exceeds size limit")]
+    TooLarge,
+    /// The retained object or named source changed during capture.
+    #[error("declared source changed during capture")]
+    Changed,
+}
+/// Read a declared Windows source with retained native identity and final no-reparse checks.
+/// Public source files do not inherit the private runtime-home ACL requirement.
+///
+/// # Errors
+/// Refuses unavailable, oversized, substituted or concurrently changed sources.
+#[cfg(windows)]
+pub fn read_stable_declared_source(
+    path: &std::path::Path,
+    limit: u64,
+) -> std::result::Result<Vec<u8>, DeclaredSourceError> {
+    use std::io::Read;
+    let parent = path.parent().ok_or(DeclaredSourceError::Unavailable)?;
+    let parent = if parent.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        parent
+    };
+    let name = path.file_name().ok_or(DeclaredSourceError::Unavailable)?;
+    // Resolve ancestor junctions and parent traversal without following the final source.
+    // The resulting native chain is retained, and the declared parent is checked again below.
+    let canonical = std::fs::canonicalize(parent).map_err(|_| DeclaredSourceError::Unavailable)?;
+    let (_, mut source) = start_preparation::secure_lock::windows::Source::capture_bounded(
+        &canonical,
+        std::path::Path::new(name),
+        u64::MAX,
+    )
+    .map_err(|_| DeclaredSourceError::Unavailable)?;
+    let size = source
+        .file
+        .metadata()
+        .map_err(|_| DeclaredSourceError::Unavailable)?
+        .len();
+    if size > limit {
+        return Err(DeclaredSourceError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    source
+        .file
+        .by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| DeclaredSourceError::Unavailable)?;
+    if bytes.len() as u64 > limit {
+        return Err(DeclaredSourceError::TooLarge);
+    }
+    source.verify().map_err(|_| DeclaredSourceError::Changed)?;
+    if bytes.len() as u64 != size
+        || std::fs::canonicalize(parent).map_err(|_| DeclaredSourceError::Changed)? != canonical
+    {
+        return Err(DeclaredSourceError::Changed);
+    }
+    Ok(bytes)
+}

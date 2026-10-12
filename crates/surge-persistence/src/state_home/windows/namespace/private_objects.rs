@@ -129,6 +129,24 @@ pub(crate) struct PrivateFiles {
     namespace: Namespace,
 }
 impl PrivateFiles {
+    pub(crate) fn open_root(home: &Path) -> NativeResult<Self> {
+        let mut namespace = Namespace::existing_parent(home)?;
+        namespace.writable_parent()?;
+        namespace.flush_parent()?;
+        namespace.verify()?;
+        Ok(Self { namespace })
+    }
+    pub(crate) fn read_optional(&self, name: &str) -> NativeResult<Option<Vec<u8>>> {
+        self.namespace.verify()?;
+        let name = OsStr::new(name);
+        match self.opened(name) {
+            Ok(file) => self.read_opened(name, file).map(Some),
+            Err(NativeError::Open(windows::Win32::Foundation::STATUS_OBJECT_NAME_NOT_FOUND)) => {
+                Ok(None)
+            },
+            Err(error) => Err(error),
+        }
+    }
     pub(crate) fn open(home: &Path, create: bool) -> NativeResult<Self> {
         Ok(Self {
             namespace: namespace(home, "private-flow-inputs", create)?,
@@ -152,7 +170,10 @@ impl PrivateFiles {
     pub(crate) fn read(&self, name: &str) -> NativeResult<Vec<u8>> {
         self.namespace.verify()?;
         let name = OsStr::new(name);
-        let mut file = self.opened(name)?;
+        let file = self.opened(name)?;
+        self.read_opened(name, file)
+    }
+    fn read_opened(&self, name: &OsStr, mut file: File) -> NativeResult<Vec<u8>> {
         let original = self.validate(&file)?;
         let length = file.metadata()?.len();
         if length > LIMIT {
@@ -1012,6 +1033,35 @@ mod tests {
         assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
         std::fs::remove_dir(&root).unwrap();
         std::fs::rename(saved, root).unwrap();
+        home.close().unwrap();
+    }
+
+    #[test]
+    fn optional_root_read_never_reclassifies_late_disappearance_as_missing() {
+        let home = FixtureHome::new().unwrap();
+        let files = PrivateFiles::open_root(home.path()).unwrap();
+        assert!(files.read_optional("route-key").unwrap().is_none());
+        files.publish("route-key", b"original key bytes").unwrap();
+        let original = home.path().join("route-key");
+        let moved = home.path().join("held-original");
+        let from = original.clone();
+        let to = moved.clone();
+        let hook = observation::register(move |phase, _| {
+            if phase == observation::Phase::ReadFileBarrier {
+                std::fs::rename(&from, &to)?;
+            }
+            Ok(())
+        });
+        assert!(matches!(
+            files.read_optional("route-key"),
+            Err(NativeError::Open(
+                windows::Win32::Foundation::STATUS_OBJECT_NAME_NOT_FOUND
+            ))
+        ));
+        drop(hook);
+        assert_eq!(std::fs::read(&moved).unwrap(), b"original key bytes");
+        assert!(!original.exists());
+        drop(files);
         home.close().unwrap();
     }
 

@@ -270,7 +270,7 @@ pub(crate) fn verify_skipped_snapshot(
     Ok(())
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
 mod tests {
     use super::*;
 
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn opaque_missing_or_changed_sources_never_reuse_a_pin() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let kind = surge_acp::bridge::session::AgentKind::Custom {
             binary: "fixture".into(),
             args: Vec::new(),
@@ -370,5 +370,6 @@ mod tests {
         assert!(
             configured_pin(home.path(), "a", &kind, &inaccessible, &env, home.path()).is_none()
         );
+        home.close().unwrap();
     }
 }

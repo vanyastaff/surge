@@ -24,7 +24,7 @@ $previousTmp = $env:TMP
 try {
     # Use actual libtest executables, not rebuilt substitutes in the other account.
     $executables = @{}
-    foreach ($crate in @('surge-persistence', 'surge-process', 'surge-mcp')) {
+    foreach ($crate in @('surge-persistence', 'surge-process', 'surge-mcp', 'surge-orchestrator')) {
         $messages = & cargo test --locked -p $crate --lib --all-features --no-run --message-format=json
         if ($LASTEXITCODE -ne 0) { throw "Native probe $crate test binary build failed" }
         $target = $crate.Replace('-', '_')
@@ -103,6 +103,7 @@ try {
         'work_items::start_preparation::secure_lock::windows_tests::existing_private_lock_read_grants_are_refused_without_acl_or_byte_repair',
         'state_home::windows::namespace::private_objects::tests::publication_is_complete_immutable_and_concurrent_losers_read_the_winner',
         'state_home::windows::namespace::private_objects::tests::private_inputs_refuse_aliases_hardlinks_and_unsafe_existing_acl_without_repair',
+        'state_home::windows::namespace::private_objects::tests::optional_root_read_never_reclassifies_late_disappearance_as_missing',
         'state_home::windows::namespace::private_objects::tests::after_rename_failure_preserves_final_and_prepublication_failure_retains_cleanup_error',
         'state_home::windows::namespace::private_objects::tests::moved_staging_cleanup_disposes_only_original_before_barrier',
         'state_home::windows::namespace::private_objects::tests::final_and_private_ancestor_reparse_points_are_refused_without_following_target',
@@ -120,6 +121,17 @@ try {
         $cases += @{ Binary = 'surge-persistence'; Filter = $filter; Native = $true; Receipts = @() }
     }
     $cases += @{ Binary = 'surge-mcp'; Filter = 'child_settlement::windows_tests::native_final_admission_refuses_after_preparation_without_spawning'; Native = $true; Receipts = @() }
+    $routePinCases = @(
+        'native_key_concurrent_publication_and_corruption_refusal',
+        'native_source_bytes_change_route_and_final_directory_is_refused',
+        'native_source_size_limit_is_typed_and_hmac_framing_is_unchanged',
+        'native_source_allows_ancestor_junction_but_refuses_final_reparse',
+        'native_existing_reparse_key_is_refused_without_target_mutation',
+        'native_existing_hardlinked_key_is_refused_without_replacement'
+    )
+    foreach ($name in $routePinCases) {
+        $cases += @{ Binary = 'surge-orchestrator'; Filter = "engine::configured_route_pin::windows_key::tests::$name"; Native = $true; Receipts = @() }
+    }
     $caseIndex = 0
     foreach ($case in $cases) {
         $printed = $false
