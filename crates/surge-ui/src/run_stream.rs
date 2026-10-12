@@ -204,6 +204,8 @@ pub struct RunStreamState {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub cost_usd: f64,
+    pub cost_unknown: bool,
+    pub usage_unknown: bool,
     /// Highest seq observed on this stream.
     pub last_seq: u64,
     /// Where the run executes, as recorded by `RunStarted` (for isolated
@@ -701,16 +703,24 @@ impl RunStreamState {
     }
 
     fn fold_cost(&mut self, payload: &EventPayload) {
-        if let EventPayload::TokensConsumed {
-            prompt_tokens,
-            output_tokens,
-            cost_usd,
-            ..
-        } = payload
-        {
-            self.tokens_in += u64::from(*prompt_tokens);
-            self.tokens_out += u64::from(*output_tokens);
-            self.cost_usd += cost_usd.unwrap_or(0.0);
+        if let Some((_, input, output, cost)) = payload.token_delta() {
+            if let (Some(input), Some(output)) = (
+                self.tokens_in.checked_add(input),
+                self.tokens_out.checked_add(output),
+            ) {
+                self.tokens_in = input;
+                self.tokens_out = output;
+            } else {
+                self.usage_unknown = true;
+            }
+            if let Some(cost) = cost {
+                self.cost_usd += cost;
+            } else {
+                self.cost_unknown = true;
+            }
+        } else if matches!(payload, EventPayload::ProviderUsageObserved { .. }) {
+            self.usage_unknown = true;
+            self.cost_unknown = true;
         }
     }
 }
@@ -806,8 +816,36 @@ fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
             "COST",
             Tone::Info,
             format!(
-                "+{output_tokens} tok · ${:.2} · {model}",
-                cost_usd.unwrap_or(0.0)
+                "+{output_tokens} tok · {} · {model}",
+                cost_usd.map_or_else(|| "cost unavailable".into(), |cost| format!("${cost:.2}"))
+            ),
+        ),
+        P::ProviderUsageObserved { usage, .. } => match usage {
+            surge_core::usage::TokenUsageObservation::Reported { cumulative, delta } => (
+                "USAGE",
+                Tone::Info,
+                format!(
+                    "reported: {} input · {} output · +{} total tokens · cost unavailable",
+                    cumulative.input_tokens, cumulative.output_tokens, delta.total_tokens
+                ),
+            ),
+            surge_core::usage::TokenUsageObservation::Unavailable { reason, .. } => (
+                "USAGE",
+                Tone::Warn,
+                format!("token spend unavailable: {reason:?}"),
+            ),
+        },
+        P::ContextUsageObserved { usage, .. } => (
+            "CONTEXT",
+            Tone::Info,
+            format!(
+                "context occupancy: {} / {}{}",
+                usage.used,
+                usage.size,
+                usage.cost.as_ref().map_or_else(String::new, |cost| format!(
+                    " · session cost {} {}",
+                    cost.amount, cost.currency
+                ))
             ),
         ),
         P::BudgetWarningRaised { pct, cost_usd, .. } => (

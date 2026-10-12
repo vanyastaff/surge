@@ -1050,9 +1050,11 @@ async fn lag_recovers_dropped_completion_from_journal() {
                 let comments = wait_for_comments(&setup.src, 1).await;
                 assert_eq!(comments.len(), 1, "lag must recover the durable completion");
                 assert_eq!(setup.src.merge_calls().await.len(), 1);
-                handle.abort();
-                assert!(handle.await.unwrap_err().is_cancelled());
-                setup.close();
+                // Drain the gate instead of aborting an in-flight durable read:
+                // its blocking reader-pool construction must finish before the
+                // retained runtime home can be removed on Windows.
+                drop(tx);
+                setup.finish(handle).await;
             });
     })
     .await

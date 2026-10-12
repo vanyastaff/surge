@@ -65,7 +65,7 @@ pub struct EdgeView {
 /// Cumulative cost accumulated up to the cutoff.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct CostView {
-    /// Sum of `prompt_tokens` across `TokensConsumed`.
+    /// Sum of legacy prompt tokens and accepted provider input-token deltas.
     pub prompt_tokens: u64,
     /// Sum of `output_tokens`.
     pub output_tokens: u64,
@@ -73,6 +73,50 @@ pub struct CostView {
     pub cache_hits: u64,
     /// Sum of `cost_usd` (events without a cost contribute 0).
     pub cost_usd: f64,
+    /// True when a token aggregate exceeded u64 and was saturated.
+    pub token_overflow: bool,
+    /// At least one provider observation lacked reliable spend counters.
+    pub usage_unknown: bool,
+    /// At least one spend observation lacked a USD price.
+    pub cost_unknown: bool,
+}
+
+impl CostView {
+    fn observe(&mut self, payload: &EventPayload) {
+        if let Some((_, input, output, usd)) = payload.token_delta() {
+            for (counter, delta) in [
+                (&mut self.prompt_tokens, input),
+                (&mut self.output_tokens, output),
+            ] {
+                if let Some(sum) = counter.checked_add(delta) {
+                    *counter = sum;
+                } else {
+                    *counter = u64::MAX;
+                    self.token_overflow = true;
+                }
+            }
+            self.cost_unknown |= usd.is_none();
+            self.cost_usd += usd.unwrap_or(0.0);
+        }
+        if let EventPayload::TokensConsumed { cache_hits, .. } = payload {
+            if let Some(sum) = self.cache_hits.checked_add(u64::from(*cache_hits)) {
+                self.cache_hits = sum;
+            } else {
+                self.cache_hits = u64::MAX;
+                self.token_overflow = true;
+            }
+        }
+        if matches!(
+            payload,
+            EventPayload::ProviderUsageObserved {
+                usage: surge_core::TokenUsageObservation::Unavailable { .. },
+                ..
+            }
+        ) {
+            self.usage_unknown = true;
+            self.cost_unknown = true;
+        }
+    }
 }
 
 /// Terminal disposition of a run.
@@ -137,6 +181,7 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
     let mut cost = CostView::default();
 
     for ev in events {
+        cost.observe(&ev.payload.payload);
         match ev.payload.payload() {
             EventPayload::StageEntered { node, attempt } => {
                 let e =
@@ -174,18 +219,6 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
                     from: from.as_str().to_owned(),
                     to: to.as_str().to_owned(),
                 });
-            },
-            EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
-                cache_hits,
-                cost_usd,
-                ..
-            } => {
-                cost.prompt_tokens += u64::from(*prompt_tokens);
-                cost.output_tokens += u64::from(*output_tokens);
-                cost.cache_hits += u64::from(*cache_hits);
-                cost.cost_usd += cost_usd.unwrap_or(0.0);
             },
             EventPayload::RunCompleted { terminal_node: tn } => {
                 terminal = Some(TerminalKind::Completed);
@@ -342,6 +375,113 @@ mod tests {
             .iter()
             .find(|n| n.node == id)
             .expect("node present")
+    }
+
+    #[test]
+    fn provider_usage_replay_uses_deltas_and_ignores_context_occupancy() {
+        use surge_core::{ContextUsage, SessionId, TokenUsageCounters, TokenUsageObservation};
+        let session = SessionId::new();
+        let counters = |input, output| TokenUsageCounters {
+            total_tokens: input + output,
+            input_tokens: input,
+            output_tokens: output,
+            thought_tokens: None,
+            cached_read_tokens: Some(8),
+            cached_write_tokens: None,
+        };
+        let events = vec![
+            ev(
+                1,
+                EventPayload::ProviderUsageObserved {
+                    session,
+                    usage: TokenUsageObservation::Reported {
+                        cumulative: counters(100, 20),
+                        delta: counters(100, 20),
+                    },
+                },
+            ),
+            ev(
+                2,
+                EventPayload::ProviderUsageObserved {
+                    session,
+                    usage: TokenUsageObservation::Reported {
+                        cumulative: counters(100, 20),
+                        delta: counters(0, 0),
+                    },
+                },
+            ),
+            ev(
+                3,
+                EventPayload::ContextUsageObserved {
+                    session,
+                    usage: ContextUsage {
+                        used: 9000,
+                        size: 10000,
+                        cost: None,
+                    },
+                },
+            ),
+            ev(
+                4,
+                EventPayload::ProviderUsageObserved {
+                    session,
+                    usage: TokenUsageObservation::Reported {
+                        cumulative: counters(130, 25),
+                        delta: counters(30, 5),
+                    },
+                },
+            ),
+        ];
+        let cost = build_replay_view(&graph_impl_to_end(), &events).cost;
+        assert_eq!(cost.prompt_tokens, 130);
+        assert_eq!(cost.output_tokens, 25);
+        assert_eq!(cost.cache_hits, 0);
+        assert_eq!(cost.cost_usd.to_bits(), 0.0_f64.to_bits());
+        assert!(cost.cost_unknown);
+        assert!(!cost.usage_unknown);
+    }
+
+    #[test]
+    fn missing_provider_evidence_marks_replay_totals_unknown() {
+        let events = vec![ev(
+            1,
+            EventPayload::ProviderUsageObserved {
+                session: surge_core::SessionId::new(),
+                usage: surge_core::TokenUsageObservation::Unavailable {
+                    reason: surge_core::UsageUnavailableReason::Missing,
+                    reported: None,
+                },
+            },
+        )];
+        let cost = build_replay_view(&graph_impl_to_end(), &events).cost;
+        assert!(cost.usage_unknown);
+        assert!(cost.cost_unknown);
+        assert_eq!(cost.prompt_tokens, 0);
+        assert_eq!(cost.output_tokens, 0);
+    }
+
+    #[test]
+    fn replay_token_overflow_is_explicit_and_never_wraps() {
+        use surge_core::{SessionId, TokenUsageCounters, TokenUsageObservation};
+        let counters = TokenUsageCounters {
+            total_tokens: u64::MAX,
+            input_tokens: u64::MAX,
+            output_tokens: 0,
+            thought_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+        };
+        let payload = EventPayload::ProviderUsageObserved {
+            session: SessionId::new(),
+            usage: TokenUsageObservation::Reported {
+                cumulative: counters.clone(),
+                delta: counters,
+            },
+        };
+        let events = vec![ev(1, payload.clone()), ev(2, payload)];
+        let cost = build_replay_view(&graph_impl_to_end(), &events).cost;
+        assert_eq!(cost.prompt_tokens, u64::MAX);
+        assert!(cost.token_overflow);
     }
 
     #[test]

@@ -619,6 +619,16 @@ pub enum EventPayload {
         outcome: OutcomeKey,
         hook_id: String,
     },
+    /// Exact ACP prompt-response counters, distinct from context occupancy.
+    ProviderUsageObserved {
+        session: SessionId,
+        usage: crate::usage::TokenUsageObservation,
+    },
+    /// ACP usage-update context-window occupancy and provider cost metadata.
+    ContextUsageObserved {
+        session: SessionId,
+        usage: crate::usage::ContextUsage,
+    },
     TokensConsumed {
         session: SessionId,
         prompt_tokens: u32,
@@ -772,6 +782,39 @@ pub enum EventPayload {
 }
 
 impl EventPayload {
+    /// Incremental consumption only; context occupancy is deliberately excluded.
+    #[must_use]
+    pub fn token_delta(&self) -> Option<(SessionId, u64, u64, Option<f64>)> {
+        match self {
+            Self::TokensConsumed {
+                session,
+                prompt_tokens,
+                output_tokens,
+                cost_usd,
+                ..
+            } => Some((
+                *session,
+                u64::from(*prompt_tokens),
+                u64::from(*output_tokens),
+                *cost_usd,
+            )),
+            Self::ProviderUsageObserved {
+                session,
+                usage: crate::usage::TokenUsageObservation::Reported { delta, .. },
+            } => Some((*session, delta.input_tokens, delta.output_tokens, None)),
+            _ => None,
+        }
+    }
+
+    /// Whether this event leaves token consumption or its price unknown.
+    #[must_use]
+    pub fn usage_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::ProviderUsageObserved { .. } | Self::TokensConsumed { cost_usd: None, .. }
+        )
+    }
+
     /// Serialize for the event log.
     ///
     /// Internally uses JSON bytes rather than raw bincode because bincode 1.x
@@ -863,6 +906,8 @@ impl EventPayload {
             Self::RuntimeVersionWarning { .. } => "RuntimeVersionWarning",
             Self::HookExecuted { .. } => "HookExecuted",
             Self::OutcomeRejectedByHook { .. } => "OutcomeRejectedByHook",
+            Self::ProviderUsageObserved { .. } => "ProviderUsageObserved",
+            Self::ContextUsageObserved { .. } => "ContextUsageObserved",
             Self::TokensConsumed { .. } => "TokensConsumed",
             Self::BudgetWarningRaised { .. } => "BudgetWarningRaised",
             Self::BudgetExceeded { .. } => "BudgetExceeded",

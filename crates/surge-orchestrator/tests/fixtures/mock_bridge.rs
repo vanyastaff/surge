@@ -155,7 +155,7 @@ impl MockBridge {
         }
     }
 
-    /// Wait until at least `expected` `subscribe()` calls have been recorded.
+    /// Wait until at least `expected` event receivers have been installed.
     ///
     /// The broadcast channel drops events sent before any receiver exists, so
     /// pumping must not race the engine reaching `bridge.subscribe()`. Tests
@@ -165,13 +165,8 @@ impl MockBridge {
     #[allow(dead_code)] // not exercised by every test binary sharing the fixture
     pub async fn wait_for_subscribe_count(&self, expected: usize) {
         for _ in 0..300 {
-            let count = self
-                .recorded_calls
-                .lock()
-                .await
-                .iter()
-                .filter(|c| matches!(c, RecordedCall::Subscribe))
-                .count();
+            // Audit recording is asynchronous; it cannot establish receiver readiness.
+            let count = self.subscribe_count();
             if count >= expected {
                 return;
             }
@@ -369,6 +364,31 @@ mod tests {
             bindings: BTreeMap::new(),
             env: BTreeMap::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn subscriber_readiness_does_not_wait_for_asynchronous_audit_recording() {
+        let mock = MockBridge::new();
+        let audit = mock.recorded_calls.lock().await;
+        let mut receiver = mock.subscribe();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            mock.wait_for_subscribe_count(1),
+        )
+        .await
+        .expect("installed receiver must be ready while audit recording is blocked");
+        assert!(audit.is_empty(), "audit task must still be blocked");
+        let session = SessionId::new();
+        mock.tx
+            .send(BridgeEvent::SessionEnded {
+                session,
+                reason: SessionEndReason::Normal,
+            })
+            .unwrap();
+        assert!(
+            matches!(receiver.recv().await.unwrap(), BridgeEvent::SessionEnded { session: observed_session, .. } if observed_session == session)
+        );
+        drop(audit);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

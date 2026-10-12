@@ -607,6 +607,37 @@ pub struct CostSummary {
     pub tokens_out: u64,
     pub cache_hits: u64,
     pub cost_usd: f64,
+    /// Token totals are incomplete (missing evidence, regression, or overflow).
+    pub usage_unknown: bool,
+    /// Recorded USD is a lower bound because some spend has no price.
+    pub cost_unknown: bool,
+}
+
+impl CostSummary {
+    fn observe(&mut self, payload: &EventPayload) {
+        if let Some((_, input, output, cost)) = payload.token_delta() {
+            self.usage_unknown |= self.tokens_in.checked_add(input).is_none()
+                || self.tokens_out.checked_add(output).is_none();
+            self.tokens_in = self.tokens_in.saturating_add(input);
+            self.tokens_out = self.tokens_out.saturating_add(output);
+            self.cost_usd += cost.unwrap_or(0.0);
+        }
+        if let EventPayload::TokensConsumed { cache_hits, .. } = payload {
+            self.usage_unknown |= self
+                .cache_hits
+                .checked_add(u64::from(*cache_hits))
+                .is_none();
+            self.cache_hits = self.cache_hits.saturating_add(u64::from(*cache_hits));
+        }
+        self.cost_unknown |= payload.usage_unavailable();
+        self.usage_unknown |= matches!(
+            payload,
+            EventPayload::ProviderUsageObserved {
+                usage: crate::usage::TokenUsageObservation::Unavailable { .. },
+                ..
+            }
+        );
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -802,13 +833,9 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
         },
         (
             state @ RunState::Pipeline { .. },
-            EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
-                cache_hits,
-                cost_usd,
-                ..
-            },
+            payload @ (EventPayload::TokensConsumed { .. }
+            | EventPayload::ProviderUsageObserved { .. }
+            | EventPayload::ContextUsageObserved { .. }),
         ) => {
             if let RunState::Pipeline {
                 graph,
@@ -818,10 +845,7 @@ pub fn apply(mut state: RunState, event: &RunEvent) -> Result<RunState, FoldErro
                 parked,
             } = state
             {
-                memory.costs.tokens_in += u64::from(*prompt_tokens);
-                memory.costs.tokens_out += u64::from(*output_tokens);
-                memory.costs.cache_hits += u64::from(*cache_hits);
-                memory.costs.cost_usd += cost_usd.unwrap_or(0.0);
+                memory.costs.observe(payload);
                 Ok(RunState::Pipeline {
                     graph,
                     cursor,
@@ -1803,18 +1827,9 @@ impl RunMemory {
                         seq: event.seq,
                     });
             },
-            EventPayload::TokensConsumed {
-                prompt_tokens,
-                output_tokens,
-                cache_hits,
-                cost_usd,
-                ..
-            } => {
-                self.costs.tokens_in += u64::from(*prompt_tokens);
-                self.costs.tokens_out += u64::from(*output_tokens);
-                self.costs.cache_hits += u64::from(*cache_hits);
-                self.costs.cost_usd += cost_usd.unwrap_or(0.0);
-            },
+            payload @ (EventPayload::TokensConsumed { .. }
+            | EventPayload::ProviderUsageObserved { .. }
+            | EventPayload::ContextUsageObserved { .. }) => self.costs.observe(payload),
             EventPayload::BudgetWarningRaised { .. } => {
                 self.budget_warning_raised = true;
             },
@@ -3779,5 +3794,73 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_usage_tests {
+    use super::*;
+    use crate::usage::{
+        ContextUsage, TokenUsageCounters, TokenUsageObservation, UsageUnavailableReason,
+    };
+
+    #[test]
+    fn cost_projection_retains_known_spend_and_marks_missing_evidence() {
+        let session = SessionId::new();
+        let mut cost = CostSummary::default();
+        cost.observe(&EventPayload::TokensConsumed {
+            session,
+            prompt_tokens: 3,
+            output_tokens: 2,
+            cache_hits: 1,
+            model: "legacy".into(),
+            cost_usd: Some(2.5),
+        });
+        cost.observe(&EventPayload::ContextUsageObserved {
+            session,
+            usage: ContextUsage {
+                used: 1000,
+                size: 2000,
+                cost: None,
+            },
+        });
+        assert_eq!(cost.tokens_in, 3);
+        assert!(!cost.cost_unknown);
+        cost.observe(&EventPayload::ProviderUsageObserved {
+            session,
+            usage: TokenUsageObservation::Unavailable {
+                reason: UsageUnavailableReason::Missing,
+                reported: None,
+            },
+        });
+        assert_eq!(cost.cost_usd, 2.5);
+        assert!(cost.cost_unknown);
+        assert!(cost.usage_unknown);
+    }
+
+    #[test]
+    fn overflowing_provider_delta_saturates_with_explicit_incompleteness() {
+        let counters = TokenUsageCounters {
+            total_tokens: u64::MAX,
+            input_tokens: u64::MAX,
+            output_tokens: 0,
+            thought_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+        };
+        let payload = EventPayload::ProviderUsageObserved {
+            session: SessionId::new(),
+            usage: TokenUsageObservation::Reported {
+                cumulative: counters.clone(),
+                delta: counters,
+            },
+        };
+        let mut cost = CostSummary::default();
+        cost.observe(&payload);
+        assert!(!cost.usage_unknown);
+        cost.observe(&payload);
+        assert_eq!(cost.tokens_in, u64::MAX);
+        assert!(cost.usage_unknown);
+        assert!(cost.cost_unknown);
     }
 }

@@ -1,7 +1,7 @@
 //! v0.2 M1 — end-to-end live budget enforcement.
 //!
 //! Drives a one-agent graph through the full engine run loop with a mock
-//! bridge that reports a large `TokenUsage` snapshot before completing the
+//! bridge that reports a large provider usage observation before completing the
 //! stage. With a tiny token budget and the default `Abort` policy, the engine
 //! must emit `BudgetExceeded` and abort the run at the stage boundary — proving
 //! the `enforce_budget` hook fires against the freshly-folded cumulative cost.
@@ -37,13 +37,14 @@ use surge_persistence::runs::{EventSeq, Storage};
 use tokio::sync::{Mutex, broadcast};
 
 /// Mock bridge that, on each `send_message`, reports a fixed large
-/// `TokenUsage` snapshot and then the session's declared outcome — so the run
+/// provider usage observation and then the session's declared outcome — so the run
 /// accrues real cost in its event log before the stage boundary.
 struct BudgetMockBridge {
     tx: broadcast::Sender<BridgeEvent>,
     outcomes: Mutex<HashMap<SessionId, OutcomeKey>>,
     prompt_tokens: u32,
     output_tokens: u32,
+    flood_events: bool,
 }
 
 impl BudgetMockBridge {
@@ -54,6 +55,7 @@ impl BudgetMockBridge {
             outcomes: Mutex::new(HashMap::new()),
             prompt_tokens,
             output_tokens,
+            flood_events: false,
         }
     }
 }
@@ -112,15 +114,8 @@ impl BridgeFacade for BudgetMockBridge {
         session: SessionId,
         _content: MessageContent,
     ) -> Result<(), SendMessageError> {
-        // Report usage first so `TokensConsumed` is appended before the stage
-        // completes; the engine folds it into cumulative cost at the boundary.
-        let _ = self.tx.send(BridgeEvent::TokenUsage {
-            session,
-            prompt_tokens: self.prompt_tokens,
-            output_tokens: self.output_tokens,
-            cache_hits: 0,
-            model: "mock-model".into(),
-        });
+        // The provider's stage outcome arrives during its prompt, before the
+        // authoritative final-response usage. Both must survive a prompt join.
         let outcome = self
             .outcomes
             .lock()
@@ -136,6 +131,59 @@ impl BridgeFacade for BudgetMockBridge {
 
             verification_report: None,
         });
+        if self.flood_events {
+            for _ in 0..1000 {
+                let _ = self.tx.send(BridgeEvent::AgentMessage {
+                    session,
+                    chunk: "flood".into(),
+                    meta: None,
+                });
+            }
+        }
+        // Accepted deltas, repeated cumulative evidence and context occupancy
+        // must remain distinct in the durable journal and budget projection.
+        let cumulative = surge_core::TokenUsageCounters {
+            total_tokens: u64::from(self.prompt_tokens) + u64::from(self.output_tokens),
+            input_tokens: u64::from(self.prompt_tokens),
+            output_tokens: u64::from(self.output_tokens),
+            thought_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+        };
+        let zero = surge_core::TokenUsageCounters {
+            total_tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            thought_tokens: None,
+            cached_read_tokens: None,
+            cached_write_tokens: None,
+        };
+        for event in [
+            BridgeEvent::ProviderUsageObserved {
+                session,
+                usage: surge_core::TokenUsageObservation::Reported {
+                    cumulative: cumulative.clone(),
+                    delta: cumulative.clone(),
+                },
+            },
+            BridgeEvent::ProviderUsageObserved {
+                session,
+                usage: surge_core::TokenUsageObservation::Reported {
+                    cumulative,
+                    delta: zero,
+                },
+            },
+            BridgeEvent::ContextUsageObserved {
+                session,
+                usage: surge_core::ContextUsage {
+                    used: 1_000_000,
+                    size: 2_000_000,
+                    cost: None,
+                },
+            },
+        ] {
+            let _ = self.tx.send(event);
+        }
         Ok(())
     }
 
@@ -321,6 +369,35 @@ async fn run_aborts_when_token_budget_exceeded() {
             .iter()
             .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. }));
         assert!(!completed, "run must not complete after a budget breach");
+        let (input, output) = events
+            .iter()
+            .filter_map(|event| event.payload.payload.token_delta())
+            .fold(
+                (0_u64, 0_u64),
+                |(input, output), (_, next_input, next_output, _)| {
+                    (input + next_input, output + next_output)
+                },
+            );
+        assert_eq!((input, output), (10_000, 5_000));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.payload.payload,
+                    EventPayload::ProviderUsageObserved { .. }
+                ))
+                .count(),
+            2
+        );
+        assert!(events.iter().any(|event| matches!(
+            event.payload.payload,
+            EventPayload::ContextUsageObserved { .. }
+        )));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload.payload, EventPayload::TokensConsumed { .. }))
+        );
     }
     dir.close().unwrap();
 }
@@ -434,6 +511,65 @@ async fn warn_only_records_breach_but_completes() {
             .any(|ev| matches!(ev.payload.payload, EventPayload::RunAborted { .. }));
         assert!(saw_exceeded, "WarnOnly must still record the breach");
         assert!(!saw_aborted, "WarnOnly must not abort the run");
+    }
+    dir.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lagged_usage_stream_fails_with_durable_unavailable_evidence() {
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let mut bridge = BudgetMockBridge::new(100, 50);
+        bridge.flood_events = true;
+        let (tx, _) = broadcast::channel(1);
+        bridge.tx = tx;
+        let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
+            as Arc<dyn ToolDispatcher>;
+        let engine = Engine::new(
+            Arc::new(bridge),
+            storage.clone(),
+            dispatcher,
+            EngineConfig::default(),
+        );
+        let run = RunId::new();
+        let handle = engine
+            .start_run(
+                run,
+                one_agent_graph(),
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+            .await
+            .expect("lag must fail promptly")
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Failed { .. }));
+        drop(engine);
+        let reader = storage.open_run_reader(run).await.unwrap();
+        assert!(reader.cost_summary().await.unwrap().usage_unknown);
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.payload.payload,
+            EventPayload::ProviderUsageObserved {
+                usage: surge_core::TokenUsageObservation::Unavailable {
+                    reason: surge_core::UsageUnavailableReason::Missing,
+                    reported: None,
+                },
+                ..
+            }
+        )));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload.payload, EventPayload::RunCompleted { .. }))
+        );
     }
     dir.close().unwrap();
 }

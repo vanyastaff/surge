@@ -6,11 +6,11 @@
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use surge_acp::bridge::{
-    AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, CloseSessionError, SessionConfig,
-    SessionEndReason,
+    AgentKind, AlwaysAllowSandbox, BridgeConfig, BridgeEvent, BridgeTimeouts, CloseSessionError,
+    SessionConfig, SessionEndReason,
 };
 use surge_acp::client::PermissionPolicy;
 use surge_core::OutcomeKey;
@@ -28,7 +28,13 @@ async fn close_against_stuck_mock_times_out() {
 
 async fn inner_test() {
     let wt = TempDir::new().unwrap();
-    let bridge = AcpBridge::with_defaults().unwrap();
+    let bridge = BridgeConfig::new()
+        .timeouts(BridgeTimeouts {
+            handshake: Duration::from_secs(10),
+            shutdown: Duration::from_secs(15),
+        })
+        .spawn()
+        .unwrap();
     let mut events = bridge.subscribe();
 
     // The `frozen` scenario processes the ACP handshake normally but the binary
@@ -44,8 +50,14 @@ async fn inner_test() {
         opening: Default::default(),
         config_selections: Vec::new(),
         stage_mcp: None,
-        agent_kind: AgentKind::Mock {
-            args: vec!["--scenario".into(), "frozen".into()],
+        agent_kind: AgentKind::Custom {
+            binary: env!("CARGO_BIN_EXE_mock_acp_agent").into(),
+            args: vec![
+                "--scenario".into(),
+                "frozen".into(),
+                "--pid-file".into(),
+                wt.path().join("pid").display().to_string(),
+            ],
         },
         working_dir: wt.path().to_path_buf(),
         system_prompt: "x".into(),
@@ -63,7 +75,10 @@ async fn inner_test() {
 
     // close_session will block ~5s waiting for the frozen child to exit, then
     // send kill_tx → subprocess_waiter kills the child → GracefulTimedOut { killed: true }.
+    let close_start = Instant::now();
     let close_result = bridge.close_session(sid).await;
+    assert!(close_start.elapsed() >= Duration::from_millis(5000));
+    assert!(close_start.elapsed() < Duration::from_secs(15));
     assert!(
         matches!(
             close_result,
@@ -79,7 +94,7 @@ async fn inner_test() {
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_millis(200), events.recv()).await {
             Ok(Ok(BridgeEvent::SessionEnded { session, reason })) if session == sid => {
-                if matches!(reason, SessionEndReason::Timeout { .. }) {
+                if matches!(reason, SessionEndReason::Timeout { duration_ms: 5000 }) {
                     saw_timeout = true;
                     break;
                 }
@@ -90,4 +105,14 @@ async fn inner_test() {
     assert!(saw_timeout);
 
     bridge.shutdown().await.unwrap();
+    let pid = std::fs::read_to_string(wt.path().join("pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let tracker = surge_acp::ProcessTracker::new(wt.path().join("tracking")).unwrap();
+    tracker.track("child", pid).unwrap();
+    assert!(
+        !tracker.is_running("child"),
+        "frozen direct child remains alive"
+    );
 }

@@ -20,7 +20,20 @@ use surge_persistence::runs::Storage;
 use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 
-const ORACLE_MODEL: &str = "host-budget-oracle";
+fn oracle_usage(tokens: u32) -> surge_core::TokenUsageObservation {
+    let counters = surge_core::TokenUsageCounters {
+        total_tokens: u64::from(tokens),
+        input_tokens: u64::from(tokens),
+        output_tokens: 0,
+        thought_tokens: None,
+        cached_read_tokens: None,
+        cached_write_tokens: None,
+    };
+    surge_core::TokenUsageObservation::Reported {
+        cumulative: counters.clone(),
+        delta: counters,
+    }
+}
 #[derive(Clone)]
 struct Designation {
     run: RunId,
@@ -40,6 +53,7 @@ pub struct HostBudgetBridge {
     sessions: Arc<Mutex<HashMap<SessionId, Charge>>>,
     charged: Mutex<HashSet<SessionId>>,
     events: broadcast::Sender<BridgeEvent>,
+    relay_barrier: tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
     cancel: CancellationToken,
     relay: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -53,6 +67,8 @@ impl HostBudgetBridge {
         let mut source = inner.subscribe();
         let (events, _) = broadcast::channel(1024);
         let sessions = Arc::new(Mutex::new(HashMap::<SessionId, Charge>::new()));
+        let (relay_barrier, mut barriers) =
+            tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
         let relay_events = events.clone();
         let relay_cancel = cancel.clone();
         let relay_sessions = sessions.clone();
@@ -75,6 +91,12 @@ impl HostBudgetBridge {
                             relay_cancel.cancel();
                             break;
                         }
+                    },
+                    barrier = barriers.recv() => {
+                        let Some(barrier) = barrier else { break; };
+                        // The biased source branch above forwards all already
+                        // published provider events before acknowledging this fence.
+                        let _ = barrier.send(());
                     }
                 }
             }
@@ -86,6 +108,7 @@ impl HostBudgetBridge {
             sessions,
             charged: Mutex::new(HashSet::new()),
             events,
+            relay_barrier,
             cancel,
             relay: Mutex::new(Some(relay)),
         })
@@ -201,21 +224,16 @@ impl BridgeFacade for HostBudgetBridge {
                 let stream = reader.subscribe_events();
                 futures::pin_mut!(stream);
                 self.events
-                    .send(BridgeEvent::TokenUsage {
+                    .send(BridgeEvent::ProviderUsageObserved {
                         session,
-                        prompt_tokens: charge.designation.tokens,
-                        output_tokens: 0,
-                        cache_hits: 0,
-                        model: ORACLE_MODEL.into(),
+                        usage: oracle_usage(charge.designation.tokens),
                     })
                     .map_err(|_| oracle_error("host budget oracle has no journal consumer"))?;
                 while let Some(event) = stream.next().await {
                     let event =
                         event.map_err(|_| oracle_error("host budget journal read failed"))?;
                     if event.seq > prefix
-                        && matches!(event.payload.payload(), EventPayload::TokensConsumed {
-                        session: actual, prompt_tokens, output_tokens: 0, cache_hits: 0, model, cost_usd: None,
-                    } if *actual == session && *prompt_tokens == charge.designation.tokens && model == ORACLE_MODEL)
+                        && matches!(event.payload.payload(), EventPayload::ProviderUsageObserved { session: actual, usage } if *actual == session && *usage == oracle_usage(charge.designation.tokens))
                     {
                         charge.acknowledged.cancel();
                         return Ok(());
@@ -235,7 +253,19 @@ impl BridgeFacade for HostBudgetBridge {
             }
             acknowledged?;
         }
-        self.inner.send_message(session, content).await
+        let result = self.inner.send_message(session, content).await;
+        let (forwarded, received) = tokio::sync::oneshot::channel();
+        self.relay_barrier
+            .send(forwarded)
+            .map_err(|_| oracle_error("host budget relay fence unavailable"))?;
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => return Err(oracle_error("host budget relay stopped before prompt fence")),
+            acknowledged = tokio::time::timeout(Duration::from_secs(10), received) => acknowledged
+                .map_err(|_| oracle_error("host budget relay fence timed out"))?
+                .map_err(|_| oracle_error("host budget relay fence dropped"))?,
+        }
+        result
     }
     async fn session_state(&self, session: SessionId) -> Result<SessionState, BridgeError> {
         self.inner.session_state(session).await
@@ -356,13 +386,9 @@ mod tests {
         // A receipt from an earlier helper lifetime must not acknowledge this new charge.
         writer
             .append_event(surge_core::VersionedEventPayload::new(
-                EventPayload::TokensConsumed {
+                EventPayload::ProviderUsageObserved {
                     session,
-                    prompt_tokens: 600,
-                    output_tokens: 0,
-                    cache_hits: 0,
-                    model: ORACLE_MODEL.into(),
-                    cost_usd: None,
+                    usage: oracle_usage(600),
                 },
             ))
             .await
@@ -379,19 +405,15 @@ mod tests {
             .expect("host charge must precede actual prompt")
             .unwrap();
         assert!(
-            matches!(event, BridgeEvent::TokenUsage { session: charged_session, prompt_tokens: 600, output_tokens: 0, cache_hits: 0, ref model } if charged_session == session && model == ORACLE_MODEL)
+            matches!(event, BridgeEvent::ProviderUsageObserved { session: charged_session, ref usage } if charged_session == session && *usage == oracle_usage(600))
         );
         assert_eq!(peer.prompts.load(Ordering::SeqCst), 0);
         // A different session's matching amount must not release the real prompt.
         writer
             .append_event(surge_core::VersionedEventPayload::new(
-                EventPayload::TokensConsumed {
+                EventPayload::ProviderUsageObserved {
                     session: SessionId::new(),
-                    prompt_tokens: 600,
-                    output_tokens: 0,
-                    cache_hits: 0,
-                    model: ORACLE_MODEL.into(),
-                    cost_usd: None,
+                    usage: oracle_usage(600),
                 },
             ))
             .await
@@ -405,13 +427,9 @@ mod tests {
         assert_eq!(peer.prompts.load(Ordering::SeqCst), 0);
         writer
             .append_event(surge_core::VersionedEventPayload::new(
-                EventPayload::TokensConsumed {
+                EventPayload::ProviderUsageObserved {
                     session,
-                    prompt_tokens: 600,
-                    output_tokens: 0,
-                    cache_hits: 0,
-                    model: ORACLE_MODEL.into(),
-                    cost_usd: None,
+                    usage: oracle_usage(600),
                 },
             ))
             .await
@@ -475,10 +493,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap(),
-            BridgeEvent::TokenUsage {
-                prompt_tokens: 600,
-                ..
-            }
+            BridgeEvent::ProviderUsageObserved { usage, .. } if usage == oracle_usage(600)
         ));
         bridge.close_session(session).await.unwrap();
         assert!(prompt.await.unwrap().is_err());

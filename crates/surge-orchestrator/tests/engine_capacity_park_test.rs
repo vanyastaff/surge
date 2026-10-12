@@ -1083,12 +1083,26 @@ async fn resuming_a_parked_run_re_arms_its_frozen_token_budget() {
         // over the 1_000-token budget) before its outcome.
         let second_session = SessionId::new();
         mock.pin_next_session_id(second_session).await;
-        mock.enqueue_event(BridgeEvent::TokenUsage {
+        mock.enqueue_event(BridgeEvent::ProviderUsageObserved {
             session: second_session,
-            prompt_tokens: 10_000,
-            output_tokens: 5_000,
-            cache_hits: 0,
-            model: "mock-model".into(),
+            usage: surge_core::TokenUsageObservation::Reported {
+                cumulative: surge_core::TokenUsageCounters {
+                    total_tokens: 10_000_u64 + 5_000_u64,
+                    input_tokens: 10_000_u64,
+                    output_tokens: 5_000_u64,
+                    thought_tokens: None,
+                    cached_read_tokens: None,
+                    cached_write_tokens: None,
+                },
+                delta: surge_core::TokenUsageCounters {
+                    total_tokens: 10_000_u64 + 5_000_u64,
+                    input_tokens: 10_000_u64,
+                    output_tokens: 5_000_u64,
+                    thought_tokens: None,
+                    cached_read_tokens: None,
+                    cached_write_tokens: None,
+                },
+            },
         })
         .await;
         mock.enqueue_event(BridgeEvent::OutcomeReported {
@@ -1384,10 +1398,12 @@ async fn binding_failure_before_provider_open_preserves_exhaustion() {
 /// The successful-dispatch capacity clear is a best-effort registry write.
 /// Registry connections wait up to 5 s in SQLite's busy handler, so when it
 /// ran before the route commit, contention on the registry delayed every
-/// stage's durable route by that long. Holding the registry write lock across
-/// the stage's completion, the route must commit well inside that timeout,
-/// and the clear (still keyed on this dispatch's own provider opening) must
-/// land once the lock is released.
+/// stage's durable route by that long. Hold the registry write lock until the
+/// route commits, then require the clear (still keyed on this dispatch's own
+/// provider opening) to succeed after releasing it. Both assertions matter:
+/// an incorrectly ordered clear can exhaust its busy timeout and let routing
+/// continue, but leaves the capacity row behind. The outer deadline bounds the
+/// test rather than using native filesystem scheduling as the ordering oracle.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registry_contention_does_not_delay_route_commit_behind_capacity_clear() {
     let profiles_dir = tempfile::tempdir().unwrap();
@@ -1459,16 +1475,24 @@ async fn registry_contention_does_not_delay_route_commit_behind_capacity_clear()
         .await
         .expect("start_run");
 
-    // The stage is mid-turn: its precheck read is done and the provider
-    // session is subscribed. Take the registry write lock before it reports.
-    mock.wait_for_subscribe_count(1).await;
+    // Subscription precedes provider admission, whose opening barrier writes
+    // the registry. Wait for the actual prompt so contention targets the
+    // post-dispatch clear rather than preventing the provider from opening.
+    // The scripted outcome remains queued until after we hold the write lock.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while mock.last_prompt().await.is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("provider did not reach prompt dispatch before registry contention");
     let holder = rusqlite::Connection::open(storage.registry_db_path()).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
     let locked_at = std::time::Instant::now();
     mock.pump_scripted_events().await;
 
     let reader = storage.open_run_reader(run_id).await.unwrap();
-    tokio::time::timeout(Duration::from_millis(2_500), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let last = reader.current_seq().await.unwrap();
             let events = reader
@@ -1487,11 +1511,18 @@ async fn registry_contention_does_not_delay_route_commit_behind_capacity_clear()
     .await
     .unwrap_or_else(|_| {
         panic!(
-            "route commit waited on the registry lock for {:?}; the 5 s busy timeout gates it",
+            "route did not commit while the registry lock remained held after {:?}",
             locked_at.elapsed()
         )
     });
 
+    assert!(
+        matches!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            surge_core::capacity::CapacityStatus::Known(_)
+        ),
+        "the capacity row must remain present while its registry is write-locked"
+    );
     holder.execute_batch("ROLLBACK").unwrap();
     drop(holder);
     let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())

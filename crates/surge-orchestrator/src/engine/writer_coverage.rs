@@ -48,16 +48,41 @@ impl surge_mcp::writer_observer::HostWriterObserver for McpWriterObserver {
         writer: ExecutionWriterId,
         pid: Option<u32>,
     ) -> Result<(), surge_mcp::writer_observer::WriterObservationError> {
+        self.child_started_observed(writer, pid, None).await
+    }
+
+    async fn child_started_observed(
+        &self,
+        writer: ExecutionWriterId,
+        pid: Option<u32>,
+        job_name: Option<&str>,
+    ) -> Result<(), surge_mcp::writer_observer::WriterObservationError> {
         let pid = pid.ok_or_else(|| {
             surge_mcp::writer_observer::WriterObservationError(
                 "spawned MCP writer has no observable process identity".into(),
             )
         })?;
-        let container = surge_acp::process_evidence::observe_container(
+        #[cfg(windows)]
+        let container = surge_acp::process_evidence::observe_named_container(
             pid,
+            job_name.ok_or_else(|| {
+                surge_mcp::writer_observer::WriterObservationError(
+                    "spawned MCP writer has no native job identity".into(),
+                )
+            })?,
             surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
-        )
-        .map_err(|error| surge_mcp::writer_observer::WriterObservationError(error.to_string()))?;
+        );
+        #[cfg(not(windows))]
+        let container = {
+            let _ = job_name;
+            surge_acp::process_evidence::observe_container(
+                pid,
+                surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+            )
+        };
+        let container = container.map_err(|error| {
+            surge_mcp::writer_observer::WriterObservationError(error.to_string())
+        })?;
         self.recorder
             .append_event(VersionedEventPayload::new(
                 EventPayload::ExecutionWriterEstablished { writer, container },

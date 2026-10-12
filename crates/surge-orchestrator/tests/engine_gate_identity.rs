@@ -180,10 +180,26 @@ async fn old_card_cannot_resolve_a_new_visit_to_the_same_gate() {
 async fn next_request(
     tap: &mut tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
     id: RunId,
-) -> (surge_core::keys::NodeKey, surge_core::id::GateRequestId) {
+) -> (
+    surge_core::keys::NodeKey,
+    surge_core::id::GateRequestId,
+    surge_persistence::runs::EventSeq,
+) {
+    next_request_after(tap, id, surge_persistence::runs::EventSeq::ZERO).await
+}
+
+async fn next_request_after(
+    tap: &mut tokio::sync::broadcast::Receiver<surge_orchestrator::engine::RunEventTap>,
+    id: RunId,
+    after: surge_persistence::runs::EventSeq,
+) -> (
+    surge_core::keys::NodeKey,
+    surge_core::id::GateRequestId,
+    surge_persistence::runs::EventSeq,
+) {
     loop {
         let event = tap.recv().await.unwrap();
-        if event.run_id != id {
+        if event.run_id != id || event.event.seq <= after {
             continue;
         }
         if let EventPayload::HumanInputRequested {
@@ -196,6 +212,7 @@ async fn next_request(
             return (
                 node,
                 surge_core::id::GateRequestId::from_event_call_id(&call_id).unwrap(),
+                event.event.seq,
             );
         }
     }
@@ -234,11 +251,16 @@ async fn reopening_after_owner_loss_reissues_an_unanswered_gate_with_fresh_ident
             drop(storage);
             let storage = Storage::open(temp.path()).await.unwrap();
             let engine = build(storage);
+            let mut tap = engine.subscribe_tap();
             let resumed = engine
                 .resume_run(id, temp.path().to_path_buf())
                 .await
                 .unwrap();
-            let fresh = next_request(&mut tap, id).await;
+            // Reopening forwards the durable history before new appends. Select by
+            // the persisted sequence boundary, independently of the identity
+            // assertion below, so accidental identity reuse still fails.
+            let fresh = next_request_after(&mut tap, id, old.2).await;
+            assert!(fresh.2 > old.2);
             assert_eq!(old.0, fresh.0);
             assert_ne!(old.1, fresh.1);
             assert!(matches!(

@@ -1,9 +1,12 @@
-//! Retained native state-home primitives; private capability integration remains closed.
+//! Retained native state-home primitives and host-private preparation/input capabilities.
 #[path = "state_home/windows/mod.rs"]
 mod windows;
+#[cfg(test)]
+pub(crate) use windows::private_observation;
 
 pub(crate) use windows::NativeJournalLock;
 pub(crate) use windows::native::NativeError;
+pub(crate) use windows::{PrivateFiles as WindowsPrivateFiles, PrivatePreparation};
 pub(crate) use windows::{RunRoot, RunRoute};
 pub(crate) use windows::{SqliteNamespaceOwner, StateHomeOwner};
 
@@ -16,6 +19,9 @@ impl From<windows::native::NativeError> for crate::runs::error::OpenError {
             NativeError::Flush(_) => "durability barrier",
             NativeError::Open(_) | NativeError::Windows(_) => "native API",
             NativeError::Io(_) => "filesystem I/O",
+            NativeError::Cleanup { .. } => "operation and cleanup failure",
+            NativeError::CloseUncertain(_) => "handle close uncertainty",
+            NativeError::Sidefile { .. } => "SQLite sidefile observation",
         };
         Self::StateHome {
             category,
@@ -36,6 +42,9 @@ impl From<windows::native::NativeError> for crate::PersistenceError {
             NativeError::Flush(_) => "durability barrier",
             NativeError::Open(_) | NativeError::Windows(_) => "native API",
             NativeError::Io(_) => "filesystem I/O",
+            NativeError::Cleanup { .. } => "operation and cleanup failure",
+            NativeError::CloseUncertain(_) => "handle close uncertainty",
+            NativeError::Sidefile { .. } => "SQLite sidefile observation",
         };
         Self::StateHome {
             category,
@@ -54,6 +63,9 @@ impl From<windows::native::NativeError> for crate::work_items::WorkItemError {
             NativeError::Flush(_) => "durability barrier",
             NativeError::Open(_) | NativeError::Windows(_) => "native API",
             NativeError::Io(_) => "filesystem I/O",
+            NativeError::Cleanup { .. } => "operation and cleanup failure",
+            NativeError::CloseUncertain(_) => "handle close uncertainty",
+            NativeError::Sidefile { .. } => "SQLite sidefile observation",
         };
         Self::StateHome {
             category,
@@ -453,3 +465,42 @@ mod control_lock_tests;
 #[cfg(test)]
 #[path = "state_home/privileged_fixture_tests.rs"]
 mod privileged_fixture_tests;
+
+/// Immutable private files in an existing, protected local Windows runtime root.
+///
+/// The owner retains and verifies the native namespace through each operation.
+/// Names are single components supplied by trusted host code. No handles or
+/// path-based write authority escape this capability.
+pub struct RuntimeImmutableFiles {
+    inner: WindowsPrivateFiles,
+}
+impl RuntimeImmutableFiles {
+    /// Open the existing protected current-user NTFS root without repairing it.
+    ///
+    /// # Errors
+    /// Refuses unsafe ownership, ACLs, reparse points and failed durability barriers.
+    pub fn open_existing_root(home: &Path) -> Result<Self, PersistenceError> {
+        Ok(Self {
+            inner: WindowsPrivateFiles::open_root(home)?,
+        })
+    }
+    /// Read an immutable file, completing its own file and parent durability barriers.
+    /// Returns `None` only for a genuinely missing final name.
+    ///
+    /// # Errors
+    /// Refuses unsafe, substituted or oversized (over 8 MiB) files and incomplete barriers.
+    pub fn read(&self, name: &str) -> Result<Option<Vec<u8>>, PersistenceError> {
+        self.inner
+            .read_optional(name)
+            .map_err(PersistenceError::from)
+    }
+    /// Publish without replacing an existing name. `false` means the caller must read the winner.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe files, substitutions and incomplete durability barriers.
+    pub fn publish(&self, name: &str, bytes: &[u8]) -> Result<bool, PersistenceError> {
+        self.inner
+            .publish(name, bytes)
+            .map_err(PersistenceError::from)
+    }
+}

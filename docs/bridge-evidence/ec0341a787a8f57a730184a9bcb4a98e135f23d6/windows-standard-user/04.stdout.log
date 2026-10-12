@@ -1,0 +1,7 @@
+
+running 1 test
+test runs::storage::windows_ownership_tests::unsafe_existing_home_refuses_without_acl_or_byte_repair ... stage1 unsafe-home unchanged-refusal=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.06s
+

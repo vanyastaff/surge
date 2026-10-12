@@ -1,0 +1,113 @@
+### linux-plain diagnostic excerpt
+2026-10-12T06:03:17.0125640Z ────────────
+2026-10-12T06:03:17.0126500Z      Summary [ 152.995s] 4167 tests run: 4167 passed, 36 skipped
+2026-10-12T06:03:17.1485478Z ##[group]Run cargo test --locked --workspace --doc
+2026-10-12T06:03:17.1488183Z cargo test --locked --workspace --doc
+2026-10-12T06:03:17.2402469Z shell: /usr/bin/bash -e {0}
+2026-10-12T06:03:17.2403155Z env:
+2026-10-12T06:03:17.2403666Z   CARGO_TERM_COLOR: always
+2026-10-12T06:03:17.2404007Z   RUST_BACKTRACE: 1
+2026-10-12T06:03:17.2404614Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-12T06:03:17.2405339Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-12T06:03:17.2406180Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-12T06:03:17.2406924Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-12T06:03:17.2407582Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-12T06:03:17.2408461Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-12T06:03:17.2409081Z   CARGO_HOME: /home/runner/.cargo
+2026-10-12T06:03:17.2409641Z   CARGO_INCREMENTAL: 0
+2026-10-12T06:03:17.2410183Z ##[endgroup]
+2026-10-12T06:03:18.1752960Z     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s
+2026-10-12T06:03:18.1757589Z warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+
+### macos-plain diagnostic excerpt
+2026-10-12T06:02:09.7662330Z ────────────
+2026-10-12T06:02:09.7662900Z      Summary [ 171.195s] 3939 tests run: 3939 passed, 37 skipped
+2026-10-12T06:02:09.8075060Z ##[group]Run cargo test --locked --workspace --exclude surge-ui --doc
+2026-10-12T06:02:09.8077310Z cargo test --locked --workspace --exclude surge-ui --doc
+2026-10-12T06:02:09.8576700Z shell: /bin/bash -e {0}
+2026-10-12T06:02:09.8578480Z env:
+2026-10-12T06:02:09.8579080Z   CARGO_TERM_COLOR: always
+2026-10-12T06:02:09.8579680Z   RUST_BACKTRACE: 1
+2026-10-12T06:02:09.8580590Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-10-12T06:02:09.8581860Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-10-12T06:02:09.8582860Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-10-12T06:02:09.8583360Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-10-12T06:02:09.8583810Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-10-12T06:02:09.8584230Z   CARGO_HOME: /Users/runner/.cargo
+2026-10-12T06:02:09.8584540Z   CARGO_INCREMENTAL: 0
+2026-10-12T06:02:09.8584990Z ##[endgroup]
+2026-10-12T06:02:11.8440840Z     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.71s
+2026-10-12T06:02:11.8464020Z warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+2026-10-12T06:02:11.8465580Z note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 2`
+
+### windows-tests-plain diagnostic excerpt
+2026-10-12T06:13:24.7275631Z ────────────
+2026-10-12T06:13:24.7276308Z      Summary [ 505.533s] 3937 tests run: 3937 passed (2 slow), 55 skipped
+2026-10-12T06:13:25.5862243Z ##[group]Run ./scripts/windows-native-probe.ps1
+2026-10-12T06:13:25.5862775Z ./scripts/windows-native-probe.ps1
+2026-10-12T06:13:25.5932603Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-12T06:13:25.5932932Z env:
+2026-10-12T06:13:25.5933113Z   CARGO_TERM_COLOR: always
+2026-10-12T06:13:25.5933313Z   RUST_BACKTRACE: 1
+2026-10-12T06:13:25.5933564Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:13:25.5933966Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-10-12T06:13:25.5934342Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:13:25.5934682Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:13:25.5935000Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T06:13:25.5935281Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-12T06:13:25.5935505Z   CARGO_INCREMENTAL: 0
+2026-10-12T06:13:25.5935719Z ##[endgroup]
+2026-10-12T06:13:38.3603835Z    Compiling serde_core v1.0.228
+2026-10-12T06:13:38.3648290Z    Compiling windows-sys v0.61.2
+2026-10-12T06:13:38.3676837Z    Compiling num-traits v0.2.19
+
+### windows-clippy-plain diagnostic excerpt
+2026-10-12T05:54:50.6566940Z     Checking surge-ui v0.1.0 (D:\a\surge\surge\crates\surge-ui)
+2026-10-12T05:55:04.6096767Z error: variants `OtherServerObject`, `OtherPurposeEnvelope`, `ManifestSandbox`, and `ManifestBinding` are never constructed
+2026-10-12T05:55:04.6174255Z     --> crates\surge-daemon\tests\owned_flow_mcp_recovery.rs:1363:5
+2026-10-12T05:55:04.6495091Z      |
+2026-10-12T05:55:04.6600045Z 1358 | enum Corruption {
+2026-10-12T05:55:04.6635063Z      |      ---------- variants in this enum
+2026-10-12T05:55:04.6755051Z ...
+2026-10-12T05:55:04.6789064Z 1363 |     OtherServerObject,
+2026-10-12T05:55:04.6814651Z      |     ^^^^^^^^^^^^^^^^^
+2026-10-12T05:55:04.7048378Z 1364 |     OtherPurposeEnvelope,
+2026-10-12T05:55:04.7146814Z      |     ^^^^^^^^^^^^^^^^^^^^
+2026-10-12T05:55:04.7367886Z 1365 |     ManifestSandbox,
+2026-10-12T05:55:04.7413329Z      |     ^^^^^^^^^^^^^^^
+2026-10-12T05:55:04.7468404Z 1366 |     ManifestBinding,
+2026-10-12T05:55:04.7483560Z      |     ^^^^^^^^^^^^^^^
+2026-10-12T05:55:04.7603948Z      |
+2026-10-12T05:55:04.7607605Z      = note: `Corruption` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+2026-10-12T05:55:04.7609725Z      = note: `-D dead-code` implied by `-D warnings`
+2026-10-12T05:55:04.7627941Z      = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+2026-10-12T05:55:04.7650198Z 
+2026-10-12T05:55:04.7669506Z error: could not compile `surge-daemon` (test "owned_flow_mcp_recovery") due to 1 previous error
+2026-10-12T05:55:04.7673689Z warning: build failed, waiting for other jobs to finish...
+2026-10-12T05:55:06.1266651Z error: unused variable: `db`
+2026-10-12T05:55:06.1308182Z    --> crates\surge-cli\src\commands\engine.rs:984:13
+2026-10-12T05:55:06.1367412Z     |
+2026-10-12T05:55:06.1386406Z 984 |         let db = home
+2026-10-12T05:55:06.1604840Z     |             ^^ help: if this is intentional, prefix it with an underscore: `_db`
+2026-10-12T05:55:06.1645884Z     |
+2026-10-12T05:55:06.1710670Z     = note: `-D unused-variables` implied by `-D warnings`
+2026-10-12T05:55:06.1721977Z     = help: to override `-D warnings` add `#[allow(unused_variables)]`
+2026-10-12T05:55:06.1950463Z 
+2026-10-12T05:55:09.7022394Z error: could not compile `surge-cli` (bin "surge" test) due to 1 previous error
+2026-10-12T05:55:21.1456198Z ##[error]Process completed with exit code 1.
+2026-10-12T05:55:21.1715928Z Post job cleanup.
+2026-10-12T05:55:21.3631642Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-12T05:55:21.3922155Z git version 2.55.0.windows.5
+2026-10-12T05:55:21.3995309Z Temporarily overriding HOME='D:\a\_temp\dfb7c0a9-0b4d-4557-82c9-08abdd4f42cd' before making global git config changes
+2026-10-12T05:55:21.3996598Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-12T05:55:21.4007209Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\surge\surge
+2026-10-12T05:55:21.4306292Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-12T05:55:21.4593386Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-12T05:55:22.0085997Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-12T05:55:22.0339337Z http.https://github.com/.extraheader
+2026-10-12T05:55:22.0376460Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-10-12T05:55:22.0660872Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-12T05:55:22.5957829Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-12T05:55:22.6243221Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-12T05:55:23.1588734Z Cleaning up orphan processes
+2026-10-12T05:55:23.2269417Z Terminate orphan process: pid (5416) (vctip)

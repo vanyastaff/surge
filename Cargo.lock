@@ -5651,9 +5651,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.1.1"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
+checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
 dependencies = [
  "libc",
  "log",
@@ -9136,6 +9136,7 @@ dependencies = [
  "serde",
  "serde_json",
  "surge-core",
+ "surge-process",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -9319,6 +9320,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -9422,6 +9424,10 @@ dependencies = [
 [[package]]
 name = "surge-process"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "windows 0.58.0",
+]
 
 [[package]]
 name = "surge-telegram"

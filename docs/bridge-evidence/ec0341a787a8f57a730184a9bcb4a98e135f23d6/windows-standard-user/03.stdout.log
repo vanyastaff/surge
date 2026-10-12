@@ -1,0 +1,9 @@
+
+running 1 test
+test runs::storage::windows_ownership_tests::derived_pool_retains_original_database_until_every_owner_drops ... stage1 profile selected: user=S-1-5-21-1643835476-1616584234-1346609752-1003 profile=C:\Users\surgeprobe46837744 owner=S-1-5-18 fixed-NTFS=true reparse=false owner-trusted=true
+stage1 profile fixture: owner-user=true status=ready
+stage1 derived-pool ownership-and-settlement=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.43s
+

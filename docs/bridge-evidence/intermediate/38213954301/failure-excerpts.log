@@ -1,0 +1,166 @@
+2026-10-12T07:03:11.7258538Z         PASS [   0.017s] (1035/3938) surge-core node::tests::outcome_decl_roundtrip
+2026-10-12T07:03:11.7293323Z         PASS [   0.020s] (1036/3938) surge-core node::tests::terminal_node_roundtrip_via_toml
+2026-10-12T07:03:11.7404161Z         FAIL [   0.490s] (1037/3938) surge-core id::tests::short_is_alphanumeric_and_distinct
+2026-10-12T07:03:11.7434818Z   stdout ───
+2026-10-12T07:03:11.7435237Z 
+2026-10-12T07:03:11.7452862Z     running 1 test
+2026-10-12T07:03:11.7554756Z     test id::tests::short_is_alphanumeric_and_distinct ... FAILED
+2026-10-12T07:03:11.7594366Z 
+2026-10-12T07:03:11.7599701Z     failures:
+2026-10-12T07:03:11.7618677Z 
+2026-10-12T07:03:11.7621225Z     failures:
+2026-10-12T07:03:11.7644775Z         id::tests::short_is_alphanumeric_and_distinct
+2026-10-12T07:03:11.7728716Z 
+2026-10-12T07:03:11.7768381Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 901 filtered out; finished in 0.46s
+2026-10-12T07:03:11.7791631Z     
+2026-10-12T07:03:11.7920234Z   stderr ───
+2026-10-12T07:03:11.7923553Z 
+2026-10-12T07:03:11.7947574Z     thread 'id::tests::short_is_alphanumeric_and_distinct' (5864) panicked at crates\surge-core\src\id.rs:261:9:
+2026-10-12T07:03:11.8019428Z     assertion `left != right` failed: two distinct ULIDs should produce distinct short forms
+2026-10-12T07:03:11.8069685Z       left: "01M4QERA40K7"
+2026-10-12T07:03:11.8092965Z      right: "01M4QERA40K7"
+2026-10-12T07:03:11.8097544Z     stack backtrace:
+2026-10-12T07:03:11.8148269Z        0: std::panicking::panic_handler
+2026-10-12T07:03:11.8171460Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T07:03:11.8190939Z        1: core::panicking::panic_fmt
+2026-10-12T07:03:11.8199799Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T07:03:11.8214754Z        2: core::panicking::assert_failed_inner
+2026-10-12T07:03:11.8227851Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:447
+2026-10-12T07:03:11.8253278Z        3: core::panicking::assert_failed<alloc::string::String,alloc::string::String>
+2026-10-12T07:03:11.8268343Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:407
+2026-10-12T07:03:11.8290089Z        4: surge_core::id::tests::short_is_alphanumeric_and_distinct
+2026-10-12T07:03:11.8324791Z                  at .\src\id.rs:261
+2026-10-12T07:03:11.8364675Z        5: surge_core::id::tests::short_is_alphanumeric_and_distinct::closure$0
+2026-10-12T07:03:11.8367407Z                  at .\src\id.rs:247
+2026-10-12T07:03:11.8386138Z        6: core::ops::function::FnOnce::call_once<surge_core::id::tests::short_is_alphanumeric_and_distinct::closure_env$0,tuple$<> >
+2026-10-12T07:03:11.8399833Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\ops\function.rs:250
+2026-10-12T07:03:11.8403357Z        7: core::ops::function::FnOnce::call_once
+2026-10-12T07:03:11.8420945Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\ops\function.rs:250
+2026-10-12T07:03:11.8425921Z     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+2026-10-12T07:03:11.8443112Z 
+2026-10-12T07:03:11.8445966Z         PASS [   0.032s] (1038/3938) surge-core node_overrides::tests::absent_or_malformed_edits_are_distinguished
+2026-10-12T07:03:11.8450518Z         PASS [   0.033s] (1039/3938) surge-core notify_config::tests::desktop_channel_carries_no_fields
+2026-10-12T07:03:11.8466486Z         PASS [   0.037s] (1040/3938) surge-core notify_config::tests::notify_with_slack_channel_roundtrips
+2026-10-12T07:03:11.8537465Z         PASS [   0.030s] (1041/3938) surge-core predicate::tests::and_short_circuits_on_first_false
+2026-10-12T07:03:11.8577520Z         PASS [   0.085s] (1042/3938) surge-core node_overrides::tests::provider_edit_lands_on_the_step
+2026-10-12T07:03:11.8598189Z         PASS [   0.027s] (1043/3938) surge-core predicate::tests::artifact_size_all_compare_ops
+2026-10-12T07:03:11.8600972Z         PASS [   0.092s] (1044/3938) surge-core node_overrides::tests::unknown_or_non_agent_targets_are_refused_whole
+2026-10-12T07:03:11.8629282Z         PASS [   0.023s] (1045/3938) surge-core predicate::tests::artifact_size_eq
+2026-10-12T07:03:11.8647012Z         PASS [   0.029s] (1046/3938) surge-core predicate::tests::artifact_size_gt_with_missing_artifact_is_false
+2026-10-12T07:03:11.8653003Z         PASS [   0.022s] (1047/3938) surge-core predicate::tests::env_var_undefined_is_false
+2026-10-12T07:03:11.8669616Z         PASS [   0.023s] (1048/3938) surge-core predicate::tests::env_var_eq
+2026-10-12T07:03:11.8674898Z         PASS [   0.023s] (1049/3938) surge-core predicate::tests::file_exists_false_when_absent
+2026-10-12T07:03:11.8693495Z         PASS [   0.024s] (1050/3938) surge-core predicate::tests::file_exists_true_when_present
+2026-10-12T07:03:11.8696989Z         PASS [   0.025s] (1051/3938) surge-core predicate::tests::nested_combinators
+2026-10-12T07:03:11.8698577Z         PASS [   0.025s] (1052/3938) surge-core predicate::tests::not_inverts_inner
+2026-10-12T07:03:11.8708129Z         PASS [   0.021s] (1053/3938) surge-core predicate::tests::or_short_circuits_on_first_true
+2026-10-12T07:03:11.8906957Z         PASS [   0.022s] (1054/3938) surge-core predicate::tests::outcome_matches_missing_node_is_false
+2026-10-12T07:03:11.9031837Z         PASS [   0.026s] (1055/3938) surge-core predicate::tests::outcome_matches_positive
+2026-10-12T07:05:35.8048738Z         PASS [  15.421s] (1832/3938) surge-daemon::quota_recovery_route_test planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process
+2026-10-12T07:05:36.1200401Z         PASS [  15.909s] (1833/3938) surge-daemon::quota_recovery_route_test planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap
+2026-10-12T07:05:36.1210547Z         FAIL [  11.579s] (1834/3938) surge-daemon::quota_recovery_route_test relative_post_429_source_change_remains_audit_only
+2026-10-12T07:05:36.1212150Z   stdout ───
+2026-10-12T07:05:36.1212681Z 
+2026-10-12T07:05:36.1214368Z     running 1 test
+2026-10-12T07:05:36.1215100Z     test relative_post_429_source_change_remains_audit_only ... FAILED
+2026-10-12T07:05:36.1215799Z 
+2026-10-12T07:05:36.1216097Z     failures:
+2026-10-12T07:05:36.1216458Z 
+2026-10-12T07:05:36.1216760Z     failures:
+2026-10-12T07:05:36.1217361Z         relative_post_429_source_change_remains_audit_only
+2026-10-12T07:05:36.1217963Z 
+2026-10-12T07:05:36.1219016Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 29 filtered out; finished in 11.53s
+2026-10-12T07:05:36.1220181Z     
+2026-10-12T07:05:36.1221425Z   stderr ───
+2026-10-12T07:05:36.1221979Z 
+2026-10-12T07:05:36.1223199Z     thread 'relative_post_429_source_change_remains_audit_only' (9184) panicked at crates\surge-daemon\tests\quota_recovery_route_test.rs:1006:9:
+2026-10-12T07:05:36.1224866Z     real typed primary seed and fallback must complete
+2026-10-12T07:05:36.1225696Z     stack backtrace:
+2026-10-12T07:05:36.1226278Z        0: std::panicking::panic_handler
+2026-10-12T07:05:36.1227269Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\std\src\panicking.rs:679
+2026-10-12T07:05:36.1228306Z        1: core::panicking::panic_fmt
+2026-10-12T07:05:36.1229269Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\panicking.rs:80
+2026-10-12T07:05:36.1230424Z        2: quota_recovery_route_test::quota_dispatch_in_home::async_fn$0
+2026-10-12T07:05:36.1231348Z                  at .\tests\quota_recovery_route_test.rs:1006
+2026-10-12T07:05:36.1232274Z        3: quota_recovery_route_test::quota_dispatch_fixture_source::async_fn$0
+2026-10-12T07:05:36.1233203Z                  at .\tests\quota_recovery_route_test.rs:493
+2026-10-12T07:05:36.1234631Z        4: quota_recovery_route_test::relative_post_429_source_change_remains_audit_only::async_block$0
+2026-10-12T07:05:36.1256792Z                  at .\tests\quota_recovery_route_test.rs:3417
+2026-10-12T07:05:36.1273250Z        5: core::future::future::impl$1::poll<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > >
+2026-10-12T07:05:36.1301977Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\future\future.rs:133
+2026-10-12T07:05:36.1322710Z        6: tokio::runtime::park::impl$4::block_on::closure$0<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1366117Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\park.rs:284
+2026-10-12T07:05:36.1373732Z        7: tokio::task::coop::with_budget
+2026-10-12T07:05:36.1376563Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\task\coop\mod.rs:167
+2026-10-12T07:05:36.1382861Z        8: tokio::task::coop::budget
+2026-10-12T07:05:36.1384148Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\task\coop\mod.rs:133
+2026-10-12T07:05:36.1398206Z        9: tokio::runtime::park::CachedParkThread::block_on<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1402585Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\park.rs:284
+2026-10-12T07:05:36.1406513Z       10: tokio::runtime::context::blocking::BlockingRegionGuard::block_on<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1408540Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\context\blocking.rs:66
+2026-10-12T07:05:36.1410565Z       11: tokio::runtime::scheduler::multi_thread::impl$0::block_on::closure$0<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1413544Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\scheduler\multi_thread\mod.rs:89
+2026-10-12T07:05:36.1416459Z       12: tokio::runtime::context::runtime::enter_runtime<tokio::runtime::scheduler::multi_thread::impl$0::block_on::closure_env$0<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >,tuple$<> >
+2026-10-12T07:05:36.1421264Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\context\runtime.rs:65
+2026-10-12T07:05:36.1423098Z       13: tokio::runtime::scheduler::multi_thread::MultiThread::block_on<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1425081Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\scheduler\multi_thread\mod.rs:88
+2026-10-12T07:05:36.1426757Z       14: tokio::runtime::runtime::Runtime::block_on_inner<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1428584Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\runtime.rs:373
+2026-10-12T07:05:36.1431155Z       15: tokio::runtime::runtime::Runtime::block_on<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+2026-10-12T07:05:36.1433939Z                  at C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.50.0\src\runtime\runtime.rs:345
+2026-10-12T07:05:36.1435883Z       16: quota_recovery_route_test::relative_post_429_source_change_remains_audit_only
+2026-10-12T07:05:36.1436680Z                  at .\tests\quota_recovery_route_test.rs:3417
+2026-10-12T07:05:36.1437516Z       17: quota_recovery_route_test::relative_post_429_source_change_remains_audit_only::closure$0
+2026-10-12T07:05:36.1438337Z                  at .\tests\quota_recovery_route_test.rs:3403
+2026-10-12T07:05:36.1439517Z       18: core::ops::function::FnOnce::call_once<quota_recovery_route_test::relative_post_429_source_change_remains_audit_only::closure_env$0,tuple$<> >
+2026-10-12T07:05:36.1440992Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\ops\function.rs:250
+2026-10-12T07:05:36.1441854Z       19: core::ops::function::FnOnce::call_once
+2026-10-12T07:05:36.1442719Z                  at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\core\src\ops\function.rs:250
+2026-10-12T07:05:36.1444118Z     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+2026-10-12T07:05:36.1444726Z 
+2026-10-12T07:05:37.7197347Z         PASS [   1.914s] (1835/3938) surge-daemon::quota_recovery_route_test relative_preparation_never_adopts_a_foreign_workspace
+2026-10-12T07:05:37.7204382Z         PASS [   2.419s] (1836/3938) surge-daemon::quota_recovery_route_test relative_preparation_does_not_recreate_a_missing_prepared_workspace
+2026-10-12T07:05:38.6592665Z         PASS [   2.540s] (1837/3938) surge-daemon::quota_recovery_route_test relative_preparation_preserves_dirty_staged_index_and_head_on_refusal
+2026-10-12T07:05:43.7398908Z         PASS [   7.613s] (1838/3938) surge-daemon::quota_recovery_route_test relative_selected_source_change_blocks_provider_effect
+2026-10-12T07:05:46.1150848Z         PASS [   8.393s] (1839/3938) surge-daemon::quota_recovery_route_test relative_sources_are_frozen_from_actual_launch_worktree_on_normal_start
+2026-10-12T07:05:46.3117203Z         PASS [   8.588s] (1840/3938) surge-daemon::quota_recovery_route_test relative_skipped_source_change_blocks_provider_effect
+2026-10-12T07:05:46.5532438Z         PASS [   7.894s] (1841/3938) surge-daemon::quota_recovery_route_test selected_route_source_change_after_freeze_prevents_any_provider_effect
+2026-10-12T07:05:46.6873413Z         PASS [   0.134s] (1842/3938) surge-daemon::triage_wiring triage_enqueued_yields_real_priority
+2026-10-12T07:05:49.7451166Z         PASS [   6.010s] (1843/3938) surge-daemon::quota_recovery_route_test skipped_route_source_change_after_freeze_prevents_fallback_effect
+2026-10-12T07:05:50.4597044Z         PASS [   3.767s] (1844/3938) surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart
+2026-10-12T07:05:50.8675577Z         PASS [   4.560s] (1845/3938) surge-daemon::quota_recovery_route_test task_owned_quota_dispatches_actual_a_then_b_in_the_same_workspace
+2026-10-12T07:05:51.7383878Z         PASS [   1.280s] (1846/3938) surge-daemon::work_item_route_test admitted_suspend_with_no_local_actor_returns_pending_original_operation
+2026-10-12T07:05:51.7772018Z         PASS [   0.042s] (1847/3938) surge-daemon::work_item_route_test child_committed_outcome_host_probe
+2026-10-12T07:05:51.8195861Z         PASS [   0.041s] (1848/3938) surge-daemon::work_item_route_test child_execution_host_probe
+2026-10-12T07:05:53.1490902Z         PASS [   7.036s] (1849/3938) surge-daemon::quota_recovery_route_test skipped_route_source_change_prevents_stale_all_exhausted_park
+2026-10-12T07:05:53.9400074Z         PASS [   4.192s] (1850/3938) surge-daemon::work_item_route_test accepted_gate_answer_survives_owner_death_before_outcome_delivery
+2026-10-12T07:05:55.3395193Z         PASS [   4.468s] (1851/3938) surge-daemon::work_item_route_test ambiguous_owned_terminal_history_never_releases_task_ownership
+2026-10-12T07:05:55.8232885Z         PASS [   4.002s] (1852/3938) surge-daemon::work_item_route_test cold_committed_outcome_does_not_repeat_a_real_provider_turn
+2026-10-12T07:10:39.4002336Z         PASS [  21.148s] (3938/3938) surge-telegram::production_callbacks bot_api_failure_does_not_roll_back_accepted_engine_decision
+2026-10-12T07:10:39.4029559Z ────────────
+2026-10-12T07:10:39.4030824Z      Summary [ 516.809s] 3938 tests run: 3936 passed (3 slow), 2 failed, 55 skipped
+2026-10-12T07:10:39.4033397Z         FAIL [   0.490s] (1037/3938) surge-core id::tests::short_is_alphanumeric_and_distinct
+2026-10-12T07:10:39.4035540Z         FAIL [  11.579s] (1834/3938) surge-daemon::quota_recovery_route_test relative_post_429_source_change_remains_audit_only
+2026-10-12T07:10:39.4350434Z error: test run failed
+2026-10-12T07:10:40.0390645Z ##[error]Process completed with exit code 1.
+2026-10-12T07:10:40.1621490Z ##[group]Run ./scripts/windows-native-probe.ps1
+2026-10-12T07:10:40.1622101Z ./scripts/windows-native-probe.ps1
+2026-10-12T07:10:40.1768182Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-12T07:10:40.1768632Z env:
+2026-10-12T07:10:40.1768814Z   CARGO_TERM_COLOR: always
+2026-10-12T07:10:40.1769038Z   RUST_BACKTRACE: 1
+2026-10-12T07:10:40.1769339Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:10:40.1769806Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-10-12T07:10:40.1770357Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:10:40.1770889Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:10:40.1771298Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-10-12T07:10:40.1771639Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-12T07:10:40.1771898Z   CARGO_INCREMENTAL: 0
+2026-10-12T07:10:40.1772150Z ##[endgroup]
+2026-10-12T07:10:47.8967354Z    Compiling serde_core v1.0.228
+2026-10-12T07:10:47.8974892Z    Compiling syn v2.0.117
+2026-10-12T07:10:47.8983460Z    Compiling serde v1.0.228
+2026-10-12T07:10:47.9012241Z    Compiling smallvec v1.15.1
+2026-10-12T07:10:48.3766144Z    Compiling windows-sys v0.61.2
+2026-10-12T07:10:48.8624744Z    Compiling num-traits v0.2.19
+2026-10-12T07:10:50.5364023Z    Compiling parking_lot_core v0.9.12

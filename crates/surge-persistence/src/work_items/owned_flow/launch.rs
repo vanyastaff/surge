@@ -2,7 +2,8 @@
 use super::{OwnedFlowSourceSnapshot, private_inputs};
 use crate::work_items::start_preparation::secure_lock::{PreparationLock, PreparationLockKey};
 use crate::work_items::{
-    self, LaunchLock, Result, WorkItemError, WorkItemLaunchClaim, WorkItemStore,
+    self, LaunchLock, ReconciliationObservation, Result, WorkItemError, WorkItemLaunchClaim,
+    WorkItemStore,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{path::Path, sync::Arc};
@@ -174,10 +175,11 @@ fn confirmed_continuation(
         && prior.fence.as_ref() == Some(fence))
 }
 impl WorkItemStore {
-    pub(in crate::work_items) fn claim_owned_flow(
+    pub(in crate::work_items) fn claim_owned_flow_matching(
         &self,
         run: RunId,
-    ) -> Result<WorkItemLaunchClaim> {
+        observation: Option<ReconciliationObservation<'_>>,
+    ) -> Result<Option<WorkItemLaunchClaim>> {
         let value = stored(&*self.pool.get()?, run)?;
         let guard = PreparationLock::acquire_stable(
             &self.home,
@@ -201,6 +203,11 @@ impl WorkItemStore {
             ));
         }
         let attempt = association(&tx, &current, run)?;
+        if let Some(observation) = observation
+            && !observation.matches(&tx, &attempt)?
+        {
+            return Ok(None);
+        }
         if current.state == "pending" {
             pending_permission(&tx, &current, run)?;
         } else if current.state != "started" || !attempt.state.is_active() {
@@ -215,7 +222,7 @@ impl WorkItemStore {
             params![token, run.to_string(), attempt.binding.generation],
         )?;
         tx.commit()?;
-        Ok(WorkItemLaunchClaim {
+        Ok(Some(WorkItemLaunchClaim {
             lock: LaunchLock::OwnedFlow {
                 guard: Arc::new(guard),
                 operation: value.operation,
@@ -224,7 +231,7 @@ impl WorkItemStore {
             run,
             token,
             binding: attempt.binding,
-        })
+        }))
     }
     pub(in crate::work_items) fn validate_owned_flow_association(
         &self,

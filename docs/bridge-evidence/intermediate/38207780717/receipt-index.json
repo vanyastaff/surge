@@ -1,0 +1,32 @@
+[
+  {
+    "source": "/tmp/surge-ci-38207780717-linux-plain.log",
+    "unique_failed_test_rows": [
+      "surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt",
+      "surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower",
+      "surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt"
+    ],
+    "summaries": [
+      "Summary [ 153.919s] 4167 tests run: 4164 passed, 3 failed, 36 skipped"
+    ],
+    "compiler_or_process_diagnostic_rows": 2
+  },
+  {
+    "source": "/tmp/surge-ci-38207780717-macos-plain.log",
+    "unique_failed_test_rows": [
+      "surge-daemon::inbox_callback_e2e cancellation_during_launch_preserves_handoff_and_processed_receipt",
+      "surge-daemon::inbox_callback_e2e consumer_shutdown_joins_every_accepted_follower",
+      "surge-daemon::inbox_callback_e2e consumer_shutdown_waits_for_joined_execution_after_terminal_receipt"
+    ],
+    "summaries": [
+      "Summary [ 162.107s] 3939 tests run: 3936 passed, 3 failed, 37 skipped"
+    ],
+    "compiler_or_process_diagnostic_rows": 2
+  },
+  {
+    "source": "/tmp/surge-ci-38207780717-windows-clippy-plain.log",
+    "unique_failed_test_rows": [],
+    "summaries": [],
+    "compiler_or_process_diagnostic_rows": 10
+  }
+]

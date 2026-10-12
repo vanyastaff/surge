@@ -1,0 +1,14 @@
+
+running 1 test
+test state_home::windows::namespace::tests::sidefile_observation_cooperates_with_delete_access_but_rejects_aliases ... processed file: C:\Users\surgeprobe46837744\surge-runtime-fixture-kBejWJ\state\substitution\events.sqlite-shm
+Successfully processed 1 files; Failed processing 0 files
+Junction created for C:\Users\surgeprobe46837744\surge-runtime-fixture-M8EmrN\state\substitution\events.sqlite-shm <<===>> C:\Users\surgeprobe46837744\surge-runtime-fixture-M8EmrN\state\substitution\sentinel-target
+ok
+
+successes:
+
+successes:
+    state_home::windows::namespace::tests::sidefile_observation_cooperates_with_delete_access_but_rejects_aliases
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.33s
+

@@ -11,6 +11,7 @@
 //! `connection::SessionState` / `pool::SessionHandle` types that already
 //! occupy that namespace):
 //!
+//! - [`BridgeConfig`] — named capacities and deadlines for spawning a bridge.
 //! - [`AcpBridge`] — owned by the engine, owns its own LocalSet thread.
 //! - [`session::SessionConfig`], [`session::MessageContent`],
 //!   [`session::SessionState`] — open-session inputs and read-back state.
@@ -65,6 +66,8 @@ pub mod command;
 pub use command::BridgeCommand;
 
 mod lifecycle;
+#[cfg(windows)]
+mod windows_child;
 pub(crate) mod worker;
 
 pub(crate) mod session_inner;
@@ -74,7 +77,7 @@ pub(crate) mod client;
 pub(crate) mod tokens;
 
 pub mod acp_bridge;
-pub use acp_bridge::{AcpBridge, BridgeTimeouts};
+pub use acp_bridge::{AcpBridge, BridgeConfig, BridgeTimeouts};
 
 pub mod facade;
 pub use facade::BridgeFacade;

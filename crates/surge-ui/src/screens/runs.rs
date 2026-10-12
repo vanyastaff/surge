@@ -153,8 +153,61 @@ struct RunRow {
     event_rows: Vec<EventRow>,
     /// Live per-run stream attached (real telemetry below).
     live_stream: bool,
-    /// (tokens_in, tokens_out, cost_usd) accumulated from the stream.
-    usage: Option<(u64, u64, f64)>,
+    /// Known subtotals and completeness accumulated from the stream.
+    usage: Option<RunUsage>,
+}
+
+#[derive(Clone, Copy)]
+struct RunUsage {
+    tokens_in: u64,
+    tokens_out: u64,
+    known_cost_usd: f64,
+    usage_unknown: bool,
+    cost_unknown: bool,
+}
+
+impl RunUsage {
+    fn from_stream(stream: &crate::run_stream::RunStreamState) -> Self {
+        Self {
+            tokens_in: stream.tokens_in,
+            tokens_out: stream.tokens_out,
+            known_cost_usd: stream.cost_usd,
+            usage_unknown: stream.usage_unknown,
+            cost_unknown: stream.cost_unknown,
+        }
+    }
+
+    fn token_label(self) -> String {
+        if self.usage_unknown && self.tokens_in == 0 && self.tokens_out == 0 {
+            return "token spend unavailable".into();
+        }
+        format!(
+            "{} in · {} out tokens{}",
+            fmt_tokens(self.tokens_in),
+            fmt_tokens(self.tokens_out),
+            if self.usage_unknown {
+                " known · total unavailable"
+            } else {
+                ""
+            }
+        )
+    }
+
+    fn cost_label(self) -> String {
+        if self.cost_unknown && self.known_cost_usd == 0.0 {
+            "cost unavailable".into()
+        } else {
+            format!(
+                "${:.2}{}",
+                self.known_cost_usd,
+                if self.cost_unknown {
+                    " known · total unavailable"
+                } else {
+                    ""
+                }
+            )
+        }
+    }
 }
 
 fn status_parts(status: RunStatus) -> (&'static str, Hsla, bool, u8) {
@@ -338,8 +391,13 @@ impl RunRow {
         if stream.last_seq > 0 {
             self.events = stream.last_seq.to_string();
         }
-        if stream.tokens_in > 0 || stream.tokens_out > 0 || stream.cost_usd > 0.0 {
-            self.usage = Some((stream.tokens_in, stream.tokens_out, stream.cost_usd));
+        if stream.tokens_in > 0
+            || stream.tokens_out > 0
+            || stream.cost_usd > 0.0
+            || stream.cost_unknown
+            || stream.usage_unknown
+        {
+            self.usage = Some(RunUsage::from_stream(stream));
         }
     }
 }
@@ -1028,13 +1086,9 @@ impl RunsScreen {
         if let Some(detail) = &row.waiting_detail {
             facts.push(detail.clone());
         }
-        if let Some((tokens_in, tokens_out, cost)) = row.usage {
-            facts.push(format!(
-                "{} in · {} out tokens",
-                fmt_tokens(tokens_in),
-                fmt_tokens(tokens_out)
-            ));
-            facts.push(format!("${cost:.2}"));
+        if let Some(usage) = row.usage {
+            facts.push(usage.token_label());
+            facts.push(usage.cost_label());
         }
 
         let mut actions = div().h_flex().gap(px(6.0)).items_center().flex_none();
@@ -2234,5 +2288,48 @@ mod result_folder_tests {
             super::validate_result_folder(root.path().into()).unwrap(),
             root.path()
         );
+    }
+}
+
+#[cfg(test)]
+mod usage_completeness_tests {
+    use super::RunUsage;
+    use crate::run_stream::RunStreamState;
+
+    #[test]
+    fn missing_only_usage_renders_unavailable() {
+        let mut stream = RunStreamState::default();
+        stream.usage_unknown = true;
+        stream.cost_unknown = true;
+        let usage = RunUsage::from_stream(&stream);
+        assert_eq!(usage.token_label(), "token spend unavailable");
+        assert_eq!(usage.cost_label(), "cost unavailable");
+    }
+
+    #[test]
+    fn partial_usage_retains_known_token_and_cost_subtotals() {
+        let mut stream = RunStreamState::default();
+        stream.tokens_in = 10;
+        stream.tokens_out = 5;
+        stream.cost_usd = 0.5;
+        stream.usage_unknown = true;
+        stream.cost_unknown = true;
+        let usage = RunUsage::from_stream(&stream);
+        assert_eq!(
+            usage.token_label(),
+            "10 in · 5 out tokens known · total unavailable"
+        );
+        assert_eq!(usage.cost_label(), "$0.50 known · total unavailable");
+    }
+
+    #[test]
+    fn complete_usage_renders_reported_totals() {
+        let mut stream = RunStreamState::default();
+        stream.tokens_in = 10;
+        stream.tokens_out = 5;
+        stream.cost_usd = 0.5;
+        let usage = RunUsage::from_stream(&stream);
+        assert_eq!(usage.token_label(), "10 in · 5 out tokens");
+        assert_eq!(usage.cost_label(), "$0.50");
     }
 }

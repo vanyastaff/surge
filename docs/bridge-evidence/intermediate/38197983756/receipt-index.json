@@ -1,0 +1,70 @@
+[
+  {
+    "source": "/tmp/surge-ci-38197983756-linux-plain.log",
+    "unique_failed_test_rows": [
+      "surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart",
+      "surge-daemon::work_item_route_test lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once",
+      "surge-persistence runs::reader::feed_probe_tests::pool_probe_rejects_failed_and_lost_running_lifecycle"
+    ],
+    "summaries": [
+      "Summary [ 155.931s] 4101 tests run: 4098 passed, 3 failed, 36 skipped"
+    ],
+    "compiler_or_process_diagnostic_rows": 2
+  },
+  {
+    "source": "/tmp/surge-ci-38197983756-macos-plain.log",
+    "unique_failed_test_rows": [
+      "surge-daemon::work_item_route_test accepted_gate_answer_receipt_survives_completion_and_restart"
+    ],
+    "summaries": [
+      "Summary [ 212.414s] 3873 tests run: 3872 passed (1 slow), 1 failed, 37 skipped"
+    ],
+    "compiler_or_process_diagnostic_rows": 2
+  },
+  {
+    "source": "/tmp/surge-ci-38197983756-windows-plain.log",
+    "unique_failed_test_rows": [
+      "surge-daemon::quota_recovery_route_test normal_task_all_fresh_exhausted_parks_without_opening_any_provider",
+      "surge-daemon::quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary",
+      "surge-daemon::quota_recovery_route_test normal_task_start_skips_fresh_exhausted_primary_before_any_provider_effect",
+      "surge-daemon::quota_recovery_route_test planned_host_budget_positive_cap_completes_without_repeating_warmup",
+      "surge-daemon::quota_recovery_route_test planned_host_budget_retains_prior_charge_and_aborts_at_frozen_cap",
+      "surge-daemon::quota_recovery_route_test planned_no_open_park_survives_killed_host_and_periodic_wake_in_new_process",
+      "surge-daemon::quota_recovery_route_test relative_selected_source_change_blocks_provider_effect",
+      "surge-daemon::quota_recovery_route_test relative_skipped_source_change_blocks_provider_effect",
+      "surge-daemon::quota_recovery_route_test relative_sources_are_frozen_from_actual_launch_worktree_on_normal_start",
+      "surge-daemon::quota_recovery_route_test selected_route_source_change_after_freeze_prevents_any_provider_effect",
+      "surge-daemon::quota_recovery_route_test skipped_route_source_change_after_freeze_prevents_fallback_effect",
+      "surge-daemon::quota_recovery_route_test skipped_route_source_change_prevents_stale_all_exhausted_park",
+      "surge-daemon::work_item_route_test cold_committed_outcome_does_not_repeat_a_real_provider_turn",
+      "surge-daemon::work_item_route_test cold_consumed_route_before_registry_ack_does_not_route_twice",
+      "surge-daemon::work_item_route_test cold_consumed_route_corrupt_checkpoint_keeps_attention_without_provider_dispatch",
+      "surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch",
+      "surge-daemon::work_item_route_test daemon_gate_answer_requires_durable_acceptance_before_success",
+      "surge-daemon::work_item_route_test disconnected_start_caller_does_not_drop_durable_attempt_or_active_run",
+      "surge-daemon::work_item_route_test execution_owner_prevents_second_live_host_from_replaying_agent_turn",
+      "surge-daemon::work_item_route_test forged_suspended_human_gate_request_cannot_authorize_cold_continue",
+      "surge-daemon::work_item_route_test killed_continue_ack_reconciles_nonterminal_control_before_waiting_for_operator",
+      "surge-daemon::work_item_route_test killed_execution_owner_releases_os_lock_and_same_attempt_recovers",
+      "surge-daemon::work_item_route_test legacy_unbound_cap_resumes_generic_task_but_current_missing_cap_retains_attention",
+      "surge-daemon::work_item_route_test lost_reservation_empty_journal_and_provision_before_ack_retry_same_run_once",
+      "surge-daemon::work_item_route_test pure_human_gate_suspend_is_not_abort_and_reuses_original_decision",
+      "surge-daemon::work_item_route_test revisited_human_gate_requires_new_occurrence_and_new_decision",
+      "surge-daemon::work_item_route_test task_created_over_daemon_survives_restart_and_runs_pinned_requirements",
+      "surge-daemon::work_item_route_test task_provider_identity_is_durable_before_first_real_acp_prompt",
+      "surge-daemon::work_item_route_test task_suspend_continue_uses_saved_provider_on_real_acp_wire",
+      "surge-orchestrator::engine_capacity_park_test registry_contention_does_not_delay_route_commit_behind_capacity_clear",
+      "surge-persistence state_home::windows::namespace::private_objects::tests::private_size_bounds_delete_pending_and_retained_parent_replacement_fail_closed"
+    ],
+    "summaries": [
+      "Summary [ 451.697s] 3848 tests run: 3817 passed, 31 failed, 55 skipped"
+    ],
+    "compiler_or_process_diagnostic_rows": 3
+  },
+  {
+    "source": "/tmp/surge-ci-38197983756-windows-clippy-plain.log",
+    "unique_failed_test_rows": [],
+    "summaries": [],
+    "compiler_or_process_diagnostic_rows": 3
+  }
+]

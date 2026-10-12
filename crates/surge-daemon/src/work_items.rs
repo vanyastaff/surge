@@ -1044,33 +1044,62 @@ async fn reconcile_candidate(
 ) -> Result<(), WorkItemError> {
     if !matches!(
         captured.state,
-        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+        WorkItemAttemptState::Reserved
+            | WorkItemAttemptState::Launched
+            | WorkItemAttemptState::Suspended
+            | WorkItemAttemptState::Attention
     ) {
         return Ok(());
     }
     let Some((_, storage)) = tracking.task_sources() else {
         return Ok(());
     };
+    tracing::debug!(run_id=%captured.run, "task reconciliation candidate began");
     let store = storage.work_items();
-    // Read-only early filtering handles candidates that became terminal and no longer
-    // have an active assignment. This is not authority: validate again under the claim.
-    let current = store
-        .for_run(captured.run)?
-        .ok_or(WorkItemError::NotFound)?;
-    if !matches!(
-        current.state,
-        WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
-    ) {
+    // Avoid claims for already paused or terminal attempts. Publication checks
+    // this observation atomically, and effects still revalidate under the claim.
+    let observed = ReconciliationAuthority {
+        attempt: store
+            .for_run(captured.run)?
+            .ok_or(WorkItemError::NotFound)?,
+        control: store.execution_control(captured.run)?,
+    };
+    if !reconciliation_eligible(&observed) {
+        tracing::debug!(run_id=%captured.run, "task reconciliation candidate is ineligible");
         return Ok(());
     }
-    let claim = match store.claim(captured.run) {
-        Ok(claim) => claim,
-        Err(WorkItemError::Busy) => return Ok(()),
+    // An ordinary unstarted reservation belongs to explicit Start. Do not
+    // briefly take its launch lock while that caller can already be admitted.
+    // Accepted pending owned Flows remain eligible through the startup check.
+    if observed.attempt.state == WorkItemAttemptState::Reserved
+        && observed.control.is_none()
+        && matches!(
+            reconciliation_startup_present(&storage, &observed.attempt).await,
+            Ok(false)
+        )
+    {
+        tracing::debug!(run_id=%captured.run, "task reconciliation startup is absent");
+        return Ok(());
+    }
+    tracing::debug!(run_id=%captured.run, "task reconciliation claim began");
+    let claim = match store.claim_reconciliation(&observed.attempt, observed.control.as_ref()) {
+        Ok(Some(claim)) => claim,
+        Ok(None) => {
+            tracing::debug!(run_id=%captured.run, "task reconciliation claim was superseded");
+            return Ok(());
+        },
+        Err(WorkItemError::Busy) => {
+            tracing::debug!(run_id=%captured.run, "task reconciliation claim is busy");
+            return Ok(());
+        },
         Err(error) => {
             if store.for_run(captured.run)?.is_some_and(|current| {
                 !matches!(
                     current.state,
-                    WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
+                    WorkItemAttemptState::Reserved
+                        | WorkItemAttemptState::Launched
+                        | WorkItemAttemptState::Suspended
+                        | WorkItemAttemptState::Attention
                 )
             }) {
                 return Ok(());
@@ -1078,6 +1107,7 @@ async fn reconcile_candidate(
             return Err(error);
         },
     };
+    tracing::debug!(run_id=%captured.run, "task reconciliation claim acquired");
     let authority = ReconciliationAuthority {
         attempt: store.validate_claim(&claim)?,
         control: store.execution_control(captured.run)?,
@@ -1098,6 +1128,7 @@ async fn reconcile_candidate(
         },
         Ok(true) => (),
     }
+    tracing::debug!(run_id=%captured.run, "task reconciliation launch began");
     if let Err(error) = launch_claimed_attempt(
         &authority.attempt,
         claim,
@@ -1117,13 +1148,26 @@ async fn reconcile_candidate(
 
 fn reconciliation_eligible(authority: &ReconciliationAuthority) -> bool {
     use surge_core::execution_recovery::ExecutionControlState;
+    // Continue is already durable operator authorization, even while its
+    // attempt still carries the last confirmed suspension projection.
+    if matches!(
+        authority.attempt.state,
+        WorkItemAttemptState::Suspended | WorkItemAttemptState::Attention
+    ) {
+        return authority
+            .control
+            .as_ref()
+            .is_some_and(|control| control.state == ExecutionControlState::ContinueReserved);
+    }
     matches!(
         authority.attempt.state,
         WorkItemAttemptState::Reserved | WorkItemAttemptState::Launched
     ) && authority.control.as_ref().is_none_or(|control| {
         matches!(
             control.state,
-            ExecutionControlState::Executing | ExecutionControlState::SuspendRequested
+            ExecutionControlState::Executing
+                | ExecutionControlState::SuspendRequested
+                | ExecutionControlState::ContinueReserved
         )
     })
 }

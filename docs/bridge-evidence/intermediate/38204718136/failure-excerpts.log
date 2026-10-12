@@ -1,0 +1,82 @@
+Sourced intermediate failure receipts; source line numbers retained.
+Only anchored nextest FAIL/Summary and actual compiler/process diagnostics are selected.
+No Windows counts or probe outcomes inferred from absent receipts.
+
+SOURCE /tmp/surge-ci-38204718136-linux-plain.log
+...
+5032: 2026-10-12T04:50:50.9336831Z ────────────
+5033: 2026-10-12T04:50:50.9338083Z      Summary [ 151.721s] 4106 tests run: 4106 passed, 36 skipped
+5034: 2026-10-12T04:50:51.1000960Z ##[group]Run cargo test --locked --workspace --doc
+5035: 2026-10-12T04:50:51.1004075Z cargo test --locked --workspace --doc
+5036: 2026-10-12T04:50:51.1710546Z shell: /usr/bin/bash -e {0}
+5037: 2026-10-12T04:50:51.1711005Z env:
+
+SOURCE /tmp/surge-ci-38204718136-macos-plain.log
+...
+4929: 2026-10-12T04:52:10.8926960Z ────────────
+4930: 2026-10-12T04:52:10.8929250Z      Summary [ 156.300s] 3878 tests run: 3878 passed, 37 skipped
+4931: 2026-10-12T04:52:10.9464940Z ##[group]Run cargo test --locked --workspace --exclude surge-ui --doc
+4932: 2026-10-12T04:52:10.9467390Z cargo test --locked --workspace --exclude surge-ui --doc
+4933: 2026-10-12T04:52:10.9737650Z shell: /bin/bash -e {0}
+4934: 2026-10-12T04:52:10.9737840Z env:
+
+SOURCE /tmp/surge-ci-38204718136-windows-tests-plain.log
+...
+2713: 2026-10-12T04:59:02.1659956Z         PASS [   6.043s] (1618/3876) surge-daemon bootstrap_supervisor::tests::restart_after_parent_completion_before_child_commit_reuses_parent_evidence
+2714: 2026-10-12T04:59:02.1677718Z         FAIL [   1.323s] (1619/3876) surge-daemon inbox::state_sync::tests::observed_terminal_cannot_commit_before_failed_settlement_join
+2715: 2026-10-12T04:59:02.2260127Z   stdout ───
+...
+2982: 2026-10-12T05:00:28.1185714Z         PASS [   8.098s] (1824/3876) surge-daemon::quota_recovery_route_test normal_task_start_skips_fresh_exhausted_primary_before_any_provider_effect
+2983: 2026-10-12T05:00:31.0726609Z         FAIL [  12.841s] (1825/3876) surge-daemon::quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary
+2984: 2026-10-12T05:00:31.0772021Z   stdout ───
+...
+3081: 2026-10-12T05:01:04.7066100Z         PASS [   3.276s] (1852/3876) surge-daemon::work_item_route_test cold_consumed_route_missing_checkpoint_keeps_attention_without_provider_dispatch
+3082: 2026-10-12T05:01:05.0997764Z         FAIL [   3.278s] (1853/3876) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+3083: 2026-10-12T05:01:05.1039914Z   stdout ───
+...
+4094: 2026-10-12T05:02:57.7468376Z         PASS [   5.521s] (2806/3876) surge-orchestrator::engine_human_input_timeout fixtures::mock_bridge::tests::admission_rejects_changed_descriptor_closes_and_never_prompts
+4095: 2026-10-12T05:02:59.0902773Z         FAIL [   7.011s] (2807/3876) surge-orchestrator::engine_guard_spill_harness_test node_wall_clock_deadline_trips_without_any_tool_call
+4096: 2026-10-12T05:02:59.0969525Z   stdout ───
+...
+5294: 2026-10-12T05:05:27.8226589Z ────────────
+5295: 2026-10-12T05:05:27.8227860Z      Summary [ 473.042s] 3876 tests run: 3872 passed (2 slow), 4 failed, 55 skipped
+5296: 2026-10-12T05:05:27.8229998Z         FAIL [   1.323s] (1619/3876) surge-daemon inbox::state_sync::tests::observed_terminal_cannot_commit_before_failed_settlement_join
+5297: 2026-10-12T05:05:27.8232196Z         FAIL [  12.841s] (1825/3876) surge-daemon::quota_recovery_route_test normal_task_mixed_skip_and_actual_429_never_reopens_primary
+5298: 2026-10-12T05:05:27.8233857Z         FAIL [   3.278s] (1853/3876) surge-daemon::work_item_route_test cold_daemon_resumes_committed_startup_with_same_run_and_accepted_acp_context
+5299: 2026-10-12T05:05:27.8236128Z         FAIL [   7.011s] (2807/3876) surge-orchestrator::engine_guard_spill_harness_test node_wall_clock_deadline_trips_without_any_tool_call
+5300: 2026-10-12T05:05:27.8418561Z error: test run failed
+5301: 2026-10-12T05:05:28.4894621Z ##[error]Process completed with exit code 1.
+5302: 2026-10-12T05:05:28.5808483Z ##[group]Run ./scripts/windows-native-probe.ps1
+5303: 2026-10-12T05:05:28.5809234Z ./scripts/windows-native-probe.ps1
+5304: 2026-10-12T05:05:28.5916927Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+5305: 2026-10-12T05:05:28.5917328Z env:
+5306: 2026-10-12T05:05:28.5917528Z   CARGO_TERM_COLOR: always
+5307: 2026-10-12T05:05:28.5917765Z   RUST_BACKTRACE: 1
+5308: 2026-10-12T05:05:28.5918061Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+5309: 2026-10-12T05:05:28.5918542Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+
+SOURCE /tmp/surge-ci-38204718136-windows-clippy-plain.log
+...
+417: 2026-10-12T04:43:28.2856352Z     Checking surge-mcp v0.1.0 (D:\a\surge\surge\crates\surge-mcp)
+418: 2026-10-12T04:43:29.9811512Z error: redundant closure
+419: 2026-10-12T04:43:29.9823257Z    --> crates\surge-mcp\src\child_settlement\mod.rs:110:30
+420: 2026-10-12T04:43:29.9893879Z     |
+421: 2026-10-12T04:43:30.0058887Z 110 |                 .is_some_and(|source| source.is::<crate::writer_observer::WriterObservationError>())
+422: 2026-10-12T04:43:30.0153738Z     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `<(dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static)>::is::<crate::writer_observer::WriterObservationError>`
+423: 2026-10-12T04:43:30.0155897Z     |
+424: 2026-10-12T04:43:30.0391980Z     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#redundant_closure_for_method_calls
+425: 2026-10-12T04:43:30.0530884Z     = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+426: 2026-10-12T04:43:30.0730946Z     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+427: 2026-10-12T04:43:30.0766764Z 
+428: 2026-10-12T04:43:30.0913229Z error: could not compile `surge-mcp` (lib) due to 1 previous error
+429: 2026-10-12T04:43:30.0916726Z warning: build failed, waiting for other jobs to finish...
+430: 2026-10-12T04:43:34.8398758Z ##[error]Process completed with exit code 1.
+431: 2026-10-12T04:43:34.8658072Z Post job cleanup.
+432: 2026-10-12T04:43:35.0595367Z [command]"C:\Program Files\Git\bin\git.exe" version
+433: 2026-10-12T04:43:35.0881032Z git version 2.55.0.windows.5
+434: 2026-10-12T04:43:35.0946993Z Temporarily overriding HOME='D:\a\_temp\52f218da-de00-419d-8348-4e34e822ff20' before making global git config changes
+435: 2026-10-12T04:43:35.0948348Z Adding repository directory to the temporary git global config as a safe directory
+436: 2026-10-12T04:43:35.0958262Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\surge\surge
+437: 2026-10-12T04:43:35.1281584Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+438: 2026-10-12T04:43:35.1633112Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+

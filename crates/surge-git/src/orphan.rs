@@ -284,10 +284,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "macOS /var/folders symlink confuses libgit2 worktree gitdir resolution; tracked separately"
-    )]
     fn test_active_worktree_not_orphaned() {
         let (_dir, path) = init_test_repo();
         let gm = GitManager::new(path.clone()).unwrap();
@@ -301,6 +297,40 @@ mod tests {
         assert!(report.is_empty());
         assert_eq!(report.orphaned_worktrees.len(), 0);
         assert_eq!(report.orphaned_branches.len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_symlinked_repository_worktree_lifecycle() {
+        let (_repo_dir, path) = init_test_repo();
+        let alias_dir = tempfile::tempdir().unwrap();
+        let alias = alias_dir.path().join("repository-alias");
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        let canonical = path.canonicalize().unwrap();
+        let manager = GitManager::new(alias.clone()).unwrap();
+        let info = manager.create_worktree("alias-spec", None).unwrap();
+
+        // Both spellings must observe the same live checkout, then the same orphan.
+        let checkout = Repository::open(&info.path).unwrap();
+        assert_eq!(
+            checkout.workdir().unwrap().canonicalize().unwrap(),
+            canonical.join(".surge/worktrees/alias-spec")
+        );
+        drop(checkout);
+        for repo_path in [&alias, &canonical] {
+            let scanner = OrphanScanner::new(GitManager::new(repo_path.clone()).unwrap());
+            assert!(scanner.scan().unwrap().is_empty());
+        }
+
+        fs::remove_dir_all(&info.path).unwrap();
+        for repo_path in [&alias, &canonical] {
+            let scanner = OrphanScanner::new(GitManager::new(repo_path.clone()).unwrap());
+            let report = scanner.scan().unwrap();
+            assert_eq!(report.orphaned_worktrees.len(), 1);
+            assert_eq!(report.orphaned_worktrees[0].spec_id, "alias-spec");
+            assert_eq!(report.orphaned_worktrees[0].reason, "directory missing");
+            assert!(report.orphaned_branches.is_empty());
+        }
     }
 
     #[test]

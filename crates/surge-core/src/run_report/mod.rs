@@ -530,21 +530,41 @@ impl RunReport {
                         origin: EvidenceOrigin::Bootstrap { stage: *stage },
                     });
                 },
-                EventPayload::TokensConsumed {
-                    prompt_tokens,
-                    output_tokens,
-                    cache_hits,
-                    cost_usd,
-                    ..
-                } => {
-                    report.cost.prompt_tokens += u64::from(*prompt_tokens);
-                    report.cost.output_tokens += u64::from(*output_tokens);
-                    report.cost.cache_hits += u64::from(*cache_hits);
-                    match cost_usd {
-                        Some(usd) => report.cost.cost_usd += usd,
-                        None => report.cost.uncosted_token_events += 1,
+                payload @ (EventPayload::TokensConsumed { .. }
+                | EventPayload::ProviderUsageObserved { .. }) => {
+                    if let Some((_, input, output, cost)) = payload.token_delta() {
+                        report.cost.usage_unknown |=
+                            report.cost.prompt_tokens.checked_add(input).is_none()
+                                || report.cost.output_tokens.checked_add(output).is_none();
+                        report.cost.prompt_tokens = report.cost.prompt_tokens.saturating_add(input);
+                        report.cost.output_tokens =
+                            report.cost.output_tokens.saturating_add(output);
+                        report.cost.cost_usd += cost.unwrap_or(0.0);
                     }
+                    if let EventPayload::TokensConsumed { cache_hits, .. } = payload {
+                        report.cost.usage_unknown |= report
+                            .cost
+                            .cache_hits
+                            .checked_add(u64::from(*cache_hits))
+                            .is_none();
+                        report.cost.cache_hits = report
+                            .cost
+                            .cache_hits
+                            .saturating_add(u64::from(*cache_hits));
+                    }
+                    if payload.usage_unavailable() {
+                        report.cost.uncosted_token_events =
+                            report.cost.uncosted_token_events.saturating_add(1);
+                    }
+                    report.cost.usage_unknown |= matches!(
+                        payload,
+                        EventPayload::ProviderUsageObserved {
+                            usage: crate::usage::TokenUsageObservation::Unavailable { .. },
+                            ..
+                        }
+                    );
                 },
+                EventPayload::ContextUsageObserved { .. } => {},
                 EventPayload::BudgetWarningRaised { .. } => {
                     report.cost.budget_warning_raised = true;
                 },
@@ -1164,6 +1184,9 @@ pub enum EvidenceOrigin {
 pub struct CostTotals {
     /// Total prompt (input) tokens.
     pub prompt_tokens: u64,
+    /// Missing or invalid evidence, or overflow, makes token totals incomplete.
+    #[serde(default)]
+    pub usage_unknown: bool,
     /// Total output tokens.
     pub output_tokens: u64,
     /// Total cache-hit tokens credited.
@@ -1176,8 +1199,8 @@ pub struct CostTotals {
     /// the agent runtime didn't report a price for some tokens. Always read
     /// the two fields together.
     pub cost_usd: f64,
-    /// Count of `TokensConsumed` events with `cost_usd: None` — spend that
-    /// happened but was never priced. A nonzero value here means
+    /// Count of unpriced legacy token events and provider usage observations.
+    /// Provider observations include missing consumption evidence. A nonzero value here means
     /// [`Self::cost_usd`] is a floor, not the true total: render callers
     /// must say "at least $X (+N events without a recorded price)", never
     /// bare "$X", whenever this is nonzero.

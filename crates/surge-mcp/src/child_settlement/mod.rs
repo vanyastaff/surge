@@ -3,6 +3,8 @@ mod panic_boundary;
 #[cfg(all(test, unix))]
 mod tests;
 mod tracker;
+#[cfg(all(test, windows))]
+mod windows_tests;
 mod worker;
 
 use crate::writer_observer::HostWriterObserver;
@@ -17,8 +19,17 @@ use std::sync::{
 };
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 
+#[cfg(windows)]
+type Child = surge_process::windows_job::NativeChild;
+#[cfg(not(windows))]
+type Child = std::process::Child;
+#[cfg(windows)]
+type LaunchCommand = surge_process::windows_job::LaunchSpec;
+#[cfg(not(windows))]
+type LaunchCommand = tokio::process::Command;
+
 struct ChildParcel {
-    child: std::process::Child,
+    child: Child,
     _owner: Option<Arc<dyn HostWriterObserver>>,
 }
 type ChildSlot = Arc<Mutex<Option<ChildParcel>>>;
@@ -56,10 +67,11 @@ pub(crate) struct ObservedTransport {
     inner: AsyncRwTransport<RoleClient, ChildStdout, ChildStdin>,
     ticket: tracker::Ticket,
     pid: u32,
+    job_name: Option<String>,
 }
 impl ObservedTransport {
     pub(crate) fn spawn(
-        mut command: tokio::process::Command,
+        command: LaunchCommand,
         owner: Option<Arc<dyn HostWriterObserver>>,
         server: &str,
     ) -> Result<(Self, Option<ChildStderr>), ChildStartError> {
@@ -69,6 +81,9 @@ impl ObservedTransport {
             ticket,
             child_spawned: false,
         };
+        #[cfg(not(windows))]
+        let mut command = command;
+        #[cfg(not(windows))]
         command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -80,7 +95,33 @@ impl ObservedTransport {
                 .map_err(|_| ChildStartError::EffectRefused)?;
         }
         // Own the standard child before any fallible runtime pipe registration.
+        #[cfg(not(windows))]
         let child = command.as_std_mut().spawn()?;
+        #[cfg(windows)]
+        let child = Child::spawn_admitted(&command, || {
+            owner
+                .as_ref()
+                .map_or(Ok(()), |observer| observer.before_effect(server))
+                .map_err(std::io::Error::other)
+        })
+        .map_err(|error| {
+            if error.get_ref().is_some_and(
+                <dyn std::error::Error + Send + Sync>::is::<
+                    crate::writer_observer::WriterObservationError,
+                >,
+            ) {
+                ChildStartError::EffectRefused
+            } else {
+                ChildStartError::Preparation
+            }
+        })?;
+        // Release the complete launch environment once the native process owns its copy.
+        #[cfg(windows)]
+        drop(command);
+        #[cfg(windows)]
+        let job_name = Some(child.job_name().to_owned());
+        #[cfg(not(windows))]
+        let job_name = None;
         reservation.child_spawned = true;
         let pid = child.id();
         let slot = Arc::new(Mutex::new(Some(ChildParcel {
@@ -111,12 +152,16 @@ impl ObservedTransport {
                 inner: AsyncRwTransport::new(stdout, stdin),
                 ticket,
                 pid,
+                job_name,
             },
             stderr,
         ))
     }
     pub(crate) fn id(&self) -> u32 {
         self.pid
+    }
+    pub(crate) fn job_name(&self) -> Option<&str> {
+        self.job_name.as_deref()
     }
     pub(crate) async fn settle(&self, graceful: bool) {
         self.ticket.request(graceful);
@@ -130,17 +175,20 @@ fn pipes(slot: &ChildSlot) -> std::io::Result<Pipes> {
         let Some(parcel) = owner.as_mut() else {
             std::process::abort();
         };
-        let stdin = parcel
-            .child
-            .stdin
-            .take()
-            .ok_or_else(|| std::io::Error::other("mcp_child_stdin_missing"))?;
-        let stdout = parcel
-            .child
-            .stdout
-            .take()
-            .ok_or_else(|| std::io::Error::other("mcp_child_stdout_missing"))?;
-        let stderr = parcel.child.stderr.take();
+        #[cfg(not(windows))]
+        let (stdin, stdout, stderr) = (
+            parcel.child.stdin.take(),
+            parcel.child.stdout.take(),
+            parcel.child.stderr.take(),
+        );
+        #[cfg(windows)]
+        let (stdin, stdout, stderr) = (
+            parcel.child.take_stdin(),
+            parcel.child.take_stdout(),
+            parcel.child.take_stderr(),
+        );
+        let stdin = stdin.ok_or_else(|| std::io::Error::other("mcp_child_stdin_missing"))?;
+        let stdout = stdout.ok_or_else(|| std::io::Error::other("mcp_child_stdout_missing"))?;
         Ok((
             ChildStdout::from_std(stdout)?,
             ChildStdin::from_std(stdin)?,
@@ -201,7 +249,9 @@ impl Transport<RoleClient> for ObservedTransport {
 ///
 /// Call after consuming the host runtime, outside any cleanup worker or held
 /// ownership mutex. This can block on unknown child exit. It does not prove
-/// descendant containment. Hosts must install their panic hook before the first
+/// descendant containment on Unix. Windows owners also wait for their retained
+/// native job to become empty; durable recovery still records `GroupOnly` evidence.
+/// Hosts must install their panic hook before the first
 /// MCP connection and must not replace the protected dispatch hook afterward.
 pub fn shutdown_children_and_join() {
     tracker::shutdown();

@@ -101,6 +101,7 @@ enum EngineBehavior {
 #[derive(Debug, Default, Clone)]
 struct EngineState {
     pub start_calls: Arc<StdMutex<Vec<RunId>>>,
+    terminal_publications: Arc<StdMutex<Vec<RunId>>>,
 }
 
 struct MockEngineFacade {
@@ -168,6 +169,7 @@ impl EngineFacade for MockEngineFacade {
                 let storage_owner = self.storage.clone();
                 let (tx, rx) = broadcast::channel(8);
                 let tx_for_task = tx.clone();
+                let terminal_publications = self.state.terminal_publications.clone();
                 let completion = tokio::spawn(async move {
                     use surge_core::keys::NodeKey;
                     use surge_core::run_event::EventPayload;
@@ -183,9 +185,14 @@ impl EngineFacade for MockEngineFacade {
                     let outcome = RunOutcome::Completed {
                         terminal: NodeKey::try_new("terminal_success").unwrap(),
                     };
-                    let _ = tx_for_task.send(EngineRunEvent::Terminal {
-                        outcome: outcome.clone(),
-                    });
+                    if tx_for_task
+                        .send(EngineRunEvent::Terminal {
+                            outcome: outcome.clone(),
+                        })
+                        .is_ok()
+                    {
+                        terminal_publications.lock().unwrap().push(run_id);
+                    }
                     if let Some(pending) = settlement {
                         pending.await.expect("test must release completion owner");
                     }
@@ -582,7 +589,7 @@ async fn assert_consumer_settles(count: usize, cancel_in_launch: bool) {
     } else {
         EngineBehavior::CompletesBeforeSettlement(gate.clone())
     };
-    let (engine, _) = MockEngineFacade::new(behavior, storage.clone());
+    let (engine, state) = MockEngineFacade::new(behavior, storage.clone());
     let consumer = make_consumer(storage.clone(), engine.clone(), source.clone());
     {
         let conn = storage.acquire_registry_conn().unwrap();
@@ -610,9 +617,9 @@ async fn assert_consumer_settles(count: usize, cancel_in_launch: bool) {
             let conn = storage.acquire_registry_conn().unwrap();
             let processed = inbox_queue::list_pending_actions(&conn).unwrap().is_empty();
             if processed
+                && state.terminal_publications.lock().unwrap().len() == count
                 && (0..count).all(|index| {
-                    fetch_state(&storage, &format!("mock:t#settle{index}"))
-                        == TicketState::Completed
+                    fetch_state(&storage, &format!("mock:t#settle{index}")) == TicketState::Active
                 })
             {
                 std::task::Poll::Ready(())
@@ -623,6 +630,14 @@ async fn assert_consumer_settles(count: usize, cancel_in_launch: bool) {
     )
     .await
     .unwrap();
+    let before_outbox: i64 = {
+        let conn = storage.acquire_registry_conn().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    let before_comments = source.posted_comments().await;
     shutdown.cancel();
     let waiting = futures::poll!(consumer.as_mut()).is_pending();
     // Always release the real completion task, including on the RED path.
@@ -645,6 +660,21 @@ async fn assert_consumer_settles(count: usize, cancel_in_launch: bool) {
         waiting,
         "consumer returned before accepted execution completion was joined"
     );
+    assert_eq!(
+        before_outbox, 0,
+        "terminal receipt cannot publish completion before join"
+    );
+    assert!(before_comments.iter().all(|(_, body)| !body.contains("✅")));
+    for index in 0..count {
+        assert_eq!(
+            fetch_state(&storage, &format!("mock:t#settle{index}")),
+            TicketState::Completed
+        );
+    }
+    {
+        let conn = storage.acquire_registry_conn().unwrap();
+        assert!(inbox_queue::list_pending_actions(&conn).unwrap().is_empty());
+    }
     assert_eq!(
         Arc::strong_count(&storage),
         2,

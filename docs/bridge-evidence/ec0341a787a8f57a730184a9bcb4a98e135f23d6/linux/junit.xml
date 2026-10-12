@@ -1,0 +1,3976 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="383" skipped="0" failures="0" errors="0" uuid="66b8b270-1b21-44bc-9794-8ae0806b04d0" timestamp="2026-10-12T09:37:16.786+00:00" time="26.230">
+    <testsuite name="surge-acp" tests="289" skipped="0" errors="0" failures="0">
+        <testcase name="agent_env::tests::default_fills_a_missing_source" classname="surge-acp" timestamp="2026-10-12T09:37:16.787+00:00" time="0.005">
+            <system-out>
+running 1 test
+test agent_env::tests::default_fills_a_missing_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::empty_source_falls_back_to_default" classname="surge-acp" timestamp="2026-10-12T09:37:16.787+00:00" time="0.005">
+            <system-out>
+running 1 test
+test agent_env::tests::empty_source_falls_back_to_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::injected_values_never_appear_in_the_error" classname="surge-acp" timestamp="2026-10-12T09:37:16.787+00:00" time="0.005">
+            <system-out>
+running 1 test
+test agent_env::tests::injected_values_never_appear_in_the_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::injection_reads_the_source_variable_at_spawn_time" classname="surge-acp" timestamp="2026-10-12T09:37:16.787+00:00" time="0.006">
+            <system-out>
+running 1 test
+test agent_env::tests::injection_reads_the_source_variable_at_spawn_time ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::missing_optional_source_is_omitted_not_failed" classname="surge-acp" timestamp="2026-10-12T09:37:16.794+00:00" time="0.005">
+            <system-out>
+running 1 test
+test agent_env::tests::missing_optional_source_is_omitted_not_failed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::literal_resolves_verbatim" classname="surge-acp" timestamp="2026-10-12T09:37:16.794+00:00" time="0.006">
+            <system-out>
+running 1 test
+test agent_env::tests::literal_resolves_verbatim ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::missing_required_source_is_a_typed_error_naming_var_and_agent" classname="surge-acp" timestamp="2026-10-12T09:37:16.794+00:00" time="0.006">
+            <system-out>
+running 1 test
+test agent_env::tests::missing_required_source_is_a_typed_error_naming_var_and_agent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::acp_bridge::tests::drop_without_shutdown_does_not_deadlock" classname="surge-acp" timestamp="2026-10-12T09:37:16.799+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::acp_bridge::tests::drop_without_shutdown_does_not_deadlock ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::acp_bridge::tests::spawn_then_shutdown_clean" classname="surge-acp" timestamp="2026-10-12T09:37:16.800+00:00" time="0.012">
+            <system-out>
+running 1 test
+test bridge::acp_bridge::tests::spawn_then_shutdown_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::acp_bridge::tests::open_session_returns_skeleton_error" classname="surge-acp" timestamp="2026-10-12T09:37:16.800+00:00" time="0.014">
+            <system-out>
+running 1 test
+test bridge::acp_bridge::tests::open_session_returns_skeleton_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::client::tests::permission_selection_never_invents_ids_or_persistent_grants" classname="surge-acp" timestamp="2026-10-12T09:37:16.811+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::client::tests::permission_selection_never_invents_ids_or_persistent_grants ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::client::tests::permission_selection_uses_kind_not_misleading_id" classname="surge-acp" timestamp="2026-10-12T09:37:16.813+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::client::tests::permission_selection_uses_kind_not_misleading_id ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::client::tests::request_permission_allow_returns_allow_option" classname="surge-acp" timestamp="2026-10-12T09:37:16.816+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::client::tests::request_permission_allow_returns_allow_option ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::error::tests::bridge_error_is_send_sync" classname="surge-acp" timestamp="2026-10-12T09:37:16.818+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::error::tests::bridge_error_is_send_sync ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::error::tests::open_no_outcomes_renders" classname="surge-acp" timestamp="2026-10-12T09:37:16.822+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::error::tests::open_no_outcomes_renders ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::error::tests::close_graceful_timeout_renders_with_killed_flag" classname="surge-acp" timestamp="2026-10-12T09:37:16.822+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::error::tests::close_graceful_timeout_renders_with_killed_flag ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::event::tests::outcome_reported_serde_round_trip" classname="surge-acp" timestamp="2026-10-12T09:37:16.826+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::event::tests::outcome_reported_serde_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::event::tests::session_end_reason_serde_round_trip" classname="surge-acp" timestamp="2026-10-12T09:37:16.827+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::event::tests::session_end_reason_serde_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::event::tests::tool_result_payload_unsupported_round_trip" classname="surge-acp" timestamp="2026-10-12T09:37:16.830+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::event::tests::tool_result_payload_unsupported_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::facade_smoke::acp_bridge_impls_facade" classname="surge-acp" timestamp="2026-10-12T09:37:16.832+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::facade_smoke::acp_bridge_impls_facade ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox::tests::always_allow_boxed_clone_round_trip" classname="surge-acp" timestamp="2026-10-12T09:37:16.834+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::sandbox::tests::always_allow_boxed_clone_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox::tests::deny_list_denies_named_mcp_server" classname="surge-acp" timestamp="2026-10-12T09:37:16.838+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::sandbox::tests::deny_list_denies_named_mcp_server ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="agent_env::tests::literal_that_looks_like_a_key_is_flagged" classname="surge-acp" timestamp="2026-10-12T09:37:16.794+00:00" time="0.048">
+            <system-out>
+running 1 test
+test agent_env::tests::literal_that_looks_like_a_key_is_flagged ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox::tests::always_allow_visibility_and_call_both_allow" classname="surge-acp" timestamp="2026-10-12T09:37:16.837+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::sandbox::tests::always_allow_visibility_and_call_both_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox::tests::deny_list_denies_named_tool" classname="surge-acp" timestamp="2026-10-12T09:37:16.842+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::sandbox::tests::deny_list_denies_named_tool ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox::tests::deny_list_visibility_and_allows_tool_parity" classname="surge-acp" timestamp="2026-10-12T09:37:16.842+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::sandbox::tests::deny_list_visibility_and_allows_tool_parity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::custom_mode_short_circuits_matrix_lookup" classname="surge-acp" timestamp="2026-10-12T09:37:16.842+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::custom_mode_short_circuits_matrix_lookup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::custom_mode_with_empty_allowlists_returns_custom_invalid" classname="surge-acp" timestamp="2026-10-12T09:37:16.846+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::custom_mode_with_empty_allowlists_returns_custom_invalid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::doctor_context_does_not_relax_unsupported_combo" classname="surge-acp" timestamp="2026-10-12T09:37:16.848+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::doctor_context_does_not_relax_unsupported_combo ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::missing_row_is_unsupported_combo" classname="surge-acp" timestamp="2026-10-12T09:37:16.848+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::missing_row_is_unsupported_combo ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::unverified_row_accepted_in_doctor_context" classname="surge-acp" timestamp="2026-10-12T09:37:16.850+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::unverified_row_accepted_in_doctor_context ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::unverified_row_refuses_in_run_context" classname="surge-acp" timestamp="2026-10-12T09:37:16.852+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::unverified_row_refuses_in_run_context ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::sandbox_resolver::tests::verified_row_returns_flags" classname="surge-acp" timestamp="2026-10-12T09:37:16.852+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::sandbox_resolver::tests::verified_row_returns_flags ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::session::tests::rejects_duplicate_tool_names" classname="surge-acp" timestamp="2026-10-12T09:37:16.856+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::session::tests::rejects_duplicate_tool_names ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::session::tests::accepts_minimal_valid_config" classname="surge-acp" timestamp="2026-10-12T09:37:16.855+00:00" time="0.007">
+            <system-out>
+running 1 test
+test bridge::session::tests::accepts_minimal_valid_config ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::session::tests::rejects_empty_outcomes" classname="surge-acp" timestamp="2026-10-12T09:37:16.858+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::session::tests::rejects_empty_outcomes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::session::tests::rejects_oversized_bindings" classname="surge-acp" timestamp="2026-10-12T09:37:16.860+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::session::tests::rejects_oversized_bindings ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::session::tests::rejects_reserved_tool_name" classname="surge-acp" timestamp="2026-10-12T09:37:16.862+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::session::tests::rejects_reserved_tool_name ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::context_cost_preserves_currency_and_rejects_invalid_amounts" classname="surge-acp" timestamp="2026-10-12T09:37:16.865+00:00" time="0.004">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::context_cost_preserves_currency_and_rejects_invalid_amounts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::acp_bridge::tests::subscribe_yields_no_events_on_idle_bridge" classname="surge-acp" timestamp="2026-10-12T09:37:16.806+00:00" time="0.064">
+            <system-out>
+running 1 test
+test bridge::acp_bridge::tests::subscribe_yields_no_events_on_idle_bridge ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.06s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::optional_counters_remain_unknown_when_missing_new_or_regressed" classname="surge-acp" timestamp="2026-10-12T09:37:16.867+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::optional_counters_remain_unknown_when_missing_new_or_regressed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::optional_regression_does_not_charge_old_tokens_on_recovery" classname="surge-acp" timestamp="2026-10-12T09:37:16.869+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::optional_regression_does_not_charge_old_tokens_on_recovery ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::reports_cumulative_deltas_without_resetting_on_missing_or_regression" classname="surge-acp" timestamp="2026-10-12T09:37:16.869+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::reports_cumulative_deltas_without_resetting_on_missing_or_regression ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::restored_provider_history_is_not_charged_as_new_spend" classname="surge-acp" timestamp="2026-10-12T09:37:16.872+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::restored_provider_history_is_not_charged_as_new_spend ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::sdk_drops_malformed_usage_and_tracker_preserves_unknown" classname="surge-acp" timestamp="2026-10-12T09:37:16.875+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::sdk_drops_malformed_usage_and_tracker_preserves_unknown ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tokens::tests::sdk_keeps_required_spend_when_optional_counter_is_malformed" classname="surge-acp" timestamp="2026-10-12T09:37:16.875+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::tokens::tests::sdk_keeps_required_spend_when_optional_counter_is_malformed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::build_injected_tools_includes_human_input_when_enabled" classname="surge-acp" timestamp="2026-10-12T09:37:16.878+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tools::tests::build_injected_tools_includes_human_input_when_enabled ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::build_injected_tools_skips_human_input_when_disabled" classname="surge-acp" timestamp="2026-10-12T09:37:16.880+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tools::tests::build_injected_tools_skips_human_input_when_disabled ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::mcp_category_returns_id" classname="surge-acp" timestamp="2026-10-12T09:37:16.881+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tools::tests::mcp_category_returns_id ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::report_stage_outcome_includes_dynamic_enum" classname="surge-acp" timestamp="2026-10-12T09:37:16.885+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tools::tests::report_stage_outcome_includes_dynamic_enum ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::report_stage_outcome_is_marked_injected" classname="surge-acp" timestamp="2026-10-12T09:37:16.886+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tools::tests::report_stage_outcome_is_marked_injected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::request_human_input_is_static_shape" classname="surge-acp" timestamp="2026-10-12T09:37:16.891+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::tools::tests::request_human_input_is_static_shape ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::build_agent_command_sets_resolved_env_on_the_child" classname="surge-acp" timestamp="2026-10-12T09:37:16.897+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::worker::tests::build_agent_command_sets_resolved_env_on_the_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_401_wins_over_rate_limit_vocabulary" classname="surge-acp" timestamp="2026-10-12T09:37:16.903+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_401_wins_over_rate_limit_vocabulary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_bare_retry_after_prose_without_rate_limit_keyword_is_not_recognized" classname="surge-acp" timestamp="2026-10-12T09:37:16.908+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_bare_retry_after_prose_without_rate_limit_keyword_is_not_recognized ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::session::tests::stage_descriptor_diagnostics_hide_environment_values" classname="surge-acp" timestamp="2026-10-12T09:37:16.862+00:00" time="0.054">
+            <system-out>
+running 1 test
+test bridge::session::tests::stage_descriptor_diagnostics_hide_environment_values ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_captured_claude_limit" classname="surge-acp" timestamp="2026-10-12T09:37:16.913+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_captured_claude_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_captured_codex_usage_limit" classname="surge-acp" timestamp="2026-10-12T09:37:16.916+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_captured_codex_usage_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_keeps_non_auth_as_bridge_error" classname="surge-acp" timestamp="2026-10-12T09:37:16.918+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_keeps_non_auth_as_bridge_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_maps_401_to_agent_auth_failed" classname="surge-acp" timestamp="2026-10-12T09:37:16.921+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_maps_401_to_agent_auth_failed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_maps_unsupported_model_to_its_own_variant" classname="surge-acp" timestamp="2026-10-12T09:37:16.924+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_maps_unsupported_model_to_its_own_variant ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::classify_prompt_error_rate_limit_shape_measurement" classname="surge-acp" timestamp="2026-10-12T09:37:16.927+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::classify_prompt_error_rate_limit_shape_measurement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::claude_kind_injects_acp_flag_before_extra_args" classname="surge-acp" timestamp="2026-10-12T09:37:16.930+00:00" time="0.006">
+            <system-out>
+running 1 test
+test bridge::worker::tests::claude_kind_injects_acp_flag_before_extra_args ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::codex_kind_uses_acp_subcommand_not_flag" classname="surge-acp" timestamp="2026-10-12T09:37:16.932+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::codex_kind_uses_acp_subcommand_not_flag ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::config_selection_matches_value_or_name_within_its_category" classname="surge-acp" timestamp="2026-10-12T09:37:16.936+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::config_selection_matches_value_or_name_within_its_category ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::config_selection_the_agent_does_not_offer_is_refused_with_its_choices" classname="surge-acp" timestamp="2026-10-12T09:37:16.938+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::config_selection_the_agent_does_not_offer_is_refused_with_its_choices ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::custom_kind_passes_args_verbatim_no_injected_flag" classname="surge-acp" timestamp="2026-10-12T09:37:16.942+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::custom_kind_passes_args_verbatim_no_injected_flag ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::filter_removes_denied_tools" classname="surge-acp" timestamp="2026-10-12T09:37:16.943+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::filter_removes_denied_tools ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::gemini_kind_injects_acp_flag" classname="surge-acp" timestamp="2026-10-12T09:37:16.948+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::gemini_kind_injects_acp_flag ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::report_stage_outcome_schema_snapshot" classname="surge-acp" timestamp="2026-10-12T09:37:16.891+00:00" time="0.063">
+            <system-out>
+running 1 test
+test bridge::tools::tests::report_stage_outcome_schema_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.06s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::forced_cleanup_closes_descendant_processes" classname="surge-acp" timestamp="2026-10-12T09:37:16.947+00:00" time="0.007">
+            <system-out>
+running 1 test
+test bridge::worker::tests::forced_cleanup_closes_descendant_processes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::resolve_program_falls_back_to_original_when_missing" classname="surge-acp" timestamp="2026-10-12T09:37:16.954+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::resolve_program_falls_back_to_original_when_missing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::resolve_program_finds_path_extension_shim" classname="surge-acp" timestamp="2026-10-12T09:37:16.954+00:00" time="0.005">
+            <system-out>
+running 1 test
+test bridge::worker::tests::resolve_program_finds_path_extension_shim ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::tools::tests::outcome_enum_serializable_for_any_size" classname="surge-acp" timestamp="2026-10-12T09:37:16.884+00:00" time="0.086">
+            <system-out>
+running 1 test
+test bridge::tools::tests::outcome_enum_serializable_for_any_size ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.08s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_dangerous_command_detection" classname="surge-acp" timestamp="2026-10-12T09:37:16.960+00:00" time="0.012">
+            <system-out>
+running 1 test
+test client::tests::test_dangerous_command_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_dangerous_command_edge_cases" classname="surge-acp" timestamp="2026-10-12T09:37:16.960+00:00" time="0.014">
+            <system-out>
+running 1 test
+test client::tests::test_dangerous_command_edge_cases ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_interactive_policy_returns_none" classname="surge-acp" timestamp="2026-10-12T09:37:16.970+00:00" time="0.005">
+            <system-out>
+running 1 test
+test client::tests::test_interactive_policy_returns_none ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_new_with_nonexistent_path_does_not_panic" classname="surge-acp" timestamp="2026-10-12T09:37:16.972+00:00" time="0.005">
+            <system-out>
+running 1 test
+test client::tests::test_new_with_nonexistent_path_does_not_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_path_traversal_rejected" classname="surge-acp" timestamp="2026-10-12T09:37:16.974+00:00" time="0.005">
+            <system-out>
+running 1 test
+test client::tests::test_path_traversal_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_permission_policy_auto_approve" classname="surge-acp" timestamp="2026-10-12T09:37:16.975+00:00" time="0.005">
+            <system-out>
+running 1 test
+test client::tests::test_permission_policy_auto_approve ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_smart_policy_delete_denied" classname="surge-acp" timestamp="2026-10-12T09:37:16.979+00:00" time="0.005">
+            <system-out>
+running 1 test
+test client::tests::test_smart_policy_delete_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_smart_policy_read_approved" classname="surge-acp" timestamp="2026-10-12T09:37:16.980+00:00" time="0.006">
+            <system-out>
+running 1 test
+test client::tests::test_smart_policy_read_approved ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_smart_policy_dangerous_bash_denied" classname="surge-acp" timestamp="2026-10-12T09:37:16.977+00:00" time="0.012">
+            <system-out>
+running 1 test
+test client::tests::test_smart_policy_dangerous_bash_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="client::tests::test_smart_policy_safe_bash_approved" classname="surge-acp" timestamp="2026-10-12T09:37:16.983+00:00" time="0.010">
+            <system-out>
+running 1 test
+test client::tests::test_smart_policy_safe_bash_approved ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="connection::tests::kill_joins_legacy_driver_and_closes_transport" classname="surge-acp" timestamp="2026-10-12T09:37:16.988+00:00" time="0.007">
+            <system-out>
+running 1 test
+test connection::tests::kill_joins_legacy_driver_and_closes_transport ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="connection::tests::shutdown::test_kill_unix_process" classname="surge-acp" timestamp="2026-10-12T09:37:16.994+00:00" time="0.021">
+            <system-out>
+running 1 test
+test connection::tests::shutdown::test_kill_unix_process ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="connection::tests::test_surge_client_capabilities" classname="surge-acp" timestamp="2026-10-12T09:37:17.015+00:00" time="0.004">
+            <system-out>
+running 1 test
+test connection::tests::test_surge_client_capabilities ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="connection::tests::test_surge_client_capabilities_smart_read_only" classname="surge-acp" timestamp="2026-10-12T09:37:17.019+00:00" time="0.004">
+            <system-out>
+running 1 test
+test connection::tests::test_surge_client_capabilities_smart_read_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::from_standard_paths_resolves_npx_launcher_for_any_user_configured_entry_too" classname="surge-acp" timestamp="2026-10-12T09:37:17.022+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::from_standard_paths_resolves_npx_launcher_for_any_user_configured_entry_too ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::from_standard_paths_resolves_npx_launcher_for_entry_with_no_cli_binary" classname="surge-acp" timestamp="2026-10-12T09:37:17.026+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::from_standard_paths_resolves_npx_launcher_for_entry_with_no_cli_binary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_discovery_cache" classname="surge-acp" timestamp="2026-10-12T09:37:17.031+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::test_discovery_cache ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_discovery_new" classname="surge-acp" timestamp="2026-10-12T09:37:17.035+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::test_discovery_new ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_env_detection" classname="surge-acp" timestamp="2026-10-12T09:37:17.038+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::test_env_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_platform_detection" classname="surge-acp" timestamp="2026-10-12T09:37:17.043+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::test_platform_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_platform_paths" classname="surge-acp" timestamp="2026-10-12T09:37:17.046+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::test_platform_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_platform_standard_paths" classname="surge-acp" timestamp="2026-10-12T09:37:17.050+00:00" time="0.004">
+            <system-out>
+running 1 test
+test discovery::tests::test_platform_standard_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="connection::tests::shutdown::test_wait_or_kill_grace_period" classname="surge-acp" timestamp="2026-10-12T09:37:16.996+00:00" time="0.106">
+            <system-out>
+running 1 test
+test connection::tests::shutdown::test_wait_or_kill_grace_period ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_version_detection" classname="surge-acp" timestamp="2026-10-12T09:37:17.102+00:00" time="0.006">
+            <system-out>
+running 1 test
+test discovery::tests::test_version_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="display::tests::test_all_agents_have_metadata" classname="surge-acp" timestamp="2026-10-12T09:37:17.108+00:00" time="0.004">
+            <system-out>
+running 1 test
+test display::tests::test_all_agents_have_metadata ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="display::tests::test_extract_version" classname="surge-acp" timestamp="2026-10-12T09:37:17.112+00:00" time="0.004">
+            <system-out>
+running 1 test
+test display::tests::test_extract_version ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::anthropic_overload_is_unclassified_instead_of_quota_exhaustion" classname="surge-acp" timestamp="2026-10-12T09:37:17.117+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::anthropic_overload_is_unclassified_instead_of_quota_exhaustion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_capacity_status_clears_on_recovery_not_stuck_exhausted_forever" classname="surge-acp" timestamp="2026-10-12T09:37:17.121+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_capacity_status_clears_on_recovery_not_stuck_exhausted_forever ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_capacity_status_known_via_record_failure_with_retry_after" classname="surge-acp" timestamp="2026-10-12T09:37:17.125+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_capacity_status_known_via_record_failure_with_retry_after ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_capacity_status_never_observed_before_any_failure" classname="surge-acp" timestamp="2026-10-12T09:37:17.129+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_capacity_status_never_observed_before_any_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_capacity_status_resets_at_unknown_without_retry_after" classname="surge-acp" timestamp="2026-10-12T09:37:17.134+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_capacity_status_resets_at_unknown_without_retry_after ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_capacity_status_unclassified_for_a_failure_that_is_not_a_rate_limit" classname="surge-acp" timestamp="2026-10-12T09:37:17.138+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_capacity_status_unclassified_for_a_failure_that_is_not_a_rate_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_capacity_status_unclassified_from_heartbeat_failures_alone" classname="surge-acp" timestamp="2026-10-12T09:37:17.142+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_capacity_status_unclassified_from_heartbeat_failures_alone ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_error_rate" classname="surge-acp" timestamp="2026-10-12T09:37:17.146+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_error_rate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_fallback_routing" classname="surge-acp" timestamp="2026-10-12T09:37:17.150+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_fallback_routing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_health_status_degraded_before_offline" classname="surge-acp" timestamp="2026-10-12T09:37:17.155+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_health_status_degraded_before_offline ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_health_status_degraded_high_error_rate" classname="surge-acp" timestamp="2026-10-12T09:37:17.159+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_health_status_degraded_high_error_rate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_health_status_degraded_rate_limited" classname="surge-acp" timestamp="2026-10-12T09:37:17.164+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_health_status_degraded_rate_limited ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_health_status_healthy" classname="surge-acp" timestamp="2026-10-12T09:37:17.168+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_health_status_healthy ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_health_status_offline" classname="surge-acp" timestamp="2026-10-12T09:37:17.172+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_health_status_offline ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_health_status_recovery_from_offline" classname="surge-acp" timestamp="2026-10-12T09:37:17.176+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_health_status_recovery_from_offline ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_healthy_by_default" classname="surge-acp" timestamp="2026-10-12T09:37:17.180+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_healthy_by_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_heartbeat_failure_tracking" classname="surge-acp" timestamp="2026-10-12T09:37:17.184+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_heartbeat_failure_tracking ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_heartbeat_recovery" classname="surge-acp" timestamp="2026-10-12T09:37:17.188+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_heartbeat_recovery ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_is_rate_limited_for_routing_rejects_bare_too_many" classname="surge-acp" timestamp="2026-10-12T09:37:17.192+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_is_rate_limited_for_routing_rejects_bare_too_many ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_latency_percentiles" classname="surge-acp" timestamp="2026-10-12T09:37:17.196+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_latency_percentiles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_latency_percentiles_with_no_data" classname="surge-acp" timestamp="2026-10-12T09:37:17.201+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_latency_percentiles_with_no_data ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_latency_samples_bounded_to_100" classname="surge-acp" timestamp="2026-10-12T09:37:17.205+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_latency_samples_bounded_to_100 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_parse_retry_after_various_formats" classname="surge-acp" timestamp="2026-10-12T09:37:17.210+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_parse_retry_after_various_formats ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_rate_limit_detection" classname="surge-acp" timestamp="2026-10-12T09:37:17.214+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_rate_limit_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_rate_limit_with_retry_after" classname="surge-acp" timestamp="2026-10-12T09:37:17.218+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_rate_limit_with_retry_after ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_rate_limit_without_retry_after" classname="surge-acp" timestamp="2026-10-12T09:37:17.222+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_rate_limit_without_retry_after ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_record_connect_failure_is_observed_but_not_a_request" classname="surge-acp" timestamp="2026-10-12T09:37:17.227+00:00" time="0.007">
+            <system-out>
+running 1 test
+test health::tests::test_record_connect_failure_is_observed_but_not_a_request ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_record_connect_failure_still_classifies_subscription_quota_shape" classname="surge-acp" timestamp="2026-10-12T09:37:17.234+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_record_connect_failure_still_classifies_subscription_quota_shape ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_record_failure_capacity_shape_does_not_set_rate_limited_for_routing" classname="surge-acp" timestamp="2026-10-12T09:37:17.239+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_record_failure_capacity_shape_does_not_set_rate_limited_for_routing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_success_recording" classname="surge-acp" timestamp="2026-10-12T09:37:17.244+00:00" time="0.004">
+            <system-out>
+running 1 test
+test health::tests::test_success_recording ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_unhealthy_on_high_errors" classname="surge-acp" timestamp="2026-10-12T09:37:17.248+00:00" time="0.005">
+            <system-out>
+running 1 test
+test health::tests::test_unhealthy_on_high_errors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="bridge::worker::tests::killing_an_exited_unreaped_child_is_not_an_error" classname="surge-acp" timestamp="2026-10-12T09:37:16.954+00:00" time="0.308">
+            <system-out>
+running 1 test
+test bridge::worker::tests::killing_an_exited_unreaped_child_is_not_an_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.30s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="onboarding::default_agent_selection_tests::a_launcher_only_runtime_never_becomes_the_default" classname="surge-acp" timestamp="2026-10-12T09:37:17.262+00:00" time="0.005">
+            <system-out>
+running 1 test
+test onboarding::default_agent_selection_tests::a_launcher_only_runtime_never_becomes_the_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="health::tests::test_uptime_tracking" classname="surge-acp" timestamp="2026-10-12T09:37:17.254+00:00" time="0.014">
+            <system-out>
+running 1 test
+test health::tests::test_uptime_tracking ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="onboarding::default_agent_selection_tests::a_preferred_agent_wins_even_when_listed_later" classname="surge-acp" timestamp="2026-10-12T09:37:17.267+00:00" time="0.006">
+            <system-out>
+running 1 test
+test onboarding::default_agent_selection_tests::a_preferred_agent_wins_even_when_listed_later ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="onboarding::default_agent_selection_tests::an_installed_runtime_outside_the_preference_list_still_wins" classname="surge-acp" timestamp="2026-10-12T09:37:17.268+00:00" time="0.006">
+            <system-out>
+running 1 test
+test onboarding::default_agent_selection_tests::an_installed_runtime_outside_the_preference_list_still_wins ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::parse_retry_after_behavior_is_unchanged_by_task_12" classname="surge-acp" timestamp="2026-10-12T09:37:17.273+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::parse_retry_after_behavior_is_unchanged_by_task_12 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::shutdown::test_drop_cleanup" classname="surge-acp" timestamp="2026-10-12T09:37:17.274+00:00" time="0.105">
+            <system-out>
+running 1 test
+test pool::tests::shutdown::test_drop_cleanup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::shutdown::test_pool_initializes_pid_directory" classname="surge-acp" timestamp="2026-10-12T09:37:17.278+00:00" time="0.105">
+            <system-out>
+running 1 test
+test pool::tests::shutdown::test_pool_initializes_pid_directory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::shutdown::test_shutdown_cleanup" classname="surge-acp" timestamp="2026-10-12T09:37:17.380+00:00" time="0.006">
+            <system-out>
+running 1 test
+test pool::tests::shutdown::test_shutdown_cleanup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_agent_pool_creation" classname="surge-acp" timestamp="2026-10-12T09:37:17.383+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_agent_pool_creation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_agent_pool_invalid_default" classname="surge-acp" timestamp="2026-10-12T09:37:17.386+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_agent_pool_invalid_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_auto_reconnect" classname="surge-acp" timestamp="2026-10-12T09:37:17.388+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_auto_reconnect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_exponential" classname="surge-acp" timestamp="2026-10-12T09:37:17.390+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_exponential ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_exponential_capped" classname="surge-acp" timestamp="2026-10-12T09:37:17.393+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_exponential_capped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_exponential_overflow_protection" classname="surge-acp" timestamp="2026-10-12T09:37:17.395+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_exponential_overflow_protection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_jitter" classname="surge-acp" timestamp="2026-10-12T09:37:17.397+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_jitter ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_jitter_distribution" classname="surge-acp" timestamp="2026-10-12T09:37:17.399+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_jitter_distribution ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_linear" classname="surge-acp" timestamp="2026-10-12T09:37:17.401+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_linear ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_zero_initial_delay" classname="surge-acp" timestamp="2026-10-12T09:37:17.403+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_zero_initial_delay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_calculate_backoff_zero_max_delay" classname="surge-acp" timestamp="2026-10-12T09:37:17.405+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_calculate_backoff_zero_max_delay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_auth_failure_api_key" classname="surge-acp" timestamp="2026-10-12T09:37:17.407+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_auth_failure_api_key ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_auth_failure_authentication_error" classname="surge-acp" timestamp="2026-10-12T09:37:17.409+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_auth_failure_authentication_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_auth_failure_case_insensitive" classname="surge-acp" timestamp="2026-10-12T09:37:17.411+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_auth_failure_case_insensitive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_auth_failure_http_401" classname="surge-acp" timestamp="2026-10-12T09:37:17.413+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_auth_failure_http_401 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_auth_failure_negative_cases" classname="surge-acp" timestamp="2026-10-12T09:37:17.415+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_auth_failure_negative_cases ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_auth_failure_unauthorized" classname="surge-acp" timestamp="2026-10-12T09:37:17.417+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_auth_failure_unauthorized ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_rate_limit_case_insensitive" classname="surge-acp" timestamp="2026-10-12T09:37:17.419+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_rate_limit_case_insensitive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_rate_limit_excludes_capacity_only_patterns" classname="surge-acp" timestamp="2026-10-12T09:37:17.421+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_rate_limit_excludes_capacity_only_patterns ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_rate_limit_http_429" classname="surge-acp" timestamp="2026-10-12T09:37:17.423+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_rate_limit_http_429 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_rate_limit_negative_cases" classname="surge-acp" timestamp="2026-10-12T09:37:17.426+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_is_rate_limit_negative_cases ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_rate_limit_quota" classname="surge-acp" timestamp="2026-10-12T09:37:17.428+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_is_rate_limit_quota ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_is_rate_limit_rate_limit_text" classname="surge-acp" timestamp="2026-10-12T09:37:17.431+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_is_rate_limit_rate_limit_text ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_parse_retry_after_default" classname="surge-acp" timestamp="2026-10-12T09:37:17.433+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_parse_retry_after_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_parse_retry_after_mixed_content" classname="surge-acp" timestamp="2026-10-12T09:37:17.435+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_parse_retry_after_mixed_content ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_parse_retry_after_out_of_range" classname="surge-acp" timestamp="2026-10-12T09:37:17.437+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_parse_retry_after_out_of_range ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_parse_retry_after_seconds" classname="surge-acp" timestamp="2026-10-12T09:37:17.439+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_parse_retry_after_seconds ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_parse_retry_after_with_suffix" classname="surge-acp" timestamp="2026-10-12T09:37:17.441+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_parse_retry_after_with_suffix ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_pool_capacity_status_reflects_observed_429" classname="surge-acp" timestamp="2026-10-12T09:37:17.444+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_pool_capacity_status_reflects_observed_429 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_pool_drop_requests_cleanup" classname="surge-acp" timestamp="2026-10-12T09:37:17.445+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_pool_drop_requests_cleanup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_session_handle" classname="surge-acp" timestamp="2026-10-12T09:37:17.449+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_session_handle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_token_validation" classname="surge-acp" timestamp="2026-10-12T09:37:17.449+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_token_validation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_try_health_degrades_to_none_when_lock_is_held" classname="surge-acp" timestamp="2026-10-12T09:37:17.454+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_try_health_degrades_to_none_when_lock_is_held ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_try_health_reflects_recorded_success" classname="surge-acp" timestamp="2026-10-12T09:37:17.454+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_try_health_reflects_recorded_success ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_try_health_unknown_agent_is_none" classname="surge-acp" timestamp="2026-10-12T09:37:17.459+00:00" time="0.005">
+            <system-out>
+running 1 test
+test pool::tests::test_try_health_unknown_agent_is_none ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="pool::tests::test_warm_up_does_not_block" classname="surge-acp" timestamp="2026-10-12T09:37:17.459+00:00" time="0.004">
+            <system-out>
+running 1 test
+test pool::tests::test_warm_up_does_not_block ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_evidence::tests::stop_group_never_signals_an_already_empty_group" classname="surge-acp" timestamp="2026-10-12T09:37:17.464+00:00" time="0.005">
+            <system-out>
+running 1 test
+test process_evidence::tests::stop_group_never_signals_an_already_empty_group ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_cleanup_all" classname="surge-acp" timestamp="2026-10-12T09:37:17.469+00:00" time="0.005">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_cleanup_all ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_drop_cleans_up" classname="surge-acp" timestamp="2026-10-12T09:37:17.473+00:00" time="0.005">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_drop_cleans_up ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_is_running_invalid_pid" classname="surge-acp" timestamp="2026-10-12T09:37:17.478+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_is_running_invalid_pid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_is_running_self" classname="surge-acp" timestamp="2026-10-12T09:37:17.482+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_is_running_self ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_is_running_tracked" classname="surge-acp" timestamp="2026-10-12T09:37:17.487+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_is_running_tracked ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_is_running_untracked" classname="surge-acp" timestamp="2026-10-12T09:37:17.491+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_is_running_untracked ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_is_tracked" classname="surge-acp" timestamp="2026-10-12T09:37:17.495+00:00" time="0.005">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_is_tracked ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_list_tracked" classname="surge-acp" timestamp="2026-10-12T09:37:17.500+00:00" time="0.005">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_list_tracked ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_new_creates_directory" classname="surge-acp" timestamp="2026-10-12T09:37:17.504+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_new_creates_directory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_read_pid" classname="surge-acp" timestamp="2026-10-12T09:37:17.509+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_read_pid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_read_pid_nonexistent" classname="surge-acp" timestamp="2026-10-12T09:37:17.513+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_read_pid_nonexistent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_track_overwrites_existing_pid" classname="surge-acp" timestamp="2026-10-12T09:37:17.517+00:00" time="0.005">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_track_overwrites_existing_pid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_track_writes_pid_file" classname="surge-acp" timestamp="2026-10-12T09:37:17.522+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_track_writes_pid_file ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_untrack_idempotent" classname="surge-acp" timestamp="2026-10-12T09:37:17.526+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_untrack_idempotent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_tracker::tests::test_untrack_removes_pid_file" classname="surge-acp" timestamp="2026-10-12T09:37:17.530+00:00" time="0.004">
+            <system-out>
+running 1 test
+test process_tracker::tests::test_untrack_removes_pid_file ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="quota_observation::tests::malformed_account_and_observation_cannot_decode" classname="surge-acp" timestamp="2026-10-12T09:37:17.534+00:00" time="0.004">
+            <system-out>
+running 1 test
+test quota_observation::tests::malformed_account_and_observation_cannot_decode ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="quota_observation::tests::typed_rejection_retains_unknown_reset_and_account" classname="surge-acp" timestamp="2026-10-12T09:37:17.538+00:00" time="0.004">
+            <system-out>
+running 1 test
+test quota_observation::tests::typed_rejection_retains_unknown_reset_and_account ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="quota_observation::tests::unsupported_probe_does_not_claim_available" classname="surge-acp" timestamp="2026-10-12T09:37:17.542+00:00" time="0.004">
+            <system-out>
+running 1 test
+test quota_observation::tests::unsupported_probe_does_not_claim_available ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::builtin_entries_carry_runtime_mapping" classname="surge-acp" timestamp="2026-10-12T09:37:17.546+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::builtin_entries_carry_runtime_mapping ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::dsh_pinned_version_matches_declared_policy" classname="surge-acp" timestamp="2026-10-12T09:37:17.550+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::dsh_pinned_version_matches_declared_policy ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::for_run_puts_user_agents_ahead_of_builtins" classname="surge-acp" timestamp="2026-10-12T09:37:17.555+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::for_run_puts_user_agents_ahead_of_builtins ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::is_installed_for_npx_only_entry_checks_the_launcher_not_a_same_named_binary" classname="surge-acp" timestamp="2026-10-12T09:37:17.559+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::is_installed_for_npx_only_entry_checks_the_launcher_not_a_same_named_binary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::ollama_entry_declares_model_env_and_settings_seed" classname="surge-acp" timestamp="2026-10-12T09:37:17.564+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::ollama_entry_declares_model_env_and_settings_seed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::registry_entry_parses_with_runtime_field" classname="surge-acp" timestamp="2026-10-12T09:37:17.569+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::registry_entry_parses_with_runtime_field ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::registry_entry_parses_without_runtime_field" classname="surge-acp" timestamp="2026-10-12T09:37:17.573+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::registry_entry_parses_without_runtime_field ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_all_are_code_capable" classname="surge-acp" timestamp="2026-10-12T09:37:17.576+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_all_are_code_capable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_builtin_agent_count" classname="surge-acp" timestamp="2026-10-12T09:37:17.581+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_builtin_agent_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_capability_metadata_parsing" classname="surge-acp" timestamp="2026-10-12T09:37:17.585+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_capability_metadata_parsing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="process_evidence::tests::stop_group_escalates_to_kill_and_reports_an_empty_group" classname="surge-acp" timestamp="2026-10-12T09:37:17.463+00:00" time="0.359">
+            <system-out>
+running 1 test
+test process_evidence::tests::stop_group_escalates_to_kill_and_reports_an_empty_group ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.35s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_dsh_alias_normalizes_to_dsh_acp" classname="surge-acp" timestamp="2026-10-12T09:37:17.822+00:00" time="0.006">
+            <system-out>
+running 1 test
+test registry::tests::test_dsh_alias_normalizes_to_dsh_acp ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_dynamic_registry_end_to_end" classname="surge-acp" timestamp="2026-10-12T09:37:17.828+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_dynamic_registry_end_to_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_find_claude" classname="surge-acp" timestamp="2026-10-12T09:37:17.833+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_find_claude ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_find_codex" classname="surge-acp" timestamp="2026-10-12T09:37:17.837+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_find_codex ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_find_copilot" classname="surge-acp" timestamp="2026-10-12T09:37:17.842+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_find_copilot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_find_dsh" classname="surge-acp" timestamp="2026-10-12T09:37:17.846+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_find_dsh ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_find_gemini" classname="surge-acp" timestamp="2026-10-12T09:37:17.851+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_find_gemini ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_from_config" classname="surge-acp" timestamp="2026-10-12T09:37:17.856+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_from_config ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_installed_checks_cli_binary" classname="surge-acp" timestamp="2026-10-12T09:37:17.860+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_installed_checks_cli_binary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_load_from_toml" classname="surge-acp" timestamp="2026-10-12T09:37:17.865+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_load_from_toml ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_merged_builtin_takes_priority_on_id_collision" classname="surge-acp" timestamp="2026-10-12T09:37:17.870+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_merged_builtin_takes_priority_on_id_collision ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_merged_empty_remote" classname="surge-acp" timestamp="2026-10-12T09:37:17.874+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_merged_empty_remote ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_merged_remote_only_entries_appended" classname="surge-acp" timestamp="2026-10-12T09:37:17.878+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_merged_remote_only_entries_appended ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_merged_three_way" classname="surge-acp" timestamp="2026-10-12T09:37:17.883+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_merged_three_way ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_ollama_alias_normalizes_to_ollama_acp" classname="surge-acp" timestamp="2026-10-12T09:37:17.887+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_ollama_alias_normalizes_to_ollama_acp ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_refresh_discovery" classname="surge-acp" timestamp="2026-10-12T09:37:17.891+00:00" time="0.006">
+            <system-out>
+running 1 test
+test registry::tests::test_refresh_discovery ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_search" classname="surge-acp" timestamp="2026-10-12T09:37:17.896+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_search ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_to_agent_config" classname="surge-acp" timestamp="2026-10-12T09:37:17.901+00:00" time="0.004">
+            <system-out>
+running 1 test
+test registry::tests::test_to_agent_config ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_which_cache_works" classname="surge-acp" timestamp="2026-10-12T09:37:17.906+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_which_cache_works ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_which_finds_git" classname="surge-acp" timestamp="2026-10-12T09:37:17.910+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_which_finds_git ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_which_not_found" classname="surge-acp" timestamp="2026-10-12T09:37:17.915+00:00" time="0.005">
+            <system-out>
+running 1 test
+test registry::tests::test_which_not_found ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_complexity_routing" classname="surge-acp" timestamp="2026-10-12T09:37:17.920+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_complexity_routing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_default_routing" classname="surge-acp" timestamp="2026-10-12T09:37:17.925+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_default_routing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_fallback_to_default" classname="surge-acp" timestamp="2026-10-12T09:37:17.929+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_fallback_to_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_phase_routing" classname="surge-acp" timestamp="2026-10-12T09:37:17.933+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_phase_routing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_route_with_capability_capable_agent" classname="surge-acp" timestamp="2026-10-12T09:37:17.938+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_route_with_capability_capable_agent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_route_with_capability_incapable_agent_falls_back" classname="surge-acp" timestamp="2026-10-12T09:37:17.942+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_route_with_capability_incapable_agent_falls_back ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_route_with_capability_none_is_passthrough" classname="surge-acp" timestamp="2026-10-12T09:37:17.947+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_route_with_capability_none_is_passthrough ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="router::tests::test_route_with_capability_unknown_agent_assumed_capable" classname="surge-acp" timestamp="2026-10-12T09:37:17.951+00:00" time="0.004">
+            <system-out>
+running 1 test
+test router::tests::test_route_with_capability_unknown_agent_assumed_capable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response" classname="surge-acp" timestamp="2026-10-12T09:37:17.955+00:00" time="0.007">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::all_admitted_effect_methods_reach_the_actual_peer_and_typed_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::all_effect_methods_refuse_after_readiness_without_retry_or_cleanup_blocking" classname="surge-acp" timestamp="2026-10-12T09:37:17.962+00:00" time="0.718">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::all_effect_methods_refuse_after_readiness_without_retry_or_cleanup_blocking ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.71s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::blocked_owner_applies_transport_backpressure" classname="surge-acp" timestamp="2026-10-12T09:37:18.680+00:00" time="0.028">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::blocked_owner_applies_transport_backpressure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::completed_notification_and_prompt_response_survive_immediate_eof" classname="surge-acp" timestamp="2026-10-12T09:37:18.709+00:00" time="0.043">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::completed_notification_and_prompt_response_survive_immediate_eof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="connection::tests::cleanup_driver_errors_reach_connection_caller" classname="surge-acp" timestamp="2026-10-12T09:37:16.987+00:00" time="2.007">
+            <system-out>
+running 1 test
+test connection::tests::cleanup_driver_errors_reach_connection_caller ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 2.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::incoming_line_limit_counts_fragmented_and_multiple_frames" classname="surge-acp" timestamp="2026-10-12T09:37:18.993+00:00" time="0.018">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::incoming_line_limit_counts_fragmented_and_multiple_frames ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission" classname="surge-acp" timestamp="2026-10-12T09:37:19.011+00:00" time="0.108">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::initialize_rechecks_host_after_driver_readiness_before_wire_admission ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::prompt_response_waits_for_notification_processing" classname="surge-acp" timestamp="2026-10-12T09:37:19.119+00:00" time="0.209">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::prompt_response_waits_for_notification_processing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.20s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::pump_read_failure_reaches_driver" classname="surge-acp" timestamp="2026-10-12T09:37:19.329+00:00" time="0.006">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::pump_read_failure_reaches_driver ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::stop_joins_outstanding_notification_callback" classname="surge-acp" timestamp="2026-10-12T09:37:19.335+00:00" time="0.006">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::stop_joins_outstanding_notification_callback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::stop_remains_responsive_when_valid_frame_queue_is_saturated" classname="surge-acp" timestamp="2026-10-12T09:37:19.341+00:00" time="0.108">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::stop_remains_responsive_when_valid_frame_queue_is_saturated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::valid_frame_burst_is_backpressured_until_owner_processes" classname="surge-acp" timestamp="2026-10-12T09:37:19.448+00:00" time="0.129">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::valid_frame_burst_is_backpressured_until_owner_processes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.12s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::transport::tests::closed_channel_ends_producer" classname="surge-acp" timestamp="2026-10-12T09:37:19.578+00:00" time="0.005">
+            <system-out>
+running 1 test
+test sdk_v1::transport::tests::closed_channel_ends_producer ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::transport::tests::malformed_and_batch_frames_never_enter_sdk_channel" classname="surge-acp" timestamp="2026-10-12T09:37:19.583+00:00" time="0.004">
+            <system-out>
+running 1 test
+test sdk_v1::transport::tests::malformed_and_batch_frames_never_enter_sdk_channel ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_anthropic_key_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.588+00:00" time="0.034">
+            <system-out>
+running 1 test
+test secrets::tests::test_anthropic_key_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_aws_key_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.622+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_aws_key_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_generic_api_key_env_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.658+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_generic_api_key_env_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_github_pat_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.694+00:00" time="0.037">
+            <system-out>
+running 1 test
+test secrets::tests::test_github_pat_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_jwt_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.731+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_jwt_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_mongodb_dsn_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.767+00:00" time="0.038">
+            <system-out>
+running 1 test
+test secrets::tests::test_mongodb_dsn_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_multiple_secrets_all_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.805+00:00" time="0.037">
+            <system-out>
+running 1 test
+test secrets::tests::test_multiple_secrets_all_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_no_secrets_unchanged" classname="surge-acp" timestamp="2026-10-12T09:37:19.842+00:00" time="0.035">
+            <system-out>
+running 1 test
+test secrets::tests::test_no_secrets_unchanged ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_ollama_key_pattern_leaves_ordinary_dotted_text_alone" classname="surge-acp" timestamp="2026-10-12T09:37:19.877+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_ollama_key_pattern_leaves_ordinary_dotted_text_alone ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_ollama_key_redacted_whole" classname="surge-acp" timestamp="2026-10-12T09:37:19.913+00:00" time="0.037">
+            <system-out>
+running 1 test
+test secrets::tests::test_ollama_key_redacted_whole ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_postgres_dsn_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.950+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_postgres_dsn_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_private_key_header_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:19.986+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_private_key_header_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_slack_token_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:20.022+00:00" time="0.035">
+            <system-out>
+running 1 test
+test secrets::tests::test_slack_token_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="secrets::tests::test_stripe_key_redacted" classname="surge-acp" timestamp="2026-10-12T09:37:20.057+00:00" time="0.036">
+            <system-out>
+running 1 test
+test secrets::tests::test_stripe_key_redacted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="settings_seed::tests::empty_declaration_is_a_noop" classname="surge-acp" timestamp="2026-10-12T09:37:20.094+00:00" time="0.005">
+            <system-out>
+running 1 test
+test settings_seed::tests::empty_declaration_is_a_noop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="settings_seed::tests::never_clobbers_an_existing_file" classname="surge-acp" timestamp="2026-10-12T09:37:20.098+00:00" time="0.004">
+            <system-out>
+running 1 test
+test settings_seed::tests::never_clobbers_an_existing_file ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="settings_seed::tests::refuses_absolute_and_parent_paths" classname="surge-acp" timestamp="2026-10-12T09:37:20.103+00:00" time="0.004">
+            <system-out>
+running 1 test
+test settings_seed::tests::refuses_absolute_and_parent_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="settings_seed::tests::refuses_to_write_through_a_symlinked_parent" classname="surge-acp" timestamp="2026-10-12T09:37:20.107+00:00" time="0.004">
+            <system-out>
+running 1 test
+test settings_seed::tests::refuses_to_write_through_a_symlinked_parent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="settings_seed::tests::writes_a_declared_file" classname="surge-acp" timestamp="2026-10-12T09:37:20.111+00:00" time="0.004">
+            <system-out>
+running 1 test
+test settings_seed::tests::writes_a_declared_file ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::content_block::tests::text_block_round_trip" classname="surge-acp" timestamp="2026-10-12T09:37:20.116+00:00" time="0.004">
+            <system-out>
+running 1 test
+test shared::content_block::tests::text_block_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::content_block::tests::text_vec_yields_single_element" classname="surge-acp" timestamp="2026-10-12T09:37:20.120+00:00" time="0.004">
+            <system-out>
+running 1 test
+test shared::content_block::tests::text_vec_yields_single_element ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::path_guard::tests::accepts_path_inside_worktree" classname="surge-acp" timestamp="2026-10-12T09:37:20.123+00:00" time="0.004">
+            <system-out>
+running 1 test
+test shared::path_guard::tests::accepts_path_inside_worktree ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::path_guard::tests::rejects_path_escaping_worktree_via_dotdot" classname="surge-acp" timestamp="2026-10-12T09:37:20.127+00:00" time="0.004">
+            <system-out>
+running 1 test
+test shared::path_guard::tests::rejects_path_escaping_worktree_via_dotdot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::path_guard::tests::rejects_relative_path" classname="surge-acp" timestamp="2026-10-12T09:37:20.131+00:00" time="0.004">
+            <system-out>
+running 1 test
+test shared::path_guard::tests::rejects_relative_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::secrets::tests::inherited_stage_credential_is_redacted_and_absent_from_debug" classname="surge-acp" timestamp="2026-10-12T09:37:20.135+00:00" time="0.035">
+            <system-out>
+running 1 test
+test shared::secrets::tests::inherited_stage_credential_is_redacted_and_absent_from_debug ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="shared::secrets::tests::redacts_a_known_pattern" classname="surge-acp" timestamp="2026-10-12T09:37:20.171+00:00" time="0.034">
+            <system-out>
+running 1 test
+test shared::secrets::tests::redacts_a_known_pattern ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_concurrent_terminals" classname="surge-acp" timestamp="2026-10-12T09:37:20.205+00:00" time="0.005">
+            <system-out>
+running 1 test
+test terminal::tests::test_concurrent_terminals ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_default_output_byte_limit" classname="surge-acp" timestamp="2026-10-12T09:37:20.211+00:00" time="0.005">
+            <system-out>
+running 1 test
+test terminal::tests::test_default_output_byte_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_kill_terminal" classname="surge-acp" timestamp="2026-10-12T09:37:20.216+00:00" time="0.004">
+            <system-out>
+running 1 test
+test terminal::tests::test_kill_terminal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_not_found" classname="surge-acp" timestamp="2026-10-12T09:37:20.220+00:00" time="0.004">
+            <system-out>
+running 1 test
+test terminal::tests::test_not_found ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_output_byte_limit" classname="surge-acp" timestamp="2026-10-12T09:37:20.224+00:00" time="0.056">
+            <system-out>
+running 1 test
+test terminal::tests::test_output_byte_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_release_terminal" classname="surge-acp" timestamp="2026-10-12T09:37:20.280+00:00" time="0.006">
+            <system-out>
+running 1 test
+test terminal::tests::test_release_terminal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="terminal::tests::test_spawn_and_wait" classname="surge-acp" timestamp="2026-10-12T09:37:20.287+00:00" time="0.059">
+            <system-out>
+running 1 test
+test terminal::tests::test_spawn_and_wait ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="transport::tests::test_serialize_mcp_config_empty" classname="surge-acp" timestamp="2026-10-12T09:37:20.346+00:00" time="0.006">
+            <system-out>
+running 1 test
+test transport::tests::test_serialize_mcp_config_empty ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="transport::tests::test_serialize_mcp_config_preserves_env" classname="surge-acp" timestamp="2026-10-12T09:37:20.352+00:00" time="0.006">
+            <system-out>
+running 1 test
+test transport::tests::test_serialize_mcp_config_preserves_env ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="transport::tests::test_serialize_mcp_config_single_server" classname="surge-acp" timestamp="2026-10-12T09:37:20.358+00:00" time="0.005">
+            <system-out>
+running 1 test
+test transport::tests::test_serialize_mcp_config_single_server ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="transport::tests::test_tcp_transport_returns_error" classname="surge-acp" timestamp="2026-10-12T09:37:20.364+00:00" time="0.006">
+            <system-out>
+running 1 test
+test transport::tests::test_tcp_transport_returns_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sdk_v1::lifecycle_tests::eof_joins_outstanding_callback" classname="surge-acp" timestamp="2026-10-12T09:37:18.752+00:00" time="2.008">
+            <system-out>
+running 1 test
+test sdk_v1::lifecycle_tests::eof_joins_outstanding_callback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 2.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="discovery::tests::test_registry_integration" classname="surge-acp" timestamp="2026-10-12T09:37:17.054+00:00" time="5.444">
+            <system-out>
+running 1 test
+test discovery::tests::test_registry_integration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 5.44s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="registry::tests::test_detect_with_discovery" classname="surge-acp" timestamp="2026-10-12T09:37:17.589+00:00" time="5.222">
+            <system-out>
+running 1 test
+test registry::tests::test_detect_with_discovery ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 288 filtered out; finished in 5.22s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_concurrent_sessions" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="five_concurrent_sessions_complete_independently" classname="surge-acp::bridge_concurrent_sessions" timestamp="2026-10-12T09:37:20.760+00:00" time="0.096">
+            <system-out>
+running 1 test
+test five_concurrent_sessions_complete_independently ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_config" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="legacy_constructors_remain_usable_and_shutdown" classname="surge-acp::bridge_config" timestamp="2026-10-12T09:37:20.855+00:00" time="0.033">
+            <system-out>
+running 1 test
+test legacy_constructors_remain_usable_and_shutdown ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="rejects_each_zero_capacity_and_timeout" classname="surge-acp::bridge_config" timestamp="2026-10-12T09:37:20.888+00:00" time="0.005">
+            <system-out>
+running 1 test
+test rejects_each_zero_capacity_and_timeout ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_config_options" tests="3" skipped="0" errors="0" failures="0">
+        <testcase name="a_best_effort_option_the_agent_does_not_offer_is_skipped" classname="surge-acp::bridge_config_options" timestamp="2026-10-12T09:37:20.894+00:00" time="0.016">
+            <system-out>
+running 1 test
+test a_best_effort_option_the_agent_does_not_offer_is_skipped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="a_model_the_agent_does_not_offer_keeps_the_session_closed" classname="surge-acp::bridge_config_options" timestamp="2026-10-12T09:37:20.910+00:00" time="0.018">
+            <system-out>
+running 1 test
+test a_model_the_agent_does_not_offer_keeps_the_session_closed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="chosen_model_and_reasoning_level_are_set_on_the_agent_session" classname="surge-acp::bridge_config_options" timestamp="2026-10-12T09:37:20.928+00:00" time="0.022">
+            <system-out>
+running 1 test
+test chosen_model_and_reasoning_level_are_set_on_the_agent_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_control_lifecycle" tests="15" skipped="0" errors="0" failures="0">
+        <testcase name="advertised_filesystem_capabilities_follow_permission_policy" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:20.951+00:00" time="0.035">
+            <system-out>
+running 1 test
+test advertised_filesystem_capabilities_follow_permission_policy ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="both_handshake_phases_have_deadlines_and_reap" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:20.986+00:00" time="1.522">
+            <system-out>
+running 1 test
+test both_handshake_phases_have_deadlines_and_reap ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 1.52s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="child_exit_during_prompt_does_not_panic_worker" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.508+00:00" time="0.054">
+            <system-out>
+running 1 test
+test child_exit_during_prompt_does_not_panic_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="close_sends_wire_cancel_before_transport_teardown" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.562+00:00" time="0.033">
+            <system-out>
+running 1 test
+test close_sends_wire_cancel_before_transport_teardown ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.03s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="callback_overload_preserves_pending_permission_and_stop" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.498+00:00" time="0.099">
+            <system-out>
+running 1 test
+test callback_overload_preserves_pending_permission_and_stop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.09s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="dropped_option_caller_settles_child_and_shutdown_promptly" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.811+00:00" time="0.018">
+            <system-out>
+running 1 test
+test dropped_option_caller_settles_child_and_shutdown_promptly ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="exit_before_handshake_response_never_announces_established" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.829+00:00" time="0.047">
+            <system-out>
+running 1 test
+test exit_before_handshake_response_never_announces_established ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="config_option_phase_shares_deadline_reaps_and_allows_next_open" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.597+00:00" time="0.521">
+            <system-out>
+running 1 test
+test config_option_phase_shares_deadline_reaps_and_allows_next_open ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.52s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="initialize_only_handshake_hang_is_retried_once_and_opens" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:23.118+00:00" time="0.520">
+            <system-out>
+running 1 test
+test initialize_only_handshake_hang_is_retried_once_and_opens ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.52s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="noisy_startup_is_drained_before_handshake" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:23.638+00:00" time="0.164">
+            <system-out>
+running 1 test
+test noisy_startup_is_drained_before_handshake ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.16s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="permission_reply_and_busy_response_work_during_prompt" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:23.803+00:00" time="0.706">
+            <system-out>
+running 1 test
+test permission_reply_and_busy_response_work_during_prompt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.70s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="spoofed_reserved_notification_has_no_outcome_authority" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:24.508+00:00" time="0.050">
+            <system-out>
+running 1 test
+test spoofed_reserved_notification_has_no_outcome_authority ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="uncertain_session_operation_is_never_automatically_reissued" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:24.559+00:00" time="0.515">
+            <system-out>
+running 1 test
+test uncertain_session_operation_is_never_automatically_reissued ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.51s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="concurrent_close_never_claims_reap_while_first_cleanup_pending" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.595+00:00" time="5.020">
+            <system-out>
+running 1 test
+test concurrent_close_never_claims_reap_while_first_cleanup_pending ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 5.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="ignored_wire_cancel_still_forces_and_reaps_child" classname="surge-acp::bridge_control_lifecycle" timestamp="2026-10-12T09:37:22.876+00:00" time="5.532">
+            <system-out>
+running 1 test
+test ignored_wire_cancel_still_forces_and_reaps_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 5.53s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_crash_detection" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="crash_after_n_tool_calls_surfaces_within_2s" classname="surge-acp::bridge_crash_detection" timestamp="2026-10-12T09:37:25.074+00:00" time="0.047">
+            <system-out>
+running 1 test
+test crash_after_n_tool_calls_surfaces_within_2s ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_dynamic_outcome_enum" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="session_catalogs_have_exact_distinct_outcome_enums" classname="surge-acp::bridge_dynamic_outcome_enum" timestamp="2026-10-12T09:37:25.122+00:00" time="0.004">
+            <system-out>
+running 1 test
+test session_catalogs_have_exact_distinct_outcome_enums ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_effect_fence" tests="4" skipped="0" errors="0" failures="0">
+        <testcase name="cancelled_awaiter_does_not_drop_the_queued_worker_capability" classname="surge-acp::bridge_effect_fence" timestamp="2026-10-12T09:37:25.126+00:00" time="0.012">
+            <system-out>
+running 1 test
+test cancelled_awaiter_does_not_drop_the_queued_worker_capability ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="permission_grant_is_checked_after_approval_await_and_automatic_allow" classname="surge-acp::bridge_effect_fence" timestamp="2026-10-12T09:37:25.138+00:00" time="0.063">
+            <system-out>
+running 1 test
+test permission_grant_is_checked_after_approval_await_and_automatic_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.06s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="queued_prompt_checks_stored_session_fence_and_close_remains_available" classname="surge-acp::bridge_effect_fence" timestamp="2026-10-12T09:37:25.201+00:00" time="0.028">
+            <system-out>
+running 1 test
+test queued_prompt_checks_stored_session_fence_and_close_remains_available ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="worker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission" classname="surge-acp::bridge_effect_fence" timestamp="2026-10-12T09:37:25.229+00:00" time="0.068">
+            <system-out>
+running 1 test
+test worker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.06s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_handshake_failure" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="handshake_failure_returns_open_session_error" classname="surge-acp::bridge_handshake_failure" timestamp="2026-10-12T09:37:25.298+00:00" time="0.044">
+            <system-out>
+running 1 test
+test handshake_failure_returns_open_session_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_mock_discovery" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="mock_executable_discovery_uses_native_paths" classname="surge-acp::bridge_mock_discovery" timestamp="2026-10-12T09:37:25.343+00:00" time="0.043">
+            <system-out>
+running 1 test
+test mock_executable_discovery_uses_native_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_close_timeout" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="close_against_stuck_mock_times_out" classname="surge-acp::bridge_close_timeout" timestamp="2026-10-12T09:37:20.370+00:00" time="5.020">
+            <system-out>
+running 1 test
+test close_against_stuck_mock_times_out ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_open_cancellation" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="bare_drop_during_opening_is_bounded_and_reaps" classname="surge-acp::bridge_open_cancellation" timestamp="2026-10-12T09:37:25.386+00:00" time="0.025">
+            <system-out>
+running 1 test
+
+running 1 test
+test bare_drop_during_opening_is_bounded_and_reaps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+
+test bare_drop_during_opening_is_bounded_and_reaps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="cancelled_open_settles_worker_and_child" classname="surge-acp::bridge_open_cancellation" timestamp="2026-10-12T09:37:25.390+00:00" time="0.317">
+            <system-out>
+running 1 test
+
+running 1 test
+test cancelled_open_settles_worker_and_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.31s
+
+test cancelled_open_settles_worker_and_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.31s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_provider_recovery" tests="4" skipped="0" errors="0" failures="0">
+        <testcase name="actual_saved_provider_id_is_restored_with_identical_cwd_without_new_session" classname="surge-acp::bridge_provider_recovery" timestamp="2026-10-12T09:37:25.411+00:00" time="0.070">
+            <system-out>
+running 1 test
+test actual_saved_provider_id_is_restored_with_identical_cwd_without_new_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.07s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="load_history_cannot_authorize_a_permission_before_a_new_prompt" classname="surge-acp::bridge_provider_recovery" timestamp="2026-10-12T09:37:25.481+00:00" time="0.054">
+            <system-out>
+running 1 test
+test load_history_cannot_authorize_a_permission_before_a_new_prompt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="restored_usage_does_not_charge_unknown_provider_history" classname="surge-acp::bridge_provider_recovery" timestamp="2026-10-12T09:37:25.535+00:00" time="0.075">
+            <system-out>
+running 1 test
+test restored_usage_does_not_charge_unknown_provider_history ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.07s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="unsupported_restore_does_not_silently_create_a_provider_session" classname="surge-acp::bridge_provider_recovery" timestamp="2026-10-12T09:37:25.610+00:00" time="0.049">
+            <system-out>
+running 1 test
+test unsupported_restore_does_not_silently_create_a_provider_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_reply_to_tool" tests="3" skipped="0" errors="0" failures="0">
+        <testcase name="reply_to_observed_call_id_cannot_fabricate_tool_result" classname="surge-acp::bridge_reply_to_tool" timestamp="2026-10-12T09:37:25.659+00:00" time="0.050">
+            <system-out>
+running 1 test
+test reply_to_observed_call_id_cannot_fabricate_tool_result ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="reply_to_unknown_session_returns_session_gone" classname="surge-acp::bridge_reply_to_tool" timestamp="2026-10-12T09:37:25.709+00:00" time="0.011">
+            <system-out>
+running 1 test
+test reply_to_unknown_session_returns_session_gone ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="reply_to_unknown_call_id_within_session_returns_unknown_call_id" classname="surge-acp::bridge_reply_to_tool" timestamp="2026-10-12T09:37:25.707+00:00" time="0.017">
+            <system-out>
+running 1 test
+test reply_to_unknown_call_id_within_session_returns_unknown_call_id ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_sandbox_filtering" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="denied_tool_does_not_appear_in_visible_list" classname="surge-acp::bridge_sandbox_filtering" timestamp="2026-10-12T09:37:25.724+00:00" time="0.016">
+            <system-out>
+running 1 test
+test denied_tool_does_not_appear_in_visible_list ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_sandbox_m4_stub" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="visibility_allow_diverges_from_allows_tool_for_escaping_path" classname="surge-acp::bridge_sandbox_m4_stub" timestamp="2026-10-12T09:37:25.740+00:00" time="0.004">
+            <system-out>
+running 1 test
+test visibility_allow_diverges_from_allows_tool_for_escaping_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="workspace_write_sandbox_compiles_against_trait" classname="surge-acp::bridge_sandbox_m4_stub" timestamp="2026-10-12T09:37:25.744+00:00" time="0.003">
+            <system-out>
+running 1 test
+test workspace_write_sandbox_compiles_against_trait ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_request_human_input" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="request_human_input_notification_has_no_authority" classname="surge-acp::bridge_request_human_input" timestamp="2026-10-12T09:37:25.721+00:00" time="0.051">
+            <system-out>
+running 1 test
+test request_human_input_notification_has_no_authority ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_session_lifecycle" tests="5" skipped="0" errors="0" failures="0">
+        <testcase name="builder_defaults_round_trip" classname="surge-acp::bridge_session_lifecycle" timestamp="2026-10-12T09:37:25.772+00:00" time="0.048">
+            <system-out>
+running 1 test
+test builder_defaults_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="builder_event_capacity_reports_lag_without_blocking_commands" classname="surge-acp::bridge_session_lifecycle" timestamp="2026-10-12T09:37:25.821+00:00" time="0.050">
+            <system-out>
+running 1 test
+test builder_event_capacity_reports_lag_without_blocking_commands ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="builder_explicit_round_trip" classname="surge-acp::bridge_session_lifecycle" timestamp="2026-10-12T09:37:25.871+00:00" time="0.047">
+            <system-out>
+running 1 test
+test builder_explicit_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="open_send_close_round_trip" classname="surge-acp::bridge_session_lifecycle" timestamp="2026-10-12T09:37:25.917+00:00" time="0.047">
+            <system-out>
+running 1 test
+test open_send_close_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="builder_applies_handshake_deadline" classname="surge-acp::bridge_session_lifecycle" timestamp="2026-10-12T09:37:25.747+00:00" time="0.514">
+            <system-out>
+running 1 test
+test builder_applies_handshake_deadline ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.51s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_shutdown_with_open" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="shutdown_emits_session_ended_for_each_open_session" classname="surge-acp::bridge_shutdown_with_open" timestamp="2026-10-12T09:37:25.964+00:00" time="0.019">
+            <system-out>
+running 1 test
+test shutdown_emits_session_ended_for_each_open_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_token_tracking" tests="5" skipped="0" errors="0" failures="0">
+        <testcase name="cumulative_reports_and_context_remain_independent_across_turns" classname="surge-acp::bridge_token_tracking" timestamp="2026-10-12T09:37:26.262+00:00" time="0.057">
+            <system-out>
+running 1 test
+test cumulative_reports_and_context_remain_independent_across_turns ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="failed_prompt_marks_usage_unknown_before_session_end" classname="surge-acp::bridge_token_tracking" timestamp="2026-10-12T09:37:26.319+00:00" time="0.050">
+            <system-out>
+running 1 test
+test failed_prompt_marks_usage_unknown_before_session_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="graceful_cancel_observes_response_usage_before_session_end" classname="surge-acp::bridge_token_tracking" timestamp="2026-10-12T09:37:26.369+00:00" time="0.552">
+            <system-out>
+running 1 test
+test graceful_cancel_observes_response_usage_before_session_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.55s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="sessions_have_independent_usage_baselines" classname="surge-acp::bridge_token_tracking" timestamp="2026-10-12T09:37:26.921+00:00" time="0.056">
+            <system-out>
+running 1 test
+test sessions_have_independent_usage_baselines ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="token_usage_monotonic_and_precedes_session_end" classname="surge-acp::bridge_token_tracking" timestamp="2026-10-12T09:37:26.977+00:00" time="0.064">
+            <system-out>
+running 1 test
+test token_usage_monotonic_and_precedes_session_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.06s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_streaming" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="long_streaming_delivers_chunks_in_order" classname="surge-acp::bridge_streaming" timestamp="2026-10-12T09:37:25.984+00:00" time="1.044">
+            <system-out>
+running 1 test
+test long_streaming_delivers_chunks_in_order ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_worker_panic" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="worker_panic_surfaces_as_command_failure" classname="surge-acp::bridge_worker_panic" timestamp="2026-10-12T09:37:27.041+00:00" time="0.042">
+            <system-out>
+running 1 test
+test worker_panic_surfaces_as_command_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+</system-out>
+            <system-err>
+thread &apos;surge-acp-bridge&apos; (5908) panicked at crates/surge-acp/src/bridge/lifecycle.rs:203:49:
+bridge worker test-panic injected
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/panicking.rs:80:14
+   2: {async_fn#0}
+             at ./src/bridge/lifecycle.rs:203:49
+   3: {closure#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/local.rs:1076:44
+   4: &lt;tokio::task::local::LocalSet&gt;::with::&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, &lt;tokio::task::local::RunUntil&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt; as core::future::future::Future&gt;::poll::{closure#0}&gt;::{closure#0}
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/local.rs:827:13
+   5: try_with&lt;tokio::task::local::LocalData, tokio::task::local::{impl#4}::with::{closure_env#0}&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, tokio::task::local::{impl#10}::poll::{closure_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;, core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs:463:12
+   6: &lt;std::thread::local::LocalKey&lt;tokio::task::local::LocalData&gt;&gt;::with::&lt;&lt;tokio::task::local::LocalSet&gt;::with&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, &lt;tokio::task::local::RunUntil&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt; as core::future::future::Future&gt;::poll::{closure#0}&gt;::{closure#0}, core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs:427:20
+   7: &lt;tokio::task::local::LocalSet&gt;::with::&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, &lt;tokio::task::local::RunUntil&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt; as core::future::future::Future&gt;::poll::{closure#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/local.rs:825:17
+   8: &lt;tokio::task::local::RunUntil&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt; as core::future::future::Future&gt;::poll
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/local.rs:1066:22
+   9: {async_fn#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/local.rs:723:19
+  10: poll&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/future/future.rs:133:9
+  11: {closure#0}&lt;core::pin::Pin&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:769:70
+  12: with_budget&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, tokio::runtime::scheduler::current_thread::{impl#9}::block_on::{closure#0}::{closure#0}::{closure_env#0}&lt;core::pin::Pin&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/coop/mod.rs:167:5
+  13: budget&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, tokio::runtime::scheduler::current_thread::{impl#9}::block_on::{closure#0}::{closure#0}::{closure_env#0}&lt;core::pin::Pin&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/coop/mod.rs:133:5
+  14: {closure#0}&lt;core::pin::Pin&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:769:25
+  15: &lt;tokio::runtime::scheduler::current_thread::Context&gt;::enter::&lt;core::task::poll::Poll&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;, &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}::{closure#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:446:19
+  16: {closure#0}&lt;core::pin::Pin&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:768:44
+  17: &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::enter::&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;::{closure#0}
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:856:68
+  18: &lt;tokio::runtime::context::scoped::Scoped&lt;tokio::runtime::scheduler::Context&gt;&gt;::set::&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::enter&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;::{closure#0}, (alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;)&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/context/scoped.rs:40:9
+  19: tokio::runtime::context::set_scheduler::&lt;(alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;), &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::enter&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;::{closure#0}&gt;::{closure#0}
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/context.rs:176:38
+  20: try_with&lt;tokio::runtime::context::Context, tokio::runtime::context::set_scheduler::{closure_env#0}&lt;(alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core, alloc::alloc::Global&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;), tokio::runtime::scheduler::current_thread::{impl#9}::enter::{closure_env#0}&lt;tokio::runtime::scheduler::current_thread::{impl#9}::block_on::{closure_env#0}&lt;core::pin::Pin&lt;&amp;mut tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;&gt;, (alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core, alloc::alloc::Global&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;)&gt;
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs:463:12
+  21: &lt;std::thread::local::LocalKey&lt;tokio::runtime::context::Context&gt;&gt;::with::&lt;tokio::runtime::context::set_scheduler&lt;(alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;), &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::enter&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;::{closure#0}&gt;::{closure#0}, (alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;)&gt;
+             at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs:427:20
+  22: tokio::runtime::context::set_scheduler::&lt;(alloc::boxed::Box&lt;tokio::runtime::scheduler::current_thread::Core&gt;, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;), &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::enter&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;::{closure#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/context.rs:176:17
+  23: &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::enter::&lt;&lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;::{closure#0}, core::option::Option&lt;core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:856:27
+  24: &lt;tokio::runtime::scheduler::current_thread::CoreGuard&gt;::block_on::&lt;core::pin::Pin&lt;&amp;mut &lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:756:24
+  25: {closure#0}&lt;tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:200:33
+  26: tokio::runtime::context::runtime::enter_runtime::&lt;&lt;tokio::runtime::scheduler::current_thread::CurrentThread&gt;::block_on&lt;&lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;::{closure#0}, core::result::Result&lt;(), surge_acp::bridge::error::BridgeError&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/context/runtime.rs:65:16
+  27: block_on&lt;tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/scheduler/current_thread/mod.rs:188:9
+  28: &lt;tokio::runtime::runtime::Runtime&gt;::block_on_inner::&lt;&lt;tokio::task::local::LocalSet&gt;::run_until&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;::{closure#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/runtime.rs:371:52
+  29: block_on&lt;tokio::task::local::{impl#4}::run_until::{async_fn_env#0}&lt;surge_acp::bridge::lifecycle::run::{async_fn_env#0}&gt;&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/runtime/runtime.rs:345:18
+  30: &lt;tokio::task::local::LocalSet&gt;::block_on::&lt;surge_acp::bridge::lifecycle::run::{closure#0}&gt;
+             at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.50.0/src/task/local.rs:680:12
+  31: &lt;surge_acp::bridge::acp_bridge::BridgeConfig&gt;::spawn::{closure#0}
+             at ./src/bridge/acp_bridge.rs:132:46
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+</system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::bridge_tool_injection" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="report_stage_outcome_notification_has_no_authority" classname="surge-acp::bridge_tool_injection" timestamp="2026-10-12T09:37:27.028+00:00" time="0.057">
+            <system-out>
+running 1 test
+test report_stage_outcome_notification_has_no_authority ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::facade_contract" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="minimal_mock_satisfies_facade_contract" classname="surge-acp::facade_contract" timestamp="2026-10-12T09:37:27.084+00:00" time="0.005">
+            <system-out>
+running 1 test
+test minimal_mock_satisfies_facade_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="real_acp_bridge_satisfies_facade_contract" classname="surge-acp::facade_contract" timestamp="2026-10-12T09:37:27.085+00:00" time="0.015">
+            <system-out>
+running 1 test
+test real_acp_bridge_satisfies_facade_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::health_integration_test" tests="4" skipped="0" errors="0" failures="0">
+        <testcase name="test_multiple_agents_heartbeat_monitoring" classname="surge-acp::health_integration_test" timestamp="2026-10-12T09:37:28.408+00:00" time="2.008">
+            <system-out>
+running 1 test
+test test_multiple_agents_heartbeat_monitoring ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 2.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_heartbeat_consecutive_failure_count" classname="surge-acp::health_integration_test" timestamp="2026-10-12T09:37:27.089+00:00" time="6.010">
+            <system-out>
+running 1 test
+test test_heartbeat_consecutive_failure_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 6.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_heartbeat_detects_nonexistent_agent" classname="surge-acp::health_integration_test" timestamp="2026-10-12T09:37:27.100+00:00" time="8.113">
+            <system-out>
+running 1 test
+test test_heartbeat_detects_nonexistent_agent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 8.11s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_heartbeat_detects_terminated_process" classname="surge-acp::health_integration_test" timestamp="2026-10-12T09:37:27.615+00:00" time="8.627">
+            <system-out>
+running 1 test
+test test_heartbeat_detects_terminated_process ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 8.62s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::platform_encoding_test" tests="11" skipped="0" errors="0" failures="0">
+        <testcase name="test_binary_output_handling" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.416+00:00" time="0.107">
+            <system-out>
+running 1 test
+test test_binary_output_handling ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_large_utf8_output" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.523+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_large_utf8_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_stderr_utf8_capture" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.580+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_stderr_utf8_capture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_truncation_exact_char_boundary" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.636+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_truncation_exact_char_boundary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_truncation_respects_char_boundaries" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.693+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_truncation_respects_char_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_utf8_basic_output" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.749+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_utf8_basic_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_utf8_cjk_characters" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.806+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_utf8_cjk_characters ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_utf8_emoji_output" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.862+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_utf8_emoji_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_utf8_locale_on_unix" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.918+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_utf8_locale_on_unix ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_utf8_mixed_scripts" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:30.974+00:00" time="0.056">
+            <system-out>
+running 1 test
+test test_utf8_mixed_scripts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_zero_byte_limit" classname="surge-acp::platform_encoding_test" timestamp="2026-10-12T09:37:31.030+00:00" time="0.106">
+            <system-out>
+running 1 test
+test test_zero_byte_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.10s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::platform_process_test" tests="9" skipped="0" errors="0" failures="0">
+        <testcase name="test_basic_process_spawn_unix" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.137+00:00" time="0.005">
+            <system-out>
+running 1 test
+test test_basic_process_spawn_unix ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_basic_process_spawn_windows" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.142+00:00" time="0.004">
+            <system-out>
+running 1 test
+test test_basic_process_spawn_windows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_git_env_vars_stripped" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.145+00:00" time="0.004">
+            <system-out>
+running 1 test
+test test_git_env_vars_stripped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_invalid_command_returns_error" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.150+00:00" time="0.004">
+            <system-out>
+running 1 test
+test test_invalid_command_returns_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_multiple_processes_sequential" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.154+00:00" time="0.004">
+            <system-out>
+running 1 test
+test test_multiple_processes_sequential ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_process_cleanup_no_zombies" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.158+00:00" time="0.005">
+            <system-out>
+running 1 test
+test test_process_cleanup_no_zombies ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_process_stdin_stdout_capture" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.164+00:00" time="0.004">
+            <system-out>
+running 1 test
+test test_process_stdin_stdout_capture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_process_termination_timeout" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.168+00:00" time="0.004">
+            <system-out>
+running 1 test
+test test_process_termination_timeout ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_process_with_working_directory" classname="surge-acp::platform_process_test" timestamp="2026-10-12T09:37:31.172+00:00" time="0.006">
+            <system-out>
+running 1 test
+test test_process_with_working_directory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::reconnect_integration_test" tests="5" skipped="0" errors="0" failures="0">
+        <testcase name="test_reconnect_prevents_duplicate_attempts" classname="surge-acp::reconnect_integration_test" timestamp="2026-10-12T09:37:36.243+00:00" time="0.159">
+            <system-out>
+running 1 test
+test test_reconnect_prevents_duplicate_attempts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.15s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_backoff_strategy_exponential" classname="surge-acp::reconnect_integration_test" timestamp="2026-10-12T09:37:31.177+00:00" time="6.213">
+            <system-out>
+running 1 test
+test test_backoff_strategy_exponential ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 6.21s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_exponential_backoff_delays" classname="surge-acp::reconnect_integration_test" timestamp="2026-10-12T09:37:33.099+00:00" time="6.316">
+            <system-out>
+running 1 test
+test test_exponential_backoff_delays ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 6.31s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_reconnect_events_emitted_on_connection_loss" classname="surge-acp::reconnect_integration_test" timestamp="2026-10-12T09:37:35.213+00:00" time="6.015">
+            <system-out>
+running 1 test
+test test_reconnect_events_emitted_on_connection_loss ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 6.01s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="test_reconnect_respects_max_attempts" classname="surge-acp::reconnect_integration_test" timestamp="2026-10-12T09:37:36.402+00:00" time="6.614">
+            <system-out>
+running 1 test
+test test_reconnect_respects_max_attempts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 6.61s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::sdk_permission_secrets" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="explicitly_enabled_upstream_trace_is_raw_provider_diagnostics" classname="surge-acp::sdk_permission_secrets" timestamp="2026-10-12T09:37:37.390+00:00" time="0.052">
+            <system-out>
+running 1 test
+test explicitly_enabled_upstream_trace_is_raw_provider_diagnostics ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="permission_title_known_literal_is_redacted_without_changing_policy_input" classname="surge-acp::sdk_permission_secrets" timestamp="2026-10-12T09:37:37.442+00:00" time="0.052">
+            <system-out>
+running 1 test
+test permission_title_known_literal_is_redacted_without_changing_policy_input ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.05s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::sdk_pool_usage" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="optional_prompt_usage_preserves_unknown_and_emits_exactly_once" classname="surge-acp::sdk_pool_usage" timestamp="2026-10-12T09:37:37.494+00:00" time="0.023">
+            <system-out>
+running 1 test
+test optional_prompt_usage_preserves_unknown_and_emits_exactly_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="surge-acp::stable_v1_wire" tests="3" skipped="0" errors="0" failures="0">
+        <testcase name="fixed_v1_handshake_and_stdio_descriptor" classname="surge-acp::stable_v1_wire" timestamp="2026-10-12T09:37:37.518+00:00" time="0.004">
+            <system-out>
+running 1 test
+test fixed_v1_handshake_and_stdio_descriptor ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="fixed_v1_observation_and_error_classification_input" classname="surge-acp::stable_v1_wire" timestamp="2026-10-12T09:37:37.522+00:00" time="0.004">
+            <system-out>
+running 1 test
+test fixed_v1_observation_and_error_classification_input ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="fixed_v1_permission_cancel_and_prompt" classname="surge-acp::stable_v1_wire" timestamp="2026-10-12T09:37:37.526+00:00" time="0.004">
+            <system-out>
+running 1 test
+test fixed_v1_permission_cancel_and_prompt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+</testsuites>

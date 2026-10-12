@@ -149,7 +149,7 @@ mod state_home;
 #[cfg(windows)]
 pub use state_home::{
     RuntimeAppendFile, RuntimeControlFile, RuntimeDirectory, RuntimeDirectoryOwner,
-    RuntimeHomeOwner,
+    RuntimeHomeOwner, RuntimeImmutableFiles,
 };
 
 #[cfg(test)]

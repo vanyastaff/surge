@@ -1,0 +1,13 @@
+
+running 1 test
+test state_home::windows::native::tests::non_admin_ntfs_complete_flush_probe ... isolated probe token: user=S-1-5-21-1643835476-1616584234-1346609752-1003 default-owner=S-1-5-21-1643835476-1616584234-1346609752-1003
+isolated probe directory: owner=S-1-5-21-1643835476-1616584234-1346609752-1003 dacl-aces=4 acl-revision=2 descriptor-revision=1 control=0x8404
+isolated probe before flush: elevation=0 filesystem=NTFS drive=fixed directory-access=0x001201b6 share=0x3
+isolated probe file: access=GENERIC_READ|GENERIC_WRITE share=std-default flags=0
+isolated probe file flush: returned=STATUS_SUCCESS final=STATUS_SUCCESS
+isolated probe directory flush: returned=STATUS_SUCCESS final=STATUS_SUCCESS
+native probe: non-elevated=true filesystem=NTFS file=PASS directory=PASS readonly-error=PASS
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 581 filtered out; finished in 0.18s
+

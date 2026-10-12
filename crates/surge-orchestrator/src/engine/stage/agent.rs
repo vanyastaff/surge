@@ -685,7 +685,7 @@ async fn append_loop_escalations(
 /// Phase 6.3: dispatches non-injected `BridgeEvent::ToolCall` events through
 /// the `ToolDispatcher`, persists `ToolCalled`/`ToolResultReceived` events, and
 /// replies to the agent via `bridge.reply_to_tool`. Also persists
-/// `TokensConsumed` events from `BridgeEvent::TokenUsage`.
+/// provider and context usage observations without inventing token consumption.
 ///
 /// # Artifact event emission
 /// `BridgeEvent::OutcomeReported` carries `artifacts_produced: Vec<String>`.
@@ -1569,6 +1569,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
     });
     let mut prompt_joined = false;
     let mut session_disposition = None;
+    let mut deferred_events = std::collections::VecDeque::new();
     let stage_result = async {
     let mut prompt_success = false;
     let mut candidates = std::collections::VecDeque::new();
@@ -1615,13 +1616,16 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         }
         let event = if prompt_success && !candidates.is_empty() {
             candidates.pop_front().ok_or_else(|| StageError::Bridge("missing buffered outcome".into()))?
+        } else if let Some(event) = deferred_events.pop_front() {
+            if is_legacy_stage_control(&event) && !p.bridge.legacy_stage_event_adapter() { continue; }
+            event
         } else if prompt_success && !p.bridge.legacy_stage_event_adapter() {
             match events.try_recv() {
                 Ok(event) => {
                     if is_legacy_stage_control(&event) && !p.bridge.legacy_stage_event_adapter() { continue; }
                     event
                 },
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => return Err(record_usage_stream_lag(p.writer, session_id, skipped).await?),
                 Err(_) if missing_outcome_reminders < MAX_MISSING_OUTCOME_REMINDERS => {
                     // Agents routinely finish real work and then end the turn
                     // without calling the stage tool. Failing the run there
@@ -1669,6 +1673,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             },
             joined = &mut prompt_task, if !prompt_joined => {
                 prompt_joined = true;
+                persist_queued_usage(&mut events, &mut deferred_events, session_id, p.writer).await?;
                 let sent = joined.map_err(|error| StageError::Bridge(format!("prompt task: {error}")))?;
                 if let Err(error @ surge_acp::bridge::error::SendMessageError::RateLimited { .. }) = &sent
                     && let (Some((store, claim, policy)), Some(quota)) =
@@ -1754,7 +1759,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     if is_legacy_stage_control(&ev) && !p.bridge.legacy_stage_event_adapter() { continue; }
                     ev
                 },
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => return Err(record_usage_stream_lag(p.writer, session_id, skipped).await?),
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err(StageError::Bridge(
                         "event stream closed unexpectedly".into(),
@@ -2328,23 +2333,20 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     );
                 }
             },
-            BridgeEvent::TokenUsage {
-                prompt_tokens,
-                output_tokens,
-                cache_hits,
-                model,
-                ..
-            } => {
-                // cost_usd is not carried by BridgeEvent::TokenUsage in M3 —
-                // a future layer can compute it from token counts + model name.
+            BridgeEvent::ProviderUsageObserved { usage, .. } => {
                 p.writer
-                    .append_event(VersionedEventPayload::new(EventPayload::TokensConsumed {
+                    .append_event(VersionedEventPayload::new(EventPayload::ProviderUsageObserved {
                         session: session_id,
-                        prompt_tokens,
-                        output_tokens,
-                        cache_hits,
-                        model,
-                        cost_usd: None,
+                        usage,
+                    }))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+            },
+            BridgeEvent::ContextUsageObserved { usage, .. } => {
+                p.writer
+                    .append_event(VersionedEventPayload::new(EventPayload::ContextUsageObserved {
+                        session: session_id,
+                        usage,
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
@@ -2458,6 +2460,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             )));
         }
     }
+    persist_queued_usage(&mut events, &mut deferred_events, session_id, p.writer).await?;
     // Outcome validation and artifact persistence already finished above.
     // Reaped forced cleanup must not discard that result; unconfirmed cleanup
     // still prevents the next stage from starting.
@@ -3574,6 +3577,69 @@ fn resolve_option_id(
     desired.to_string()
 }
 
+fn usage_stream_lag(skipped: u64) -> StageError {
+    StageError::Bridge(format!("usage evidence stream lagged by {skipped} events"))
+}
+
+async fn record_usage_stream_lag(
+    writer: &RunWriter,
+    session: surge_core::SessionId,
+    skipped: u64,
+) -> Result<StageError, StageError> {
+    writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::ProviderUsageObserved {
+                session,
+                usage: surge_core::TokenUsageObservation::Unavailable {
+                    reason: surge_core::UsageUnavailableReason::Missing,
+                    reported: None,
+                },
+            },
+        ))
+        .await
+        .map_err(|error| StageError::Storage(error.to_string()))?;
+    Ok(usage_stream_lag(skipped))
+}
+
+/// A successful prompt join is a publication barrier for final provider usage.
+/// Persist those queued observations before accepting a buffered stage outcome.
+/// Other events retain their relative order for the normal stage event loop.
+async fn persist_queued_usage(
+    events: &mut tokio::sync::broadcast::Receiver<BridgeEvent>,
+    deferred: &mut std::collections::VecDeque<BridgeEvent>,
+    session: surge_core::SessionId,
+    writer: &RunWriter,
+) -> Result<(), StageError> {
+    for _ in 0..events.len() {
+        let event = match events.try_recv() {
+            Ok(event) => event,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
+                return Err(record_usage_stream_lag(writer, session, skipped).await?);
+            },
+            Err(_) => break,
+        };
+        let payload = match event {
+            BridgeEvent::ProviderUsageObserved {
+                session: actual,
+                usage,
+            } if actual == session => EventPayload::ProviderUsageObserved { session, usage },
+            BridgeEvent::ContextUsageObserved {
+                session: actual,
+                usage,
+            } if actual == session => EventPayload::ContextUsageObserved { session, usage },
+            other => {
+                deferred.push_back(other);
+                continue;
+            },
+        };
+        writer
+            .append_event(VersionedEventPayload::new(payload))
+            .await
+            .map_err(|error| StageError::Storage(error.to_string()))?;
+    }
+    Ok(())
+}
+
 fn is_legacy_stage_control(event: &BridgeEvent) -> bool {
     matches!(
         event,
@@ -3587,7 +3653,8 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
     match event {
         BridgeEvent::SessionEstablished { session, .. }
         | BridgeEvent::AgentMessage { session, .. }
-        | BridgeEvent::TokenUsage { session, .. }
+        | BridgeEvent::ProviderUsageObserved { session, .. }
+        | BridgeEvent::ContextUsageObserved { session, .. }
         | BridgeEvent::ToolObserved { session, .. }
         | BridgeEvent::ToolCall { session, .. }
         | BridgeEvent::ToolResult { session, .. }

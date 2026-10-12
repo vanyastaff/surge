@@ -1,0 +1,12 @@
+
+running 1 test
+test engine::configured_route_pin::windows_key::tests::native_source_allows_ancestor_junction_but_refuses_final_reparse ... Junction created for C:\Users\Public\surge-native-5b809f2f96d14873905bb2b60e11e670\temp\.tmpcuWNmV\alias-?? <<===>> C:\Users\Public\surge-native-5b809f2f96d14873905bb2b60e11e670\temp\.tmpcuWNmV\actual-??
+ok
+
+successes:
+
+successes:
+    engine::configured_route_pin::windows_key::tests::native_source_allows_ancestor_junction_but_refuses_final_reparse
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 458 filtered out; finished in 0.07s
+

@@ -5,7 +5,6 @@ use crate::intake_completion::{
     durable_outcome, format_completion, post_comment_bounded, terminal_kind,
 };
 use std::sync::Arc;
-use std::time::Duration;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -41,20 +40,13 @@ impl TicketStateSync {
         info!(task_id = %self.task_id, run_id = %handle.run_id, "TicketStateSync started");
         let mut went_active = false;
         let mut observed = None;
-        let mut projected = false;
         let mut events_open = true;
         loop {
             tokio::select! {
                 biased;
                 joined = &mut handle.completion => {
-                    self.on_completion(handle.run_id, joined, observed, projected).await;
+                    self.on_completion(handle.run_id, joined, observed).await;
                     return;
-                },
-                () = tokio::time::sleep(Duration::from_millis(1)), if observed.is_some() && !projected => {
-                    if let Some(outcome) = observed.as_ref() {
-                        self.on_terminal(&handle.run_id, outcome).await;
-                        projected = true;
-                    }
                 },
                 event = handle.events.recv(), if events_open && observed.is_none() => match event {
                     Ok(EngineRunEvent::Persisted { .. }) if !went_active => {
@@ -89,7 +81,6 @@ impl TicketStateSync {
         run_id: surge_core::RunId,
         joined: Result<RunOutcome, tokio::task::JoinError>,
         observed: Option<RunOutcome>,
-        projected: bool,
     ) {
         match joined {
             Ok(RunOutcome::SettlementFailed { failures, .. }) => {
@@ -99,7 +90,6 @@ impl TicketStateSync {
                 Some(previous) if previous != outcome => {
                     warn!(%run_id, ?previous, ?outcome, "ticket event disagrees with joined completion");
                 },
-                Some(_) if projected => {},
                 Some(_) | None => self.on_terminal(&run_id, &outcome).await,
             },
             Err(error) => {
@@ -479,12 +469,29 @@ mod tests {
             events: receiver,
             completion,
         }));
-        let was_pending = futures::poll!(follower.as_mut()).is_pending();
+        // Keep polling after the observed terminal event while settlement is blocked.
+        // A single poll can miss an eager projection hidden behind a short timer.
+        let was_pending =
+            tokio::time::timeout(std::time::Duration::from_millis(50), follower.as_mut())
+                .await
+                .is_err();
         let before_join = fetch_ticket_state(&storage);
+        let before_outbox: i64 = storage
+            .acquire_registry_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM terminal_comment_outbox", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let before_comments = source.posted_comments().await;
         release.send(()).unwrap();
-        follower.await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), follower)
+            .await
+            .unwrap();
         assert!(was_pending);
         assert_eq!(before_join, TicketState::Active);
+        assert_eq!(before_outbox, 0);
+        assert_eq!(before_comments, []);
         assert_eq!(fetch_ticket_state(&storage), TicketState::Active);
         assert_eq!(source.posted_comments().await, []);
         let count: i64 = storage

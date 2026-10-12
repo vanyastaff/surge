@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    runs::{Storage, WriterLifecycle},
+    runs::{FeedLifecycleError, Storage, WriterFailure, WriterLifecycle},
     runtime_home_fixture::FixtureHome,
 };
 use std::time::Duration;
@@ -89,6 +89,19 @@ async fn pool_probe_rejects_failed_and_lost_running_lifecycle() {
             writer.writer_join.as_ref().unwrap().abort();
         } else {
             writer.request_stop();
+        }
+        // A cancellation request alone does not establish actor loss: a seal
+        // command could still win. Observe the intended lifecycle first.
+        let stopped = tokio::time::timeout(Duration::from_secs(5), feed.changed())
+            .await
+            .unwrap();
+        if abort_actor {
+            assert_eq!(stopped, Err(FeedLifecycleError::WriterLost));
+        } else {
+            assert_eq!(
+                stopped,
+                Ok(WriterLifecycle::Failed(WriterFailure::Interrupted))
+            );
         }
         let closed = writer.seal_for_read_drain().await;
         let observed = probe.wait_sealed().await;

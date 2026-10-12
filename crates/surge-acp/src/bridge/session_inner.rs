@@ -21,13 +21,8 @@ pub(crate) struct SessionStateInner {
     /// Restored transcript callbacks received during session setup remain historical.
     pub live_ingress: bool,
 
-    /// Last cumulative token usage seen on a `SessionUpdate`. Flushed before
-    /// `SessionEnded` (spec §5.7 ordering guarantee).
-    pub last_token_usage: Option<TokenUsageSnapshot>,
-
-    /// Whether `last_token_usage` has been broadcast since the last update.
-    /// Used to skip duplicate emissions.
-    pub last_token_usage_emitted: bool,
+    /// Accepted provider response baseline, independent of context occupancy.
+    pub usage: super::tokens::UsageTracker,
 
     /// Open tool calls keyed by call_id — used to correlate `tool/call` and
     /// `tool/result` from the agent.
@@ -55,33 +50,13 @@ impl SessionStateInner {
         Self {
             acp_session_id,
             live_ingress: true,
-            last_token_usage: None,
-            // `false` matches the initial state where there is nothing to emit.
-            // Phase 8.3 flush logic should be a no-op when `last_token_usage`
-            // is `None` regardless, but `false` here avoids a subtle inversion
-            // (a `true` initial value would suggest an emission has already
-            // happened, which is the opposite of reality on a fresh session).
-            last_token_usage_emitted: false,
+            usage: super::tokens::UsageTracker::default(),
             open_tool_calls: HashMap::new(),
             pending_permissions: HashMap::new(),
             closing: false,
             end_emitted: None,
         }
     }
-}
-
-/// Cumulative token usage snapshot read from the most recent ACP update.
-#[allow(dead_code)] // wired in Task 8.3 token extraction
-#[derive(Debug, Clone)]
-pub(crate) struct TokenUsageSnapshot {
-    /// Number of prompt (input) tokens consumed.
-    pub prompt_tokens: u32,
-    /// Number of output tokens generated.
-    pub output_tokens: u32,
-    /// Number of cache hit tokens (prompt tokens served from the prompt cache).
-    pub cache_hits: u32,
-    /// Model identifier the usage was reported against.
-    pub model: String,
 }
 
 /// One pending tool call (engine-injected or otherwise) the agent has

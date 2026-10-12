@@ -523,7 +523,15 @@ impl AgentsScreen {
         let usage = self.usage.get(&agent.entry.id);
         let summary = match usage {
             Some(u) if u.sessions > 0 => match u.cost_usd {
-                Some(cost) => format!("{} sessions · ${cost:.2}", u.sessions),
+                Some(cost) => format!(
+                    "{} sessions · ${cost:.2}{}",
+                    u.sessions,
+                    if u.cost_unknown {
+                        " known · total unavailable"
+                    } else {
+                        ""
+                    }
+                ),
                 None => format!("{} sessions", u.sessions),
             },
             _ => "not used in this project yet".into(),
@@ -722,7 +730,7 @@ impl AgentsScreen {
                     .items_stretch()
                     .gap(px(10.0))
                     .child(tile("Sessions", usage.sessions.to_string(), last))
-                    .child(if usage.tokens_in + usage.tokens_out == 0 {
+                    .child(if usage.tokens_in == 0 && usage.tokens_out == 0 {
                         tile(
                             "Tokens",
                             "—".into(),
@@ -735,11 +743,19 @@ impl AgentsScreen {
                     } else {
                         tile(
                             "Tokens",
-                            fmt_tokens(usage.tokens_in + usage.tokens_out),
+                            usage
+                                .tokens_in
+                                .checked_add(usage.tokens_out)
+                                .map_or_else(|| "total unavailable".into(), fmt_tokens),
                             format!(
-                                "{} in · {} out",
+                                "{} in · {} out{}",
                                 fmt_tokens(usage.tokens_in),
-                                fmt_tokens(usage.tokens_out)
+                                fmt_tokens(usage.tokens_out),
+                                if usage.usage_unknown {
+                                    " · partial; total unavailable"
+                                } else {
+                                    ""
+                                }
                             ),
                         )
                     })
@@ -749,7 +765,11 @@ impl AgentsScreen {
                             .cost_usd
                             .map_or_else(|| "—".into(), |c| format!("${c:.2}")),
                         if usage.cost_usd.is_some() {
-                            "as reported by the agent".into()
+                            if usage.cost_unknown {
+                                "known cost; total unavailable".into()
+                            } else {
+                                "as reported by the agent".into()
+                            }
                         } else if usage.sessions > 0 {
                             "not reported by this agent".into()
                         } else {

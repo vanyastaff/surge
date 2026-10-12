@@ -74,14 +74,11 @@ impl PreparationLock {
         }
         #[cfg(windows)]
         {
-            if matches!(requirement, Requirement::RestrictedPrivateInputs) {
-                return Err(WorkItemError::Invalid(
-                    "private preparation unsupported on this platform".into(),
-                ));
-            }
+            let _ = requirement;
             Ok(Self {
                 key: Some(key),
-                inner: windows::acquire(home, &key.name())?,
+                // Public requests may resolve private host defaults after admission.
+                inner: windows::acquire_private(home, &key.name())?,
             })
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -105,7 +102,11 @@ impl PreparationLock {
         {
             Ok(())
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            self.inner.require_private()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             Err(WorkItemError::Invalid(
                 "private preparation unsupported on this platform".into(),
@@ -557,8 +558,8 @@ mod tests {
 mod windows_tests {
     use super::*;
     #[test]
-    fn stable_flow_namespaces_remain_distinct_and_do_not_mint_private_capability() {
-        let home = tempfile::tempdir().unwrap();
+    fn stable_flow_namespaces_remain_distinct_and_validate_private_capability() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
         let operation = WorkItemOperationId::new();
         let run = RunId::new();
         let preparation = PreparationLock::acquire_stable(
@@ -574,8 +575,8 @@ mod windows_tests {
             .unwrap(),
         );
         assert_ne!(preparation.identity().unwrap(), launch.identity().unwrap());
-        assert!(preparation.require_private().is_err());
-        assert!(launch.require_private().is_err());
+        preparation.require_private().unwrap();
+        launch.require_private().unwrap();
         let worker = launch.clone();
         drop(launch);
         assert!(matches!(
@@ -593,9 +594,11 @@ mod windows_tests {
             )
             .is_ok()
         );
+        drop(preparation);
+        home.close().unwrap();
     }
     #[test]
-    fn restricted_task_and_populated_flow_fail_before_touching_private_namespaces() {
+    fn restricted_task_and_populated_flow_refuse_missing_unowned_runtime_home() {
         let home = tempfile::tempdir().unwrap();
         let absent = home.path().join("never-created");
         assert!(PreparationLock::acquire_task(&absent, WorkItemId::new()).is_err());
@@ -608,5 +611,54 @@ mod windows_tests {
         );
         assert!(!absent.exists());
         assert!(!home.path().join("work-items").exists());
+    }
+    #[test]
+    fn private_task_ownership_preserves_stable_identity_and_last_arc_exclusion() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let item = WorkItemId::new();
+        let original =
+            std::sync::Arc::new(PreparationLock::acquire_task(home.path(), item).unwrap());
+        let identity = original.identity().unwrap();
+        original.require_private().unwrap();
+        assert!(matches!(
+            PreparationLock::acquire_task(home.path(), item),
+            Err(WorkItemError::Busy)
+        ));
+        let worker = original.clone();
+        drop(original);
+        assert!(matches!(
+            PreparationLock::acquire_task(home.path(), item),
+            Err(WorkItemError::Busy)
+        ));
+        drop(worker);
+        let reopened = PreparationLock::acquire_task(home.path(), item).unwrap();
+        assert_eq!(identity, reopened.identity().unwrap());
+        reopened.require_private().unwrap();
+        drop(reopened);
+        home.close().unwrap();
+    }
+    #[test]
+    fn existing_private_lock_read_grants_are_refused_without_acl_or_byte_repair() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let item = WorkItemId::new();
+        drop(PreparationLock::acquire_task(home.path(), item).unwrap());
+        let lock = home
+            .path()
+            .join(format!("work-items/preparation-locks/{item}.lock"));
+        std::fs::write(&lock, b"original bytes").unwrap();
+        let status = std::process::Command::new("icacls")
+            .arg(&lock)
+            .args(["/grant", "*S-1-1-0:R"])
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert!(PreparationLock::acquire_task(home.path(), item).is_err());
+        assert_eq!(std::fs::read(&lock).unwrap(), b"original bytes");
+        // Stable-only legacy ownership still does not grant private authority.
+        let stable = windows::acquire(home.path(), &item.to_string()).unwrap();
+        stable.verify().unwrap();
+        assert!(windows::acquire_private(home.path(), &item.to_string()).is_err());
+        drop(stable);
+        home.close().unwrap();
     }
 }
