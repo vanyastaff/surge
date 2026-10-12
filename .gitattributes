@@ -40,3 +40,6 @@
 *.gz    binary
 *.tar   binary
 *.wasm  binary
+
+# Native verification receipts retain exact bytes for manifest SHA-256 checks.
+docs/bridge-evidence/** -text whitespace=-blank-at-eol
