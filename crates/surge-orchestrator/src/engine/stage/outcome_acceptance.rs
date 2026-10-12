@@ -1073,3 +1073,95 @@ fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {
 
     has_normal_component.then(|| path.to_path_buf())
 }
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use surge_persistence::runs::Storage;
+    use surge_persistence::runs::seq::EventSeq;
+
+    fn rejection(outcome: &str, hook: &str) -> Rejection {
+        Rejection {
+            outcome: OutcomeKey::try_from(outcome).unwrap(),
+            hook_id: hook.into(),
+            reason: "nope".into(),
+            rule: "on_outcome hook",
+            feedback: format!("{hook}: nope"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejections_are_recorded_counted_and_exhaust_with_every_rejected_key() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let storage = Storage::open(home.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::RunId::new(), home.path(), None)
+            .await
+            .unwrap();
+        let node = NodeKey::try_from("impl").unwrap();
+        let mut budget = RejectionBudget::new(2);
+
+        let first = budget
+            .reject(&writer, &node, rejection("done", "lint"))
+            .await
+            .unwrap();
+        assert!(
+            matches!(&first, Acceptance::Rejected { feedback, remaining: 2 }
+                if feedback.contains("lint: nope") && feedback.contains("report_stage_outcome")),
+            "{first:?}"
+        );
+        let second = budget
+            .reject(&writer, &node, rejection("partial", "tests"))
+            .await
+            .unwrap();
+        assert!(matches!(second, Acceptance::Rejected { remaining: 1, .. }));
+        assert_eq!(budget.attempts(), 2);
+
+        let exhausted = budget
+            .reject(&writer, &node, rejection("done", "contract"))
+            .await
+            .unwrap_err();
+        let StageError::OutcomeBudgetExhausted {
+            hook_id,
+            rule,
+            rejected,
+        } = exhausted
+        else {
+            panic!("expected exhaustion, got {exhausted:?}");
+        };
+        assert_eq!(hook_id, "contract");
+        assert_eq!(rule, "on_outcome hook");
+        assert_eq!(
+            rejected,
+            vec![
+                OutcomeKey::try_from("done").unwrap(),
+                OutcomeKey::try_from("partial").unwrap()
+            ],
+            "each rejected key once, in first-rejection order"
+        );
+
+        let last = writer.current_seq().await.unwrap();
+        let kinds: Vec<_> = writer
+            .read_events(EventSeq(0)..last.next())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.payload.payload)
+            .collect();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|e| matches!(e, EventPayload::OutcomeRejectedByHook { .. }))
+                .count(),
+            3,
+            "every rejection, including the exhausting one, is durable"
+        );
+        assert!(
+            !kinds.iter().any(|e| matches!(
+                e,
+                EventPayload::StageFailed { .. } | EventPayload::OutcomeReported { .. }
+            )),
+            "acceptance never writes terminal or accepted events for a rejection"
+        );
+    }
+}
