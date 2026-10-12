@@ -123,12 +123,13 @@ async fn next_permission(events: &mut tokio::sync::broadcast::Receiver<BridgeEve
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worker_rechecks_spawn_initialize_new_session_and_option_after_queue_admission() {
-    for target in 1..=7 {
+    let native_spawn_check = usize::from(cfg!(windows));
+    for target in 1..=7 + native_spawn_check {
         let root = tempfile::tempdir().unwrap();
         let fence = Fence::new(target);
         let bridge = Arc::new(AcpBridge::with_defaults().unwrap());
         let mut request = config(root.path(), fence.clone());
-        if target >= 6 {
+        if target >= 6 + native_spawn_check {
             request.config_selections.push(session::ConfigSelection {
                 category: session::ConfigCategory::Model,
                 value: "Mock Opus".into(),
@@ -147,8 +148,8 @@ async fn worker_rechecks_spawn_initialize_new_session_and_option_after_queue_adm
         ));
         assert_eq!(fence.checks.load(Ordering::SeqCst), target);
         assert!(
-            target != 1 || !root.path().join("pid").exists(),
-            "physical spawn ran after first refusal"
+            target > 1 + native_spawn_check || !root.path().join("pid").exists(),
+            "physical spawn ran after launch admission refusal"
         );
         Arc::try_unwrap(bridge)
             .ok()
@@ -156,10 +157,12 @@ async fn worker_rechecks_spawn_initialize_new_session_and_option_after_queue_adm
             .shutdown()
             .await
             .unwrap();
-        let expected = match target {
-            1..=3 => vec![],
-            4 | 5 => vec!["initialize"],
-            _ => vec!["initialize", "new_session"],
+        let expected = if target <= 3 + native_spawn_check {
+            vec![]
+        } else if target <= 5 + native_spawn_check {
+            vec!["initialize"]
+        } else {
+            vec!["initialize", "new_session"]
         };
         assert_eq!(operations(root.path()), expected);
         assert!(!root.path().join("choices").exists());
@@ -173,7 +176,7 @@ async fn worker_rechecks_spawn_initialize_new_session_and_option_after_queue_adm
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queued_prompt_checks_stored_session_fence_and_close_remains_available() {
-    for target in [6, 7] {
+    for target in [6, 7].map(|check| check + usize::from(cfg!(windows))) {
         let root = tempfile::tempdir().unwrap();
         let fence = Fence::new(target);
         let bridge = Arc::new(AcpBridge::with_defaults().unwrap());
@@ -230,7 +233,7 @@ impl Sandbox for Elevate {
 async fn permission_grant_is_checked_after_approval_await_and_automatic_allow() {
     for elevated in [false, true] {
         let root = tempfile::tempdir().unwrap();
-        let fence = Fence::new(8);
+        let fence = Fence::new(8 + usize::from(cfg!(windows)));
         let bridge = Arc::new(AcpBridge::with_defaults().unwrap());
         let mut request = config(root.path(), fence.clone());
         if elevated {

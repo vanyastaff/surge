@@ -24,7 +24,7 @@ $previousTmp = $env:TMP
 try {
     # Use actual libtest executables, not rebuilt substitutes in the other account.
     $executables = @{}
-    foreach ($crate in @('surge-persistence', 'surge-process')) {
+    foreach ($crate in @('surge-persistence', 'surge-process', 'surge-mcp')) {
         $messages = & cargo test --locked -p $crate --lib --all-features --no-run --message-format=json
         if ($LASTEXITCODE -ne 0) { throw "Native probe $crate test binary build failed" }
         $target = $crate.Replace('-', '_')
@@ -89,7 +89,9 @@ try {
         'native_owner_death_kills_job_without_inherited_job_handles',
         'native_job_refuses_collision_malformed_nonce_and_wrong_creation_identity',
         'native_job_reopening_rejects_broad_acl_and_denied_access_without_claiming_absence',
-        'native_child_cannot_break_away_from_job'
+        'native_child_cannot_break_away_from_job',
+        'inherited_command_preserves_casefolded_overrides_removals_and_inherited_values',
+        'final_launch_admission_preserves_refusal_and_prevents_child_effect'
     )
     foreach ($name in $processCases) {
         $receipts = if ($name -eq $processCases[0]) { @('SURGE_NATIVE_STANDARD_USER_PASS') } else { @() }
@@ -117,6 +119,7 @@ try {
     foreach ($filter in $privateCases) {
         $cases += @{ Binary = 'surge-persistence'; Filter = $filter; Native = $true; Receipts = @() }
     }
+    $cases += @{ Binary = 'surge-mcp'; Filter = 'child_settlement::windows_tests::native_final_admission_refuses_after_preparation_without_spawning'; Native = $true; Receipts = @() }
     $caseIndex = 0
     foreach ($case in $cases) {
         $printed = $false

@@ -85,7 +85,7 @@ pub(super) async fn run(
                 match done {
                     Ok(OpenDone { result: Ok(mut session), reply }) => {
                         let id = session.session_id;
-                        let exited_before_delivery = match session.child.as_mut().map(tokio::process::Child::try_wait) {
+                        let exited_before_delivery = match session.child.as_mut().map(|child| child.try_wait()) {
                             Some(Ok(None)) => false,
                             Some(Ok(Some(_))) | Some(Err(_)) | None => true,
                         };

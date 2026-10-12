@@ -52,6 +52,10 @@ fn native_host_probe() {
     let Ok(case) = std::env::var("SURGE_MCP_JOB_CASE") else {
         return;
     };
+    if case == "final-refuse" {
+        final_admission_refusal();
+        return;
+    }
     if case == "pipes" {
         failed_native_pipes();
         return;
@@ -298,4 +302,59 @@ fn failed_native_pipes() {
     assert_eq!(job.active_processes().unwrap(), 0);
     drop(runtime);
     shutdown_children_and_join();
+}
+
+#[test]
+fn native_final_admission_refuses_after_preparation_without_spawning() {
+    isolated("final-refuse");
+}
+
+struct FinalAdmission(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl HostWriterObserver for FinalAdmission {
+    fn before_effect(&self, _: &str) -> Result<(), crate::writer_observer::WriterObservationError> {
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            Ok(())
+        } else {
+            Err(crate::writer_observer::WriterObservationError(
+                "final admission refused".into(),
+            ))
+        }
+    }
+    async fn before_child(
+        &self,
+        _: &str,
+    ) -> Result<surge_core::id::ExecutionWriterId, crate::writer_observer::WriterObservationError>
+    {
+        panic!("transport spawn does not reserve a new writer");
+    }
+    async fn child_started(
+        &self,
+        _: surge_core::id::ExecutionWriterId,
+        _: Option<u32>,
+    ) -> Result<(), crate::writer_observer::WriterObservationError> {
+        panic!("refused child cannot start");
+    }
+}
+
+fn final_admission_refusal() {
+    let directory = tempfile::tempdir().unwrap();
+    let pidfile = directory.path().join("descendant.pid");
+    let observer = Arc::new(FinalAdmission(std::sync::atomic::AtomicUsize::new(0)));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    {
+        let _entered = runtime.enter();
+        assert!(matches!(
+            ObservedTransport::spawn(launch(&pidfile), Some(observer.clone()), "fixture"),
+            Err(ChildStartError::EffectRefused)
+        ));
+    }
+    drop(runtime);
+    shutdown_children_and_join();
+    assert_eq!(observer.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(!pidfile.exists());
 }

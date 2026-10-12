@@ -66,6 +66,8 @@ pub mod command;
 pub use command::BridgeCommand;
 
 mod lifecycle;
+#[cfg(windows)]
+mod windows_child;
 pub(crate) mod worker;
 
 pub(crate) mod session_inner;

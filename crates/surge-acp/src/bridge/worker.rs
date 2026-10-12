@@ -11,11 +11,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(windows)]
+use super::windows_child::WindowsChild as Child;
 use agent_client_protocol::schema::v1::{Implementation, InitializeRequest, NewSessionRequest};
 use std::collections::BTreeMap;
 use surge_core::SessionId;
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, Command};
+#[cfg(not(windows))]
+use tokio::process::Child;
+use tokio::process::Command;
 use tokio::sync::broadcast;
 
 use tracing::{debug, warn};
@@ -330,8 +334,27 @@ async fn open_session_attempt(
     // separate group so forced cleanup reaches the adapter, not just its shim.
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(windows)]
+    let native_launch = surge_process::windows_job::LaunchSpec::from_inherited_command(
+        cmd.as_std(),
+    )
+    .map_err(|source| OpenSessionError::AgentSpawnFailed {
+        kind: config.agent_kind.label().into(),
+        source,
+    })?;
     super::effect_fence::check(config.effect_fence.as_ref())?;
-    let mut child: Child = cmd.spawn().map_err(|e| {
+    #[cfg(not(windows))]
+    let spawned = cmd.spawn();
+    #[cfg(windows)]
+    let spawned = Child::spawn(&native_launch, || {
+        super::effect_fence::check(config.effect_fence.as_ref()).map_err(std::io::Error::other)
+    });
+    let mut child: Child = spawned.map_err(|e| {
+        if e.get_ref()
+            .is_some_and(|error| error.is::<super::HostEffectRefused>())
+        {
+            return OpenSessionError::HostEffectRefused(super::HostEffectRefused);
+        }
         warn!(
             kind = config.agent_kind.label(),
             working_dir = %config.working_dir.display(),
@@ -343,13 +366,24 @@ async fn open_session_attempt(
             source: e,
         }
     })?;
-    let (Some(stdin), Some(stdout), Some(stderr)) =
-        (child.stdin.take(), child.stdout.take(), child.stderr.take())
-    else {
-        reap_failed_open(&mut child).await;
-        return Err(OpenSessionError::HandshakeFailed {
-            reason: "agent stdio pipes unavailable".into(),
-        });
+    let (stdin, stdout, stderr) = match take_agent_pipes(&mut child) {
+        Ok(pipes) => pipes,
+        Err(error) => {
+            reap_failed_open(&mut child).await;
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: format!("agent stdio pipes unavailable: {error}"),
+            });
+        },
+    };
+    #[cfg(windows)]
+    let writer_container = match child.container() {
+        Ok(container) => Some(container),
+        Err(error) => {
+            reap_failed_open(&mut child).await;
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: error.to_string(),
+            });
+        },
     };
 
     // Step 4: ACP handshake — mirrors the pattern in legacy connection.rs.
@@ -551,13 +585,22 @@ async fn open_session_attempt(
         opened.execution_writer = Some(
             surge_core::execution_recovery::process::ExecutionWriterObservation::new(
                 config.writer_id,
-                child.id().and_then(|pid| {
-                    crate::process_evidence::observe_container(
-                        pid,
-                        surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
-                    )
-                    .ok()
-                }),
+                {
+                    #[cfg(windows)]
+                    {
+                        writer_container
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        child.id().and_then(|pid| {
+                            crate::process_evidence::observe_container(
+                                pid,
+                                surge_core::execution_recovery::process::WriterCoverage::GroupOnly,
+                            )
+                            .ok()
+                        })
+                    }
+                },
             )?,
         );
         Ok::<_, surge_core::execution_recovery::RecoveryIdentityError>(opened)
@@ -675,6 +718,26 @@ async fn reap_failed_open(child: &mut Child) {
                 warn!(%error, "handshake child reap unconfirmed");
                 tokio::time::sleep(Duration::from_millis(100)).await;
             },
+        }
+    }
+}
+
+type AgentPipes = (
+    tokio::process::ChildStdin,
+    tokio::process::ChildStdout,
+    tokio::process::ChildStderr,
+);
+
+fn take_agent_pipes(child: &mut Child) -> std::io::Result<AgentPipes> {
+    #[cfg(windows)]
+    {
+        child.take_pipes()
+    }
+    #[cfg(not(windows))]
+    {
+        match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+            (Some(stdin), Some(stdout), Some(stderr)) => Ok((stdin, stdout, stderr)),
+            _ => Err(std::io::Error::other("agent stdio pipes unavailable")),
         }
     }
 }

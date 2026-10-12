@@ -18,6 +18,43 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
+impl LaunchSpec {
+    /// Snapshot inherited host environment, then apply a command's overrides/removals.
+    ///
+    /// The caller must know that this command uses environment inheritance.
+    /// `std::process::Command` cannot reveal an earlier `env_clear`; commands with
+    /// complete explicit environments must construct `LaunchSpec` directly.
+    /// Windows' own command environment map handles case-insensitive key aliases.
+    /// # Errors
+    /// Rejects native command/environment inputs containing NUL or invalid keys.
+    pub fn from_inherited_command(command: &std::process::Command) -> io::Result<Self> {
+        let mut snapshot = std::process::Command::new(command.get_program());
+        snapshot.env_clear().envs(std::env::vars_os());
+        for (key, value) in command.get_envs() {
+            if let Some(value) = value {
+                snapshot.env(key, value);
+            } else {
+                snapshot.env_remove(key);
+            }
+        }
+        let child_environment = snapshot
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+            .collect::<Vec<_>>();
+        wide(command.get_program())?;
+        for arg in command.get_args() {
+            wide(arg)?;
+        }
+        environment(&child_environment)?;
+        Ok(Self {
+            program: command.get_program().to_owned(),
+            args: command.get_args().map(OsStr::to_owned).collect(),
+            environment: child_environment,
+            current_dir: command.get_current_dir().map(Path::to_owned),
+        })
+    }
+}
+
 #[path = "command/batch.rs"]
 mod batch;
 
@@ -83,7 +120,12 @@ impl Drop for Attributes {
     }
 }
 
-pub(super) fn spawn(spec: &LaunchSpec, job: HANDLE, pipes: &Pipes) -> io::Result<Spawned> {
+pub(super) fn spawn(
+    spec: &LaunchSpec,
+    job: HANDLE,
+    pipes: &Pipes,
+    admit: impl FnOnce() -> io::Result<()>,
+) -> io::Result<Spawned> {
     let program = resolve(spec)?;
     let (executable, mut command_line) = if is_batch(&program) {
         (
@@ -117,6 +159,7 @@ pub(super) fn spawn(spec: &LaunchSpec, job: HANDLE, pipes: &Pipes) -> io::Result
     startup.StartupInfo.hStdError = std_handles[2];
     startup.lpAttributeList = attributes.raw();
     let mut process = PROCESS_INFORMATION::default();
+    admit()?;
     // SAFETY: every input allocation and attribute value remains live through this
     // call. JOB_LIST assignment is atomic with creation; no child runs uncontained.
     unsafe {

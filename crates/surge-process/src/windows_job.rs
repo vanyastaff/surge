@@ -242,9 +242,22 @@ impl NativeChild {
     /// # Errors
     /// Rejects invalid command/environment input and all failed native preparation or launch.
     pub fn spawn(spec: &LaunchSpec) -> io::Result<Self> {
+        Self::spawn_admitted(spec, || Ok(()))
+    }
+
+    /// Prepare the launch, then invoke final admission immediately before process creation.
+    ///
+    /// Refusal drops prepared job/pipe handles without creating a child. Admission
+    /// is synchronous and authorizes only this one immediately following spawn.
+    /// # Errors
+    /// Returns preparation, admission or native launch failures.
+    pub fn spawn_admitted(
+        spec: &LaunchSpec,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<Self> {
         let job = Job::fresh()?;
         let pipes = pipes::Pipes::new(&job.name)?;
-        let spawned = command::spawn(spec, job.raw(), &pipes)?;
+        let spawned = command::spawn(spec, job.raw(), &pipes, admit)?;
         let (stdin, stdout, stderr) = pipes.into_parent();
         Ok(Self {
             process: spawned.process,

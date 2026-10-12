@@ -25,6 +25,8 @@ async fn inner_test() {
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
+    #[cfg(windows)]
+    let mut jobs = Vec::new();
     let mut sids: Vec<SessionId> = Vec::with_capacity(2);
     for index in 0..2 {
         let cfg = SessionConfig {
@@ -54,10 +56,31 @@ async fn inner_test() {
             bindings: BTreeMap::new(),
             env: Default::default(),
         };
-        sids.push(bridge.open_session(cfg).await.unwrap().session);
+        let opened = bridge.open_session(cfg).await.unwrap();
+        #[cfg(windows)]
+        {
+            let container = opened
+                .execution_writer
+                .as_ref()
+                .unwrap()
+                .container()
+                .unwrap();
+            let identity = container.windows_job().unwrap();
+            assert!(identity.name().starts_with("Global\\SurgeMcp-"));
+            let job = surge_process::windows_job::Job::open(identity.name())
+                .unwrap()
+                .unwrap();
+            assert!(job.active_processes().unwrap() >= 1);
+            jobs.push(job);
+        }
+        sids.push(opened.session);
     }
 
     bridge.shutdown().await.unwrap();
+    #[cfg(windows)]
+    for job in jobs {
+        assert_eq!(job.active_processes().unwrap(), 0);
+    }
 
     // Accept any bridge-initiated end reason: ForcedClose (from close_all_sessions
     // explicit emit) OR Timeout (from subprocess_waiter racing the kill_tx). Both

@@ -98,7 +98,25 @@ impl ObservedTransport {
         #[cfg(not(windows))]
         let child = command.as_std_mut().spawn()?;
         #[cfg(windows)]
-        let child = Child::spawn(&command)?;
+        let child = Child::spawn_admitted(&command, || {
+            owner
+                .as_ref()
+                .map_or(Ok(()), |observer| observer.before_effect(server))
+                .map_err(std::io::Error::other)
+        })
+        .map_err(|error| {
+            if error
+                .get_ref()
+                .is_some_and(|source| source.is::<crate::writer_observer::WriterObservationError>())
+            {
+                ChildStartError::EffectRefused
+            } else {
+                ChildStartError::Preparation
+            }
+        })?;
+        // Release the complete launch environment once the native process owns its copy.
+        #[cfg(windows)]
+        drop(command);
         #[cfg(windows)]
         let job_name = Some(child.job_name().to_owned());
         #[cfg(not(windows))]

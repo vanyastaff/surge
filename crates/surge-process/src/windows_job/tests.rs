@@ -63,6 +63,50 @@ fn settle(child: &mut NativeChild) -> ExitStatus {
 }
 
 #[test]
+fn inherited_command_preserves_casefolded_overrides_removals_and_inherited_values() {
+    let root = tempfile::tempdir().unwrap();
+    let inherited = std::env::var_os("SystemRoot").unwrap();
+    let mut command = fixture_command("environment", root.path());
+    command
+        .env("pAtH", "surge inherited environment fixture")
+        .env_remove("tEmP");
+    let launch = LaunchSpec::from_inherited_command(&command).unwrap();
+    let mut child = NativeChild::spawn(&launch).unwrap();
+    assert!(settle(&mut child).success());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("environment")).unwrap(),
+        format!(
+            "surge inherited environment fixture\n{}\nabsent",
+            inherited.to_string_lossy()
+        )
+    );
+}
+
+#[test]
+fn final_launch_admission_preserves_refusal_and_prevents_child_effect() {
+    #[derive(Debug)]
+    struct Refused;
+    impl std::fmt::Display for Refused {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("native fixture refused")
+        }
+    }
+    impl std::error::Error for Refused {}
+    let root = tempfile::tempdir().unwrap();
+    let launch = spec(&fixture_command("environment", root.path()));
+    let mut checks = 0;
+    let error = NativeChild::spawn_admitted(&launch, || {
+        checks += 1;
+        Err(io::Error::other(Refused))
+    })
+    .err()
+    .unwrap();
+    assert_eq!(checks, 1);
+    assert!(error.get_ref().unwrap().is::<Refused>());
+    assert!(!root.path().join("environment").exists());
+}
+
+#[test]
 fn native_launch_contains_immediate_descendants_and_observes_empty_job() {
     let standard_user_probe = assert_requested_standard_user();
     let root = tempfile::tempdir().unwrap();
@@ -410,6 +454,18 @@ fn native_fixture() {
     let mode = std::env::var("SURGE_JOB_FIXTURE_MODE").expect("fixture marker required");
     let root = PathBuf::from(std::env::var_os("SURGE_JOB_FIXTURE_ROOT").unwrap());
     match mode.as_str() {
+        "environment" => {
+            assert!(std::env::var_os("TEMP").is_none());
+            std::fs::write(
+                root.join("environment"),
+                format!(
+                    "{}\n{}\nabsent",
+                    std::env::var("PATH").unwrap(),
+                    std::env::var("SystemRoot").unwrap()
+                ),
+            )
+            .unwrap();
+        },
         "arguments" => {
             use std::os::windows::ffi::OsStrExt;
             let argument = std::env::args_os().next_back().unwrap();
