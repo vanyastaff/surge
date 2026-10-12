@@ -9,6 +9,49 @@ use surge_core::{
     verification_evidence::{VerificationBinding, VerificationCriteria, VerificationSubject},
 };
 
+/// Where a stage observes its verification subject (#94).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum VerificationPoint<'a> {
+    /// Stage entry, before the agent can touch the checked workspace.
+    Begin {
+        /// The node declares a `Verified` outcome.
+        node_verifies: bool,
+        /// The stage runs inside a task loop.
+        active_task: bool,
+    },
+    /// After an outcome was accepted.
+    Accepted {
+        /// The input captured at stage entry, if any.
+        input: Option<&'a VerificationBinding>,
+        /// The stage runs inside a task loop.
+        active_task: bool,
+    },
+    /// After a stage failure (and after its `on_error` hooks): only a subject
+    /// the run already remembers is re-observed.
+    AfterFailure,
+}
+
+/// Whether verification is in play at `point`: the one rule every
+/// observation site uses, so `VerificationSubjectObserved` cannot drift
+/// between entry, acceptance and failure.
+#[must_use]
+pub(crate) fn verification_in_play(
+    point: VerificationPoint<'_>,
+    memory: &surge_core::run_state::RunMemory,
+) -> bool {
+    let remembered = memory.verification.subject.is_some();
+    match point {
+        VerificationPoint::Begin {
+            node_verifies,
+            active_task,
+        } => node_verifies || active_task || remembered,
+        VerificationPoint::Accepted { input, active_task } => {
+            input.is_some() || active_task || remembered
+        },
+        VerificationPoint::AfterFailure => remembered,
+    }
+}
+
 pub(super) async fn begin(
     p: &AgentStageParams<'_>,
 ) -> Result<Option<VerificationBinding>, StageError> {
@@ -16,7 +59,13 @@ pub(super) async fn begin(
         .declared_outcomes
         .iter()
         .any(|outcome| outcome.ledger_effect == surge_core::node::LedgerEffect::Verified);
-    if !verifying && p.active_task_id.is_none() && p.run_memory.verification.subject.is_none() {
+    if !verification_in_play(
+        VerificationPoint::Begin {
+            node_verifies: verifying,
+            active_task: p.active_task_id.is_some(),
+        },
+        p.run_memory,
+    ) {
         return Ok(None);
     }
     let subject = if verifying {
@@ -337,6 +386,43 @@ fn unbound_audit(report: VerificationReportArtifact) -> Result<VerificationRepor
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verification_in_play_keeps_each_point_meaning() {
+        use surge_core::run_state::RunMemory;
+        let empty = RunMemory::default();
+        let mut remembered = RunMemory::default();
+        remembered.verification.subject = Some(VerificationSubject {
+            repository: "/repo".into(),
+            worktree: "/repo".into(),
+            tree: "tree".into(),
+            checkpoint: "checkpoint".into(),
+        });
+        let begin = |node_verifies, active_task| VerificationPoint::Begin {
+            node_verifies,
+            active_task,
+        };
+        assert!(!verification_in_play(begin(false, false), &empty));
+        assert!(verification_in_play(begin(true, false), &empty));
+        assert!(verification_in_play(begin(false, true), &empty));
+        assert!(verification_in_play(begin(false, false), &remembered));
+        let accepted = |active_task| VerificationPoint::Accepted {
+            input: None,
+            active_task,
+        };
+        assert!(!verification_in_play(accepted(false), &empty));
+        assert!(verification_in_play(accepted(true), &empty));
+        assert!(verification_in_play(accepted(false), &remembered));
+        // After a failure only a remembered subject counts, even in a task.
+        assert!(!verification_in_play(
+            VerificationPoint::AfterFailure,
+            &empty
+        ));
+        assert!(verification_in_play(
+            VerificationPoint::AfterFailure,
+            &remembered
+        ));
+    }
+
     use super::*;
     use crate::engine::frames::{Frame, LoopFrame};
     #[tokio::test]

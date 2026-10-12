@@ -1563,7 +1563,8 @@ async fn observe_failed_agent(
     state: &RunExecutionState,
     result: &Result<StageOutcome, StageError>,
 ) -> Result<(), StageError> {
-    if result.is_ok() || state.memory.verification.subject.is_none() {
+    use crate::engine::stage::verification::{VerificationPoint, verification_in_play};
+    if result.is_ok() || !verification_in_play(VerificationPoint::AfterFailure, &state.memory) {
         return Ok(());
     }
     crate::engine::stage::verification::observe_after(
@@ -2380,13 +2381,15 @@ async fn resolve_stage_error(
         crate::engine::hooks::record_hook_executed(&params.writer, record).await;
     }
 
-    if state.memory.verification.subject.is_some()
-        && let Err(observation_error) = crate::engine::stage::verification::observe_after(
-            &params.writer,
-            &params.worktree_path,
-            state.memory.verification.subject.as_ref(),
-        )
-        .await
+    if crate::engine::stage::verification::verification_in_play(
+        crate::engine::stage::verification::VerificationPoint::AfterFailure,
+        &state.memory,
+    ) && let Err(observation_error) = crate::engine::stage::verification::observe_after(
+        &params.writer,
+        &params.worktree_path,
+        state.memory.verification.subject.as_ref(),
+    )
+    .await
     {
         return Err(failed(
             params,

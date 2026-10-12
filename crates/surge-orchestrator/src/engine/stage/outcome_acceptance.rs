@@ -374,10 +374,13 @@ async fn commit_accepted(
             .await
             .map_err(|error| StageError::Storage(error.to_string()))?;
     }
-    if ctx.verification_input.is_some()
-        || p.active_task_id.is_some()
-        || p.run_memory.verification.subject.is_some()
-    {
+    if super::verification::verification_in_play(
+        super::verification::VerificationPoint::Accepted {
+            input: ctx.verification_input,
+            active_task: p.active_task_id.is_some(),
+        },
+        p.run_memory,
+    ) {
         super::verification::observe_after(
             p.writer,
             p.worktree_path,
