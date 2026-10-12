@@ -435,9 +435,13 @@ mod save_tests {
         use std::io::Read as _;
         use std::sync::atomic::Ordering;
 
-        let mut file = std::fs::File::open(destination).unwrap_or_else(|error| {
+        let opened = std::fs::File::open(destination);
+        // Capture this thread's last native status before formatting. This is
+        // supporting evidence: std does not promise it belongs to this open.
+        let native_status = windows_atomic::last_native_status_for_test();
+        let mut file = opened.unwrap_or_else(|error| {
             panic!(
-                "config reader open failed: raw_os_error={:?}, completed_reads={completed_reads}, finished_writers={}: {error}",
+                "config reader open failed: raw_os_error={:?}, last_native_status={native_status:#010x}, completed_reads={completed_reads}, finished_writers={}: {error}",
                 error.raw_os_error(),
                 finished.load(Ordering::Acquire),
             );
