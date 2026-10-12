@@ -50,7 +50,9 @@ use surge_persistence::runs::{RunReader, Storage, StorageError};
 /// `agent_id` when normalization fails despite a profile resolving (the
 /// bundled `mock` profile is a real, shipped case of that fallback, not a
 /// defensive one — see `engine::stage::agent::canonical_runtime_id_for`'s
-/// doc). Constructible only through [`Self::resolve`] — see the module
+/// doc). Constructible only through [`Self::resolve`] (and its run-scoped
+/// form [`Self::resolve_for_run`]) or, for an id a writer already resolved
+/// and recorded, `Self::recorded` — see the module
 /// doc's "acceptance criterion A" section for why that is the whole point
 /// of this type existing rather than a plain `String`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -70,6 +72,32 @@ impl CanonicalRuntimeId {
         )
     }
 
+    /// Resolve `raw_agent_id` through the agent registry that defines
+    /// runtime identity for a run: its merged registry (`[agents.*]` config
+    /// over builtin), or builtin when the run carries none. Every capacity
+    /// key and availability check for a run goes through this, so a custom
+    /// `[agents.claude]` entry is its own runtime rather than an alias of
+    /// `claude-acp` (#93).
+    #[must_use]
+    pub fn resolve_for_run(
+        run_agent_registry: Option<&surge_acp::Registry>,
+        raw_agent_id: &str,
+    ) -> Self {
+        Self::resolve(
+            &run_agent_registry_or_builtin(run_agent_registry),
+            raw_agent_id,
+        )
+    }
+
+    /// Adopt an id a write site already canonicalised and recorded (for
+    /// example `RunParked.runtime`). Re-resolving it through a different
+    /// registry than the writer used would undo the writer's identity, so
+    /// readers of recorded keys use this instead of [`Self::resolve`].
+    #[must_use]
+    pub(crate) fn recorded(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
     /// Borrow the canonical id as a string (e.g. to key
     /// `surge-persistence`'s `runtime_capacity` table, or to log).
     #[must_use]
@@ -85,6 +113,19 @@ impl CanonicalRuntimeId {
     pub fn into_string(self) -> String {
         self.0
     }
+}
+
+/// The agent registry that defines runtime identity for a run: the run's own
+/// merged registry, or builtin when it carries none. The single choice every
+/// capacity key, availability check and configured-route recheck shares.
+#[must_use]
+pub(crate) fn run_agent_registry_or_builtin(
+    run_agent_registry: Option<&surge_acp::Registry>,
+) -> std::borrow::Cow<'_, surge_acp::Registry> {
+    run_agent_registry.map_or_else(
+        || std::borrow::Cow::Owned(surge_acp::Registry::builtin()),
+        std::borrow::Cow::Borrowed,
+    )
 }
 
 impl std::fmt::Display for CanonicalRuntimeId {

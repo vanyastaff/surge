@@ -1543,3 +1543,171 @@ async fn registry_contention_does_not_delay_route_commit_behind_capacity_clear()
     drop(storage);
     dir.close().unwrap();
 }
+
+/// #93: a custom `[agents.claude]` entry is its own runtime for capacity.
+/// The run's merged agent registry — not the builtin alias table, which maps
+/// `claude` to `claude-acp` — keys every observe, status read and clear.
+///
+/// The `claude-acp` row seeded below stands for the real builtin runtime
+/// being exhausted by some other project sharing this home. Before #93 the
+/// custom wrapper was precheck-parked on that row without ever dispatching,
+/// and its own 429 and recovery were filed under `claude-acp` too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_agent_named_like_a_builtin_alias_keys_capacity_under_its_own_id() {
+    let profiles_dir = tempfile::tempdir().unwrap();
+    drop_profile(profiles_dir.path(), "custom-claude", "claude", &["done"]);
+    let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
+    let profiles = Arc::new(ProfileRegistry::new(disk));
+    let custom =
+        serde_json::from_value(serde_json::json!({"command": "claude-wrapper", "args": []}))
+            .unwrap();
+    let agents = Arc::new(surge_acp::Registry::merged_with_config(
+        surge_acp::Registry::from_config(std::collections::HashMap::from([(
+            "claude".to_string(),
+            custom,
+        )])),
+        surge_acp::Registry::builtin(),
+        surge_acp::Registry::from_config(std::collections::HashMap::new()),
+    ));
+
+    let dir = FixtureHome::new().unwrap();
+    {
+        let storage = Storage::open(dir.path()).await.unwrap();
+        storage
+            .observe_capacity(&surge_core::capacity::CapacityWindow::observed_429(
+                "claude-acp",
+                Some(Duration::from_secs(3600)),
+                chrono::Utc::now(),
+            ))
+            .await
+            .unwrap();
+        let builtin_row = storage.capacity_status("claude-acp").await.unwrap();
+
+        let mock = Arc::new(MockBridge::new());
+        let bridge: Arc<dyn BridgeFacade> = mock.clone();
+        mock.fail_next_send_message(SendMessageError::RateLimited {
+            retry_after: None,
+            details: "usage limit reached".into(),
+        })
+        .await;
+        let engine = Engine::new_full(
+            bridge,
+            storage.clone(),
+            Arc::new(UnusedDispatcher),
+            Arc::new(surge_notify::MultiplexingNotifier::new()),
+            None,
+            Some(profiles),
+            EngineConfig {
+                agent_registry: Some(agents),
+                ..EngineConfig::default()
+            },
+        );
+
+        let run_id = RunId::new();
+        let g = graph(
+            "custom-alias-capacity-identity",
+            "agent_1",
+            vec![
+                agent_node("agent_1", "custom-claude@1.0", vec![], &["done"]),
+                terminal_node("end"),
+            ],
+            vec![edge("agent_to_end", "agent_1", "done", "end")],
+        );
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            engine
+                .start_run(
+                    run_id,
+                    g,
+                    dir.path().to_path_buf(),
+                    EngineRunConfig::default(),
+                )
+                .await
+                .expect("start_run")
+                .await_completion(),
+        )
+        .await
+        .expect("run must not hang")
+        .expect("run handle join");
+        assert!(
+            matches!(outcome, RunOutcome::Parked { .. }),
+            "the custom runtime's own 429 parks the run, got {outcome:?}"
+        );
+        let dispatched = mock
+            .recorded_calls
+            .lock()
+            .await
+            .iter()
+            .filter(|c| matches!(c, fixtures::mock_bridge::RecordedCall::SendMessage { .. }))
+            .count();
+        assert_eq!(
+            dispatched, 1,
+            "the exhausted builtin claude-acp row must not precheck-park the custom claude entry"
+        );
+
+        let reader = storage.open_run_reader(run_id).await.unwrap();
+        let last = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+            .await
+            .unwrap();
+        let parked_runtime = events.iter().find_map(|ev| match &ev.payload.payload {
+            EventPayload::RunParked { runtime, .. } => Some(runtime.clone()),
+            _ => None,
+        });
+        assert_eq!(parked_runtime, Some(Some("claude".to_string())));
+        assert!(
+            matches!(
+                storage.capacity_status("claude").await.unwrap(),
+                surge_core::capacity::CapacityStatus::Known(_)
+            ),
+            "the custom runtime's exhaustion is recorded under its own id"
+        );
+        assert_eq!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            builtin_row,
+            "the builtin claude-acp row is untouched by the custom runtime's 429"
+        );
+
+        let second_session = SessionId::new();
+        mock.pin_next_session_id(second_session).await;
+        mock.enqueue_event(BridgeEvent::OutcomeReported {
+            session: second_session,
+            outcome: OutcomeKey::try_from("done").unwrap(),
+            summary: "ok on resume".into(),
+            artifacts_produced: vec![],
+            verification_report: None,
+        })
+        .await;
+        let resumed = engine
+            .resume_run(run_id, dir.path().to_path_buf())
+            .await
+            .expect("resume_run");
+        let pump_mock = mock.clone();
+        let pump = tokio::spawn(async move {
+            pump_mock.wait_for_subscribe_count(2).await;
+            pump_mock.pump_scripted_events().await;
+        });
+        let resumed_outcome =
+            tokio::time::timeout(Duration::from_secs(2), resumed.await_completion())
+                .await
+                .expect("resumed run must not hang")
+                .expect("run handle join");
+        pump.await.unwrap();
+        assert!(
+            matches!(resumed_outcome, RunOutcome::Completed { .. }),
+            "got {resumed_outcome:?}"
+        );
+        assert_eq!(
+            storage.capacity_status("claude").await.unwrap(),
+            surge_core::capacity::CapacityStatus::NeverObserved,
+            "proven recovery clears the custom runtime's own row"
+        );
+        assert_eq!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            builtin_row,
+            "proven recovery of the custom runtime never clears the builtin claude-acp row"
+        );
+    }
+    dir.close().unwrap();
+}

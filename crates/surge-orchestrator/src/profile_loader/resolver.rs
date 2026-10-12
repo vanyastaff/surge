@@ -51,7 +51,7 @@ impl ReferenceResolver for ProfileRegistry {
         // so two profiles naming the same runtime under different aliases
         // must resolve to the same `String` here — the whole point of
         // `ValidationErrorKind::SameRuntimeVerification` (W5) existing.
-        crate::engine::stage::agent::resolve_profile_runtime_id(Some(self), name)
+        crate::engine::stage::agent::resolve_profile_runtime_id(Some(self), None, name)
             .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
     }
 }

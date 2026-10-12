@@ -404,17 +404,16 @@ async fn evidence_backed_for_completed_run(storage: &Arc<Storage>, run_id: RunId
 /// which predates that write-site fix and can still carry a raw, un-
 /// normalized value on a run started before it landed (ADR-0016, M1). This
 /// function does not inherit that risk — it never reads `agent_id` at
-/// all — but re-resolves through [`CanonicalRuntimeId::resolve`] anyway
-/// rather than trusting the string, the same discipline the write side
-/// (`CapacityLedger::observe`) already applies: the read half of a typed
-/// contract should not depend on every writer, past or future, having
-/// gotten it right.
+/// all. It adopts the recorded id as-is ([`CanonicalRuntimeId::recorded`]):
+/// the writer resolved it through the run's own agent registry (#93), and
+/// re-resolving it here through a different registry would undo that
+/// identity (a custom `[agents.claude]` would read back as `claude-acp`).
 ///
 /// A read failure (registry unreachable) degrades to `NeverObserved` —
 /// best-effort, same as the scan this replaces: one run's optional capacity
 /// line must never block the rest of the inbox listing.
 async fn runtime_capacity_status(storage: &Arc<Storage>, raw_runtime: &str) -> CapacityStatus {
-    let canonical = CanonicalRuntimeId::resolve(&surge_acp::Registry::builtin(), raw_runtime);
+    let canonical = CanonicalRuntimeId::recorded(raw_runtime);
     storage
         .capacity_status(canonical.as_str())
         .await
@@ -1204,14 +1203,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn inbox_two_runs_parked_on_the_same_runtime_converge_through_the_registry() {
-        // The exact divergence this milestone closes (module doc): before
-        // it, run A's own journal knew nothing of a 429 run B observed on
-        // the *same* runtime, so their capacity columns disagreed. Now both
-        // read the one registry row, so they agree — proven here with run A
-        // parked under a raw, unnormalized alias ("claude") and run B under
-        // the canonical spelling ("claude-acp"), so this also proves
-        // `CanonicalRuntimeId::resolve` normalizes at read time rather than
-        // trusting the journal's own string.
+        // The divergence this milestone closes (module doc): before it, run
+        // A's own journal knew nothing of a 429 run B observed on the *same*
+        // runtime, so their capacity columns disagreed. Now both read the one
+        // registry row, so they agree.
+        //
+        // #93: the recorded `RunParked.runtime` is the writer's canonical id
+        // under the run's own agent registry, adopted as-is. A third run
+        // parked under `claude` — which only a custom `[agents.claude]`
+        // entry produces, since the builtin path always records
+        // `claude-acp` — is its own runtime and must not read the
+        // `claude-acp` row.
         use surge_core::capacity::{CapacityWindow, WakeBasis};
 
         let dir = crate::runtime_home_fixture::FixtureHome::new().unwrap();
@@ -1237,27 +1239,23 @@ mod tests {
             reason: "provider rate limit exhausted".into(),
         };
 
-        let run_a = RunId::new();
-        let wa = storage.create_run(run_a, &project, None).await.unwrap();
-        append(
-            &wa,
-            vec![run_started(), pipeline_materialized(), park_event("claude")],
-        )
-        .await;
-        wa.flush().await.unwrap();
-
-        let run_b = RunId::new();
-        let wb = storage.create_run(run_b, &project, None).await.unwrap();
-        append(
-            &wb,
-            vec![
-                run_started(),
-                pipeline_materialized(),
-                park_event("claude-acp"),
-            ],
-        )
-        .await;
-        wb.flush().await.unwrap();
+        let mut writers = Vec::new();
+        let parked = |runtime: &'static str| {
+            let storage = storage.clone();
+            let project = project.clone();
+            let event = park_event(runtime);
+            async move {
+                let run = RunId::new();
+                let writer = storage.create_run(run, &project, None).await.unwrap();
+                append(&writer, vec![run_started(), pipeline_materialized(), event]).await;
+                writer.flush().await.unwrap();
+                (run, writer)
+            }
+        };
+        let (run_a, wa) = parked("claude-acp").await;
+        let (run_b, wb) = parked("claude-acp").await;
+        let (run_custom, wc) = parked("claude").await;
+        writers.extend([wa, wb, wc]);
 
         let entries = collect_entries(&storage, Some(project.clone()), 100)
             .await
@@ -1268,10 +1266,10 @@ mod tests {
                 .find(|e| e.run_id == id)
                 .unwrap_or_else(|| panic!("missing {id}"))
         };
-        let window_a = find(run_a).capacity.window().expect(
-            "run A must see the registry's observation despite its own RunParked \
-                     recording the unnormalized alias \"claude\"",
-        );
+        let window_a = find(run_a)
+            .capacity
+            .window()
+            .expect("run A must see the registry's observation");
         let window_b = find(run_b)
             .capacity
             .window()
@@ -1281,8 +1279,13 @@ mod tests {
             "two runs parked on the same runtime must read the identical registry fact, not \
              two independently-derived ones"
         );
-        wa.close().await.unwrap();
-        wb.close().await.unwrap();
+        assert!(
+            find(run_custom).capacity.window().is_none(),
+            "a run parked on the custom `claude` runtime must not read the builtin claude-acp row"
+        );
+        for writer in writers {
+            writer.close().await.unwrap();
+        }
         drop(storage);
         dir.close().unwrap();
     }
@@ -1418,7 +1421,7 @@ mod tests {
     async fn inbox_working_run_never_consults_the_registry() {
         // The non-terminal counterpart to the test above: a run that is
         // `Working` (not currently parked) is, by the dispatch gate's own
-        // guarantee (`capacity_decision_for` runs before every agent
+        // guarantee (`RunCapacity::before_dispatch` runs before every agent
         // stage), not blocked by capacity right now — so it reads
         // `NeverObserved` even with a matching registry row in play. Only
         // `Attention::Waiting` ever triggers the lookup; see `classify`'s

@@ -42,13 +42,17 @@ use super::ProfileRegistry;
 /// resolving to a different runtime than `implementer`).
 #[must_use]
 pub fn render_profile_catalog(registry: &ProfileRegistry) -> String {
-    render_profile_catalog_with(registry, &std::collections::BTreeMap::new())
+    render_profile_catalog_with(registry, None, &std::collections::BTreeMap::new())
 }
 
 /// Canonical runtime ids the catalog rows resolve to (what a caller needs to
-/// look up availability for).
+/// look up availability for), under the run's agent registry — the same
+/// identity the capacity ledger is keyed by (`None` = builtin).
 #[must_use]
-pub fn catalog_runtimes(registry: &ProfileRegistry) -> std::collections::BTreeSet<String> {
+pub fn catalog_runtimes(
+    registry: &ProfileRegistry,
+    run_agent_registry: Option<&surge_acp::Registry>,
+) -> std::collections::BTreeSet<String> {
     registry
         .list()
         .into_iter()
@@ -56,6 +60,7 @@ pub fn catalog_runtimes(registry: &ProfileRegistry) -> std::collections::BTreeSe
             let role = &entry.profile.role;
             crate::engine::stage::agent::resolve_profile_runtime_id(
                 Some(registry),
+                run_agent_registry,
                 &format!("{}@{}", role.id.as_str(), role.version),
             )
         })
@@ -70,6 +75,7 @@ pub fn catalog_runtimes(registry: &ProfileRegistry) -> std::collections::BTreeSe
 #[must_use]
 pub fn render_profile_catalog_with(
     registry: &ProfileRegistry,
+    run_agent_registry: Option<&surge_acp::Registry>,
     unavailable: &std::collections::BTreeMap<String, String>,
 ) -> String {
     let mut out = String::from(
@@ -91,10 +97,13 @@ pub fn render_profile_catalog_with(
         // Inputs, outcomes, sandbox and authority must describe the same
         // inherited profile that execution resolves, not only the leaf file.
         let profile = resolved.as_ref().map_or(profile, |value| &value.profile);
-        let runtime =
-            crate::engine::stage::agent::resolve_profile_runtime_id(Some(registry), &resolve_key)
-                .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
-                .unwrap_or_else(|| "unknown".to_string());
+        let runtime = crate::engine::stage::agent::resolve_profile_runtime_id(
+            Some(registry),
+            run_agent_registry,
+            &resolve_key,
+        )
+        .map(crate::engine::capacity::CanonicalRuntimeId::into_string)
+        .unwrap_or_else(|| "unknown".to_string());
         let runtime = match unavailable.get(&runtime) {
             Some(why) => format!("{runtime} ⚠ UNAVAILABLE ({why})"),
             None => runtime,
@@ -238,13 +247,13 @@ system = "test fixture prompt"
     #[test]
     fn exhausted_runtime_is_marked_unavailable() {
         let registry = ProfileRegistry::new(DiskProfileSet::empty());
-        let runtimes = super::catalog_runtimes(&registry);
+        let runtimes = super::catalog_runtimes(&registry, None);
         assert!(runtimes.contains("codex-acp"), "{runtimes:?}");
         let unavailable = std::collections::BTreeMap::from([(
             "codex-acp".to_string(),
             "provider usage limit".to_string(),
         )]);
-        let catalog = super::render_profile_catalog_with(&registry, &unavailable);
+        let catalog = super::render_profile_catalog_with(&registry, None, &unavailable);
         let cross = catalog
             .lines()
             .find(|l| l.contains("`cross-verifier@1.0`"))

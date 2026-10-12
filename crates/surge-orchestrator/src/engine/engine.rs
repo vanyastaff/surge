@@ -409,6 +409,7 @@ impl Engine {
         if let Some(policy) = super::capacity_routes::freeze_policy(
             graph,
             &self.config,
+            self.agent_registry_for(&config).as_deref(),
             self.storage.home(),
             working_dir,
         )? {
@@ -418,6 +419,7 @@ impl Engine {
             graph,
             &config.quota_recovery,
             self.config.profile_registry.as_deref(),
+            self.agent_registry_for(&config).as_deref(),
         )?;
         self.seed_profile_catalog(&mut config).await?;
         crate::engine::validate::validate_loop_seeds(graph, &config.seed_artifacts)?;
@@ -508,14 +510,17 @@ impl Engine {
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
             agent_registry: run_agent_registry.clone(),
-            capacity_ledger,
-            capacity_estimator,
-            capacity_policy: self.config.capacity.clone(),
-            escalation: self.config.escalation.clone(),
-            fallback_agents: self.config.fallback_agents.clone(),
-            storage: self.storage.clone(),
             // A fresh run was never parked — nothing to bypass.
-            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(false),
+            capacity: crate::engine::quota_recovery::RunCapacity::new(
+                capacity_ledger,
+                capacity_estimator,
+                self.config.capacity.clone(),
+                self.config.fallback_agents.clone(),
+                run_agent_registry.clone(),
+                false,
+            ),
+            escalation: self.config.escalation.clone(),
+            storage: self.storage.clone(),
         };
 
         let join = self.spawn_run_execution(params, feed);
@@ -651,6 +656,7 @@ impl Engine {
             graph,
             &run_config.quota_recovery,
             self.config.profile_registry.as_deref(),
+            self.agent_registry_for(&run_config).as_deref(),
         )?;
 
         run_config.memory_store_path =
@@ -817,13 +823,10 @@ impl Engine {
         let Some(registry) = self.config.profile_registry.as_ref() else {
             return Ok(());
         };
-        let agents = run_config
-            .agent_registry
-            .clone()
-            .or_else(|| self.config.agent_registry.clone())
-            .unwrap_or_else(|| Arc::new(surge_acp::Registry::builtin()));
+        let run_agents = self.agent_registry_for(run_config);
+        let agents = crate::engine::capacity::run_agent_registry_or_builtin(run_agents.as_deref());
         let mut unavailable = std::collections::BTreeMap::new();
-        for runtime in crate::profile_loader::catalog_runtimes(registry) {
+        for runtime in crate::profile_loader::catalog_runtimes(registry, run_agents.as_deref()) {
             // A runtime that cannot even start (e.g. a required environment
             // variable is unset) would fail its stage at spawn.
             if let Some(entry) = agents.find_normalized(&runtime)
@@ -839,7 +842,11 @@ impl Engine {
                 unavailable.insert(runtime, why);
             }
         }
-        let catalog = crate::profile_loader::render_profile_catalog_with(registry, &unavailable);
+        let catalog = crate::profile_loader::render_profile_catalog_with(
+            registry,
+            run_agents.as_deref(),
+            &unavailable,
+        );
         let seed = RunSeedArtifact::new(
             PROFILE_CATALOG_ARTIFACT_NAME,
             PROFILE_CATALOG_ARTIFACT_RELPATH,
@@ -1089,7 +1096,7 @@ impl Engine {
         // `set_run_parked` itself already applies), before anything else
         // about the resume proceeds. Also the source of truth for whether
         // this resumed run's first agent dispatch bypasses the capacity
-        // precheck once (see `RunTaskParams::capacity_precheck_bypass_once`'s
+        // precheck once (see `quota_recovery::RunCapacity`'s bypass
         // doc) — a resumed *non*-parked run (e.g. crash recovery of a
         // `Crashed` row) gets no such bypass.
         // Neither of these two may be best-effort. If the row still reads
@@ -1268,6 +1275,7 @@ impl Engine {
             &replayed.graph,
             &resume_run_config.quota_recovery,
             self.config.profile_registry.as_deref(),
+            self.agent_registry_for(&resume_run_config).as_deref(),
         )?;
         // Task 12 M4 review: `memory_store_path` is deliberately never
         // persisted (see `EngineRunConfig::memory_store_path`'s own doc),
@@ -1381,15 +1389,16 @@ impl Engine {
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
             agent_registry: run_agent_registry.clone(),
-            capacity_ledger,
-            capacity_estimator,
-            capacity_policy: self.config.capacity.clone(),
-            escalation: self.config.escalation.clone(),
-            fallback_agents: self.config.fallback_agents.clone(),
-            storage: self.storage.clone(),
-            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(
+            capacity: crate::engine::quota_recovery::RunCapacity::new(
+                capacity_ledger,
+                capacity_estimator,
+                self.config.capacity.clone(),
+                self.config.fallback_agents.clone(),
+                run_agent_registry.clone(),
                 was_parked || capacity_continue,
             ),
+            escalation: self.config.escalation.clone(),
+            storage: self.storage.clone(),
         };
 
         let join = self.spawn_run_execution(params, feed);

@@ -22,6 +22,7 @@ pub(crate) fn validate_quota_policy(
     graph: &Graph,
     policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaPolicy,
     profiles: Option<&crate::profile_loader::ProfileRegistry>,
+    run_agent_registry: Option<&surge_acp::Registry>,
 ) -> Result<(), EngineError> {
     for stage in policy.stages() {
         let node = graph.nodes.get(stage.node()).ok_or_else(|| {
@@ -36,12 +37,14 @@ pub(crate) fn validate_quota_policy(
                 stage.node()
             )));
         };
-        if let Some(primary) =
-            crate::engine::stage::agent::resolve_node_runtime_id(profiles, config)
-            && stage
-                .candidates()
-                .first()
-                .is_none_or(|candidate| candidate.candidate().runtime() != primary.as_str())
+        if let Some(primary) = crate::engine::stage::agent::resolve_node_runtime_id(
+            profiles,
+            run_agent_registry,
+            config,
+        ) && stage
+            .candidates()
+            .first()
+            .is_none_or(|candidate| candidate.candidate().runtime() != primary.as_str())
         {
             return Err(EngineError::GraphInvalid(format!(
                 "quota recovery primary candidate does not match node {} runtime {}",

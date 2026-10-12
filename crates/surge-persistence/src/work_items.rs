@@ -319,6 +319,13 @@ impl WorkItemStore {
         &self.home
     }
 
+    /// The clock this store stamps its rows with. Callers that plan against
+    /// stored evidence (quota wakes, observation expiry) read time here so
+    /// their decisions and the store's timestamps share one source.
+    pub fn clock(&self) -> &dyn crate::runs::Clock {
+        self.clock.as_ref()
+    }
+
     /// Inspect admission without attempting execution or inferring it from error text.
     pub fn operation_admission(&self, command: &WorkItemCommand) -> Result<WorkItemAdmission> {
         let Some(operation) = command.operation_id() else {

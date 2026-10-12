@@ -47,14 +47,10 @@ pub struct AgentStageParams<'a> {
     /// One-shot opening authority for a task-owned fallback candidate.
     pub quota_opening: Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
     /// Recovery state carried when this stage is being retried on a frozen fallback.
-    pub quota_cycle: Option<TaskQuotaCycle>,
+    pub quota_cycle: Option<crate::engine::quota_recovery::TaskQuotaCycle>,
     /// Persistent-task quota owner and the frozen policy for this agent node.
     /// Ordinary runs have no task-owned quota cycle.
-    pub quota_owner: Option<(
-        surge_persistence::work_items::WorkItemStore,
-        surge_persistence::work_items::WorkItemLaunchClaim,
-        surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-    )>,
+    pub quota_owner: Option<crate::engine::quota_recovery::TaskQuotaOwner>,
     /// Current host-authorized continuation, distinct from the attempt binding.
     pub continuation: Option<surge_core::execution_recovery::WorkItemExecutionControl>,
     /// Active execution frames supplying the current loop items to the agent.
@@ -146,125 +142,6 @@ pub struct AgentStageParams<'a> {
     /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
     /// emits the matching task-ledger event. `None` outside a task loop.
     pub active_task_id: Option<RoadmapTaskId>,
-}
-
-/// Durable position for one logical stage's ordered provider recovery cycle.
-pub struct TaskQuotaCycle {
-    cycle: surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-    reservation: surge_persistence::work_items::recovery_cycles::CandidateReservation,
-    opening_seq: u64,
-}
-impl TaskQuotaCycle {
-    pub(crate) fn from_automatic_wake(
-        cycle: surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-        reservation: surge_persistence::work_items::recovery_cycles::CandidateReservation,
-    ) -> Self {
-        Self {
-            cycle,
-            reservation,
-            opening_seq: 0,
-        }
-    }
-}
-
-fn initialize_task_quota_cycle(
-    store: &surge_persistence::work_items::WorkItemStore,
-    claim: &surge_persistence::work_items::WorkItemLaunchClaim,
-    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-    invocation: surge_core::id::StageInvocationId,
-    opening_seq: u64,
-    control_generation: u64,
-) -> Result<TaskQuotaCycle, surge_persistence::work_items::WorkItemError> {
-    let bound = store.bind_quota_stage(claim, invocation, opening_seq)?;
-    if &bound != policy {
-        return Err(surge_persistence::work_items::WorkItemError::Conflict(
-            "persisted quota stage changed after opening".into(),
-        ));
-    }
-    let cycle = store.begin_recovery_cycle(claim, &invocation.to_string(), control_generation)?;
-    let primary = policy.candidates().first().ok_or_else(|| {
-        surge_persistence::work_items::WorkItemError::Invalid(
-            "frozen quota primary is absent".into(),
-        )
-    })?;
-    let reservation = store.reserve_recovery_candidate(claim, &cycle, primary.candidate())?;
-    let cycle = store.recovery_cycle(claim.run(), &invocation.to_string(), cycle.generation)?;
-    Ok(TaskQuotaCycle {
-        cycle,
-        reservation,
-        opening_seq,
-    })
-}
-
-fn record_task_quota_rate_limit(
-    store: &surge_persistence::work_items::WorkItemStore,
-    claim: &surge_persistence::work_items::WorkItemLaunchClaim,
-    policy: &surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-    quota: &TaskQuotaCycle,
-    invocation: surge_core::id::StageInvocationId,
-    session: surge_core::SessionId,
-    error: &surge_acp::bridge::error::SendMessageError,
-) -> Result<
-    surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-    surge_persistence::work_items::WorkItemError,
-> {
-    let surge_acp::bridge::error::SendMessageError::RateLimited {
-        retry_after,
-        details,
-    } = error
-    else {
-        return Ok(quota.cycle.clone());
-    };
-    let now = chrono::Utc::now().timestamp_millis();
-    let delay_ms = retry_after
-        .map(|delay| {
-            i64::try_from(delay.as_millis()).map_err(|_| {
-                surge_persistence::work_items::WorkItemError::Invalid(
-                    "quota retry delay overflow".into(),
-                )
-            })
-        })
-        .transpose()?;
-    let expires_at_ms = now
-        .checked_add(policy.observation_ttl_ms())
-        .ok_or_else(|| {
-            surge_persistence::work_items::WorkItemError::Invalid(
-                "quota observation expiry overflow".into(),
-            )
-        })?;
-    let reset_at_ms = match delay_ms {
-        Some(delay) => Some(now.checked_add(delay).ok_or_else(|| {
-            surge_persistence::work_items::WorkItemError::Invalid("quota reset overflow".into())
-        })?),
-        None => None,
-    };
-    let retry_after_ms = delay_ms.map(u64::try_from).transpose().map_err(|_| {
-        surge_persistence::work_items::WorkItemError::Invalid(
-            "quota retry delay is negative".into(),
-        )
-    })?;
-    let source = surge_persistence::work_items::recovery_cycles::QuotaRateLimitSource::new(
-        quota.opening_seq,
-        invocation,
-        session,
-        retry_after_ms,
-        details.clone(),
-    )?;
-    let observation = surge_persistence::work_items::recovery_cycles::QuotaObservation::new(
-        surge_persistence::work_items::recovery_cycles::QuotaEvidence::Observed {
-            observed_at_ms: now,
-            expires_at_ms,
-            available: false,
-            reset_at_ms,
-        },
-    )?;
-    store.record_selected_rate_limit(
-        claim,
-        &quota.cycle,
-        &quota.reservation.receipt,
-        &source,
-        &observation,
-    )
 }
 
 /// Largest `verification-report` read back for re-entry feedback.
@@ -703,8 +580,39 @@ async fn append_loop_escalations(
 /// Returns [`StageError::AgentCrashed`] if the session ends without reporting
 /// an outcome.
 /// Returns [`StageError::Storage`] if event persistence fails.
-#[allow(clippy::too_many_lines)]
+///
+/// # Task-owned quota
+/// When the stage is task-owned and its selected candidate reports
+/// exhaustion, the next frozen candidate runs as a fresh attempt — one
+/// provider opening per attempt, decided between attempts by
+/// [`crate::engine::quota_recovery::TaskQuotaOwner::after_exhaustion`]. When
+/// no candidate remains the original rate-limit error is returned with the
+/// capacity suspension already requested.
 pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
+    loop {
+        let mut exhausted = None;
+        let result = execute_agent_attempt(&mut p, &mut exhausted).await;
+        let (Some(quota), Some(owner)) = (exhausted, p.quota_owner.as_ref()) else {
+            return result;
+        };
+        match owner.after_exhaustion(&quota, p.worktree_path, p.agent_registry.as_deref())? {
+            crate::engine::quota_recovery::AfterExhaustion::Retry(next) => {
+                p.quota_cycle = Some(next.cycle);
+                p.quota_opening = Some(next.opening);
+            },
+            crate::engine::quota_recovery::AfterExhaustion::Suspended => return result,
+        }
+    }
+}
+
+/// One provider attempt of [`execute_agent_stage`]. On a rate limit with a
+/// task-owned cycle, `exhausted` receives the cycle carrying the recorded
+/// exhaustion so the caller can decide the next candidate.
+#[allow(clippy::too_many_lines)]
+async fn execute_agent_attempt(
+    p: &mut AgentStageParams<'_>,
+    exhausted: &mut Option<crate::engine::quota_recovery::TaskQuotaCycle>,
+) -> StageResult {
     let mut targets = BTreeSet::new();
     for binding in &p.agent_config.bindings {
         if !targets.insert(&binding.target.0) {
@@ -721,7 +629,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         resolve_bindings(&p.agent_config.bindings, p.run_memory, p.worktree_path)
             .await
             .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
-    let memory_receipt = apply_memory_claim_pack(&p, &mut resolved_bindings).await?;
+    let memory_receipt = apply_memory_claim_pack(p, &mut resolved_bindings).await?;
 
     // Resolve the profile once (when a registry is wired) so we can use
     // its `runtime.agent_id` to derive `AgentKind` AND fall back to its
@@ -875,7 +783,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         .current_seq()
         .await
         .map_err(|error| StageError::Storage(error.to_string()))?;
-    let verification_input = super::verification::begin(&p).await?;
+    let verification_input = super::verification::begin(p).await?;
     let mut prompt_text = prompt_text;
     if let Some(input) = &verification_input {
         let _ = write!(
@@ -1158,7 +1066,14 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             || {
                 resolved_profile.as_ref().map_or_else(
                     || agent_kind.label().into(),
-                    |profile| canonical_runtime_id_for(p.agent_config, profile).into_string(),
+                    |profile| {
+                        canonical_runtime_id_for(
+                            p.agent_registry.as_deref(),
+                            p.agent_config,
+                            profile,
+                        )
+                        .into_string()
+                    },
                 )
             },
             |permit| permit.launch().candidate().candidate().runtime().to_owned(),
@@ -1204,17 +1119,21 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         };
     }
 
-    if let Err(error) = validate_configured_capacity_sources(&p, &session_config) {
-        if let (Some(permit), Some((store, claim, _))) =
-            (p.quota_opening.take(), p.quota_owner.as_ref())
-        {
-            store
-                .invalidate_unexecuted_quota_open(claim, permit)
-                .map_err(|failure| {
-                    StageError::RecoveryRequired(format!(
-                        "retain source-changed opening containment: {failure}"
-                    ))
-                })?;
+    if let Some(owner) = p.quota_owner.as_ref()
+        && let Err(error) = owner.validate_sources(
+            p.quota_cycle.as_ref(),
+            p.quota_opening.as_ref(),
+            p.worktree_path,
+            p.agent_registry.as_deref(),
+            &session_config,
+        )
+    {
+        if let Some(permit) = p.quota_opening.take() {
+            owner.invalidate_unexecuted(permit).map_err(|failure| {
+                StageError::RecoveryRequired(format!(
+                    "retain source-changed opening containment: {failure}"
+                ))
+            })?;
         }
         return Err(error);
     }
@@ -1382,9 +1301,10 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             agent_id: if is_quota_fallback {
                 Some(logical_runtime.clone())
             } else {
-                resolved_profile
-                    .as_ref()
-                    .map(|rp| canonical_runtime_id_for(p.agent_config, rp).into_string())
+                resolved_profile.as_ref().map(|rp| {
+                    canonical_runtime_id_for(p.agent_registry.as_deref(), p.agent_config, rp)
+                        .into_string()
+                })
             },
         }))
         .await;
@@ -1401,14 +1321,14 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         let sequence = opened.as_ref().map_err(|error| {
             StageError::Storage(format!("quota opening sequence unavailable: {error}"))
         })?;
-        let Some((store, claim, _)) = &p.quota_owner else {
+        let Some(owner) = &p.quota_owner else {
             let endpoint_cleanup = stage_endpoint.close().await;
             let cleanup = p.bridge.close_session(session_id).await;
             return Err(StageError::RecoveryRequired(format!(
                 "quota opening has no task owner; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
             )));
         };
-        if let Err(error) = store.confirm_provider_open(claim, operation, sequence.0) {
+        if let Err(error) = owner.confirm_open(operation, sequence.0) {
             let endpoint_cleanup = stage_endpoint.close().await;
             let cleanup = p.bridge.close_session(session_id).await;
             return Err(StageError::RecoveryRequired(format!(
@@ -1427,7 +1347,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
     if is_new_opening
         && !is_quota_fallback
         && task_quota_cycle.is_none()
-        && let Some((store, claim, policy)) = &p.quota_owner
+        && let Some(owner) = &p.quota_owner
     {
         let sequence = opened.as_ref().map_err(|error| {
             StageError::Storage(format!("quota opening sequence unavailable: {error}"))
@@ -1436,14 +1356,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             .continuation
             .as_ref()
             .map_or(0, |control| control.generation);
-        match initialize_task_quota_cycle(
-            store,
-            claim,
-            policy,
-            logical_invocation,
-            sequence.0,
-            control_generation,
-        ) {
+        match owner.begin(logical_invocation, sequence.0, control_generation) {
             Ok(cycle) => task_quota_cycle = Some(cycle),
             Err(error) => {
                 let endpoint_cleanup = stage_endpoint.close().await;
@@ -1455,10 +1368,11 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
         }
     }
 
+    let mut continued_seq = None;
     if let Some(control) = &p.continuation
         && control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
     {
-        let continued_seq = match p
+        let sequence = match p
             .writer
             .append_event(VersionedEventPayload::new(EventPayload::RunContinued {
                 control_generation: control.generation,
@@ -1474,56 +1388,30 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 )));
             },
         };
-        if let (Some(operation), Some((store, claim, _))) = (quota_handoff, &p.quota_owner)
-            && store
-                .quota_handoff(operation)
-                .is_ok_and(|handoff| handoff.is_automatic_wake())
-            && let Err(error) =
-                store.authorize_automatic_wake_prompt(claim, operation, continued_seq)
-        {
+        continued_seq = Some(sequence);
+    }
+
+    if let (Some(operation), Some(owner)) = (quota_handoff, &p.quota_owner) {
+        let opened_seq = match opened.as_ref() {
+            Ok(sequence) => sequence.0,
+            Err(error) => {
+                let endpoint_cleanup = stage_endpoint.close().await;
+                let cleanup = p.bridge.close_session(session_id).await;
+                return Err(StageError::Storage(format!(
+                    "quota opening sequence unavailable: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                )));
+            },
+        };
+        if let Err(reason) = owner.authorize_prompt(operation, opened_seq, continued_seq) {
             let endpoint_cleanup = stage_endpoint.close().await;
             let cleanup = p.bridge.close_session(session_id).await;
             return Err(StageError::RecoveryRequired(format!(
-                "automatic quota prompt authorization failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
+                "{reason}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
             )));
         }
     }
 
-    if is_quota_fallback
-        && let (Some(operation), Some((store, claim, _))) = (quota_handoff, &p.quota_owner)
-    {
-        let handoff = match store.quota_handoff(operation) {
-            Ok(handoff) => handoff,
-            Err(error) => {
-                let endpoint_cleanup = stage_endpoint.close().await;
-                let cleanup = p.bridge.close_session(session_id).await;
-                return Err(StageError::RecoveryRequired(format!(
-                    "read quota prompt handoff: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-                )));
-            },
-        };
-        if !handoff.is_automatic_wake() {
-            let opened_seq = match opened.as_ref() {
-                Ok(sequence) => sequence.0,
-                Err(error) => {
-                    let endpoint_cleanup = stage_endpoint.close().await;
-                    let cleanup = p.bridge.close_session(session_id).await;
-                    return Err(StageError::Storage(format!(
-                        "quota opening sequence unavailable: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-                    )));
-                },
-            };
-            if let Err(error) = store.authorize_fallback_prompt(claim, operation, opened_seq) {
-                let endpoint_cleanup = stage_endpoint.close().await;
-                let cleanup = p.bridge.close_session(session_id).await;
-                return Err(StageError::RecoveryRequired(format!(
-                    "fallback quota prompt authorization failed: {error}; cleanup: {cleanup:?}; endpoint: {endpoint_cleanup:?}"
-                )));
-            }
-        }
-    }
-
-    let prompt_text = match previous_attempt_feedback(&p).await {
+    let prompt_text = match previous_attempt_feedback(p).await {
         Some(feedback) => feedback + &prompt_text,
         None => prompt_text,
     };
@@ -1676,25 +1564,17 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 persist_queued_usage(&mut events, &mut deferred_events, session_id, p.writer).await?;
                 let sent = joined.map_err(|error| StageError::Bridge(format!("prompt task: {error}")))?;
                 if let Err(error @ surge_acp::bridge::error::SendMessageError::RateLimited { .. }) = &sent
-                    && let (Some((store, claim, policy)), Some(quota)) =
-                        (&p.quota_owner, &mut task_quota_cycle)
+                    && let (Some(owner), Some(quota)) = (&p.quota_owner, &mut task_quota_cycle)
                 {
-                    if let Some(target) = policy.candidates().iter().find(|target|Some(target.candidate().runtime())==quota.cycle.selected_runtime.as_deref())
-                        && target.configured_pin().is_some() {
-                        let builtin = surge_acp::Registry::builtin();
-                        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-                        if crate::engine::capacity_routes::verify_skipped_snapshot(store.host_home(),p.worktree_path,registry,target).is_err() {
-                            store.invalidate_admitted_configured_pin(execution_writer).map_err(|e|StageError::Storage(e.to_string()))?;
-                        }
-                    }
-                    match record_task_quota_rate_limit(
-                        store, claim, policy, quota, provider_invocation, session_id, error,
-                    ) {
-                        Ok(cycle) => quota.cycle = cycle,
-                        Err(storage_error) => return Err(StageError::RecoveryRequired(format!(
-                            "typed quota exhaustion could not be durably recorded: {storage_error}"
-                        ))),
-                    }
+                    owner.record_rate_limit(
+                        quota,
+                        provider_invocation,
+                        session_id,
+                        error,
+                        p.worktree_path,
+                        p.agent_registry.as_deref(),
+                        execution_writer,
+                    )?;
                 }
                 sent.map_err(|e| match e {
             surge_acp::bridge::error::SendMessageError::RateLimited {
@@ -1866,7 +1746,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                     && resolved_profile.as_ref().is_some_and(|profile| profile.profile.outcomes.iter().any(|declaration| declaration.id == outcome && declaration.produced_artifacts.iter().any(|artifact| artifact.contract.kind == ArtifactKind::VerificationReport))) {
                     None // Historical file audit: the existing profile contract still validates it.
                 } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified {
-                    match super::verification::seal(&p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
+                    match super::verification::seal(p, verification_input.as_ref(), verification_report.map(|report| *report), verification_input_seq).await {
                         Ok(report) => Some(report),
                         Err(reason) => {
                             record_outcome_rejection(RejectionRecordParams { writer: p.writer, bridge: p.bridge, node: p.node, session_id, outcome: &outcome, hook_id: "verification_binding", reason: &reason, source: "verification binding", max_rejections: max_outcome_rejections }, &mut outcome_rejection_attempts).await?;
@@ -1875,7 +1755,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                         }
                     }
                 } else if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::FailedVerification {
-                    verification_report.map(|report| super::verification::seal_failure(&p, verification_input.as_ref(), *report)).transpose().map_err(StageError::Internal)?
+                    verification_report.map(|report| super::verification::seal_failure(p, verification_input.as_ref(), *report)).transpose().map_err(StageError::Internal)?
                 } else { None };
                 if let Some(rejection) = validate_profile_artifact_contracts(
                     resolved_profile.as_ref(),
@@ -2107,7 +1987,7 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
                 ..
             } => {
                 handle_permission_request(
-                    &p,
+                    p,
                     &effective_approval_cfg,
                     &prompt_finished,
                     session_id,
@@ -2498,216 +2378,10 @@ pub async fn execute_agent_stage(mut p: AgentStageParams<'_>) -> StageResult {
             "stage endpoint cleanup: {error}; stage: {stage_result:?}"
         ))
     })?;
-    if matches!(stage_result, Err(StageError::RateLimited { .. }))
-        && let (Some(quota), Some((store, claim, policy))) =
-            (task_quota_cycle.as_ref(), p.quota_owner.as_ref())
-    {
-        let configured = policy
-            .candidates()
-            .iter()
-            .any(|target| target.configured_route().is_some());
-        let next = if configured {
-            match store.select_planned_capacity(claim,&quota.cycle,chrono::Utc::now().timestamp_millis())
-                .map_err(|error|StageError::RecoveryRequired(format!("select next configured quota candidate: {error}")))? {
-                surge_persistence::work_items::recovery_cycles::CapacitySelection::Selected {reservation,..}=>Some(reservation),
-                surge_persistence::work_items::recovery_cycles::CapacitySelection::AllExhausted {..}=>None,
-            }
-        } else {
-            store
-                .reserve_next_candidate_after_exhaustion(claim, &quota.cycle, policy)
-                .map_err(|error| {
-                    StageError::RecoveryRequired(format!("reserve next quota candidate: {error}"))
-                })?
-        };
-        if let Some(reservation) = next {
-            if reservation.disposition
-                != surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved
-            {
-                return Err(StageError::RecoveryRequired(
-                    "next quota candidate reservation was already consumed".into(),
-                ));
-            }
-            let frozen_candidate = policy
-                .candidates()
-                .iter()
-                .find(|candidate| candidate.candidate() == &reservation.candidate)
-                .cloned()
-                .ok_or_else(|| {
-                    StageError::RecoveryRequired(
-                        "reserved quota candidate is absent from frozen launch policy".into(),
-                    )
-                })?;
-            let provider_invocation = surge_core::id::StageInvocationId::new();
-            let launch = surge_persistence::work_items::recovery_cycles::QuotaLaunchContract::new(
-                frozen_candidate,
-                provider_invocation,
-                surge_core::execution_recovery::SessionOpenMode::New,
-                None,
-            )
-            .map_err(|error| {
-                StageError::RecoveryRequired(format!("build quota launch contract: {error}"))
-            })?;
-            let selected_cycle = store
-                .recovery_cycle(claim.run(), &quota.cycle.invocation, quota.cycle.generation)
-                .map_err(|error| {
-                    StageError::RecoveryRequired(format!("read selected quota cycle: {error}"))
-                })?;
-            let handoff = store
-                .reserve_quota_open(claim, &selected_cycle, &reservation, launch)
-                .map_err(|error| {
-                    StageError::RecoveryRequired(format!("reserve quota opening: {error}"))
-                })?;
-            let permit = store
-                .admit_provider_open(claim, handoff.operation())
-                .map_err(|error| {
-                    StageError::RecoveryRequired(format!("admit quota opening: {error}"))
-                })?;
-            let next_cycle = store
-                .recovery_cycle(claim.run(), &quota.cycle.invocation, quota.cycle.generation)
-                .map_err(|error| {
-                    StageError::RecoveryRequired(format!("read fallback quota cycle: {error}"))
-                })?;
-            p.quota_cycle = Some(TaskQuotaCycle {
-                cycle: next_cycle,
-                reservation,
-                opening_seq: quota.opening_seq,
-            });
-            p.quota_opening = Some(permit);
-            return Box::pin(execute_agent_stage(p)).await;
-        }
-
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let marker = store
-            .typed_rate_limit(&quota.reservation.receipt)
-            .map_err(|error| {
-                StageError::RecoveryRequired(format!("read typed quota exhaustion: {error}"))
-            })?
-            .ok_or_else(|| {
-                StageError::RecoveryRequired("exhausted quota candidate has no typed origin".into())
-            })?;
-        let reset_at_ms = match marker.observation().evidence() {
-            surge_persistence::work_items::recovery_cycles::QuotaEvidence::Observed {
-                reset_at_ms,
-                ..
-            } => *reset_at_ms,
-            _ => None,
-        };
-        let (origin, due_at_ms) = match reset_at_ms.filter(|reset| *reset > now_ms) {
-            Some(reset) => (
-                surge_persistence::work_items::recovery_cycles::WakeOrigin::ObservedReset,
-                reset,
-            ),
-            None => (
-                surge_persistence::work_items::recovery_cycles::WakeOrigin::PolicyBackoff,
-                now_ms
-                    .checked_add(policy.policy_backoff_ms())
-                    .ok_or_else(|| {
-                        StageError::RecoveryRequired("quota wake time overflow".into())
-                    })?,
-            ),
-        };
-        let wake = surge_persistence::work_items::recovery_cycles::RecoveryWake::new(
-            surge_core::RunId::new().to_string(),
-            origin,
-            now_ms,
-            due_at_ms,
-        )
-        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
-        let scheduled = store
-            .arm_recovery_wake(claim, &quota.cycle, &quota.reservation.receipt, &wake)
-            .map_err(|error| StageError::RecoveryRequired(format!("arm quota wake: {error}")))?;
-        if configured {
-            let skips = store
-                .revalidate_capacity_skips(claim, &scheduled, now_ms, None)
-                .map_err(|error| {
-                    StageError::RecoveryRequired(format!(
-                        "revalidate exhausted configured skips: {error}"
-                    ))
-                })?;
-            let builtin = surge_acp::Registry::builtin();
-            let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-            for skip in &skips {
-                crate::engine::capacity_routes::verify_skipped_snapshot(
-                    store.host_home(),
-                    p.worktree_path,
-                    registry,
-                    &skip.candidate,
-                )?;
-            }
-            store.request_capacity_suspend_with_skips(
-                claim,
-                &scheduled,
-                &quota.reservation.receipt,
-                now_ms,
-            )
-        } else {
-            store.request_capacity_suspend(claim, &scheduled, &quota.reservation.receipt, now_ms)
-        }
-        .map_err(|error| {
-            StageError::RecoveryRequired(format!("reserve quota suspension: {error}"))
-        })?;
+    if matches!(stage_result, Err(StageError::RateLimited { .. })) {
+        *exhausted = task_quota_cycle;
     }
     stage_result
-}
-
-fn validate_configured_capacity_sources(
-    p: &AgentStageParams<'_>,
-    session_config: &surge_acp::bridge::SessionConfig,
-) -> Result<(), StageError> {
-    if let (Some(quota), Some((store, claim, _))) = (&p.quota_cycle, &p.quota_owner) {
-        let skips = store
-            .revalidate_capacity_skips(
-                claim,
-                &quota.cycle,
-                chrono::Utc::now().timestamp_millis(),
-                p.quota_opening.as_ref(),
-            )
-            .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-        let builtin = surge_acp::Registry::builtin();
-        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-        for skip in &skips {
-            crate::engine::capacity_routes::verify_skipped_snapshot(
-                store.host_home(),
-                p.worktree_path,
-                registry,
-                &skip.candidate,
-            )?;
-        }
-    }
-    if let Some(permit) = p.quota_opening.as_ref()
-        && let Some(route) = permit.launch().candidate().configured_route()
-    {
-        let builtin = surge_acp::Registry::builtin();
-        let registry = p.agent_registry.as_deref().unwrap_or(&builtin);
-        if registry
-            .find_normalized(&session_config.runtime)
-            .and_then(|entry| entry.capacity_route.as_ref())
-            != Some(route)
-        {
-            return Err(StageError::RecoveryRequired(
-                "selected configured route declaration changed before provider effect".into(),
-            ));
-        }
-        let actual = crate::engine::capacity_routes::configured_pin(
-            p.quota_owner
-                .as_ref()
-                .map_or(p.worktree_path, |(store, _, _)| store.host_home()),
-            &session_config.runtime,
-            &session_config.agent_kind,
-            route,
-            &session_config.env,
-            p.worktree_path,
-        );
-        if permit.launch().candidate().configured_pin().is_some()
-            && actual.as_ref() != permit.launch().candidate().configured_pin()
-        {
-            return Err(StageError::RecoveryRequired(
-                "selected configured source changed before provider effect".into(),
-            ));
-        }
-    }
-
-    Ok(())
 }
 
 async fn apply_memory_claim_pack(
@@ -3684,11 +3358,12 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
 /// never quietly diverge on what "the runtime" means for the same profile
 /// (Task 12 M3, acceptance criterion A).
 fn canonical_runtime_id_for(
+    agent_registry: Option<&surge_acp::Registry>,
     agent_config: &AgentConfig,
     rp: &ResolvedProfile,
 ) -> crate::engine::capacity::CanonicalRuntimeId {
-    crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
+    crate::engine::capacity::CanonicalRuntimeId::resolve_for_run(
+        agent_registry,
         effective_agent_id(agent_config, rp),
     )
 }
@@ -3759,12 +3434,17 @@ fn effective_agent_id<'a>(agent_config: &'a AgentConfig, rp: &'a ResolvedProfile
 #[must_use]
 pub(crate) fn resolve_node_runtime_id(
     profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    agent_registry: Option<&surge_acp::Registry>,
     agent_config: &AgentConfig,
 ) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
     let registry = profile_registry?;
     let key_ref = surge_core::profile::keyref::parse_key_ref(agent_config.profile.as_ref()).ok()?;
     let resolved = registry.resolve(&key_ref).ok()?;
-    Some(canonical_runtime_id_for(agent_config, &resolved))
+    Some(canonical_runtime_id_for(
+        agent_registry,
+        agent_config,
+        &resolved,
+    ))
 }
 
 /// Resolve the canonical agent-runtime id a node's `agent_config.profile`
@@ -3782,15 +3462,18 @@ pub(crate) fn resolve_node_runtime_id(
 #[must_use]
 pub(crate) fn resolve_profile_runtime_id(
     profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    agent_registry: Option<&surge_acp::Registry>,
     profile_str: &str,
 ) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
     let registry = profile_registry?;
     let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).ok()?;
     let resolved = registry.resolve(&key_ref).ok()?;
-    Some(crate::engine::capacity::CanonicalRuntimeId::resolve(
-        &surge_acp::Registry::builtin(),
-        &resolved.profile.runtime.agent_id,
-    ))
+    Some(
+        crate::engine::capacity::CanonicalRuntimeId::resolve_for_run(
+            agent_registry,
+            &resolved.profile.runtime.agent_id,
+        ),
+    )
 }
 
 /// Why legacy runtime-only capacity routing refuses a rotation target.
@@ -3912,8 +3595,7 @@ pub(crate) fn derive_agent_kind_from_id(
     if agent_id == "mock" {
         return Ok(AgentLaunch::mock());
     }
-    let builtin = surge_acp::Registry::builtin();
-    let agent_registry = registry.unwrap_or(&builtin);
+    let agent_registry = crate::engine::capacity::run_agent_registry_or_builtin(registry);
     let normalized_agent_id = agent_registry.normalize_agent_id(agent_id).ok_or_else(|| {
         let known = agent_registry.known_ids_and_aliases().join(", ");
         tracing::warn!(
@@ -4672,6 +4354,6 @@ mod tests {
         // The legacy no-registry path: no runtime identity exists to check
         // capacity for, so the pre-dispatch capacity check must skip
         // entirely rather than fabricate a key.
-        assert!(resolve_profile_runtime_id(None, "mock").is_none());
+        assert!(resolve_profile_runtime_id(None, None, "mock").is_none());
     }
 }
