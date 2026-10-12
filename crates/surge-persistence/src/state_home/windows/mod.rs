@@ -2,6 +2,8 @@
 pub(super) mod native;
 
 mod namespace;
+#[cfg(test)]
+pub(crate) use namespace::private_observation;
 mod security;
 
 #[cfg(test)]

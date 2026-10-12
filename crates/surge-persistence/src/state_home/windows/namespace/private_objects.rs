@@ -169,7 +169,11 @@ impl PrivateFiles {
             return Err(refusal("private object changed during read"));
         }
         self.namespace.verify()?;
+        #[cfg(test)]
+        observation::observe(observation::Phase::ReadFileBarrier, &file)?;
         flush_complete(&file)?;
+        #[cfg(test)]
+        observation::observe(observation::Phase::ReadParentBarrier, self.parent()?)?;
         flush_complete(self.parent()?)?;
         self.namespace.verify()?;
         if self.validate(&file)? != original
@@ -198,7 +202,11 @@ impl PrivateFiles {
             #[cfg(test)]
             observation::observe(observation::Phase::BeforeWrite, &file)?;
             file.write_all(bytes)?;
+            #[cfg(test)]
+            observation::observe(observation::Phase::AfterWrite, &file)?;
             flush_complete(&file)?;
+            #[cfg(test)]
+            observation::observe(observation::Phase::AfterFileFlush, &file)?;
             self.namespace.verify()?;
             if self.validate(&file)? != original {
                 return Err(refusal("private staging identity changed"));
@@ -235,7 +243,11 @@ impl PrivateFiles {
         drop(named);
         close_checked(published.0)?;
         self.namespace.verify()?;
+        #[cfg(test)]
+        observation::observe(observation::Phase::BeforePublishParentFlush, self.parent()?)?;
         flush_complete(self.parent()?)?;
+        #[cfg(test)]
+        observation::observe(observation::Phase::AfterParentFlush, self.parent()?)?;
         let stored = self.read(name)?;
         if stored != bytes {
             return Err(refusal("published private bytes changed"));
@@ -438,12 +450,18 @@ fn cleanup_barrier(parent: &File) -> NativeResult<()> {
 }
 
 #[cfg(test)]
-mod observation {
+pub(crate) mod observation {
     use super::*;
     use std::{cell::RefCell, marker::PhantomData, rc::Rc};
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub(super) enum Phase {
+    pub(crate) enum Phase {
         BeforeWrite,
+        AfterWrite,
+        AfterFileFlush,
+        BeforePublishParentFlush,
+        AfterParentFlush,
+        ReadFileBarrier,
+        ReadParentBarrier,
         Published,
         CleanupBarrier,
         PreparationFileBarrier,
@@ -452,7 +470,7 @@ mod observation {
     }
     type Callback = Box<dyn FnMut(Phase, &File) -> NativeResult<()>>;
     thread_local! { static OBSERVER: RefCell<Option<Callback>> = const { RefCell::new(None) }; }
-    pub(super) struct Registration(PhantomData<Rc<()>>);
+    pub(crate) struct Registration(PhantomData<Rc<()>>);
     impl Drop for Registration {
         fn drop(&mut self) {
             OBSERVER.with(|slot| {
@@ -460,7 +478,7 @@ mod observation {
             });
         }
     }
-    pub(super) fn register(
+    pub(crate) fn register(
         callback: impl FnMut(Phase, &File) -> NativeResult<()> + 'static,
     ) -> Registration {
         OBSERVER.with(|slot| {
@@ -469,6 +487,31 @@ mod observation {
             *slot = Some(Box::new(callback));
         });
         Registration(PhantomData)
+    }
+    pub(crate) fn crash_child(home: &Path, filter: &str, phase: &str) {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", filter, "--nocapture"])
+            .env("SURGE_PRIVATE_CRASH_HOME", home)
+            .env("SURGE_PRIVATE_CRASH_PHASE", phase)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert_eq!(
+                    status.code(),
+                    Some(91),
+                    "child failed before requested death boundary {phase}"
+                );
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("child timed out at {phase}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
     pub(super) fn observe(phase: Phase, file: &File) -> NativeResult<()> {
         OBSERVER.with(|slot| match slot.borrow_mut().as_mut() {
@@ -799,6 +842,249 @@ mod tests {
         );
         drop(deleting);
         drop(files);
+        home.close().unwrap();
+    }
+    #[test]
+    fn moved_staging_cleanup_disposes_only_original_before_barrier() {
+        use std::{cell::RefCell, rc::Rc};
+        let home = FixtureHome::new().unwrap();
+        let files = PrivateFiles::open(home.path(), true).unwrap();
+        files.publish("final", b"final sentinel").unwrap();
+        let root = home.path().join("work-items/private-flow-inputs");
+        let pending = Rc::new(RefCell::new(None::<OsString>));
+        let captured = pending.clone();
+        let created = crate::state_home::windows::creation_observation::register(
+            move |_, name, directory, _| {
+                if !directory && captured.borrow().is_none() {
+                    *captured.borrow_mut() = Some(name.to_owned());
+                }
+            },
+        );
+        let observed = Rc::new(RefCell::new(None::<Identity>));
+        let checked = observed.clone();
+        let barrier_seen = Rc::new(std::cell::Cell::new(false));
+        let reached_barrier = barrier_seen.clone();
+        let competing = PrivateFiles::open(home.path(), false).unwrap();
+        let fault = observation::register(move |phase, original| {
+            let pending = pending.borrow();
+            let name = pending.as_ref().unwrap();
+            if phase == observation::Phase::BeforeWrite {
+                let original_id = inspect(original, false).unwrap();
+                std::fs::rename(root.join(name), root.join("moved-original")).unwrap();
+                let creation = competing.namespace.owner.creation(false).unwrap();
+                let mut substitute =
+                    private_open(competing.parent().unwrap(), name, Some(&creation), true).unwrap();
+                substitute.write_all(b"substitute sentinel").unwrap();
+                flush_complete(&substitute).unwrap();
+                let substitute_id = competing.validate(&substitute).unwrap();
+                assert!(substitute_id != original_id);
+                *checked.borrow_mut() = Some(substitute_id);
+                return Err(refusal("force original-only cleanup"));
+            }
+            if phase == observation::Phase::CleanupBarrier {
+                reached_barrier.set(true);
+                assert!(!root.join("moved-original").exists());
+                let substitute = competing.opened(name).unwrap();
+                assert!(
+                    competing.validate(&substitute).unwrap() == *checked.borrow().as_ref().unwrap()
+                );
+                assert_eq!(
+                    std::fs::read(root.join(name)).unwrap(),
+                    b"substitute sentinel"
+                );
+                assert_eq!(
+                    std::fs::read(root.join("final")).unwrap(),
+                    b"final sentinel"
+                );
+            }
+            Ok(())
+        });
+        assert!(matches!(
+            files.publish("unpublished", b"never public"),
+            Err(NativeError::Security("force original-only cleanup"))
+        ));
+        assert!(observed.borrow().is_some());
+        assert!(
+            barrier_seen.get(),
+            "cleanup must reach its checked-close parent barrier"
+        );
+        drop(fault);
+        drop(created);
+        drop(files);
+        home.close().unwrap();
+    }
+
+    fn junction(link: &Path, target: &Path) {
+        let result = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "junction creation: {:?}", result);
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn final_and_private_ancestor_reparse_points_are_refused_without_following_target() {
+        let home = FixtureHome::new().unwrap();
+        let files = PrivateFiles::open(home.path(), true).unwrap();
+        let root = home.path().join("work-items/private-flow-inputs");
+        let target = home.path().join("junction-target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("sentinel"), b"unchanged target").unwrap();
+        junction(&root.join("reparse"), &target);
+        assert!(files.read("reparse").is_err());
+        assert!(files.publish("reparse", b"never replace target").is_err());
+        std::fs::remove_dir(root.join("reparse")).unwrap();
+        drop(files);
+        let saved = home.path().join("saved-private-inputs");
+        std::fs::rename(&root, &saved).unwrap();
+        junction(&root, &target);
+        assert!(PrivateFiles::open(home.path(), false).is_err());
+        assert!(PrivateFiles::open(home.path(), true).is_err());
+        assert_eq!(
+            std::fs::read(target.join("sentinel")).unwrap(),
+            b"unchanged target"
+        );
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::rename(saved, root).unwrap();
+        home.close().unwrap();
+    }
+
+    #[test]
+    fn independent_final_reader_completes_own_barriers_before_publisher_parent_flush() {
+        let home = FixtureHome::new().unwrap();
+        let files = PrivateFiles::open(home.path(), true).unwrap();
+        let root = home.path().to_owned();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = seen.clone();
+        let hook = observation::register(move |phase, _| {
+            if phase == observation::Phase::BeforePublishParentFlush {
+                let root = root.clone();
+                std::thread::spawn(move || read_final_with_own_barriers(&root))
+                    .join()
+                    .unwrap();
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(())
+        });
+        files
+            .publish("complete-final", b"durable final bytes")
+            .unwrap();
+        assert!(seen.load(std::sync::atomic::Ordering::SeqCst));
+        drop(hook);
+        drop(files);
+        home.close().unwrap();
+    }
+
+    fn read_final_with_own_barriers(root: &Path) {
+        let barriers = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let checked = barriers.clone();
+        let hook = observation::register(move |phase, _| {
+            if matches!(
+                phase,
+                observation::Phase::ReadFileBarrier | observation::Phase::ReadParentBarrier
+            ) {
+                checked.borrow_mut().push(phase);
+            }
+            Ok(())
+        });
+        let reader = PrivateFiles::open(root, false).unwrap();
+        assert_eq!(
+            reader.read("complete-final").unwrap(),
+            b"durable final bytes"
+        );
+        assert!(
+            *barriers.borrow()
+                == [
+                    observation::Phase::ReadFileBarrier,
+                    observation::Phase::ReadParentBarrier
+                ]
+        );
+        drop(hook);
+    }
+
+    #[test]
+    fn subprocess_death_at_publication_boundaries_never_accepts_partial_final() {
+        const FILTER: &str = "state_home::windows::namespace::private_objects::tests::subprocess_death_at_publication_boundaries_never_accepts_partial_final";
+        if let Some(home) = std::env::var_os("SURGE_PRIVATE_CRASH_HOME") {
+            let phase = std::env::var("SURGE_PRIVATE_CRASH_PHASE").unwrap();
+            let hook = observation::register(move |current, _| {
+                if crash_phase(current) == phase {
+                    std::process::exit(91);
+                }
+                Ok(())
+            });
+            PrivateFiles::open(Path::new(&home), true)
+                .unwrap()
+                .publish("crash-final", b"complete crash bytes")
+                .unwrap();
+            drop(hook);
+            panic!("crash boundary not reached");
+        }
+        for phase in [
+            "before-write",
+            "after-write",
+            "after-file-flush",
+            "after-rename",
+            "before-parent-flush",
+            "after-parent-flush",
+        ] {
+            let home = FixtureHome::new().unwrap();
+            observation::crash_child(home.path(), FILTER, phase);
+            let files = PrivateFiles::open(home.path(), false).unwrap();
+            if matches!(phase, "before-write" | "after-write" | "after-file-flush") {
+                assert!(files.read("crash-final").is_err());
+            } else {
+                assert_eq!(files.read("crash-final").unwrap(), b"complete crash bytes");
+            }
+            drop(files);
+            home.close().unwrap();
+        }
+    }
+    fn crash_phase(phase: observation::Phase) -> &'static str {
+        match phase {
+            observation::Phase::BeforeWrite => "before-write",
+            observation::Phase::AfterWrite => "after-write",
+            observation::Phase::AfterFileFlush => "after-file-flush",
+            observation::Phase::Published => "after-rename",
+            observation::Phase::BeforePublishParentFlush => "before-parent-flush",
+            observation::Phase::AfterParentFlush => "after-parent-flush",
+            _ => "unrelated",
+        }
+    }
+    #[test]
+    fn killed_native_preparation_owner_releases_os_lock_without_changing_original_identity() {
+        const FILTER: &str = "state_home::windows::namespace::private_objects::tests::killed_native_preparation_owner_releases_os_lock_without_changing_original_identity";
+        if let Some(home) = std::env::var_os("SURGE_PRIVATE_CRASH_HOME") {
+            let hook = observation::register(|phase, _| {
+                if phase == observation::Phase::PreparationParentBarrier {
+                    // acquire has already obtained the actual OS lock; exit skips Drop.
+                    std::process::exit(91);
+                }
+                Ok(())
+            });
+            let owner = PrivatePreparation::acquire(Path::new(&home), "killed-owner").unwrap();
+            drop(owner);
+            drop(hook);
+            panic!("locked native owner boundary not reached");
+        }
+        let home = FixtureHome::new().unwrap();
+        let owner = PrivatePreparation::acquire(home.path(), "killed-owner").unwrap();
+        let original = owner.legacy_identity().unwrap();
+        drop(owner);
+        observation::crash_child(home.path(), FILTER, "native-owner-held");
+        let owner = PrivatePreparation::acquire(home.path(), "killed-owner").unwrap();
+        assert_eq!(owner.legacy_identity().unwrap(), original);
+        owner.require_private().unwrap();
+        drop(owner);
         home.close().unwrap();
     }
 }

@@ -456,4 +456,85 @@ mod tests {
         assert!(hydrate(home.path(), &manifest).is_err());
         home.close().unwrap();
     }
+    #[cfg(windows)]
+    #[test]
+    fn established_corrupt_host_key_never_regenerates_or_authenticates() {
+        let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+        let original = request_identity(home.path(), b"private request", true, true).unwrap();
+        let root = home.path().join("work-items/private-flow-inputs");
+        let marker = std::fs::read(root.join(KEY_MARKER)).unwrap();
+        std::fs::write(root.join(KEY_NAME), b"corrupt established key").unwrap();
+        for allow_new in [false, true] {
+            assert!(matches!(
+                request_identity(home.path(), b"private request", true, allow_new),
+                Err(WorkItemError::PrivateInputsRecoveryRequired)
+            ));
+            assert_eq!(
+                std::fs::read(root.join(KEY_NAME)).unwrap(),
+                b"corrupt established key"
+            );
+            assert_eq!(std::fs::read(root.join(KEY_MARKER)).unwrap(), marker);
+        }
+        assert!(verify_request(home.path(), b"private request", &original).is_err());
+        home.close().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn subprocess_death_around_key_marker_preserves_key_or_fails_closed() {
+        use crate::state_home::private_observation::{self as observation, Phase};
+        const FILTER: &str = "work_items::owned_flow::private_inputs::tests::subprocess_death_around_key_marker_preserves_key_or_fails_closed";
+        if let Some(home) = std::env::var_os("SURGE_PRIVATE_CRASH_HOME") {
+            let selected = std::env::var("SURGE_PRIVATE_CRASH_PHASE").unwrap();
+            let root = std::path::PathBuf::from(&home).join("work-items/private-flow-inputs");
+            let mut publication = 0;
+            let hook = observation::register(move |phase, _| {
+                if phase == Phase::BeforeWrite {
+                    publication += 1;
+                }
+                let matches = match selected.as_str() {
+                    "before-marker-write" => phase == Phase::BeforeWrite,
+                    "after-marker-rename" => phase == Phase::Published,
+                    "after-marker-parent-flush" => phase == Phase::AfterParentFlush,
+                    _ => panic!("unknown marker boundary"),
+                };
+                if publication == 2 && matches {
+                    assert!(root.join(KEY_NAME).exists());
+                    assert_eq!(root.join(KEY_MARKER).exists(), phase != Phase::BeforeWrite);
+                    std::process::exit(91);
+                }
+                Ok(())
+            });
+            request_identity(Path::new(&home), b"private crash request", true, true).unwrap();
+            drop(hook);
+            panic!("marker death boundary not reached");
+        }
+        for phase in [
+            "before-marker-write",
+            "after-marker-rename",
+            "after-marker-parent-flush",
+        ] {
+            let home = crate::runtime_home_fixture::FixtureHome::new().unwrap();
+            observation::crash_child(home.path(), FILTER, phase);
+            let root = home.path().join("work-items/private-flow-inputs");
+            let before = std::fs::read(root.join(KEY_NAME)).unwrap();
+            let original_key = decode_key(&before).unwrap();
+            let identity = request_identity(home.path(), b"private crash request", true, false);
+            if phase == "before-marker-write" {
+                assert!(matches!(
+                    identity,
+                    Err(WorkItemError::PrivateInputsRecoveryRequired)
+                ));
+            } else {
+                let expected = OwnedFlowRequestIdentity::Hmac {
+                    tag: authentication(&original_key, REQUEST_DOMAIN, b"private crash request")
+                        .unwrap(),
+                };
+                assert_eq!(identity.unwrap(), expected);
+                verify_request(home.path(), b"private crash request", &expected).unwrap();
+            }
+            assert_eq!(std::fs::read(root.join(KEY_NAME)).unwrap(), before);
+            home.close().unwrap();
+        }
+    }
 }

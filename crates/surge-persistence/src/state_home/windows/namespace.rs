@@ -4,6 +4,8 @@ use super::{
     native::{NativeError, NativeResult, flush_complete},
     security::{DirectoryPolicy, EffectiveOwner},
 };
+#[cfg(test)]
+pub(crate) use private_objects::observation as private_observation;
 pub(crate) use private_objects::{PrivateFiles, PrivatePreparation};
 use std::{
     ffi::{OsStr, OsString},

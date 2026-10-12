@@ -1553,12 +1553,22 @@ mod tests {
         };
         assert_eq!(attempt.ordinal, 1);
         assert_eq!(attempt.config, "native frozen configuration");
+        let lock_namespace = home.path().join("work-items/preparation-locks");
+        std::fs::rename(
+            &lock_namespace,
+            home.path().join("unavailable-preparation-locks"),
+        )
+        .unwrap();
         let replay = store
             .mutate(&command, None, Some("must never replace"), "host", 3)
             .unwrap();
         assert_eq!(
             serde_json::to_value(&result).unwrap(),
             serde_json::to_value(replay).unwrap()
+        );
+        assert!(
+            !lock_namespace.exists(),
+            "exact replay must not recreate private ownership"
         );
         let count: u64 = store
             .pool

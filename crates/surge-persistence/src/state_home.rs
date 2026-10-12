@@ -1,6 +1,8 @@
 //! Retained native state-home primitives and host-private preparation/input capabilities.
 #[path = "state_home/windows/mod.rs"]
 mod windows;
+#[cfg(test)]
+pub(crate) use windows::private_observation;
 
 pub(crate) use windows::NativeJournalLock;
 pub(crate) use windows::native::NativeError;
