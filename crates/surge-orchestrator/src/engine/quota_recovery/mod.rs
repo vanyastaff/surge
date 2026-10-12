@@ -16,10 +16,7 @@
 //! and acts on the answer; it never reads the ledger or the policy itself.
 mod task;
 
-pub(crate) use task::{
-    TaskQuotaCycle, initialize_task_quota_cycle, plan_quota_wake, record_selected_rate_limit,
-    verify_skipped_snapshots,
-};
+pub(crate) use task::{AfterExhaustion, TaskQuotaCycle, TaskQuotaOwner};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

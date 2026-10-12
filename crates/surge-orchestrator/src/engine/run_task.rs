@@ -1754,209 +1754,6 @@ fn validate_persistent_dispatch_authority(params: &RunTaskParams) -> Option<Stri
         .map(|error| error.to_string())
 }
 
-fn prepare_automatic_quota_wake(
-    run_id: RunId,
-    owner: Option<&(
-        surge_persistence::work_items::WorkItemStore,
-        surge_persistence::work_items::WorkItemLaunchClaim,
-        surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-    )>,
-    continuation: Option<&surge_core::execution_recovery::WorkItemExecutionControl>,
-) -> Result<
-    (
-        Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
-        Option<crate::engine::quota_recovery::TaskQuotaCycle>,
-    ),
-    StageError,
-> {
-    let Some((store, claim, _)) = owner else {
-        return Ok((None, None));
-    };
-    let Some(control) = continuation.filter(|control| {
-        control.state == surge_core::execution_recovery::ExecutionControlState::ContinueReserved
-    }) else {
-        return Ok((None, None));
-    };
-    let handoff = match store.quota_handoff(control.operation) {
-        Ok(handoff) if handoff.is_automatic_wake() => handoff,
-        Ok(_) | Err(surge_persistence::work_items::WorkItemError::NotFound) => {
-            return Ok((None, None));
-        },
-        Err(error) => return Err(StageError::RecoveryRequired(error.to_string())),
-    };
-    if handoff.control_generation() != control.generation {
-        return Err(StageError::RecoveryRequired(
-            "automatic quota handoff does not match Continue generation".into(),
-        ));
-    }
-    let cycle = store
-        .recovery_cycle(
-            run_id,
-            handoff.logical_invocation(),
-            handoff.cycle_generation(),
-        )
-        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
-    let reservation = surge_persistence::work_items::recovery_cycles::CandidateReservation {
-        receipt: handoff.reservation_receipt().to_owned(),
-        candidate: handoff.launch().candidate().candidate().clone(),
-        disposition:
-            surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved,
-    };
-    let opening = store
-        .admit_provider_open(claim, control.operation)
-        .map_err(|error| StageError::RecoveryRequired(error.to_string()))?;
-    let cycle =
-        crate::engine::quota_recovery::TaskQuotaCycle::from_automatic_wake(cycle, reservation);
-    Ok((Some(opening), Some(cycle)))
-}
-
-type TaskQuotaOwner = (
-    surge_persistence::work_items::WorkItemStore,
-    surge_persistence::work_items::WorkItemLaunchClaim,
-    surge_persistence::work_items::recovery_cycles::FrozenQuotaStage,
-);
-type PreparedTaskQuota = (
-    Option<surge_persistence::work_items::recovery_cycles::QuotaOpenPermit>,
-    Option<crate::engine::quota_recovery::TaskQuotaCycle>,
-);
-
-async fn bind_current_plan(
-    params: &RunTaskParams,
-    state: &RunExecutionState,
-    owner: &TaskQuotaOwner,
-    control: u64,
-) -> Result<surge_persistence::work_items::recovery_cycles::RecoveryCycle, StageError> {
-    let (store, claim, _) = owner;
-    let current = params
-        .writer
-        .current_seq()
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-    let events = params
-        .writer
-        .read_events(surge_persistence::runs::EventSeq(1)..current.next())
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-    let entry = events.iter().rev().find(|row|matches!(&row.payload.payload,EventPayload::StageEntered { node: entered, attempt } if entered == &state.cursor.node && *attempt == state.cursor.attempt)).ok_or_else(||StageError::RecoveryRequired("actual stage entry missing".into()))?;
-    let hash = params
-        .run_config
-        .quota_recovery
-        .content_hash()
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-    let planned = events.iter().find_map(|row| match &row.payload.payload {
-        EventPayload::QuotaStagePlanned {
-            stage_entry_seq,
-            logical_invocation,
-            policy_hash,
-            control_generation,
-            ..
-        } if *stage_entry_seq == entry.seq.as_u64()
-            && policy_hash == &hash
-            && *control_generation == control =>
-        {
-            Some((*logical_invocation, row.seq.as_u64()))
-        },
-        _ => None,
-    });
-    let (logical, plan_seq) = if let Some(planned) = planned {
-        planned
-    } else {
-        let logical = surge_core::id::StageInvocationId::new();
-        let sequence = params
-            .writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::QuotaStagePlanned {
-                    node: state.cursor.node.clone(),
-                    attempt: state.cursor.attempt,
-                    stage_entry_seq: entry.seq.as_u64(),
-                    logical_invocation: logical,
-                    control_generation: control,
-                    policy_hash: hash,
-                },
-            ))
-            .await
-            .map_err(|e| StageError::Storage(e.to_string()))?;
-        (logical, sequence.as_u64())
-    };
-    store
-        .bind_planned_quota_stage(claim, logical, plan_seq)
-        .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-    store
-        .begin_recovery_cycle(claim, &logical.to_string(), control)
-        .map_err(|e| StageError::RecoveryRequired(e.to_string()))
-}
-
-fn select_current_plan(
-    params: &RunTaskParams,
-    owner: &TaskQuotaOwner,
-    cycle: &surge_persistence::work_items::recovery_cycles::RecoveryCycle,
-) -> Result<PreparedTaskQuota, StageError> {
-    let (store, claim, policy) = owner;
-    match store
-        .select_planned_capacity(claim, cycle, store.clock().now_ms())
-        .map_err(|e| StageError::RecoveryRequired(e.to_string()))?
-    {
-        surge_persistence::work_items::recovery_cycles::CapacitySelection::Selected {
-            cycle,
-            reservation,
-            ..
-        } => {
-            if reservation.disposition
-                != surge_persistence::work_items::recovery_cycles::ReservationDisposition::Reserved
-            {
-                return Err(StageError::RecoveryRequired(
-                    "planned opening replay requires reconciliation".into(),
-                ));
-            }
-            let target = policy
-                .candidates()
-                .iter()
-                .find(|target| target.candidate() == &reservation.candidate)
-                .cloned()
-                .ok_or_else(|| {
-                    StageError::RecoveryRequired("selected candidate outside host plan".into())
-                })?;
-            let launch = surge_persistence::work_items::recovery_cycles::QuotaLaunchContract::new(
-                target,
-                surge_core::id::StageInvocationId::new(),
-                surge_core::execution_recovery::SessionOpenMode::New,
-                None,
-            )
-            .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-            let handoff = store
-                .reserve_quota_open(claim, &cycle, &reservation, launch)
-                .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-            let opening = store
-                .admit_provider_open(claim, handoff.operation())
-                .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-            Ok((
-                Some(opening),
-                Some(
-                    crate::engine::quota_recovery::TaskQuotaCycle::from_automatic_wake(
-                        cycle,
-                        reservation,
-                    ),
-                ),
-            ))
-        },
-        surge_persistence::work_items::recovery_cycles::CapacitySelection::AllExhausted {
-            cycle,
-            skipped,
-        } => {
-            crate::engine::quota_recovery::verify_skipped_snapshots(
-                store,
-                &params.worktree_path,
-                params.agent_registry.as_deref(),
-                skipped.iter().map(|skip| &skip.candidate),
-            )?;
-            store
-                .suspend_planned_capacity(claim, &cycle, store.clock().now_ms())
-                .map_err(|e| StageError::RecoveryRequired(e.to_string()))?;
-            Err(StageError::CapacityExhausted)
-        },
-    }
-}
-
 async fn execute_agent_node(
     params: &RunTaskParams,
     state: &mut RunExecutionState,
@@ -1990,41 +1787,45 @@ async fn execute_agent_node(
     // re-deliver on the retry, which is acceptable — the operator's guidance
     // should apply to the re-attempt too.
     let steers_backup = steers.clone();
-    let quota_owner = params.work_item_claim.as_ref().and_then(|claim| {
-        params
-            .run_config
-            .quota_recovery
-            .stage(&state.cursor.node)
-            .cloned()
-            .map(|stage| (params.storage.work_items(), claim.clone(), stage))
-    });
+    let quota_owner = crate::engine::quota_recovery::TaskQuotaOwner::for_stage(
+        params.storage.work_items(),
+        params.work_item_claim.as_ref(),
+        params.run_config.quota_recovery.stage(&state.cursor.node),
+    );
     let continuation = params
         .storage
         .work_items()
         .execution_control(params.run_id)
         .map_err(|error| StageError::Storage(error.to_string()))?;
-    let (mut quota_opening, mut quota_cycle) =
-        prepare_automatic_quota_wake(params.run_id, quota_owner.as_ref(), continuation.as_ref())?;
+    let (mut quota_opening, mut quota_cycle) = match &quota_owner {
+        Some(owner) => owner.prepare_automatic_wake(params.run_id, continuation.as_ref())?,
+        None => (None, None),
+    };
     if quota_opening.is_none()
-        && let Some((_, _, policy)) = quota_owner.as_ref()
-        && policy
-            .candidates()
-            .iter()
-            .any(|target| target.configured_route().is_some())
+        && let Some(owner) = quota_owner.as_ref()
+        && owner.has_configured_routes()
     {
-        let owner = quota_owner
-            .as_ref()
-            .ok_or_else(|| StageError::RecoveryRequired("host quota owner disappeared".into()))?;
-        let cycle = bind_current_plan(
-            params,
-            state,
-            owner,
-            continuation
-                .as_ref()
-                .map_or(0, |control| control.generation),
-        )
-        .await?;
-        (quota_opening, quota_cycle) = select_current_plan(params, owner, &cycle)?;
+        let policy_hash = params
+            .run_config
+            .quota_recovery
+            .content_hash()
+            .map_err(|error| StageError::Storage(error.to_string()))?;
+        let cycle = owner
+            .bind_current_plan(
+                &params.writer,
+                &state.cursor.node,
+                state.cursor.attempt,
+                policy_hash,
+                continuation
+                    .as_ref()
+                    .map_or(0, |control| control.generation),
+            )
+            .await?;
+        (quota_opening, quota_cycle) = owner.select_current_plan(
+            &cycle,
+            &params.worktree_path,
+            params.agent_registry.as_deref(),
+        )?;
     }
     let stage_result = Box::pin(execute_agent_stage(AgentStageParams {
         quota_opening,
