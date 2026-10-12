@@ -981,6 +981,7 @@ mod tests {
             .await
             .unwrap();
         let empty_run = RunId::new();
+        #[cfg(not(windows))]
         let db = home
             .path()
             .join("runs")

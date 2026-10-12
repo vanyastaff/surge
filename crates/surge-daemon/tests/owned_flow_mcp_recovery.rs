@@ -1615,7 +1615,6 @@ async fn missing_and_corrupt_private_inputs_refuse_real_cold_writers() {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transplanted_objects_and_changed_manifest_refuse_real_cold_writers() {
     for fault in [
