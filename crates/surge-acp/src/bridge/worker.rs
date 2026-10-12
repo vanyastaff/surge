@@ -351,7 +351,7 @@ async fn open_session_attempt(
     });
     let mut child: Child = spawned.map_err(|e| {
         if e.get_ref()
-            .is_some_and(|error| error.is::<super::HostEffectRefused>())
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<super::HostEffectRefused>)
         {
             return OpenSessionError::HostEffectRefused(super::HostEffectRefused);
         }

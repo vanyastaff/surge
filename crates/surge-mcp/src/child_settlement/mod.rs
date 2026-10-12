@@ -105,10 +105,11 @@ impl ObservedTransport {
                 .map_err(std::io::Error::other)
         })
         .map_err(|error| {
-            if error
-                .get_ref()
-                .is_some_and(|source| source.is::<crate::writer_observer::WriterObservationError>())
-            {
+            if error.get_ref().is_some_and(
+                <dyn std::error::Error + Send + Sync>::is::<
+                    crate::writer_observer::WriterObservationError,
+                >,
+            ) {
                 ChildStartError::EffectRefused
             } else {
                 ChildStartError::Preparation
