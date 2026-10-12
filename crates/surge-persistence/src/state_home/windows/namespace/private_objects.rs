@@ -954,18 +954,36 @@ mod tests {
     }
 
     fn junction(link: &Path, target: &Path) {
+        use std::os::windows::{ffi::OsStringExt, fs::MetadataExt};
+        // Windows accepts either separator, but cmd's built-in mklink parses '/'
+        // as a switch. Normalize command arguments without lossy Unicode conversion.
+        let argument = |path: &Path| {
+            OsString::from_wide(
+                &path
+                    .as_os_str()
+                    .encode_wide()
+                    .map(|unit| {
+                        if unit == u16::from(b'/') {
+                            u16::from(b'\\')
+                        } else {
+                            unit
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
         let result = std::process::Command::new("cmd")
             .args(["/d", "/c", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
+            .arg(argument(link))
+            .arg(argument(target))
             .output()
             .unwrap();
         assert!(result.status.success(), "junction creation: {:?}", result);
-        assert!(
-            std::fs::symlink_metadata(link)
-                .unwrap()
-                .file_type()
-                .is_symlink()
+        assert_ne!(
+            std::fs::symlink_metadata(link).unwrap().file_attributes()
+                & FILE_ATTRIBUTE_REPARSE_POINT.0,
+            0,
+            "created junction must be an actual reparse point"
         );
     }
 
